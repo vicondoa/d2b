@@ -2,10 +2,13 @@
 // Result Err type. Boxing it would require pervasive API changes across
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(test)]
+use std::collections::hash_map::Entry;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+#[cfg(test)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -66,7 +69,7 @@ use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
     NetworkProvenance, ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration,
-    ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
+    ResourceRef, ResourceUid, SchemaFingerprint, ZoneId, ZoneResourceIdentity, ZoneRevision,
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
@@ -76,6 +79,12 @@ use d2b_contracts_resource::v3::{
     ResourceName,
     activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
 };
+use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
+use d2b_contracts_zone_session::v3::zone_routing::{
+    ZoneLabelId, ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest, ZonePath,
+    ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneTreeEdge,
+};
+use d2b_contracts_zone_session::v3::ZoneLinkSpec;
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -95,15 +104,25 @@ use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core::workload_identity::WorkloadIdentity;
+use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
+use d2b_core_controller::zone_links::{
+    BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
+    ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkRecord, ZoneLinkRouteBinding,
+};
+use d2b_core_controller::zonelink::{
+    ZoneLinkController, ZoneLinkOwnerProof,
+};
+#[cfg(test)]
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
     IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
     SessionBinding, SessionSecret, TargetKey,
 };
+#[cfg(test)]
 use d2b_gateway_runtime::relay_bridge::LocalTarget;
+#[cfg(test)]
 use d2b_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
     RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
@@ -121,6 +140,7 @@ use d2b_provider_network_local::{
     ifname::derive_network_child_name,
     observe::observe_host_network,
 };
+#[cfg(test)]
 use d2b_provider_runtime_azure_container_apps::gateway::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
@@ -128,10 +148,19 @@ use d2b_provider_shell_terminal::{
     DEFAULT_OUTPUT_RING_CAPACITY, ExecutionTarget, PoolSpec, ShellAuthorityLedger,
     ShellAuthorityPort, ShellPool, ShellSession, ShellTerminalError, SupervisorProcessResource,
 };
+use d2b_provider_transport_azure_relay::RelayTransportSettings;
+use d2b_zone_routing::engine::{
+    ZoneRouteAdmission, ZoneRouteAdmissionExpectation, ZoneRouteDecision, ZoneRouteEngine,
+};
+use d2b_zone_routing::resolver::{SealedZoneTopology, ZoneEntrypointResolver};
+use d2b_zone_routing::engine::ZoneRouteRequest;
+#[cfg(test)]
 use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
+#[cfg(test)]
 use d2b_realm_core::TargetName;
 use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
+use d2b_core::allocator_config::AllocatorZoneTopology;
 pub(crate) use d2bd_runtime::broker_transport::{
     broker_remaining_before_op, broker_response_kind, default_audit_join_context,
     dispatch_broker_request_to_socket, redact_broker_dispatch_failure_for_launcher,
@@ -249,8 +278,12 @@ pub(crate) fn test_scratch_root() -> PathBuf {
 
 use d2bd_runtime::admission::{
     AdmissionConfig, PeerIdentity, PeerRole, authorize_peer, broker_caller_role_for_peer,
+    verb_allowed_for_host_shutdown, verb_requires_admin,
+};
+#[cfg(test)]
+use d2bd_runtime::admission::{
     gateway_display_op_requires_admin, gateway_display_peer_principal,
-    gateway_display_peer_principal_string, verb_allowed_for_host_shutdown, verb_requires_admin,
+    gateway_display_peer_principal_string,
 };
 #[cfg(test)]
 use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
@@ -415,6 +448,7 @@ mod tpm_migration_inventory_tests {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayFileConfig {
@@ -436,6 +470,7 @@ pub struct GatewayFileConfig {
     display: GatewayDisplayFileConfig,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayRelayFileConfig {
@@ -445,6 +480,7 @@ struct GatewayRelayFileConfig {
     entity: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayAcaFileConfig {
@@ -476,6 +512,7 @@ struct GatewayAcaFileConfig {
     auto_suspend_interval_secs: Option<u32>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayDisplayFileConfig {
@@ -503,8 +540,8 @@ struct ServerState {
     /// session is a daemon-held authenticated named-stream client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
-    /// Gateway display orchestrator state. Persisted for the daemon lifetime so
-    /// Open/List/Close share the same ledger and resource handles.
+    /// Test-only compatibility fixture for the retired GatewayDisplay owner.
+    #[cfg(test)]
     gateway_display: Arc<GatewayDisplayRuntime>,
     /// Bounded admission gate for in-flight connection-handler threads.
     /// The accept loop performs a non-blocking try-acquire and refuses
@@ -569,6 +606,1169 @@ struct ServerState {
     security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
+}
+
+/// Closed failures while composing one Zone-owned Gateway Guest route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZoneLinkGatewayCompositionError {
+    InvalidResource,
+    InvalidTransportSettings,
+    InvalidTopology,
+    InvalidIdentity,
+    SessionAlreadyBound,
+}
+
+impl ZoneLinkGatewayCompositionError {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidResource => "zonelink-composition-resource-invalid",
+            Self::InvalidTransportSettings => "zonelink-composition-transport-settings-invalid",
+            Self::InvalidTopology => "zonelink-composition-topology-invalid",
+            Self::InvalidIdentity => "zonelink-composition-identity-invalid",
+            Self::SessionAlreadyBound => "zonelink-composition-session-already-bound",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ZoneTopologyError {
+    Empty,
+    Missing,
+    Ambiguous,
+    RootMismatch,
+    MissingParent,
+    SelfParent,
+    Cycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommittedZoneTopology {
+    root: ZoneId,
+    parents: BTreeMap<ZoneId, ZoneId>,
+}
+
+impl CommittedZoneTopology {
+    fn from_allocator(
+        zones: &BTreeSet<ZoneId>,
+        topology: &AllocatorZoneTopology,
+    ) -> Result<Self, ZoneTopologyError> {
+        if zones.is_empty() {
+            return Err(ZoneTopologyError::Empty);
+        }
+        if topology.parent_map.keys().cloned().collect::<BTreeSet<_>>() != *zones {
+            return Err(ZoneTopologyError::Missing);
+        }
+        let roots = topology
+            .parent_map
+            .iter()
+            .filter_map(|(zone, parent)| parent.is_none().then_some(zone.clone()))
+            .collect::<Vec<_>>();
+        let [root] = roots.as_slice() else {
+            return Err(ZoneTopologyError::Ambiguous);
+        };
+        if root != &topology.root {
+            return Err(ZoneTopologyError::RootMismatch);
+        }
+        let mut parents = BTreeMap::new();
+        for (zone, parent) in &topology.parent_map {
+            let Some(parent) = parent else {
+                continue;
+            };
+            if zone == parent {
+                return Err(ZoneTopologyError::SelfParent);
+            }
+            if !zones.contains(parent) {
+                return Err(ZoneTopologyError::MissingParent);
+            }
+            parents.insert(zone.clone(), parent.clone());
+        }
+        if parents.len() + 1 != zones.len() {
+            return Err(ZoneTopologyError::Missing);
+        }
+        for start in zones {
+            let mut seen = BTreeSet::new();
+            let mut current = start;
+            while let Some(parent) = parents.get(current) {
+                if !seen.insert(current.clone()) {
+                    return Err(ZoneTopologyError::Cycle);
+                }
+                current = parent;
+            }
+            if !seen.insert(current.clone()) {
+                return Err(ZoneTopologyError::Cycle);
+            }
+            if current != root {
+                return Err(ZoneTopologyError::MissingParent);
+            }
+        }
+        Ok(Self {
+            root: root.clone(),
+            parents,
+        })
+    }
+
+    fn parent(&self, zone: &ZoneId) -> Option<&ZoneId> {
+        self.parents.get(zone)
+    }
+
+    fn path(&self, zone: &ZoneId) -> Option<ZonePath> {
+        let mut labels = Vec::new();
+        let mut current = zone;
+        loop {
+            labels.push(ZoneLabelId::parse(current.as_str().to_owned()).ok()?);
+            if current == &self.root {
+                break;
+            }
+            current = self.parents.get(current)?;
+        }
+        ZonePath::new(labels).ok()
+    }
+}
+
+/// Production composition for a child-local ZoneLink using a Gateway Guest.
+///
+/// The composition owns only non-secret route metadata and the child-local
+/// controller. Relay credentials, sealing keys, and relay bearer material are
+/// deliberately absent: the selected transport Provider acquires them inside
+/// its Gateway Guest execution context. Route admissions are accepted only as
+/// runtime-issued, single-use values and are never reconstructed from this
+/// metadata.
+pub(crate) struct ZoneLinkGatewayComposition {
+    zone: ZoneId,
+    link_ref: ResourceRef,
+    link_uid: ResourceUid,
+    parent_path: ZonePath,
+    child_path: ZonePath,
+    edge: ZoneTreeEdge,
+    parent_zone_uid: ResourceUid,
+    child_zone_uid: ResourceUid,
+    controller_generation: ZoneLinkControllerGeneration,
+    reconnect_generation: Mutex<ReconnectGeneration>,
+    required_capability: ZoneRouteCapability,
+    policy_revision: ZoneRevision,
+    transport_provider_ref: ResourceRef,
+    transport_settings: RelayTransportSettings,
+    cursor_owner: ZoneLinkOwnerProof,
+    controller: Mutex<ZoneLinkController>,
+    route_engine: Mutex<ZoneRouteEngine>,
+    resolver: ZoneEntrypointResolver,
+    gateway_session: Mutex<
+        Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>>,
+    >,
+    route_admission_authority: Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
+    gateway_vm: Mutex<Option<String>>,
+}
+
+impl std::fmt::Debug for ZoneLinkGatewayComposition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneLinkGatewayComposition(<redacted>)")
+    }
+}
+
+impl ZoneLinkGatewayComposition {
+    /// Compose the selected Azure Relay route from the committed ZoneLink row.
+    ///
+    /// The Host retains only the ZoneLink's non-secret transport settings. The
+    /// selected Provider's execution/configuration rows and all credential
+    /// rows remain in the Gateway Guest composition.
+    #[allow(clippy::too_many_arguments)]
+    fn from_committed_resources(
+        zone: ZoneId,
+        parent_path: ZonePath,
+        child_path: ZonePath,
+        parent_uid: ResourceUid,
+        child_uid: ResourceUid,
+        authority_generation: u64,
+        authority_digest: &str,
+        link: &Value,
+    ) -> Result<Self, ZoneLinkGatewayCompositionError> {
+        if link.get("type").and_then(Value::as_str) != Some("ZoneLink") {
+            return Err(ZoneLinkGatewayCompositionError::InvalidResource);
+        }
+        let link_name = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidResource)?;
+        if link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str)
+            != Some(zone.as_str())
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidResource);
+        }
+        let link_ref = ResourceRef::parse(&format!("ZoneLink/{link_name}"))
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        let link_uid = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let spec = link
+            .get("spec")
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidResource)
+            .and_then(|spec| {
+                serde_json::from_value::<ZoneLinkSpec>(spec.clone())
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)
+            })?;
+        spec.validate_child_zone(&zone)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        if spec.transport_provider_ref().to_canonical_string()
+            != d2b_provider_transport_azure_relay::PROVIDER_REF
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidTransportSettings);
+        }
+        let transport_settings = serde_json::from_slice::<RelayTransportSettings>(
+            &spec.transport_settings().to_canonical_bytes(),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTransportSettings)?;
+
+        let edge = ZoneTreeEdge::new(parent_path.clone(), child_path)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?;
+        let controller_generation = ZoneLinkControllerGeneration::parse(format!(
+            "zonelink-{}",
+            link_uid.as_str().replace('-', "")
+        ))
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let reconnect_generation = ReconnectGeneration::new(1)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let policy_revision = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("revision"))
+            .and_then(Value::as_u64)
+            .filter(|value| *value != 0)
+            .map(ZoneRevision::new)
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let required_capability = ZoneRouteCapability::parse("resource-read")
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let binding = ZoneLinkRouteBinding::new(
+            link_uid.clone(),
+            edge.clone(),
+            controller_generation.clone(),
+            reconnect_generation,
+            parent_uid.clone(),
+            child_uid.clone(),
+            policy_revision,
+            required_capability.clone(),
+            OperationClass::Invoke,
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let record = ZoneLinkRecord::unenrolled(controller_generation.clone())
+            .with_disabled(spec.disabled())
+            .with_route_binding(binding)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let owner = ZoneLinkOwnerProof::from_digest(authority_generation, authority_digest)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let controller_limits = ZoneLinkLimits::new(
+            spec.limits().max_pending_intents(),
+            spec.limits().max_active_streams(),
+            spec.limits().reconnect_max_attempts(),
+            spec.limits().reconnect_window_secs(),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        let controller = ZoneLinkController::restore(
+            controller_limits,
+            ZoneLinkKeyPolicy::default(),
+            record,
+            owner.clone(),
+        );
+        let child_path_for_route = edge.child().clone();
+        let topology = SealedZoneTopology::seal(parent_path.clone(), vec![edge.clone()])
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?;
+        Ok(Self {
+            zone,
+            link_ref,
+            link_uid,
+            parent_path: parent_path.clone(),
+            child_path: child_path_for_route,
+            edge,
+            parent_zone_uid: parent_uid,
+            child_zone_uid: child_uid,
+            controller_generation,
+            reconnect_generation: Mutex::new(reconnect_generation),
+            required_capability,
+            policy_revision,
+            transport_provider_ref: spec.transport_provider_ref().clone(),
+            transport_settings,
+            cursor_owner: owner.clone(),
+            controller: Mutex::new(controller),
+            route_engine: Mutex::new(ZoneRouteEngine::new(parent_path)),
+            resolver: ZoneEntrypointResolver::new(topology),
+            gateway_session: Mutex::new(None),
+            route_admission_authority: Mutex::new(None),
+            gateway_vm: Mutex::new(None),
+        })
+    }
+
+    const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    const fn link_ref(&self) -> &ResourceRef {
+        &self.link_ref
+    }
+
+    const fn link_uid(&self) -> &ResourceUid {
+        &self.link_uid
+    }
+
+    const fn transport_provider_ref(&self) -> &ResourceRef {
+        &self.transport_provider_ref
+    }
+
+    const fn transport_settings(&self) -> &RelayTransportSettings {
+        &self.transport_settings
+    }
+
+    const fn child_path(&self) -> &ZonePath {
+        &self.child_path
+    }
+
+    /// Return the child-local controller session state.
+    fn session_state(&self) -> d2b_core_controller::zone_links::ZoneLinkSessionState {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .handler()
+            .session_state()
+    }
+
+    /// Apply one committed child-local controller event and release effects.
+    fn apply_event(
+        &self,
+        event: d2b_core_controller::zone_links::ZoneLinkEvent,
+    ) -> Result<Vec<ZoneLinkEffect>, ZoneLinkError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pass = controller.handler_mut().begin(event)?;
+        let proof = controller.handler_mut().commit(pass)?;
+        controller.handler_mut().release_effects(proof)
+    }
+
+    /// Issue one route admission through the child-local controller's
+    /// post-commit hand-off.
+    fn issue_route_admission<T>(
+        &self,
+        request: ZoneLinkRouteAdmissionRequest,
+        issuer: impl FnOnce(ZoneLinkRouteAdmissionRequest) -> Result<T, ZoneLinkError>,
+    ) -> Result<T, ZoneLinkError> {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .issue_route_admission(request, issuer)
+    }
+
+    /// Adopt the single durable cursor observation owned by this link.
+    fn adopt_cursor(
+        &self,
+        observation: d2b_core_controller::zonelink::ZoneLinkCursorRecord,
+    ) -> d2b_core_controller::zonelink::ZoneLinkAdoption {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .adopt_cursor([observation])
+    }
+
+    fn reconnect_generation(&self) -> ReconnectGeneration {
+        *self
+            .reconnect_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Bind the host-side authenticated Gateway Guest session and its
+    /// runtime-owned route-admission issuer.
+    fn bind_gateway_session(
+        &self,
+        session: Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    ) -> Result<(), ZoneLinkGatewayCompositionError> {
+        let session_generation = ReconnectGeneration::new(session.generation())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let current_generation = self.reconnect_generation();
+        if session_generation < current_generation {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let previous_session = self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let previous_authority = self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let previous_is_live = previous_session
+            .as_ref()
+            .is_some_and(|previous| previous.route_binding().liveness().is_live());
+        if previous_is_live && session_generation == current_generation {
+            if let Some(previous_session) = previous_session {
+                *self
+                    .gateway_session
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_session);
+            }
+            if let Some(previous_authority) = previous_authority {
+                *self
+                    .route_admission_authority
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_authority);
+            }
+            return Err(ZoneLinkGatewayCompositionError::SessionAlreadyBound);
+        }
+        if let Some(previous_authority) = previous_authority {
+            previous_authority.revoke();
+        }
+        drop(previous_session);
+        if session_generation > current_generation {
+            self.apply_event(ZoneLinkEvent::SessionGenerationAdvanced {
+                reconnect_generation: session_generation,
+            })
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            *self
+                .reconnect_generation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = session_generation;
+        }
+        self.establish_authenticated_controller_session(
+            session_generation,
+            session.peer_key_fingerprint(),
+        )?;
+        let route_binding = session.route_binding();
+        let policy = session
+            .identity()
+            .endpoint_policy_for_generation(session_generation.get());
+        let authority = d2b_bus::session::RuntimeRouteAdmissionAuthority::new(
+            self.link_uid.clone(),
+            self.edge.clone(),
+            self.controller_generation.clone(),
+            self.parent_zone_uid.clone(),
+            self.child_zone_uid.clone(),
+            self.required_capability.clone(),
+            OperationClass::Invoke,
+            self.policy_revision,
+            &policy,
+            &route_binding,
+            Arc::new(unix_now_millis),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        *self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session);
+        *self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(authority);
+        Ok(())
+    }
+
+    fn establish_authenticated_controller_session(
+        &self,
+        reconnect_generation: ReconnectGeneration,
+        peer_key_fingerprint: &d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint,
+    ) -> Result<(), ZoneLinkGatewayCompositionError> {
+        if self.reconnect_generation() != reconnect_generation {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        if self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .handler()
+            .record()
+            .enrollment()
+            .is_some_and(|enrollment| enrollment.key_fingerprint() != peer_key_fingerprint)
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let state = self.session_state();
+        match state {
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Unenrolled => {
+                let issued_at = unix_now_millis();
+                let psk = BootstrapPsk::issue(
+                    self.controller_generation.clone(),
+                    1,
+                    issued_at.saturating_add(300_000),
+                );
+                self.apply_event(ZoneLinkEvent::PskIssued { psk: psk.clone() })
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::BootstrapAdmit {
+                    psk,
+                    now_ms: issued_at,
+                })
+                .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::SealEnrollment {
+                    enrollment: SealedEnrollment::new(
+                        self.child_zone_uid.clone(),
+                        peer_key_fingerprint.clone(),
+                    ),
+                })
+                .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            }
+            d2b_core_controller::zone_links::ZoneLinkSessionState::EnrollmentCommitted => {
+                self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            }
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Kk => {}
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Ready => {}
+            d2b_core_controller::zone_links::ZoneLinkSessionState::IKpsk2 => {
+                return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+            }
+        }
+        if self.session_state()
+            == d2b_core_controller::zone_links::ZoneLinkSessionState::Kk
+        {
+            self.apply_event(ZoneLinkEvent::EnrolledSessionEstablished {
+                peer_key_fingerprint: peer_key_fingerprint.clone(),
+            })
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        }
+        if self.session_state() != d2b_core_controller::zone_links::ZoneLinkSessionState::Ready {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let mut controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !controller.cursor_authority().adoption().is_adopted() {
+            let cursor = controller.handler().record().cursor();
+            if !controller
+                .adopt_cursor([d2b_core_controller::zonelink::ZoneLinkCursorRecord::new(
+                    self.cursor_owner.clone(),
+                    cursor,
+                )])
+                .is_adopted()
+            {
+                return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+            }
+        }
+        Ok(())
+    }
+
+    fn has_gateway_session(&self) -> bool {
+        self.gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    fn gateway_session(
+        &self,
+    ) -> Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>> {
+        self.gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn fence_gateway_session(&self) {
+        if let Some(authority) = self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            authority.revoke();
+        }
+        let had_session = self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .is_some();
+        if had_session
+            && self.session_state()
+                == d2b_core_controller::zone_links::ZoneLinkSessionState::Ready
+        {
+            let _ = self.apply_event(ZoneLinkEvent::SessionDisconnected);
+        }
+    }
+
+    fn set_gateway_vm(&self, gateway_vm: String) {
+        *self
+            .gateway_vm
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_vm);
+    }
+
+    fn gateway_vm(&self) -> Option<String> {
+        self.gateway_vm
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Consume one runtime-issued admission for a child-Zone request.
+    fn admit_request(
+        &self,
+        operation_id: &str,
+        target_zone: ZonePath,
+    ) -> Result<(), ZoneRouteFailClosedReason> {
+        if target_zone != self.child_path || !self.has_gateway_session() {
+            return Err(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        let mut operation_digest = Sha256::new();
+        operation_digest.update(b"d2b:v3:zonelink-operation\0");
+        operation_digest.update(operation_id.as_bytes());
+        let operation_id = OperationId::new(operation_digest.finalize()[..16].to_vec())
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let request = ZoneLinkRouteAdmissionRequest::new(operation_id.clone(), OperationClass::Invoke)
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let expected = ZoneRouteAdmissionExpectation::new(
+            self.link_uid.clone(),
+            self.edge.clone(),
+            self.controller_generation.clone(),
+            self.reconnect_generation(),
+            self.parent_zone_uid.clone(),
+            self.child_zone_uid.clone(),
+            operation_id,
+            OperationClass::Invoke,
+            self.required_capability.clone(),
+            self.policy_revision,
+        )?
+        .for_zones(self.parent_path.clone(), self.child_path.clone());
+        let (verifier, evidence) = self
+            .issue_route_admission(request, |request| {
+                let authority = self
+                    .route_admission_authority
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                authority
+                    .as_ref()
+                    .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?
+                    .issue(request)
+                    .map_err(|_| ZoneLinkError::RouteAdmissionBindingInvalid)
+            })
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let admission = ZoneRouteAdmission::verify(verifier, evidence, &expected)?;
+        match self.decide_route(target_zone, admission) {
+            ZoneRouteDecision::Allowed { .. } => Ok(()),
+            ZoneRouteDecision::Denied { reason } => Err(reason),
+        }
+    }
+
+    /// Decide a route using a runtime-issued admission.
+    ///
+    /// The route engine consumes the admission at the exact decision point;
+    /// no caller policy, connectivity, capability, or time claim is read.
+    fn decide_route(
+        &self,
+        target_zone: ZonePath,
+        admission: ZoneRouteAdmission,
+    ) -> ZoneRouteDecision {
+        let request = ZoneRouteRequest::new(
+            self.resolver.topology().local_root().clone(),
+            target_zone,
+        )
+        .with_admission(admission);
+        let now = unix_now_seconds();
+        self.route_engine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .decide_authenticated_edge_route(
+                &self.edge,
+                ZoneRouteCapabilitySet::new(vec![self.required_capability.clone()])
+                    .expect("one required capability is within the contract bound"),
+                now,
+                now.saturating_add(30),
+                &request,
+            )
+    }
+}
+
+#[cfg(test)]
+fn zone_path(zone: &ZoneId) -> Result<ZonePath, ZoneLinkGatewayCompositionError> {
+    ZonePath::new(vec![
+        ZoneLabelId::parse(zone.as_str().to_owned())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?,
+    ])
+    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)
+}
+
+#[cfg(test)]
+fn child_zone_path(
+    parent: &ZonePath,
+    child: &ZoneId,
+) -> Result<ZonePath, ZoneLinkGatewayCompositionError> {
+    let mut labels = Vec::with_capacity(parent.depth() + 1);
+    labels.push(
+        ZoneLabelId::parse(child.as_str().to_owned())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?,
+    );
+    labels.extend(parent.labels().iter().cloned());
+    ZonePath::new(labels).map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)
+}
+
+fn unix_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod zone_link_gateway_composition_tests {
+    use super::*;
+    use d2b_core_controller::zone_links::{
+        BootstrapPsk, SealedEnrollment, ZoneLinkCursor, ZoneLinkEvent, ZoneLinkSessionState,
+    };
+    use d2b_core_controller::zonelink::{ZoneLinkCursorRecord, ZoneLinkOwnerProof};
+
+    fn uid(digit: char) -> ResourceUid {
+        ResourceUid::parse(format!(
+            "{0}{0}{0}{0}{0}{0}{0}{0}-{0}{0}{0}{0}-4{0}{0}{0}-8{0}{0}{0}-{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}",
+            digit
+        ))
+        .expect("test resource uid")
+    }
+
+    fn link_resource() -> Value {
+        json!({
+            "type": "ZoneLink",
+            "metadata": {
+                "name": "uplink",
+                "zone": "child",
+                "uid": uid('1'),
+                "revision": 1,
+            },
+            "spec": {
+                "childZoneName": "child",
+                "disabled": false,
+                "limits": {
+                    "maxActiveStreams": 32,
+                    "maxPendingIntents": 256,
+                    "reconnectMaxAttempts": 10,
+                    "reconnectWindowSecs": 300,
+                },
+                "transportCredentials": [
+                    "Credential/relay-listen",
+                    "Credential/relay-send",
+                ],
+                "transportProviderRef": "Provider/transport-azure-relay",
+                "transportSettings": {
+                    "relayEntityId": "hc-d2b-child",
+                    "relayNamespaceId": "relns-d2b-prod",
+                },
+            },
+        })
+    }
+
+    fn composition() -> ZoneLinkGatewayComposition {
+        let link = link_resource();
+        ZoneLinkGatewayComposition::from_committed_resources(
+            ZoneId::parse("child").unwrap(),
+            zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+            child_zone_path(
+                &zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+                &ZoneId::parse("child").unwrap(),
+            )
+            .unwrap(),
+            uid('2'),
+            uid('3'),
+            1,
+            &format!("sha256:{}", "a".repeat(64)),
+            &link,
+        )
+        .expect("valid Gateway Guest composition")
+    }
+
+    #[test]
+    fn committed_topology_accepts_a_non_local_root_name() {
+        let root = ZoneId::parse("root").unwrap();
+        let child = ZoneId::parse("child").unwrap();
+        let zones = BTreeSet::from([root.clone(), child.clone()]);
+        let topology = AllocatorZoneTopology {
+            root: root.clone(),
+            parent_map: BTreeMap::from([(root.clone(), None), (child.clone(), Some(root.clone()))]),
+        };
+        let resolved =
+            CommittedZoneTopology::from_allocator(&zones, &topology).expect("valid topology");
+        assert_eq!(resolved.root, root);
+        assert_eq!(
+            resolved.path(&child).unwrap().to_storage_string(),
+            "root/child"
+        );
+    }
+
+    #[test]
+    fn committed_topology_rejects_missing_and_ambiguous_roots() {
+        let root = ZoneId::parse("root").unwrap();
+        let child = ZoneId::parse("child").unwrap();
+        let zones = BTreeSet::from([root.clone(), child.clone()]);
+        let missing = AllocatorZoneTopology {
+            root: root.clone(),
+            parent_map: BTreeMap::from([(root.clone(), None)]),
+        };
+        assert!(matches!(
+            CommittedZoneTopology::from_allocator(&zones, &missing),
+            Err(ZoneTopologyError::Missing)
+        ));
+
+        let ambiguous = AllocatorZoneTopology {
+            root,
+            parent_map: BTreeMap::from([(child.clone(), None), (ZoneId::parse("other").unwrap(), None)]),
+        };
+        let ambiguous_zones = BTreeSet::from([child, ZoneId::parse("other").unwrap()]);
+        assert!(matches!(
+            CommittedZoneTopology::from_allocator(&ambiguous_zones, &ambiguous),
+            Err(ZoneTopologyError::Ambiguous)
+        ));
+    }
+
+    #[test]
+    fn composition_keeps_gateway_provider_and_route_state_together() {
+        let composition = composition();
+        assert_eq!(composition.zone().as_str(), "child");
+        assert_eq!(
+            composition.link_ref().to_canonical_string(),
+            "ZoneLink/uplink"
+        );
+        assert_eq!(composition.link_uid(), &uid('1'));
+        assert_eq!(
+            composition.transport_provider_ref().to_canonical_string(),
+            "Provider/transport-azure-relay"
+        );
+        assert_eq!(
+            composition.transport_settings().relay_entity_id,
+            "hc-d2b-child"
+        );
+        assert_eq!(composition.session_state(), ZoneLinkSessionState::Unenrolled);
+        assert_eq!(
+            format!("{composition:?}"),
+            "ZoneLinkGatewayComposition(<redacted>)"
+        );
+        assert!(!format!("{composition:?}").contains("hc-d2b-child"));
+    }
+
+    #[test]
+    fn authenticated_session_promotes_child_controller_and_adopts_cursor() {
+        let composition = composition();
+        let fingerprint =
+            d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                "fingerprint-child",
+            )
+            .unwrap();
+        composition
+            .establish_authenticated_controller_session(
+                composition.reconnect_generation(),
+                &fingerprint,
+            )
+            .expect("authenticated session should establish the child controller");
+        assert_eq!(
+            composition.session_state(),
+            ZoneLinkSessionState::Ready
+        );
+        assert!(
+            composition
+                .controller
+                .lock()
+                .unwrap()
+                .cursor_authority()
+                .adoption()
+                .is_adopted()
+        );
+    }
+
+    #[test]
+    fn a_reconnected_session_with_a_different_enrolled_key_is_refused() {
+        let composition = composition();
+        let first =
+            d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                "fingerprint-child",
+            )
+            .unwrap();
+        let replacement =
+            d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                "fingerprint-other",
+            )
+            .unwrap();
+        composition
+            .establish_authenticated_controller_session(composition.reconnect_generation(), &first)
+            .expect("initial session should establish");
+        assert_eq!(
+            composition
+                .establish_authenticated_controller_session(
+                    composition.reconnect_generation(),
+                    &replacement,
+                )
+                .unwrap_err(),
+            ZoneLinkGatewayCompositionError::InvalidIdentity
+        );
+    }
+
+    #[test]
+    fn gateway_route_operation_identity_binds_target_and_method() {
+        let base = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway",
+            "operationId": "same-operation"
+        });
+        let mut other_target = base.clone();
+        other_target["resourceRef"] = Value::String("Guest/other".to_owned());
+        let mut other_method = base.clone();
+        other_method["method"] = Value::String("Delete".to_owned());
+        assert_ne!(
+            gateway_route_operation_id(&base, 1000, "Get"),
+            gateway_route_operation_id(&other_target, 1000, "Get")
+        );
+        assert_ne!(
+            gateway_route_operation_id(&base, 1000, "Get"),
+            gateway_route_operation_id(&other_method, 1000, "Delete")
+        );
+    }
+
+    #[test]
+    fn gateway_classification_blocks_host_fallback_before_method_dispatch() {
+        let gateway_start = json!({
+            "method": "Start",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway"
+        });
+        let gateway_reconcile = json!({
+            "method": "Reconcile",
+            "zoneRef": "Zone/child",
+            "resourceType": "Guest"
+        });
+        let gateway_exec = json!({
+            "method": "Create",
+            "zoneRef": "Zone/child",
+            "resourceType": "EphemeralProcess"
+        });
+        let gateway_unsupported = json!({
+            "method": "Status",
+            "zoneRef": "Zone/child",
+            "resourceType": "Guest"
+        });
+        let gateway_shell = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "shell-terminal.d2bus.org.ShellSession/canary"
+        });
+        let gateway_exec_get = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "EphemeralProcess/canary"
+        });
+        for request in [
+            &gateway_start,
+            &gateway_reconcile,
+            &gateway_exec,
+            &gateway_unsupported,
+            &gateway_shell,
+            &gateway_exec_get,
+        ] {
+            assert_eq!(
+                classify_gateway_zone_request_kind(GatewayZonePresence::Composed, request)
+                    .unwrap_err(),
+                resource_runtime::ResourceRuntimeError::CapabilityUnavailable
+            );
+            assert_eq!(
+                classify_gateway_zone_request_kind(GatewayZonePresence::Refused, request)
+                    .unwrap_err(),
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            );
+        }
+
+        let forwarded = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway"
+        });
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Composed, &forwarded),
+            Ok(GatewayZoneRequestRoute::Forward)
+        );
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Local, &forwarded),
+            Ok(GatewayZoneRequestRoute::Local)
+        );
+
+        let control = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "ZoneLink/uplink"
+        });
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Composed, &control),
+            Ok(GatewayZoneRequestRoute::HostControl)
+        );
+        assert_eq!(
+            classify_gateway_zone_request_kind(
+                GatewayZonePresence::Composed,
+                &json!({
+                    "method": "Start",
+                    "zoneRef": "Zone/child",
+                    "resourceRef": "ZoneLink/uplink"
+                })
+            )
+            .unwrap_err(),
+            resource_runtime::ResourceRuntimeError::CapabilityUnavailable
+        );
+    }
+
+    #[test]
+    fn gateway_classification_precedes_lifecycle_and_reconcile_dispatch() {
+        let source = include_str!("composition.rs");
+        let early_classification = source
+            .find("let gateway_resource_route = match")
+            .expect("early gateway classification");
+        let shell_owner = source
+            .find("&& typed_shell_request(&resource.value())")
+            .expect("typed shell owner dispatch");
+        let process_owner = source
+            .find("&& process_resource_owner_request(&resource.value())")
+            .expect("process owner dispatch");
+        assert!(early_classification < shell_owner);
+        assert!(early_classification < process_owner);
+
+        let classification = source
+            .find("let gateway_route = match classify_gateway_zone_request")
+            .expect("gateway classification");
+        let forwarding = source
+            .find("if gateway_route == GatewayZoneRequestRoute::Forward")
+            .expect("gateway forwarding branch");
+        let admission = source
+            .find("match admit_gateway_zone_request")
+            .expect("gateway route admission");
+        let lifecycle = source
+            .find("Some(\"Start\" | \"Stop\" | \"Restart\")")
+            .expect("lifecycle dispatch");
+        let reconcile = source
+            .find("if is_device_tpm_reconcile_request")
+            .expect("reconcile dispatch");
+        assert!(classification < forwarding);
+        assert!(classification < admission);
+        assert!(classification < lifecycle);
+        assert!(classification < reconcile);
+    }
+
+    #[test]
+    fn non_relay_provider_is_refused_before_gateway_composition() {
+        let mut link = link_resource();
+        link["spec"]["transportProviderRef"] =
+            Value::String("Provider/transport-unix".to_owned());
+        assert!(!is_gateway_zone_link(&link));
+        let error = ZoneLinkGatewayComposition::from_committed_resources(
+            ZoneId::parse("child").unwrap(),
+            zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+            child_zone_path(
+                &zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+                &ZoneId::parse("child").unwrap(),
+            )
+            .unwrap(),
+            uid('2'),
+            uid('3'),
+            1,
+            &format!("sha256:{}", "a".repeat(64)),
+            &link,
+        )
+        .expect_err("local transport cannot use the Gateway Guest composition");
+        assert_eq!(
+            error,
+            ZoneLinkGatewayCompositionError::InvalidTransportSettings
+        );
+    }
+
+    #[test]
+    fn controller_requires_adopted_cursor_before_route_admission() {
+        let composition = composition();
+        let generation = ZoneLinkControllerGeneration::parse(
+            format!("zonelink-{}", uid('1').as_str().replace('-', "")),
+        )
+        .unwrap();
+        let psk = BootstrapPsk::issue(generation.clone(), 1, 300_000);
+        composition
+            .apply_event(ZoneLinkEvent::PskIssued { psk: psk.clone() })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::BootstrapAdmit { psk, now_ms: 1 })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::SealEnrollment {
+                enrollment: SealedEnrollment::new(
+                    uid('3'),
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                        "fingerprint-child",
+                    )
+                    .unwrap(),
+                ),
+            })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::EnrolledSessionEstablished {
+                peer_key_fingerprint:
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                        "fingerprint-child",
+                    )
+                    .unwrap(),
+            })
+            .unwrap();
+        let request = ZoneLinkRouteAdmissionRequest::new(
+            d2b_contracts_zone_session::v3::component_session::OperationId::new(vec![1; 16])
+                .unwrap(),
+            OperationClass::Invoke,
+        )
+        .unwrap();
+        assert_eq!(
+            composition
+                .issue_route_admission(request.clone(), Ok::<_, ZoneLinkError>)
+                .unwrap_err(),
+            ZoneLinkError::RouteAdmissionCursorUnavailable
+        );
+        let owner = ZoneLinkOwnerProof::from_digest(
+            1,
+            format!("sha256:{}", "a".repeat(64)),
+        )
+        .unwrap();
+        assert!(composition
+            .adopt_cursor(ZoneLinkCursorRecord::new(owner, ZoneLinkCursor::default()))
+            .is_adopted());
+        assert_eq!(
+            composition
+                .issue_route_admission(request, Ok::<_, ZoneLinkError>)
+                .unwrap()
+                .verb(),
+            OperationClass::Invoke
+        );
+    }
+
+    #[test]
+    fn host_startup_has_no_legacy_gateway_config_or_credential_loader() {
+        let source = include_str!("composition.rs");
+        let start = source.find("pub async fn serve(").expect("host serve");
+        let end = source
+            .find("pub struct GuestServeOptions")
+            .expect("Guest options");
+        let host = &source[start..end];
+        for retired in [
+            "load_gateway_file_config",
+            "gateway_deps_from_config",
+            "GatewayCredential::load_sealed",
+        ] {
+            assert!(
+                !host.contains(retired),
+                "Host composition must not load retired gateway material: {retired}"
+            );
+        }
+    }
 }
 const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
 
@@ -2172,6 +3372,7 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
     }
 }
 
+#[cfg(test)]
 struct GatewayDisplayRuntime {
     orchestrator: GatewayOrchestrator,
     sessions: Mutex<HashMap<String, GatewayDisplaySession>>,
@@ -2179,12 +3380,14 @@ struct GatewayDisplayRuntime {
     preflight: Option<GatewayDisplayPreflight>,
 }
 
+#[cfg(test)]
 impl std::fmt::Debug for GatewayDisplayRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("GatewayDisplayRuntime(<state>)")
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct GatewayDisplaySession {
     target: String,
@@ -2193,24 +3396,28 @@ struct GatewayDisplaySession {
     opened_at: Instant,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct GatewayDisplayPreflight {
     allow_host_relay_credentials: bool,
     waypipe_socket_path: Option<PathBuf>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct ValidatedWaypipeSocket {
     uid: u32,
     mode: u32,
 }
 
+#[cfg(test)]
 #[async_trait]
 trait GatewayLifecycle: Send + Sync {
     async fn start(&self, target: &TargetName) -> Result<String, GatewayError>;
     async fn stop(&self, target: &TargetName) -> Result<String, GatewayError>;
 }
 
+#[cfg(test)]
 fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
     Arc::new(GatewayDisplayRuntime {
         orchestrator: GatewayOrchestrator::new(
@@ -2234,6 +3441,7 @@ fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
     })
 }
 
+#[cfg(test)]
 fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, TypedError> {
     if !path.exists() {
         return Ok(None);
@@ -2249,6 +3457,7 @@ fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, Ty
         })
 }
 
+#[cfg(test)]
 fn new_gateway_display_runtime_from_config(
     config: GatewayFileConfig,
 ) -> Result<Arc<GatewayDisplayRuntime>, TypedError> {
@@ -2264,6 +3473,7 @@ fn new_gateway_display_runtime_from_config(
     }))
 }
 
+#[cfg(test)]
 fn gateway_display_preflight_from_config(
     config: &GatewayFileConfig,
 ) -> Result<GatewayDisplayPreflight, TypedError> {
@@ -2279,6 +3489,7 @@ fn gateway_display_preflight_from_config(
     })
 }
 
+#[cfg(test)]
 fn validate_gateway_host_relay_transition_guard(
     config: &GatewayFileConfig,
 ) -> Result<(), TypedError> {
@@ -2290,6 +3501,7 @@ fn validate_gateway_host_relay_transition_guard(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocket, TypedError> {
     if !path.is_absolute() {
         return Err(gateway_display_config_error(format!(
@@ -2334,6 +3546,7 @@ fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocke
     Ok(ValidatedWaypipeSocket { uid, mode })
 }
 
+#[cfg(test)]
 fn reject_symlink_components(path: &Path) -> Result<(), TypedError> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -2357,6 +3570,7 @@ fn reject_symlink_components(path: &Path) -> Result<(), TypedError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
     TypedError::GatewayDisplayUnavailable {
         detail: detail.into(),
@@ -2450,12 +3664,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         "d2bd restored runner state; checking startup contracts",
     );
 
-    let gateway_display =
-        if let Some(gateway_config) = load_gateway_file_config(&config.gateway_config_path)? {
-            crate::new_gateway_display_runtime_from_config(gateway_config)?
-        } else {
-            crate::new_gateway_display_runtime()
-        };
     if let Some(realm_controllers) =
         load_realm_controllers_config(&config.realm_controllers_config_path)?
     {
@@ -2511,10 +3719,11 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        #[cfg(test)]
+        gateway_display: new_gateway_display_runtime(),
         console_sessions: Arc::new(Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
-        gateway_display,
         conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(
             resolve_max_inflight_connections(),
         ),
@@ -2563,25 +3772,40 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
-            let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
-                Ok(()) => {
-                    let process_providers =
-                        Arc::new(process_provider_runtime::ProductionProcessProviders::new(
-                            resolver.clone(),
-                            broker_socket_path(&state),
-                            BrokerCallerRole::AdminUid {
-                                uid: state.daemon_uid,
-                            },
-                        ));
-                    state
-                        .provider_runtime
-                        .attach_process_providers(process_providers)
-                        .is_ok()
-                }
-                Err(error) => {
+            let provider_root = d2bd_runtime::zone_authority::authoritative_zone_ids(&resolver)
+                .ok()
+                .and_then(|zones| committed_zone_topology(&resolver, &zones).ok())
+                .map(|topology| topology.root);
+            let provider_ready = match provider_root.as_ref() {
+                Some(root) => match state
+                    .provider_runtime
+                    .configure_from_host(&resolver.host, root)
+                {
+                    Ok(()) => {
+                        let process_providers =
+                            Arc::new(process_provider_runtime::ProductionProcessProviders::new(
+                                resolver.clone(),
+                                broker_socket_path(&state),
+                                BrokerCallerRole::AdminUid {
+                                    uid: state.daemon_uid,
+                                },
+                            ));
+                        state
+                            .provider_runtime
+                            .attach_process_providers(process_providers)
+                            .is_ok()
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            error = %error,
+                            "provider registry catalog refused; Provider lifecycle effects are disabled",
+                        );
+                        false
+                    }
+                },
+                None => {
                     tracing::error!(
-                        error = %error,
-                        "provider registry catalog refused; Provider lifecycle effects are disabled",
+                        "provider registry refused: committed Zone topology root is unavailable",
                     );
                     false
                 }
@@ -3012,13 +4236,180 @@ pub struct GuestServeOptions {
     pub boot_id_path: PathBuf,
     pub local_private_key_path: Option<PathBuf>,
     pub parent_public_key_path: Option<PathBuf>,
+    /// Guest-local gateway configuration. The file contains only runtime
+    /// paths and non-secret Relay coordinates; absence means this Guest is not
+    /// a Gateway execution target.
+    pub gateway_zone_link_config_path: Option<PathBuf>,
     pub validate_only: bool,
     pub once: bool,
 }
 
+/// Guest-local inputs for the selected Azure Relay transport Provider.
+#[derive(Debug, Clone)]
+pub struct GatewayGuestZoneLinkOptions {
+    pub credential_path: PathBuf,
+    pub seal_key_path: PathBuf,
+    pub observation_path: Option<PathBuf>,
+    pub execution_ref: ResourceRef,
+    pub network_ref: ResourceRef,
+    pub settings: RelayTransportSettings,
+    pub max_concurrent_sessions: u32,
+    pub connect_timeout_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayGuestConfigFile {
+    credential_path: PathBuf,
+    seal_key_path: PathBuf,
+    observation_path: Option<PathBuf>,
+    relay: GatewayGuestRelayConfigFile,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayGuestRelayConfigFile {
+    namespace: Option<String>,
+    entity: Option<String>,
+}
+
+const GATEWAY_GUEST_OPEN_OBSERVATION_PATH: &str = "/run/d2b-gateway-observation/opened";
+
+fn validate_gateway_guest_observation_path(
+    path: Option<PathBuf>,
+) -> Result<Option<PathBuf>, TypedError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if path != Path::new(GATEWAY_GUEST_OPEN_OBSERVATION_PATH) {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest gateway observation path is invalid".to_owned(),
+        });
+    }
+    Ok(Some(path))
+}
+
+fn load_gateway_guest_zone_link_options(
+    config_path: Option<&Path>,
+    identity: &d2bd_runtime::guest_mode::GuestIdentity,
+    bundle: &BundleResolver,
+) -> Result<Option<GatewayGuestZoneLinkOptions>, TypedError> {
+    let Some(config_path) = config_path else {
+        return Ok(None);
+    };
+    let metadata = match fs::symlink_metadata(config_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(TypedError::InternalConfig {
+                detail: "Guest gateway configuration unavailable".to_owned(),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest gateway configuration is not a regular file".to_owned(),
+        });
+    }
+    let bytes = fs::read(config_path).map_err(|_| TypedError::InternalConfig {
+        detail: "Guest gateway configuration unavailable".to_owned(),
+    })?;
+    let config: GatewayGuestConfigFile =
+        serde_json::from_slice(&bytes).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest gateway configuration is invalid".to_owned(),
+        })?;
+    let observation_path = validate_gateway_guest_observation_path(config.observation_path)?;
+    let namespace = config
+        .relay
+        .namespace
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay namespace is unavailable".to_owned(),
+        })?;
+    let entity = config
+        .relay
+        .entity
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay entity is unavailable".to_owned(),
+        })?;
+    let settings = RelayTransportSettings::new(namespace, entity).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "Guest Relay settings are invalid".to_owned(),
+        }
+    })?;
+    let bundle_bytes = bundle
+        .zone_resource_bundle_bytes(identity.zone().as_str())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Zone resource bundle is unavailable".to_owned(),
+        })?;
+    let zone_bundle =
+        ResourceBundle::from_json(bundle_bytes).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest Zone resource bundle is invalid".to_owned(),
+        })?;
+    let providers = zone_bundle
+        .resources
+        .iter()
+        .filter(|resource| {
+            resource.resource_type().as_str() == "Provider"
+                && resource
+                    .metadata()
+                    .name()
+                    .as_str()
+                    .starts_with("transport-azure-relay")
+        })
+        .collect::<Vec<_>>();
+    let [provider] = providers.as_slice() else {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest Relay Provider assignment is unavailable".to_owned(),
+        });
+    };
+    let provider_spec = serde_json::from_slice::<Value>(&provider.spec().to_canonical_bytes())
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Guest Relay Provider configuration is invalid".to_owned(),
+        })?;
+    let provider_config = provider_spec
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay Provider configuration is unavailable".to_owned(),
+        })?;
+    let execution_ref = provider_config
+        .get("executionRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay execution assignment is invalid".to_owned(),
+        })?;
+    let network_ref = provider_config
+        .get("networkRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay network assignment is invalid".to_owned(),
+        })?;
+    if execution_ref != *identity.guest_ref()
+        || execution_ref.resource_type().as_str() != "Guest"
+        || network_ref.resource_type().as_str() != "Network"
+    {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest Relay Provider placement is invalid".to_owned(),
+        });
+    }
+    Ok(Some(GatewayGuestZoneLinkOptions {
+        credential_path: config.credential_path,
+        seal_key_path: config.seal_key_path,
+        observation_path,
+        execution_ref,
+        network_ref,
+        settings,
+        max_concurrent_sessions: 32,
+        connect_timeout_seconds: 30,
+    }))
+}
+
 /// Start the fixed Guest target agent. Unlike [`serve`], this path never
-/// loads `DaemonConfig`, binds a public operator socket, opens a Zone store,
-/// or loads realm credentials.
+/// loads `DaemonConfig`, binds a public operator socket, or opens a Host Zone
+/// store. Any optional credential input belongs to the Guest-local
+/// `GatewayGuestZoneLinkOptions` path.
 pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
         return Err(TypedError::InternalConfig {
@@ -3101,6 +4492,32 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             detail: "guest process bundle unavailable".to_owned(),
         }
     })?;
+    let gateway_zone_link = load_gateway_guest_zone_link_options(
+        options.gateway_zone_link_config_path.as_deref(),
+        &identity,
+        &bundle,
+    )?
+    .map(|config| {
+        let observation_path = config.observation_path;
+        let runtime = d2b_gateway_runtime::GatewayGuestZoneLinkRuntime::from_sealed(
+            config.credential_path,
+            config.seal_key_path,
+            config.execution_ref,
+            config.network_ref,
+            config.settings,
+            config.max_concurrent_sessions,
+            config.connect_timeout_seconds,
+            &d2b_gateway_runtime::CredentialFilePolicy::default(),
+        )
+        .map_err(|error| TypedError::InternalConfig {
+            detail: error.code().to_owned(),
+        })?;
+        Ok::<_, TypedError>((runtime, observation_path))
+    })
+    .transpose()?;
+    if gateway_zone_link.is_some() {
+        tracing::info!("Guest-local ZoneLink transport Provider composed");
+    }
     let process_providers = Arc::new(process_provider_runtime::ProductionProcessProviders::new_for_mode(
         bundle,
         options.broker_socket_path.clone(),
@@ -3125,6 +4542,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         .map_err(|error| TypedError::InternalConfig {
             detail: error.to_string(),
         })?;
+    if let Some((gateway_zone_link, Some(observation_path))) = gateway_zone_link.as_ref() {
+        gateway_zone_link
+            .write_open_observation(observation_path)
+            .map_err(|error| TypedError::InternalConfig {
+                detail: error.code().to_owned(),
+            })?;
+    }
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -4301,8 +5725,32 @@ fn handle_connection_authorized(
             let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
             continue;
         }
+        let gateway_resource_route = if matches!(peer.role, PeerRole::Admin) {
+            match &request {
+                d2bd_runtime::wire::Request::Resource(resource) => {
+                    if let Ok(runtime) = resolve_resource_runtime(state, &resource.value()) {
+                        match classify_gateway_zone_request(state, &runtime, &resource.value()) {
+                            Ok(route) => Some(route),
+                            Err(error) => {
+                                let _ = write_json_frame(
+                                    &stream,
+                                    &resource_runtime_error_frame(error),
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if let d2bd_runtime::wire::Request::Resource(resource) = &request
             && typed_shell_request(&resource.value())
+            && gateway_resource_route != Some(GatewayZoneRequestRoute::Forward)
         {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -4338,6 +5786,7 @@ fn handle_connection_authorized(
         }
         if let d2bd_runtime::wire::Request::Resource(resource) = &request
             && process_resource_owner_request(&resource.value())
+            && gateway_resource_route != Some(GatewayZoneRequestRoute::Forward)
         {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -4371,8 +5820,10 @@ fn handle_connection_authorized(
                 }
             }
         }
-        // Gateway display operations can perform provider/relay orchestration.
-        // Hand them off the serial accept loop just like Process owner sessions.
+        // The retired GatewayDisplay compatibility owner remains available
+        // only to owner-local tests; production requests fall through to the
+        // clean-break unsupported arm below.
+        #[cfg(test)]
         if let d2bd_runtime::wire::Request::GatewayDisplay(op) = &request {
             if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -4411,6 +5862,7 @@ fn handle_connection_authorized(
     }
 }
 
+#[cfg(test)]
 fn run_gateway_display_owner(
     stream: Socket,
     state: ServerState,
@@ -4559,8 +6011,15 @@ fn dispatch_request_locked(
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
         d2bd_runtime::wire::Request::Console(op) => dispatch_console(state, peer, op),
+        #[cfg(test)]
         d2bd_runtime::wire::Request::GatewayDisplay(op) => {
             dispatch_gateway_display(state, peer, op)
+        }
+        #[cfg(not(test))]
+        d2bd_runtime::wire::Request::GatewayDisplay(_) => {
+            Err(TypedError::WireUnsupportedRequest {
+                request_type: "gatewayDisplay".to_owned(),
+            })
         }
         d2bd_runtime::wire::Request::Workload(op) => dispatch_workload(state, peer, op),
         d2bd_runtime::wire::Request::Audio(op) => {
@@ -5207,6 +6666,14 @@ fn dispatch_resource_request(
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
+    let gateway_route = match classify_gateway_zone_request(
+        state,
+        &runtime,
+        &request.value(),
+    ) {
+        Ok(route) => route,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
     if let Err(error) = block_on_future(runtime.authenticate_public_peer(
         peer.uid,
         &d2bd_runtime::resource_runtime_support::public_operation_id(
@@ -5216,6 +6683,12 @@ fn dispatch_resource_request(
         ),
     )) {
         return Ok(resource_runtime_error_frame(error));
+    }
+    if gateway_route == GatewayZoneRequestRoute::Forward {
+        match admit_gateway_zone_request(state, &runtime, &request.value(), peer.uid) {
+            Ok(value) => return Ok(value),
+            Err(error) => return Ok(resource_runtime_error_frame(error)),
+        }
     }
     if matches!(
         request.method(),
@@ -5328,6 +6801,226 @@ fn dispatch_resource_request(
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayZoneRequestRoute {
+    Local,
+    HostControl,
+    Forward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayZonePresence {
+    Local,
+    Composed,
+    Refused,
+}
+
+fn classify_gateway_zone_request(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+) -> Result<GatewayZoneRequestRoute, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let presence = if plane.gateway_zone_link_is_refused(runtime.zone()) {
+        GatewayZonePresence::Refused
+    } else if plane.gateway_zone_link(runtime.zone()).is_some() {
+        GatewayZonePresence::Composed
+    } else {
+        GatewayZonePresence::Local
+    };
+    classify_gateway_zone_request_kind(presence, request)
+}
+
+fn classify_gateway_zone_request_kind(
+    presence: GatewayZonePresence,
+    request: &Value,
+) -> Result<GatewayZoneRequestRoute, resource_runtime::ResourceRuntimeError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if is_zone_link_control_request(request) {
+        if gateway_zone_link_control_method(method) {
+            return Ok(GatewayZoneRequestRoute::HostControl);
+        }
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
+    match presence {
+        GatewayZonePresence::Local => Ok(GatewayZoneRequestRoute::Local),
+        GatewayZonePresence::Composed if gateway_forwardable_request(request) => {
+            Ok(GatewayZoneRequestRoute::Forward)
+        }
+        GatewayZonePresence::Composed => {
+            Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable)
+        }
+        GatewayZonePresence::Refused => {
+            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        }
+    }
+}
+
+fn gateway_zone_link_control_method(method: &str) -> bool {
+    matches!(
+        method,
+        "Get"
+            | "List"
+            | "Create"
+            | "UpdateSpec"
+            | "UpdateStatus"
+            | "UpdateFinalizers"
+            | "Delete"
+    )
+}
+
+fn gateway_forwardable_method(method: &str) -> bool {
+    gateway_zone_link_control_method(method)
+}
+
+fn gateway_forwardable_request(request: &Value) -> bool {
+    let Some(method) = request.get("method").and_then(Value::as_str) else {
+        return false;
+    };
+    gateway_forwardable_method(method)
+        && !matches!(method, "Start" | "Stop" | "Restart" | "Reconcile")
+        && !matches!(
+            method,
+            "DeviceUsbAttach" | "DeviceUsbDetach" | "DeviceUsbProbe"
+        )
+        && request
+            .get("service")
+            .and_then(Value::as_str)
+            != Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
+        && !process_resource_owner_request(request)
+        && !process_resource_detached_create_request(request)
+        && !process_resource_management_request(request)
+        && !is_gateway_shell_resource_request(request)
+        && !is_gateway_ephemeral_process_request(request)
+}
+
+fn is_gateway_shell_resource_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .is_some_and(is_typed_shell_resource_ref)
+}
+
+fn is_gateway_ephemeral_process_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .is_some_and(|value| value.resource_type().as_str() == "EphemeralProcess")
+}
+
+fn admit_gateway_zone_request(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+    peer_uid: u32,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    if plane.gateway_zone_link_is_refused(runtime.zone()) {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let composition = plane
+        .gateway_zone_link(runtime.zone())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if !composition.has_gateway_session() {
+        let Some(gateway_vm) = composition.gateway_vm() else {
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        };
+        let session = block_on_future(connect_guest_component_session(state, &gateway_vm))
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        composition
+            .bind_gateway_session(session)
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    }
+    let target_zone = composition.child_path().clone();
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = gateway_route_operation_id(request, peer_uid, method);
+    composition
+        .admit_request(&operation_id, target_zone)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    debug_assert!(gateway_forwardable_request(request));
+    let session = composition
+        .gateway_session()
+        .ok_or(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
+    let result = block_on_future(runtime.dispatch_gateway_resource_request(
+        &session,
+        request,
+        &operation_id,
+    ));
+    if matches!(
+        &result,
+        Err(
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                | resource_runtime::ResourceRuntimeError::AuthenticationUnavailable
+        )
+    ) {
+        composition.fence_gateway_session();
+        if let Some(gateway_vm) = composition.gateway_vm() {
+            block_on_future(invalidate_guest_component_session(state, &gateway_vm));
+        }
+    }
+    result
+}
+
+fn gateway_route_operation_id(request: &Value, peer_uid: u32, method: &str) -> String {
+    let public_operation_id =
+        d2bd_runtime::resource_runtime_support::public_operation_id(request, peer_uid, method);
+    let target = request
+        .get("resourceRef")
+        .or_else(|| request.get("resourceType"))
+        .and_then(Value::as_str)
+        .unwrap_or("unaddressed");
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .unwrap_or("unaddressed");
+    let digest = Sha256::digest(
+        format!(
+            "d2b:gateway-route:v1:{peer_uid}:{public_operation_id}:{method}:{zone}:{target}"
+        )
+        .as_bytes(),
+    );
+    format!(
+        "gateway-route-{}",
+        digest
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn is_zone_link_control_request(request: &Value) -> bool {
+    request
+        .get("resourceType")
+        .and_then(Value::as_str)
+        == Some("ZoneLink")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .is_some_and(|value| value.resource_type().as_str() == "ZoneLink")
 }
 
 fn dispatch_guest_lifecycle_resource_request(
@@ -6717,6 +8410,97 @@ fn committed_resource_generation(
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
 }
 
+fn committed_resource_revision(
+    resource: &Value,
+) -> Result<ZoneRevision, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("revision"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value != 0)
+        .map(ZoneRevision::new)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_zone_resource_identity(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    resource: &Value,
+) -> Result<ZoneResourceIdentity, resource_runtime::ResourceRuntimeError> {
+    let metadata = resource
+        .get("metadata")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_zone = metadata
+        .get("zone")
+        .and_then(Value::as_str)
+        .and_then(|value| ZoneId::parse(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if resource_zone != *runtime.zone() {
+        return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+    }
+    let resource_type = resource
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_name = metadata
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_ref_text = format!("{resource_type}/{resource_name}");
+    let resource_ref = ResourceRef::parse(&resource_ref_text)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone_uid = runtime
+        .authority_zone_uid()
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::IdentityUnbound)?;
+    Ok(ZoneResourceIdentity::new(
+        resource_zone,
+        zone_uid,
+        resource_ref,
+        committed_resource_uid(resource)?,
+        committed_resource_generation(resource)?,
+        committed_resource_revision(resource)?,
+    ))
+}
+
+/// Resolve the committed execution resource for the same-UID unsafe-local
+/// helper. The helper owns workload scopes, but the daemon may only bind them
+/// to an identity read from the authoritative topology-root resource store.
+fn authoritative_unsafe_local_resource_identity(
+    state: &ServerState,
+) -> Result<ZoneResourceIdentity, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let root_zone = plane
+        .topology_root()
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let runtime = plane.zone(&root_zone)?;
+    let hosts = block_on_future(runtime.committed_resources_of_type("Host"))?;
+    let [host] = hosts.as_slice() else {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    };
+    committed_zone_resource_identity(&runtime, host)
+}
+
+fn same_zone_resource_identity(
+    left: &ZoneResourceIdentity,
+    right: &ZoneResourceIdentity,
+) -> bool {
+    left.matches(
+        right.zone(),
+        right.zone_uid(),
+        right.resource_ref(),
+        right.resource_uid(),
+        right.generation(),
+        right.revision(),
+    )
+}
+
 fn network_deletion_completed(resource: &Value) -> bool {
     resource
         .get("status")
@@ -7357,7 +9141,14 @@ fn resolve_typed_shell_runtime(
     request: &Value,
 ) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
     let runtime = resolve_resource_runtime(state, request)?;
-    if runtime.zone().as_str() != "local-root" {
+    let root = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    if runtime.zone() != &root {
         return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
     }
     Ok(runtime)
@@ -7864,14 +9655,17 @@ fn workload_runtime_status(
                     .unsafe_local_helpers
                     .last_failure(requester_uid, &entry.metadata.identity.canonical_target),
             );
+            let authoritative_identity =
+                authoritative_unsafe_local_resource_identity(state).ok();
             let workload_state = state
                 .unsafe_local_helpers
                 .snapshot(requester_uid)
                 .and_then(|snapshot| {
+                    let identity = authoritative_identity.as_ref()?;
                     snapshot
                         .scopes
                         .into_iter()
-                        .find(|scope| scope.workload == entry.metadata.identity)
+                        .find(|scope| same_zone_resource_identity(&scope.workload, identity))
                 })
                 .map_or(WorkloadState::Stopped, |scope| match scope.state {
                     HelperScopeState::Starting => WorkloadState::Starting,
@@ -7917,10 +9711,20 @@ fn dispatch_unsafe_local_launcher(
     use d2b_contracts_control::unsafe_local_wire::{
         HelperLaunchRequest, HelperOperationDisposition,
     };
+    let target = resolved.identity.canonical_target.clone();
+    let workload = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: target.to_canonical(),
+            runtime_kind: "unsafe-local".to_owned(),
+            capability: "committed-resource-identity".to_owned(),
+            verb: "launch".to_owned(),
+        }
+    })?;
     let request = HelperLaunchRequest {
         request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
-        workload: resolved.identity.clone(),
+        workload,
+        target,
         item_id: resolved.item_id.clone(),
         argv: resolved.argv.clone(),
         graphical: resolved.graphical,
@@ -7948,6 +9752,18 @@ fn dispatch_local_vm_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
+    let root_zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(|| TypedError::RuntimeCapabilityUnsupported {
+            vm: vm.to_owned(),
+            runtime_kind: "resource-plane".to_owned(),
+            capability: "committed-zone-topology".to_owned(),
+            verb: "launch".to_owned(),
+        })?;
     let mut fingerprint = Sha256::new();
     fingerprint.update(requester_uid.to_le_bytes());
     fingerprint.update(operation_id.as_str().as_bytes());
@@ -7976,7 +9792,7 @@ fn dispatch_local_vm_launcher(
         }
     })?;
     let resource_request = serde_json::json!({
-        "zoneRef": "Zone/local-root",
+        "zoneRef": format!("Zone/{}", root_zone.as_str()),
         "requestId": request_id,
     });
     let client = exec_detached::ResourceDetachedClient::new(
@@ -8234,6 +10050,7 @@ mod network_tap_provenance_tests {
     #[test]
     fn network_admission_release_requires_deleted_resource_without_finalizers() {
         assert!(!network_deletion_completed(&json!({
+            "type": "ZoneLink",
             "metadata": {"finalizers": ["network.d2bus.org/cleanup"]},
             "status": {"phase": "Deleted"}
         })));
@@ -8607,6 +10424,73 @@ mod workload_observability_tests {
             ),
             public_wire::WorkloadAvailability::WaylandUnavailable
         );
+    }
+
+    #[test]
+    fn snapshot_identity_matching_fences_every_zone_resource_field() {
+        let identity = ZoneResourceIdentity::new(
+            ZoneId::parse("local-root").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
+        );
+        assert!(same_zone_resource_identity(&identity, &identity));
+
+        let variants = [
+            ZoneResourceIdentity::new(
+                ZoneId::parse("other").unwrap(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                ResourceRef::parse("Host/other").unwrap(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                ResourceGeneration::new(2).unwrap(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                ZoneRevision::new(2),
+            ),
+        ];
+        assert!(variants
+            .iter()
+            .all(|variant| !same_zone_resource_identity(&identity, variant)));
     }
 
     fn assert_single_refusal(
@@ -9019,6 +10903,7 @@ fn build_read_output_result(
     }
 }
 
+#[cfg(test)]
 fn dispatch_gateway_display(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -9272,6 +11157,7 @@ fn dispatch_gateway_display(
     Ok(value)
 }
 
+#[cfg(test)]
 fn parse_gateway_display_lifecycle_target(
     target: &str,
     operation_id: &str,
@@ -9293,30 +11179,22 @@ fn parse_gateway_display_lifecycle_target(
     Ok(target)
 }
 
+#[cfg(test)]
 fn validate_gateway_display_open_preflight(state: &ServerState) -> Result<(), TypedError> {
-    if let Some(preflight) = state.gateway_display.preflight.as_ref() {
-        let guard_config = GatewayFileConfig {
-            gateway: String::new(),
-            realm: String::new(),
-            state_dir: None,
-            credential_path: None,
-            seal_key_path: None,
-            allow_host_relay_credentials: preflight.allow_host_relay_credentials,
-            relay: GatewayRelayFileConfig::default(),
-            aca: GatewayAcaFileConfig::default(),
-            display: GatewayDisplayFileConfig::default(),
-        };
-        validate_gateway_host_relay_transition_guard(&guard_config)?;
-        let waypipe_socket_path = preflight.waypipe_socket_path.as_ref().ok_or_else(|| {
-            gateway_display_config_error(
-                "gateway config field display.waypipeSocket is required; set it to the operator Waypipe receiver Unix socket path",
-            )
-        })?;
-        validate_waypipe_receiver_socket(waypipe_socket_path)?;
+    if state
+        .gateway_display
+        .preflight
+        .as_ref()
+        .is_some_and(|preflight| preflight.allow_host_relay_credentials)
+    {
+        return Err(gateway_display_config_error(
+            "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
+        ));
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Result<(), TypedError> {
     gateway_display_gc(state);
     let sessions: Vec<(String, GatewayDisplaySession)> = state
@@ -9337,6 +11215,7 @@ fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 fn gateway_error_to_typed(error: GatewayError) -> TypedError {
     tracing::warn!(
         gateway_error = error.slug(),
@@ -9347,6 +11226,7 @@ fn gateway_error_to_typed(error: GatewayError) -> TypedError {
     }
 }
 
+#[cfg(test)]
 fn gateway_display_gc(state: &ServerState) {
     let now = Instant::now();
     let expired: Vec<(String, GatewayDisplaySession)> = match state.gateway_display.sessions.lock()
@@ -9368,6 +11248,7 @@ fn gateway_display_gc(state: &ServerState) {
     }
 }
 
+#[cfg(test)]
 fn gateway_deps_from_config(config: &GatewayFileConfig) -> Result<GatewayDeps, TypedError> {
     Ok(production_deps(
         Box::new(ConfiguredGatewayWorkload {
@@ -9380,10 +11261,12 @@ fn gateway_deps_from_config(config: &GatewayFileConfig) -> Result<GatewayDeps, T
     ))
 }
 
+#[cfg(test)]
 struct ConfiguredGatewayWorkload {
     config: GatewayFileConfig,
 }
 
+#[cfg(test)]
 #[async_trait]
 impl GatewayWorkload for ConfiguredGatewayWorkload {
     async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
@@ -9408,11 +11291,13 @@ impl GatewayWorkload for ConfiguredGatewayWorkload {
     }
 }
 
+#[cfg(test)]
 struct ConfiguredDisplayListener {
     config: GatewayFileConfig,
     listeners: Mutex<HashMap<String, Arc<RelayDisplayListener>>>,
 }
 
+#[cfg(test)]
 #[async_trait]
 impl DisplayListener for ConfiguredDisplayListener {
     async fn arm(
@@ -9459,6 +11344,7 @@ impl DisplayListener for ConfiguredDisplayListener {
     }
 }
 
+#[cfg(test)]
 fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, GatewayError> {
     Ok(RelayCoords {
         namespace: required_gateway_field(&config.relay.namespace)?,
@@ -9468,6 +11354,7 @@ fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, G
     })
 }
 
+#[cfg(test)]
 fn relay_endpoint_from_config(config: &GatewayFileConfig) -> Result<RelayEndpoint, GatewayError> {
     Ok(RelayEndpoint {
         namespace: required_gateway_field(&config.relay.namespace)?,
@@ -9475,6 +11362,7 @@ fn relay_endpoint_from_config(config: &GatewayFileConfig) -> Result<RelayEndpoin
     })
 }
 
+#[cfg(test)]
 fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
     let mut bins = AgentBinaries::default();
     if let Some(compression) = config
@@ -9488,6 +11376,7 @@ fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
     bins
 }
 
+#[cfg(test)]
 fn gateway_credential_from_config(
     config: &GatewayFileConfig,
 ) -> Result<GatewayCredential, GatewayError> {
@@ -9506,6 +11395,7 @@ fn gateway_credential_from_config(
         .map_err(|_| GatewayError::ProviderAllocationFailed)
 }
 
+#[cfg(test)]
 fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
     let credential = gateway_credential_from_config(config)?;
     let token = credential
@@ -9514,6 +11404,7 @@ fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, 
     Ok(relay_sas_token_snippet(token.expose()))
 }
 
+#[cfg(test)]
 fn display_listener_from_config(
     config: &GatewayFileConfig,
 ) -> Result<RelayDisplayListener, GatewayError> {
@@ -9543,6 +11434,7 @@ fn display_listener_from_config(
     ))
 }
 
+#[cfg(test)]
 fn unavailable_gateway_deps() -> GatewayDeps {
     GatewayDeps {
         workload: Box::new(UnavailableGatewayWorkload),
@@ -9564,8 +11456,10 @@ fn daemon_gateway_deps() -> GatewayDeps {
     }
 }
 
+#[cfg(test)]
 struct UnavailableGatewayLifecycle;
 
+#[cfg(test)]
 #[async_trait]
 impl GatewayLifecycle for UnavailableGatewayLifecycle {
     async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
@@ -9577,8 +11471,10 @@ impl GatewayLifecycle for UnavailableGatewayLifecycle {
     }
 }
 
+#[cfg(test)]
 struct UnavailableGatewayWorkload;
 
+#[cfg(test)]
 #[async_trait]
 impl GatewayWorkload for UnavailableGatewayWorkload {
     async fn spawn_agent(&self, _req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
@@ -9590,8 +11486,10 @@ impl GatewayWorkload for UnavailableGatewayWorkload {
     }
 }
 
+#[cfg(test)]
 struct UnavailableDisplayListener;
 
+#[cfg(test)]
 #[async_trait]
 impl DisplayListener for UnavailableDisplayListener {
     async fn arm(
@@ -9627,10 +11525,12 @@ impl GatewayLifecycle for DaemonGatewayLifecycle {
     }
 }
 
+#[cfg(test)]
 struct AcaGatewayLifecycle {
     provider: Arc<AcaWorkloadProvider>,
 }
 
+#[cfg(test)]
 #[async_trait]
 impl GatewayLifecycle for AcaGatewayLifecycle {
     async fn start(&self, target: &TargetName) -> Result<String, GatewayError> {
@@ -9656,6 +11556,7 @@ impl GatewayLifecycle for AcaGatewayLifecycle {
     }
 }
 
+#[cfg(test)]
 fn required_gateway_field(value: &Option<String>) -> Result<String, GatewayError> {
     value
         .as_ref()
@@ -9664,6 +11565,7 @@ fn required_gateway_field(value: &Option<String>) -> Result<String, GatewayError
         .ok_or(GatewayError::ProviderAllocationFailed)
 }
 
+#[cfg(test)]
 fn aca_provider_from_gateway_config(
     config: &GatewayFileConfig,
 ) -> Result<AcaWorkloadProvider, GatewayError> {
@@ -9754,8 +11656,10 @@ impl DisplayListener for DaemonDisplayListener {
     }
 }
 
+#[cfg(test)]
 struct DaemonGatewayClock;
 
+#[cfg(test)]
 impl Clock for DaemonGatewayClock {
     fn now_unix(&self) -> u64 {
         std::time::SystemTime::now()
@@ -9765,8 +11669,10 @@ impl Clock for DaemonGatewayClock {
     }
 }
 
+#[cfg(test)]
 struct DaemonGatewayIds;
 
+#[cfg(test)]
 impl IdSource for DaemonGatewayIds {
     fn new_session_id(&self) -> d2b_gateway::DisplaySessionId {
         let mut raw = [0u8; 16];
@@ -12120,7 +14026,13 @@ fn daemon_shell_authority(state: &ServerState) -> Arc<DaemonShellAuthority> {
 fn shell_resource_client(
     state: &ServerState,
 ) -> Result<(ZoneId, Arc<DaemonResourceApiClient>), TypedError> {
-    let zone = ZoneId::parse("local-root").map_err(|_| shell_protocol_failed())?;
+    let zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(shell_capability_failed)?;
     let authority = daemon_shell_authority(state);
     let client = authority
         .client_for_zone(&zone)
@@ -12421,10 +14333,11 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::List {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -12520,11 +14433,12 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let name = name.unwrap_or_else(|| policy.default_name.clone());
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::Detach {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -12616,10 +14530,11 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::Kill {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -12687,10 +14602,12 @@ fn dispatch_shell_management(
 }
 
 fn unsafe_shell_request_parts(
+    state: &ServerState,
     resolved: &workload_dispatch::ResolvedShell,
 ) -> Result<
     (
-        d2b_core::workload_identity::WorkloadIdentity,
+        ZoneResourceIdentity,
+        WorkloadTarget,
         d2b_contracts_control::unsafe_local_wire::HelperShellPolicy,
     ),
     TypedError,
@@ -12700,12 +14617,18 @@ fn unsafe_shell_request_parts(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
         )
     })?;
+    let workload_target = identity.canonical_target.clone();
+    let resource_identity = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
+        d2bd_runtime::shell_backend::unsafe_shell_failed(
+            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
+        )
+    })?;
     let policy = resolved.policy.clone().ok_or_else(|| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
         )
     })?;
-    Ok((identity, policy))
+    Ok((resource_identity, workload_target, policy))
 }
 
 fn dispatch_unsafe_shell_management(
@@ -13003,10 +14926,17 @@ fn guest_shell_session(
         .ssh_user
         .as_deref()
         .ok_or_else(shell_capability_failed)?;
+    let root_zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(shell_capability_failed)?;
     let pool_name = format!("{vm}-shell");
     let pool = ShellPool::new(
         pool_name,
-        "local-root",
+        root_zone.as_str(),
         PoolSpec::new(
             ExecutionTarget::guest(vm.to_owned()),
             workload_user,
@@ -14212,22 +16142,15 @@ async fn establish_shell_backend(
             })
         }
         WorkloadRoute::UnsafeLocal => {
-            let identity = resolved.identity.ok_or_else(|| {
-                d2bd_runtime::shell_backend::unsafe_shell_failed(
-                    d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                )
-            })?;
-            let policy = resolved.policy.ok_or_else(|| {
-                d2bd_runtime::shell_backend::unsafe_shell_failed(
-                    d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                )
-            })?;
+            let (identity, workload_target, policy) =
+                unsafe_shell_request_parts(state, &resolved)?;
             let operation_id = new_internal_shell_operation_id()?;
             let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+            let target = workload_target.to_canonical();
             emit_provider_shell_audit(
                 state,
                 ProviderShellAudit {
-                    target: &identity.canonical_target.to_canonical(),
+                    target: &target,
                     peer_uid,
                     provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
                     action: d2bd_runtime::daemon_audit::ShellAuditAction::Create,
@@ -14285,7 +16208,7 @@ async fn establish_shell_backend(
                     state: ready.result.state,
                     force_evicted: ready.result.force_evicted,
                 },
-                target: identity.canonical_target.to_canonical(),
+                target,
                 provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
                 operation_digest: Some(operation_digest),
                 initial_control_sequence: 0,
@@ -15044,6 +16967,17 @@ async fn shutdown_unpublished_runtimes(
     }
 }
 
+fn committed_zone_topology(
+    resolver: &BundleResolver,
+    zones: &BTreeSet<ZoneId>,
+) -> Result<CommittedZoneTopology, resource_runtime::ResourceRuntimeError> {
+    let topology = resolver
+        .zone_topology()
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    CommittedZoneTopology::from_allocator(zones, topology)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -15067,6 +17001,14 @@ async fn open_resource_plane(
             return Err(resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid);
         }
     };
+    let topology = match committed_zone_topology(resolver, &zones) {
+        Ok(topology) => topology,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource topology validation failed");
+            return Err(error);
+        }
+    };
+    plane.set_topology_root(topology.root.clone());
     let mut prepared_inputs = BTreeMap::new();
     let mut prepared_generations = BTreeMap::new();
     for zone in &zones {
@@ -15192,7 +17134,7 @@ async fn open_resource_plane(
 
     let coordinator_index = prepared_runtimes
         .iter()
-        .position(|(zone, _, _)| zone.as_str() == "local-root")
+        .position(|(zone, _, _)| zone == &topology.root)
         .ok_or_else(|| {
             resource_runtime::ResourceRuntimeError::HandlerNotReady
         })?;
@@ -15324,11 +17266,221 @@ async fn open_resource_plane(
             return Err(error);
         }
     }
+    compose_gateway_zone_links(state, &mut plane, &topology).await;
     if plane.ready_zone_count() == 0 {
         let _ = plane.shutdown().await;
         return Err(resource_runtime::ResourceRuntimeError::PlaneUnavailable);
     }
     Ok(Arc::new(plane))
+}
+
+/// Compose child-local ZoneLink state after every Zone has passed the
+/// generation publication barrier. The host keeps only route metadata and
+/// placement refs; credential acquisition remains a Gateway Guest concern.
+async fn compose_gateway_zone_links(
+    state: &ServerState,
+    plane: &mut resource_runtime::ResourcePlane,
+    topology: &CommittedZoneTopology,
+) {
+    let Some(root) = plane.zone(&topology.root).ok() else {
+        return;
+    };
+    let Some(authority_digest) = root.authority_bundle_generation().map(|value| value.as_str().to_owned()) else {
+        tracing::error!("Gateway Guest composition refused: root Zone generation unavailable");
+        return;
+    };
+    let authority_generation = root.current_revision().get().max(1);
+    let zones = plane.zone_ids();
+    for zone in zones {
+        if zone == topology.root {
+            continue;
+        }
+        let Some(parent_zone) = topology.parent(&zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: parent Zone topology is unavailable",
+            );
+            continue;
+        };
+        let Some(parent_path) = topology.path(parent_zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: parent Zone path is unavailable",
+            );
+            continue;
+        };
+        let Some(child_path) = topology.path(&zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: child Zone path is unavailable",
+            );
+            continue;
+        };
+        let Some(parent) = plane.zone(parent_zone).ok() else {
+            tracing::warn!(
+                zone = %zone,
+                parent = %parent_zone,
+                "Gateway Guest composition skipped: parent Zone runtime unavailable",
+            );
+            continue;
+        };
+        let Some(parent_uid) = parent.authority_zone_uid().cloned() else {
+            tracing::warn!(
+                zone = %zone,
+                parent = %parent_zone,
+                "Gateway Guest composition skipped: parent Zone identity unavailable",
+            );
+            continue;
+        };
+        let Some(runtime) = plane.zone(&zone).ok() else {
+            continue;
+        };
+        let links = match runtime.committed_resources_of_type("ZoneLink").await {
+            Ok(links) => links,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone,
+                    error = ?error,
+                    "Gateway Guest composition skipped: ZoneLink rows unavailable",
+                );
+                continue;
+            }
+        };
+        let matching_links = links
+            .into_iter()
+            .filter(|resource| {
+                resource
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("zone"))
+                    .and_then(Value::as_str)
+                    == Some(zone.as_str())
+            })
+            .collect::<Vec<_>>();
+        let link = match matching_links.as_slice() {
+            [] => continue,
+            [link] => link,
+            _ => {
+                if matching_links.iter().any(is_gateway_zone_link) {
+                    plane.refuse_gateway_zone_link(zone.clone());
+                }
+                tracing::warn!(
+                    zone = %zone,
+                    "Gateway Guest composition refused: multiple committed ZoneLink rows",
+                );
+                continue;
+            }
+        };
+        if !is_gateway_zone_link(link) {
+            continue;
+        }
+        let Some(child_uid) = runtime.authority_zone_uid().cloned() else {
+            plane.refuse_gateway_zone_link(zone.clone());
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: child Zone identity unavailable",
+            );
+            continue;
+        };
+        let composition = match ZoneLinkGatewayComposition::from_committed_resources(
+            zone.clone(),
+            parent_path,
+            child_path,
+            parent_uid,
+            child_uid,
+            authority_generation,
+            &authority_digest,
+            link,
+        ) {
+            Ok(composition) => composition,
+            Err(error) => {
+                plane.refuse_gateway_zone_link(zone.clone());
+                tracing::warn!(
+                    zone = %zone,
+                    error = error.code(),
+                    "Gateway Guest composition refused",
+                );
+                continue;
+            }
+        };
+        let Some(gateway_vm) = gateway_guest_for_link(&runtime, link).await else {
+            plane.refuse_gateway_zone_link(zone.clone());
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition refused: transport Provider Guest is unavailable",
+            );
+            if let Err(error) = plane.insert_gateway_zone_link(composition) {
+                tracing::warn!(
+                    zone = %zone,
+                    error = ?error,
+                    "Gateway Guest composition skipped: duplicate ZoneLink",
+                );
+            }
+            continue;
+        };
+        composition.set_gateway_vm(gateway_vm.clone());
+        let composition = match connect_guest_component_session(state, &gateway_vm).await {
+            Ok(session) => {
+                if let Err(error) = composition.bind_gateway_session(session) {
+                    tracing::warn!(
+                        zone = %zone,
+                        error = error.code(),
+                        "Gateway Guest session binding refused",
+                    );
+                }
+                composition
+            }
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone,
+                    gateway = %gateway_vm,
+                    error = %error,
+                    "Gateway Guest ComponentSession unavailable",
+                );
+                composition
+            }
+        };
+        if let Err(error) = plane.insert_gateway_zone_link(composition) {
+            tracing::warn!(
+                zone = %zone,
+                error = ?error,
+                "Gateway Guest composition skipped: duplicate ZoneLink",
+            );
+        }
+    }
+}
+
+async fn gateway_guest_for_link(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    link: &Value,
+) -> Option<String> {
+    let provider_ref = link
+        .get("spec")
+        .and_then(|spec| spec.get("transportProviderRef"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())?;
+    let providers = runtime.committed_resources_of_type("Provider").await.ok()?;
+    let provider = providers.into_iter().find(|provider| {
+        provider
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+            == Some(provider_ref.name().as_str())
+    })?;
+    provider
+        .get("spec")
+        .and_then(|spec| spec.get("config"))
+        .and_then(|config| config.get("executionRef"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")
+        .map(|value| value.name().as_str().to_owned())
+}
+
+fn is_gateway_zone_link(link: &Value) -> bool {
+    link.get("spec")
+        .and_then(|spec| spec.get("transportProviderRef"))
+        .and_then(Value::as_str)
+        == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
 }
 
 #[cfg(test)]

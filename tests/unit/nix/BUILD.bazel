@@ -60,6 +60,7 @@ exports_files([
     "cases/realm-workloads.nix",
     "cases/zone-control.nix",
     "cases/zone-link.nix",
+    "cases/allocator-topology.nix",
     "cases/requested-vm-config.nix",
     "cases/resources-bundle-telemetry.nix",
     "cases/resource-sharing.nix",
@@ -85,4 +86,5 @@ exports_files([
     "surfaces/realm-zone.nix",
     "surfaces/storage-volume.nix",
     "surfaces/zone-control.nix",
+    "surfaces/allocator-topology.nix",
 ])

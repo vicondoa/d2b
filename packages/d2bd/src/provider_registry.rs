@@ -612,8 +612,14 @@ impl ProviderRuntime {
     /// Compose the v3 catalog from the trusted host artifact.
     ///
     /// An absent or malformed catalog is stored as refused; lifecycle
-    /// dispatch remains unavailable until a valid catalog is installed.
-    pub fn configure_from_host(&self, host: &HostJson) -> Result<(), ProviderCompositionError> {
+    /// dispatch remains unavailable until a valid catalog is installed. The
+    /// Zone identity is supplied by the committed topology rather than a
+    /// built-in root name.
+    pub fn configure_from_host(
+        &self,
+        host: &HostJson,
+        zone: &ZoneId,
+    ) -> Result<(), ProviderCompositionError> {
         if host.runtime_providers.is_empty() {
             let error = ProviderCompositionError::ProviderNotRegistered;
             let mut state = self
@@ -623,7 +629,7 @@ impl ProviderRuntime {
             *state = ProviderRuntimeState::Refused(error);
             return Err(error);
         }
-        let next = match self.compose_host_runtime(host) {
+        let next = match self.compose_host_runtime(host, zone) {
             Ok(active) => ProviderRuntimeState::Active(active),
             Err(error) => {
                 let mut state = self
@@ -812,9 +818,9 @@ impl ProviderRuntime {
     fn compose_host_runtime(
         &self,
         host: &HostJson,
+        zone: &ZoneId,
     ) -> Result<ActiveProviderRuntime, ProviderCompositionError> {
-        let zone =
-            ZoneId::parse("local-root").map_err(|_| ProviderCompositionError::ZonePathInvalid)?;
+        let zone = zone.clone();
         let mut bindings = Vec::with_capacity(host.runtime_providers.len());
         let mut provider_refs = BTreeMap::new();
         for metadata in &host.runtime_providers {

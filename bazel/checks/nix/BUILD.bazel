@@ -130,6 +130,13 @@ _SURFACES = {
             "packages/d2b-provider-volume-local/nix/options-volumes.nix",
         ],
     },
+    "allocator-topology": {
+        "cases": ["allocator-topology"],
+        "files": [
+            "nixos-modules/allocator-json.nix",
+        ],
+        "modules": [],
+    },
     "desktop-interaction": {
         "cases": [],
         "package": "packages/d2b-provider-display-wayland",

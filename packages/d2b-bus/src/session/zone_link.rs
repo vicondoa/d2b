@@ -431,8 +431,7 @@ fn route_admission_error(error: RouteAdmissionError) -> ZoneLinkSessionError {
 mod tests {
     use super::*;
     use crate::session::contract::{
-        RouteAdmissionConfig, RouteAdmissionSessionBinding, RouteAdmissionVerifier,
-        ZoneLinkRouteAdmissionRequest, route_admission_pair,
+        RouteAdmissionVerifier, RuntimeRouteAdmissionAuthority, ZoneLinkRouteAdmissionRequest,
     };
     use crate::session::enrollment::{
         BOOTSTRAP_PSK_TTL_MS_DEFAULT, BootstrapPskIssuance, EnrollmentFingerprint, EnrollmentRecord,
@@ -785,12 +784,9 @@ mod tests {
             .expect("authenticated route");
         let _ = responder.expect("responder handshake");
         let route = session.route_binding();
-        let session_binding =
-            RouteAdmissionSessionBinding::from_authenticated_session(&wire_policy, &route)
-                .expect("route profile");
         let clock = Arc::new(AtomicU64::new(1_000));
         let clock_for_config = Arc::clone(&clock);
-        let config = RouteAdmissionConfig::new(
+        let authority = RuntimeRouteAdmissionAuthority::new(
             ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("link UID"),
             ZoneTreeEdge::new(
                 ZonePath::new(vec![ZoneLabelId::parse("parent").expect("Zone label")])
@@ -808,18 +804,19 @@ mod tests {
             ZoneRouteCapability::parse("resource-read").expect("capability"),
             OperationClass::Invoke,
             ZoneRevision::new(9),
-            session_binding,
+            &wire_policy,
+            &route,
             Arc::new(move || clock_for_config.load(Ordering::Acquire)),
         )
         .expect("route admission config");
-        let (issuer, verifier) = route_admission_pair(config);
         let request = ZoneLinkRouteAdmissionRequest::new(
             OperationId::new(vec![0x11; 16]).expect("operation ID"),
             OperationClass::Invoke,
         )
         .expect("route operation");
+        let (verifier, evidence) = authority.issue(request).expect("issue route admission");
         let admission = verifier
-            .verify(issuer.issue(request).expect("issue route admission"))
+            .verify(evidence)
             .expect("verify route admission");
         (session, admission, verifier)
     }

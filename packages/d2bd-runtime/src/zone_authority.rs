@@ -183,9 +183,6 @@ pub fn authoritative_zone_ids(resolver: &BundleResolver) -> Result<BTreeSet<Zone
     if zones.is_empty() {
         return Err("bundle Zone resource bundle index empty");
     }
-    if !zones.iter().any(|zone| zone.as_str() == "local-root") {
-        return Err("bundle Zone resource bundle index missing local root");
-    }
     Ok(zones)
 }
 

@@ -16,6 +16,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
         "//packages/d2b-realm-core:d2b_realm_core",
@@ -33,6 +34,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps_test_support",
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_test_support",
         "//packages/d2b-realm-core:d2b_realm_core",

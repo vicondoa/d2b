@@ -2,10 +2,10 @@
 //!
 //! The engine is a pure, in-memory adaptation of the v3 baseline tree-route
 //! engine onto the Zone tree contracts owned by
-//! `d2b_contracts_zone_session::v3::zone_routing`. It admits already-verified route
-//! advertisements and withdrawals, keeps a bounded parent/route projection plus
-//! a bounded replay-key table, and answers nearest-common-ancestor route
-//! questions.
+//! `d2b_contracts_zone_session::v3::zone_routing`. It admits already-verified
+//! route advertisements and withdrawals, projects authenticated direct child
+//! edges, keeps a bounded parent/route projection plus a bounded replay-key
+//! table, and answers nearest-common-ancestor route questions.
 //!
 //! What the engine deliberately does not do: it performs no I/O, opens no
 //! socket, and verifies no advertisement signature. Advertisement signature
@@ -526,15 +526,27 @@ fn validate_session_binding(
     verified: &VerifiedRouteAdmission,
 ) -> Result<(), ZoneRouteFailClosedReason> {
     let binding = verified.session_binding();
+    // A ZoneLink may terminate either at an adjacent Zone controller over a
+    // Provider stream or at the selected Gateway Guest over its authenticated
+    // Guest-local vsock session. Both profiles are fixed by the v3 policy;
+    // no caller-selected transport profile is accepted here.
+    let remote_provider_stream = binding.responder_role() == EndpointRole::ZoneController
+        && binding.endpoint_locality()
+            == d2b_contracts_zone_session::v3::component_session::Locality::Remote
+        && binding.transport_class() == TransportClass::ProviderStream
+        && binding.transport_binding().locality()
+            == d2b_contracts_resource::v3::identity::Locality::AdjacentZone;
+    let gateway_guest_session = binding.responder_role() == EndpointRole::GuestAgent
+        && binding.endpoint_locality()
+            == d2b_contracts_zone_session::v3::component_session::Locality::GuestLocal
+        && binding.transport_class() == TransportClass::NativeVsock
+        && binding.transport_binding().locality()
+            == d2b_contracts_resource::v3::identity::Locality::Local;
     if binding.purpose() != EndpointPurpose::ZoneLink
         || binding.purpose_class() != PurposeClass::Enrolled
         || binding.initiator_role() != EndpointRole::ZoneController
-        || binding.responder_role() != EndpointRole::ZoneController
         || binding.service() != ServicePackage::ResourceV3
-        || binding.endpoint_locality() != d2b_contracts_zone_session::v3::component_session::Locality::Remote
-        || binding.transport_class() != TransportClass::ProviderStream
-        || binding.transport_binding().locality()
-            != d2b_contracts_resource::v3::identity::Locality::AdjacentZone
+        || (!remote_provider_stream && !gateway_guest_session)
     {
         return Err(ZoneRouteFailClosedReason::PolicyDenial);
     }
@@ -1104,6 +1116,107 @@ impl ZoneRouteEngine {
 
         accepted_routes.sort();
         ZoneAdvertisementAdmission::Accepted { accepted_routes }
+    }
+
+    /// Project the direct child edge proven by an authenticated
+    /// ComponentSession.
+    ///
+    /// A Gateway Guest does not send a descendant advertisement for its own
+    /// Zone. The authenticated session itself proves the one direct edge, so
+    /// this method installs only that parent row. It is intentionally not a
+    /// second authority: callers must consume the runtime-issued admission
+    /// before invoking it, and the route decision consumes that admission
+    /// again at the point of use.
+    fn admit_authenticated_edge(
+        &mut self,
+        edge: &ZoneTreeEdge,
+        capabilities: ZoneRouteCapabilitySet,
+        now_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+    ) -> ZoneAdvertisementAdmission {
+        if expires_at_unix_seconds <= now_unix_seconds {
+            return ZoneAdvertisementAdmission::Denied {
+                reason: ZoneRouteFailClosedReason::Expired,
+            };
+        }
+        if edge.parent() != &self.local_root || !edge.child().is_direct_child_of(edge.parent()) {
+            return ZoneAdvertisementAdmission::Denied {
+                reason: ZoneRouteFailClosedReason::UnknownParent,
+            };
+        }
+
+        self.prune_expired(now_unix_seconds);
+        let child = edge.child().clone();
+        if let Some(existing) = self.parents.get(&child)
+            && existing.parent != *edge.parent()
+        {
+            return ZoneAdvertisementAdmission::Denied {
+                reason: ZoneRouteFailClosedReason::MultiParent,
+            };
+        }
+        if !self.parents.contains_key(&child)
+            && self.parents.len() >= self.capacity.max_parent_entries
+        {
+            return ZoneAdvertisementAdmission::Denied {
+                reason: ZoneRouteFailClosedReason::QueueFullDropNew,
+            };
+        }
+        let route_id = self
+            .parents
+            .get(&child)
+            .and_then(|existing| existing.route_id.clone());
+        let capabilities = self
+            .parents
+            .get(&child)
+            .and_then(|existing| existing.capabilities.as_ref())
+            .map_or_else(
+                || capabilities.clone(),
+                |existing| intersect_capabilities(existing, &capabilities),
+            );
+        self.parents.insert(
+            child,
+            ParentEntry {
+                parent: edge.parent().clone(),
+                route_id,
+                capabilities: Some(capabilities),
+                issued_at_unix_seconds: now_unix_seconds,
+                expires_at_unix_seconds,
+            },
+        );
+        ZoneAdvertisementAdmission::Accepted {
+            accepted_routes: Vec::new(),
+        }
+    }
+
+    /// Decide a route after projecting the direct edge proven by the
+    /// authenticated ComponentSession.
+    ///
+    /// The request must carry a runtime-issued admission. Keeping projection
+    /// and decision in one public operation prevents callers from mutating
+    /// the authenticated-edge projection without first presenting the
+    /// admission that the decision will consume.
+    pub fn decide_authenticated_edge_route(
+        &mut self,
+        edge: &ZoneTreeEdge,
+        capabilities: ZoneRouteCapabilitySet,
+        now_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+        request: &ZoneRouteRequest,
+    ) -> ZoneRouteDecision {
+        if request.admission.is_none() {
+            return ZoneRouteDecision::Denied {
+                reason: ZoneRouteFailClosedReason::PolicyDenial,
+            };
+        }
+        if let ZoneAdvertisementAdmission::Denied { reason } = self.admit_authenticated_edge(
+            edge,
+            capabilities,
+            now_unix_seconds,
+            expires_at_unix_seconds,
+        ) {
+            return ZoneRouteDecision::Denied { reason };
+        }
+        self.decide_route(request)
     }
 
     /// Admit one withdrawal, removing exactly the named live routes.
@@ -2361,6 +2474,54 @@ mod tests {
         assert_eq!(
             decision.audit_event(),
             ZoneRouteAuditEventKind::ZoneRouteDenied
+        );
+    }
+
+    #[test]
+    fn an_authenticated_child_session_seeds_its_exact_direct_edge() {
+        let parent = zone(&["k0"]);
+        let child = zone(&["k1", "k0"]);
+        let edge = ZoneTreeEdge::new(parent.clone(), child.clone()).expect("direct edge");
+        let mut engine = ZoneRouteEngine::new(parent.clone());
+        let request = ZoneRouteRequest::new(parent, child.clone()).with_admission(test_admission(
+            edge,
+            zone(&["k0"]),
+            child,
+            OperationClass::Invoke,
+            "get",
+            1_500,
+            4_000,
+        ));
+        let ZoneRouteDecision::Allowed { path, .. } = engine.decide_authenticated_edge_route(
+            &ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            caps(&["get"]),
+            1_000,
+            4_000,
+            &request,
+        ) else {
+            panic!("expected an authenticated direct child route");
+        };
+        assert_eq!(path.hop_count(), 1);
+    }
+
+    #[test]
+    fn authenticated_edge_projection_requires_a_runtime_admission() {
+        let parent = zone(&["k0"]);
+        let child = zone(&["k1", "k0"]);
+        let edge = ZoneTreeEdge::new(parent.clone(), child.clone()).expect("direct edge");
+        let request = ZoneRouteRequest::new(parent, child);
+        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
+        assert_eq!(
+            engine
+                .decide_authenticated_edge_route(
+                    &edge,
+                    caps(&["get"]),
+                    1_000,
+                    4_000,
+                    &request,
+                )
+                .denial_reason(),
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
         );
     }
 

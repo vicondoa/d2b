@@ -74,6 +74,7 @@ let
         d2b.componentSession = {
           guestRef = "Guest/${gw.vmName}";
           zone = gw.realm;
+          bundlePath = "/etc/d2b/bundle.json";
         };
         environment.etc."d2b/daemon-config.json".text = builtins.toJSON {
           publicSocketPath = "/run/d2b/public.sock";

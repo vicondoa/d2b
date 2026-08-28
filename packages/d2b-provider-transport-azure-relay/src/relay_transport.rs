@@ -12,6 +12,10 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::ResourceRef;
+use d2b_session::{
+    OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
+    TransportWriter,
+};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
@@ -108,6 +112,10 @@ impl RelayFrame {
     /// Borrow bytes at the socket effect boundary.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.0.to_vec()
     }
 }
 
@@ -854,6 +862,155 @@ impl RelayConnection {
     /// Return current session phase.
     pub async fn phase(&self) -> RelaySessionPhase {
         *self.phase.lock().await
+    }
+}
+
+/// An authenticated Relay connection presented as a ComponentSession
+/// `OwnedTransport`.
+///
+/// The Relay Provider carries only protected ComponentSession packets. It
+/// never interprets their contents and never permits attachments on the
+/// remote carriage.
+pub struct RelayComponentSessionTransport {
+    connection: Arc<RelayConnection>,
+}
+
+impl RelayComponentSessionTransport {
+    /// Wrap one connection after its transport-level enrollment has completed.
+    pub fn from_connection(connection: RelayConnection) -> Self {
+        Self {
+            connection: Arc::new(connection),
+        }
+    }
+}
+
+impl fmt::Debug for RelayComponentSessionTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RelayComponentSessionTransport(<redacted>)")
+    }
+}
+
+struct RelayComponentSessionReader {
+    connection: Arc<RelayConnection>,
+}
+
+struct RelayComponentSessionWriter {
+    connection: Arc<RelayConnection>,
+}
+
+fn map_transport_error(error: RelayTransportError) -> TransportError {
+    match error {
+        RelayTransportError::FrameTooLarge | RelayTransportError::CreditExhausted => {
+            TransportError::LimitExceeded
+        }
+        RelayTransportError::Unavailable
+        | RelayTransportError::AuthenticationFailed
+        | RelayTransportError::CredentialUnavailable
+        | RelayTransportError::CredentialRoleMismatch
+        | RelayTransportError::CredentialExpired
+        | RelayTransportError::CredentialBindingMismatch
+        | RelayTransportError::CredentialInvalid
+        | RelayTransportError::Protocol
+        | RelayTransportError::InvalidSessionTransition
+        | RelayTransportError::DeadlineExpired
+        | RelayTransportError::StaleGeneration => TransportError::Disconnected,
+        RelayTransportError::InvalidConfiguration => TransportError::Other,
+    }
+}
+
+#[async_trait]
+impl TransportReader for RelayComponentSessionReader {
+    async fn receive(
+        &mut self,
+        _protected_limit: usize,
+    ) -> Result<TransportPacket, TransportError> {
+        match self.connection.receive().await {
+            Ok(Some(frame)) => Ok(TransportPacket::new(frame.into_bytes())),
+            Ok(None) => Err(TransportError::Disconnected),
+            Err(error) => Err(map_transport_error(error)),
+        }
+    }
+}
+
+#[async_trait]
+impl TransportWriter for RelayComponentSessionWriter {
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        let (bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            for attachment in attachments {
+                attachment.close();
+            }
+            return Err(TransportError::InvalidAttachment);
+        }
+        let frame = RelayFrame::new(bytes).map_err(map_transport_error)?;
+        self.connection
+            .send(frame)
+            .await
+            .map_err(map_transport_error)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        self.connection
+            .close()
+            .await
+            .map_err(map_transport_error)
+    }
+}
+
+#[async_trait]
+impl OwnedTransport for RelayComponentSessionTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        TransportDescriptor {
+            class: d2b_contracts_zone_session::v3::component_session::TransportClass::ProviderStream,
+            locality: d2b_contracts_zone_session::v3::component_session::Locality::Remote,
+            packet_atomic: false,
+            supports_attachments: false,
+        }
+    }
+
+    fn into_split(
+        self: Box<Self>,
+    ) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+        (
+            Box::new(RelayComponentSessionReader {
+                connection: Arc::clone(&self.connection),
+            }),
+            Box::new(RelayComponentSessionWriter {
+                connection: Arc::clone(&self.connection),
+            }),
+        )
+    }
+
+    async fn receive(
+        &mut self,
+        _protected_limit: usize,
+    ) -> Result<TransportPacket, TransportError> {
+        match self.connection.receive().await {
+            Ok(Some(frame)) => Ok(TransportPacket::new(frame.into_bytes())),
+            Ok(None) => Err(TransportError::Disconnected),
+            Err(error) => Err(map_transport_error(error)),
+        }
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        let (bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            for attachment in attachments {
+                attachment.close();
+            }
+            return Err(TransportError::InvalidAttachment);
+        }
+        self.connection
+            .send(RelayFrame::new(bytes).map_err(map_transport_error)?)
+            .await
+            .map_err(map_transport_error)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        self.connection
+            .close()
+            .await
+            .map_err(map_transport_error)
     }
 }
 

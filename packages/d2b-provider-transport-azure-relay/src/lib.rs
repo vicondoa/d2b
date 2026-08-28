@@ -24,9 +24,9 @@ pub use reconnect::{ReconnectBackoff, ReconnectDecision};
 pub use relay_transport::{
     AzureRelaySocketConnector, AzureRelayTransportProvider, MAX_RELAY_CA_BYTES,
     MAX_RELAY_GENERATION_FENCES, MAX_RELAY_WS_WRITE_BUFFER_BYTES, RelayAuthenticatedPeer,
-    RelayConnection, RelayEndpoint, RelayEnrollmentChallenge, RelayEnrollmentProof,
-    RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySessionPhase, RelaySocket,
-    RelaySocketConnector, RelayTransportConfig, RelayTransportError,
+    RelayComponentSessionTransport, RelayConnection, RelayEndpoint, RelayEnrollmentChallenge,
+    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySessionPhase,
+    RelaySocket, RelaySocketConnector, RelayTransportConfig, RelayTransportError,
 };
 pub use transport_settings::{RelayTransportSettings, RelayTransportSettingsError};
 

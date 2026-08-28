@@ -25,6 +25,7 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
+d2b-zone-routing = { path = "../d2b-zone-routing", version = "0.0.0-bootstrap" }
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", version = "0.0.0-bootstrap" }
 d2b-provider-system-systemd = { path = "../d2b-provider-system-systemd", version = "0.0.0-bootstrap" }

@@ -61,8 +61,8 @@ mod noise_vectors;
 
 pub use contract::{
     RouteAdmissionError, RouteAdmissionEvidence, RouteAdmissionSessionBinding,
-    RouteAdmissionVerifier, VerifiedRouteAdmission, ZoneEndpointPolicy, ZoneEndpointPolicyIdentity,
-    ZoneLinkRouteAdmissionRequest, ZonePolicyError,
+    RouteAdmissionVerifier, RuntimeRouteAdmissionAuthority, VerifiedRouteAdmission,
+    ZoneEndpointPolicy, ZoneEndpointPolicyIdentity, ZoneLinkRouteAdmissionRequest, ZonePolicyError,
 };
 pub use enrollment::{
     BOOTSTRAP_PSK_TTL_MS_DEFAULT, BOOTSTRAP_PSK_TTL_MS_MAX, BOOTSTRAP_PSK_TTL_MS_MIN,

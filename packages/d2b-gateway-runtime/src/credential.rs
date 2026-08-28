@@ -27,6 +27,7 @@ use d2b_provider_transport_azure_relay::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 /// Required file mode for gateway credential envelopes.
@@ -471,6 +472,15 @@ impl GatewayGuestCredentialPort {
     /// Return the generation of the sealed credential envelope.
     pub fn credential_generation(&self) -> u64 {
         self.credential.generation()
+    }
+
+    /// Return a non-secret digest for Guest-local observation.
+    ///
+    /// The digest is emitted only as a test/diagnostic marker after the
+    /// sealed envelope has been opened; credential bytes never leave this
+    /// port.
+    pub fn safe_observation_digest(&self) -> [u8; 32] {
+        Sha256::digest(self.credential.send_key.as_bytes()).into()
     }
 
     /// Return the number of currently revocable leases.

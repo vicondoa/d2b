@@ -20,6 +20,7 @@ workspace = true
 # consumed by the gateway-mode daemon).
 [dependencies]
 d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 futures-util = "0.3"
 d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
 d2b-provider-runtime-azure-container-apps = { path = "../d2b-provider-runtime-azure-container-apps", version = "0.0.0-bootstrap" }

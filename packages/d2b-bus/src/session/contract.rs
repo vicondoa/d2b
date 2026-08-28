@@ -48,6 +48,7 @@
 //! non-cloneable and sealed to that verifier.
 
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use d2b_contracts_resource::v3::{ResourceUid, SchemaFingerprint, ZoneRevision};
@@ -666,6 +667,88 @@ pub(crate) struct RouteAdmissionIssuer {
 /// caller input. It is handed out only by the runtime-owned admission pair.
 pub struct RouteAdmissionVerifier {
     authority: Arc<RouteAdmissionAuthority>,
+}
+
+/// Runtime-owned ZoneLink route-admission issuer.
+///
+/// The authority is constructed only from an already authenticated
+/// ComponentSession route and the exact committed ZoneLink identity. Callers
+/// receive sealed evidence paired with a verifier for one downstream
+/// consumer; they cannot construct or clone either half.
+pub struct RuntimeRouteAdmissionAuthority {
+    issuer: RouteAdmissionIssuer,
+    verifier: RouteAdmissionVerifier,
+}
+
+impl fmt::Debug for RuntimeRouteAdmissionAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RuntimeRouteAdmissionAuthority(<redacted>)")
+    }
+}
+
+impl RuntimeRouteAdmissionAuthority {
+    /// Bind route admissions to one authenticated ComponentSession and
+    /// committed ZoneLink policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        zone_link_uid: ResourceUid,
+        edge: ZoneTreeEdge,
+        controller_generation: ZoneLinkControllerGeneration,
+        source_zone_uid: ResourceUid,
+        target_zone_uid: ResourceUid,
+        required_capability: ZoneRouteCapability,
+        verb: base::OperationClass,
+        policy_revision: ZoneRevision,
+        policy: &base::EndpointPolicy,
+        session: &d2b_session::AuthenticatedSessionRouteBinding,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Result<Self, RouteAdmissionError> {
+        let session_binding =
+            RouteAdmissionSessionBinding::from_authenticated_session(policy, session)
+                .map_err(|_| RouteAdmissionError::SessionBindingMismatch)?;
+        let config = RouteAdmissionConfig::new(
+            zone_link_uid,
+            edge,
+            controller_generation,
+            source_zone_uid,
+            target_zone_uid,
+            required_capability,
+            verb,
+            policy_revision,
+            session_binding,
+            clock,
+        )?;
+        let (issuer, verifier) = route_admission_pair(config);
+        Ok(Self { issuer, verifier })
+    }
+
+    /// Issue evidence and a fresh paired verifier for one operation.
+    pub fn issue(
+        &self,
+        request: ZoneLinkRouteAdmissionRequest,
+    ) -> Result<(RouteAdmissionVerifier, RouteAdmissionEvidence), RouteAdmissionError> {
+        let evidence = self.issuer.issue(request)?;
+        let verifier = RouteAdmissionVerifier {
+            authority: Arc::clone(&self.verifier.authority),
+        };
+        Ok((verifier, evidence))
+    }
+
+    /// Advance the committed policy without widening an existing authority.
+    pub fn update_policy(
+        &self,
+        required_capability: ZoneRouteCapability,
+        verb: base::OperationClass,
+        revision: ZoneRevision,
+    ) -> Result<(), RouteAdmissionError> {
+        self.verifier
+            .update_policy(required_capability, verb, revision)
+    }
+
+    /// Revoke all future admissions from this exact authority.
+    pub fn revoke(&self) {
+        self.verifier.revoke();
+    }
 }
 
 /// Sealed route-admission evidence.

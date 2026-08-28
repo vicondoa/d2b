@@ -9,12 +9,14 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::ResourceRef;
+use d2b_session::{OwnedTransport, TransportPacket};
 use d2b_provider_transport_azure_relay::{
     AzureRelayTransportProvider, CreditWindow, MAX_RELAY_GENERATION_FENCES, ReconnectBackoff,
     RelayAuthenticatedPeer, RelayCredentialBinding, RelayCredentialError, RelayCredentialLease,
     RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole, RelayEndpoint,
-    RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame, RelayRole, RelaySecret, RelaySocket,
-    RelaySocketConnector, RelayTransportConfig, RelayTransportError, RelayTransportSettings,
+    RelayComponentSessionTransport, RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame,
+    RelayRole, RelaySecret, RelaySocket, RelaySocketConnector, RelayTransportConfig,
+    RelayTransportError, RelayTransportSettings,
 };
 use tokio::sync::Notify;
 
@@ -270,6 +272,39 @@ async fn sender_roundtrip_is_bounded_and_relay_has_no_local_admin() {
     assert_eq!(connection.credit_state().await, (256 * 1024, 0));
     let peer = RelayAuthenticatedPeer;
     assert!(!peer.local_admin());
+}
+
+#[tokio::test]
+async fn enrolled_relay_connection_is_a_component_session_transport() {
+    let provider = provider();
+    let connection = provider.open(RelayRole::Sender, 1_000).await.unwrap();
+    let challenge = connection.enrollment_challenge();
+    let proof = RelayEnrollmentProof::authenticate(
+        &FakeEnrollment,
+        b"authenticated-enrollment",
+        &challenge,
+    )
+    .unwrap();
+    connection.enroll(proof).await.unwrap();
+
+    let mut transport = RelayComponentSessionTransport::from_connection(connection);
+    let descriptor = transport.descriptor();
+    assert_eq!(
+        descriptor.class,
+        d2b_contracts_zone_session::v3::component_session::TransportClass::ProviderStream
+    );
+    assert_eq!(
+        descriptor.locality,
+        d2b_contracts_zone_session::v3::component_session::Locality::Remote
+    );
+    assert!(!descriptor.supports_attachments);
+
+    transport
+        .send(TransportPacket::new(b"encrypted-session-record".to_vec()))
+        .await
+        .unwrap();
+    let packet = transport.receive(1024).await.unwrap();
+    assert_eq!(packet.as_bytes(), b"encrypted-session-record");
 }
 
 #[tokio::test]
