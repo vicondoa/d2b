@@ -11,7 +11,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "packages/Cargo.guest.lock",
-  "lock_sha256": "c09c13cd4c9e796e329bc940f279bf1a21319eacef8939ac85184cee3e925620",
+  "lock_sha256": "cdfa26b707b276a34f9f92426ef906df9a8e75c31d8637804fe0fd8b43ffa855",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -5969,6 +5969,12 @@
     },
     {
       "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
       "to": "d2b-gateway@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -7325,7 +7331,19 @@
     },
     {
       "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
       "to": "d2b-contracts@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "d2b-session@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
