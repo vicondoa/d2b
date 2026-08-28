@@ -424,6 +424,7 @@ in
     set +u
     bundle_json=/etc/d2b/processes.json
     if [ -r "$bundle_json" ]; then
+      :
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
           qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
