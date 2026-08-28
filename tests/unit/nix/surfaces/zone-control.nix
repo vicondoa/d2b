@@ -5,5 +5,6 @@ import ../helpers/surface.nix {
   name = "zone-control";
   caseFiles = [
     ../cases/zone-control.nix
+    ../cases/zone-link.nix
   ];
 }

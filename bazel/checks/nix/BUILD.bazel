@@ -103,11 +103,10 @@ _SURFACES = {
             "nixos-modules/realm-identity-config-json.nix",
             "nixos-modules/realm-workloads-launcher-json.nix",
             "nixos-modules/realm-workloads-launcher-v2-json.nix",
-            "nixos-modules/resources-zone-control.nix",
         ],
     },
     "zone-control": {
-        "cases": ["zone-control"],
+        "cases": ["zone-control", "zone-link"],
         "package": "packages/d2b-provider-volume-local",
         "files": [
             "nixos-modules/generated/provider-catalog-shape.nix",
@@ -124,7 +123,9 @@ _SURFACES = {
             "nixos-modules/options-zones-resources.nix",
             "nixos-modules/options-zones.nix",
             "nixos-modules/provider-catalog.nix",
+            "nixos-modules/provider-runtime-contracts.nix",
             "nixos-modules/resources-zones-processes.nix",
+            "nixos-modules/resources-zone-control.nix",
             "nixos-modules/zone-resources.nix",
             "packages/d2b-provider-volume-local/nix/options-volumes.nix",
         ],
@@ -137,7 +138,7 @@ _SURFACES = {
         ],
     },
     "provider-catalog": {
-        "cases": ["provider-catalog", "provider-elf-shim"],
+        "cases": ["provider-catalog", "provider-elf-shim", "provider-runtime-contracts"],
         "package": "packages/d2b-provider-activation-nixos",
         "files": [
             "nix/provider-elf-shim.nix",

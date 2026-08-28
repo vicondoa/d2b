@@ -30,7 +30,7 @@ let
     "^([A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
   digestPattern = "^sha256:[0-9a-f]{64}$";
   artifactIdPattern = "^[a-z][a-z0-9-]{0,62}$";
-  transportProviderRefPattern = "^Provider/transport-[a-z][a-z0-9-]*$";
+  transportProviderRefPattern = "^Provider/transport-[a-z][a-z0-9-]{0,52}$";
 
   zoneLinkSpecKeys = [
     "childZoneName"
