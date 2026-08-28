@@ -76,8 +76,7 @@ impl ClientAttributionBook {
 
 #[cfg(test)]
 mod tests {
-    use d2b_core::workload_identity::WorkloadTarget;
-    use d2b_realm_core::WorkloadProviderKind;
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 
     use super::*;
 
@@ -106,7 +105,7 @@ mod tests {
     #[test]
     fn presentation_metadata_cannot_change_endpoint_identity() {
         let mut book = ClientAttributionBook::new(unsafe_local_identity());
-        book.update_app_id(ProxyClientId(1), "d2b.other.realm.d2b.Terminal");
+        book.update_app_id(ProxyClientId(1), "d2b.other.zone.d2b.Terminal");
         book.update_title(ProxyClientId(1), "[isolated] misleading");
 
         let snapshot = book.snapshot(ProxyClientId(1)).expect("client tracked");

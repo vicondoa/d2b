@@ -1,6 +1,6 @@
 //! Rate-limited, payload-free diagnostics.
 //!
-//! All log events must contain only bounded metadata: VM name, interface name,
+//! All log events must contain only bounded metadata: workload label, interface name,
 //! action, reason code, and numeric registry name. Never log titles, clipboard
 //! payloads, DnD data, raw app-id values, or message bodies.
 
@@ -27,7 +27,7 @@ impl DropReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RateKey {
-    vm: String,
+    identity_label: String,
     event: &'static str,
     label: String,
 }
@@ -87,14 +87,14 @@ pub fn bounded_error_detail(error: impl Into<String>) -> String {
 /// Per-state rate limiter for filter diagnostics.
 #[derive(Debug)]
 pub struct DiagRateLimiter {
-    vm: String,
+    identity_label: String,
     buckets: HashMap<RateKey, BucketState>,
 }
 
 impl DiagRateLimiter {
-    pub fn new(vm: String) -> Self {
+    pub fn new(identity_label: String) -> Self {
         Self {
-            vm,
+            identity_label,
             buckets: HashMap::new(),
         }
     }
@@ -107,7 +107,7 @@ impl DiagRateLimiter {
         self.prune_expired(now);
         let label = if self.buckets.len() >= MAX_BUCKETS
             && !self.buckets.contains_key(&RateKey {
-                vm: self.vm.clone(),
+                identity_label: self.identity_label.clone(),
                 event,
                 label: bounded_label.clone(),
             }) {
@@ -116,7 +116,7 @@ impl DiagRateLimiter {
             bounded_label
         };
         let key = RateKey {
-            vm: self.vm.clone(),
+            identity_label: self.identity_label.clone(),
             event,
             label: label.clone(),
         };
@@ -132,7 +132,7 @@ impl DiagRateLimiter {
                 log::warn!(
                     "[d2b-wlproxy] target={} event={event} label={label} \
                      suppressed={} in last window",
-                    self.vm,
+                    self.identity_label,
                     bucket.suppressed,
                 );
             }
@@ -163,14 +163,14 @@ impl DiagRateLimiter {
     }
 
     /// Log a bind-denial event (security boundary enforcement).
-    /// Always emits via `log::warn`; rate-limited per (vm, event, interface).
+    /// Always emits via `log::warn`; rate-limited per (identity, event, interface).
     pub fn bind_denied(&mut self, reason: DropReason, registry_name: u32, interface: &str) {
         let reason_str = reason.as_str();
-        let vm = self.vm.clone();
+        let identity_label = self.identity_label.clone();
         let interface = bounded_diag_label(interface);
         self.emit("bind-denied", &interface, || {
             format!(
-                "[d2b-wlproxy] target={vm} event=bind-denied reason={reason_str} \
+                "[d2b-wlproxy] target={identity_label} event=bind-denied reason={reason_str} \
                  interface={interface} registry-name={registry_name}"
             )
         });
@@ -178,10 +178,12 @@ impl DiagRateLimiter {
 
     /// Log a global-filtered event (advertisement filtered; opt-in via `--log-filtered-globals`).
     pub fn global_filtered(&mut self, interface: &str) {
-        let vm = self.vm.clone();
+        let identity_label = self.identity_label.clone();
         let interface = bounded_diag_label(interface);
         self.emit("global-filtered", &interface, || {
-            format!("[d2b-wlproxy] target={vm} event=global-filtered interface={interface}")
+            format!(
+                "[d2b-wlproxy] target={identity_label} event=global-filtered interface={interface}"
+            )
         });
     }
 
@@ -196,7 +198,7 @@ impl DiagRateLimiter {
             }
             log::warn!(
                 "[d2b-wlproxy] target={} event={} label={} suppressed={} in last window",
-                key.vm,
+                key.identity_label,
                 key.event,
                 key.label,
                 bucket.suppressed,
@@ -218,7 +220,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_suppresses_after_max() {
-        let mut rl = DiagRateLimiter::new("test-vm".to_owned());
+        let mut rl = DiagRateLimiter::new("test-workload".to_owned());
         // Emit MAX_PER_WINDOW events for the same key - all should pass.
         for _ in 0..MAX_PER_WINDOW {
             let emitted = rl.emit("test-event", "test-label", || "msg".to_owned());
@@ -231,7 +233,7 @@ mod tests {
 
     #[test]
     fn different_labels_have_independent_buckets() {
-        let mut rl = DiagRateLimiter::new("vm".to_owned());
+        let mut rl = DiagRateLimiter::new("workload".to_owned());
         for _ in 0..MAX_PER_WINDOW {
             rl.emit("ev", "a", || "msg".to_owned());
         }
@@ -242,7 +244,7 @@ mod tests {
 
     #[test]
     fn flush_suppressed_resets_terminal_burst_counts() {
-        let mut rl = DiagRateLimiter::new("vm".to_owned());
+        let mut rl = DiagRateLimiter::new("workload".to_owned());
         for _ in 0..MAX_PER_WINDOW {
             assert!(rl.emit("ev", "a", || "msg".to_owned()));
         }
@@ -278,7 +280,7 @@ mod tests {
 
     #[test]
     fn bind_denied_rate_limits_by_interface() {
-        let mut rl = DiagRateLimiter::new("vm".to_owned());
+        let mut rl = DiagRateLimiter::new("workload".to_owned());
         for name in 0..MAX_PER_WINDOW as u32 {
             rl.bind_denied(
                 DropReason::BindDeniedUnadvertised,
@@ -303,7 +305,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_bounds_component_sessionled_label_cardinality() {
-        let mut rl = DiagRateLimiter::new("test-vm".to_owned());
+        let mut rl = DiagRateLimiter::new("test-workload".to_owned());
         for index in 0..(MAX_BUCKETS + 64) {
             let label = format!("component-sessionled-interface-{index}");
             let _ = rl.warn("bind-denied", &label, || "bounded".to_owned());
