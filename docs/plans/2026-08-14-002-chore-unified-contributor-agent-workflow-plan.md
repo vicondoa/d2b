@@ -25,7 +25,7 @@ deepened: 2026-08-14
 
 ## Product Contract
 
-**Product Contract preservation:** Changed R2, A3, AE1, dependencies, and scope boundaries after user-confirmed research findings. The changes clarify ordinary-checkout scope, keep Gas City outside the workflow, and separate GitHub status enforcement from Compound Engineering review. All other requirements and stable IDs retain their meaning.
+**Product Contract preservation:** Changed R2, A3, AE1, dependencies, and scope boundaries after user-confirmed research findings. The changes clarify ordinary-checkout scope, keep the standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) outside the workflow, and separate GitHub status enforcement from Compound Engineering review. All other requirements and stable IDs retain their meaning.
 
 ### Summary
 
@@ -35,7 +35,10 @@ The workflow will favor minimal code, token-efficient communication, parallel ex
 ### Problem Frame
 
 The prior contributor process took too long and was removed.
-The current `v3` tree packages Compound Engineering for Gas City but does not provide repo-native skills to ordinary Claude, Codex, or Copilot CLI sessions.
+The current `v3` tree leaves Compound Engineering packaging to the standalone
+[contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) and
+does not provide repo-native skills to ordinary Claude, Codex, or Copilot CLI
+sessions.
 Operational guidance is also too broad to serve as a concise entry point.
 
 Contributors need reasonable repository defaults that preserve rigor without forcing heavyweight orchestration onto every task.
@@ -49,7 +52,7 @@ The workflow must reduce instruction duplication, keep model use predictable, an
 - **Keep one canonical copy of each skill.** (session-settled: user-approved - chosen over repeating complete skill and policy text for each CLI: one source avoids drift and wasted context.) Governs R1-R4.
 - **Limit the dash-lint exemption to agent assets.** (session-settled: user-approved - chosen over a broad lint relaxation: imported skills and agent instructions need upstream punctuation without weakening the repository-wide rule.) Governs R13-R14.
 - **Merge automatically only after the repository's required review and gates pass.** (session-settled: user-directed - chosen over human-only merge or a second explicit merge instruction: the workflow should finish accepted work.) Governs R8-R9.
-- **Leave managed Gas City unchanged and outside this workflow.** (session-settled: user-directed - chosen over adding project-skill masking or direct-CLI support: this plan makes no skill-visibility guarantee for managed sessions.) Governs R2, R9.
+- **Leave the standalone contributor Gas City repository unchanged and outside this workflow.** (session-settled: user-directed - chosen over adding project-skill masking or direct-CLI support: this plan makes no skill-visibility guarantee for managed sessions.) Governs R2, R9.
 
 ### Actors
 
@@ -116,7 +119,9 @@ The workflow must reduce instruction duplication, keep model use predictable, an
 - No Ponytail lifecycle hooks, Caveman engine, or Compound Engineering plugin runtime.
 - No dash-lint exemption for ordinary source, product documentation, plans, changelog entries, or configuration.
 - No GitHub repository-setting or branch-protection change.
-- No change to managed Gas City instructions, formulas, publishing, or merge authority.
+- No change to the standalone
+  [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity),
+  its instructions, publishing, or merge authority.
 - No change to d2b runtime, daemon, broker, VM, networking, or consumer behavior.
 
 ### Dependencies and Assumptions
@@ -131,8 +136,8 @@ The workflow must reduce instruction duplication, keep model use predictable, an
 ### Sources and Research
 
 - `AGENTS.md` - current repository operating rules, instruction budget, and non-ASCII dash policy.
-- `nix/gas-city-contributor/default.nix` - current Compound Engineering packaging.
-- `nix/gas-city-contributor/copilot/instructions.md` - managed Gas City prohibition on repo skills and direct GitHub operations.
+- [Standalone contributor Gas City repository](https://github.com/vicondoa/d2b-gascity)
+  - separate Compound Engineering packaging and managed instructions.
 - `tests/tools/tier0-first-pass.sh` - current fail-closed dash scanner.
 - `packages/d2b-contract-tests/tests/policy_dash_gate.rs` - existing dash policy coverage.
 - `packages/d2b-contract-tests/tests/policy_docs.rs` - existing `AGENTS.md` content and size contracts.
@@ -153,7 +158,7 @@ The workflow must reduce instruction duplication, keep model use predictable, an
 - KTD1. **Vendor versioned skill subsets once.** (session-settled: user-approved - chosen over full per-CLI copies: one source avoids drift and repeated context.) Use a versioned `third_party/agent-skills/` tree with upstream license and provenance metadata, then point every discovery adapter at those canonical directories. Governs R1-R4.
 - KTD2. **Use native project discovery with relative symlinks.** Codex and Copilot consume the root agent-skill directory, Claude consumes its native project skill directory, and `CLAUDE.md` aliases `AGENTS.md`. The primary topology uses one directory symlink per skill; the static Claude fallback uses real skill directories whose components are relative symlinks to the same canonical source. No adapter repeats a skill body or policy text. Governs R2-R3.
 - KTD3. **Vendor skill-only surfaces.** Pin Ponytail `v4.9.0` at `0a4dd63ad4541f4f655c4108a295916f3c1d8fda`, Caveman `v2.0.0` at `2c67abb9833689b48c7abba88afaa77c39a18657`, and Compound Engineering `compound-engineering-v3.21.4` at `0a2957852e2034d04eb01120fd7da6ed5307dc56`. Exclude Ponytail hooks, Caveman BSL components and `caveman-compress`, and Compound Engineering plugin runtime. Governs R1, R4.
-- KTD4. **Make repository policy override generic CE shipping defaults.** (session-settled: user-approved - chosen over importing upstream shipping defaults unchanged: every code diff must receive independent review and current-head re-review before merge.) Keep upstream skill files unchanged. The d2b profile uses `ce-work mode:return-to-caller`, report-only `ce-code-review mode:agent`, `ce-commit-push-pr branding:off babysit:off`, and `ce-babysit-pr posture:target`. The repository-owned caller fixes findings, reruns review, and owns merge. A conflict blocks execution. Gas City keeps its separate authority. Governs R6-R9.
+- KTD4. **Make repository policy override generic CE shipping defaults.** (session-settled: user-approved - chosen over importing upstream shipping defaults unchanged: every code diff must receive independent review and current-head re-review before merge.) Keep upstream skill files unchanged. The d2b profile uses `ce-work mode:return-to-caller`, report-only `ce-code-review mode:agent`, `ce-commit-push-pr branding:off babysit:off`, and `ce-babysit-pr posture:target`. The repository-owned caller fixes findings, reruns review, and owns merge. A conflict blocks execution. The standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) keeps its separate authority. Governs R6-R9.
 - KTD5. **Keep model routing as portable instruction policy.** (session-settled: user-directed - chosen over fail-closed model binding: unavailable preferred profiles use the strongest native role-equivalent model.) Exact Sol and Luna preferences are normative shipped policy where the host supports them. Run-specific served-model attribution and substitutions remain transient. Review independence requires a separate clean review context, not a different model family; unavailable independent review blocks delivery. Governs R6, R10-R12.
 - KTD6. **Use a reviewed-head merge transaction with best-effort base refresh.** (session-settled: user-directed - chosen over human-only merge, strict branch-setting changes, native auto-merge, or a second merge prompt: the agent accepts the narrow base race under current non-strict protection.) Review evidence binds repository, PR, observed base ref and OID, head OID, and verdict. Observed head or base drift returns to synchronization, validation, and review. Unavailable review evidence is drift and requires fresh independent review. Immediately before normal squash merge, the agent refreshes required checks, feedback, mergeability, and base observation and guards the merge with the reviewed head. An ambiguous result is reconciled from current PR state before any retry. Governs R8-R9.
 - KTD7. **Prefilter an exact dash allowlist.** (session-settled: user-approved - chosen over broad directory exclusions: only recognized instruction files and approved canonical skill payloads may carry non-ASCII dashes.) Filter allowlisted paths after fail-closed enumeration and before `grep`. Admit only the four current instruction files, the three exact versioned approved-skill roots, validated symlink entries for the approved inventory, and exact component links in the static Claude fallback. Preserve all current enumerator, unreadable-file, and grep-error behavior. Governs R13-R14.
@@ -171,7 +176,9 @@ The workflow must reduce instruction duplication, keep model use predictable, an
 
 The repository holds one real copy of each approved skill.
 Host-native discovery paths are adapter views over that copy.
-Repository policy constrains every ordinary-checkout invocation, while Gas City keeps its separate managed authority.
+Repository policy constrains every ordinary-checkout invocation, while the
+standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity)
+keeps its separate managed authority.
 
 ```mermaid
 flowchart TB
@@ -186,7 +193,7 @@ flowchart TB
   Policy --> Copilot
   Policy --> ClaudeAlias[CLAUDE.md alias]
   ClaudeAlias --> Claude
-  GasCity[Managed Gas City authority] --> Managed[Managed Copilot session]
+  GasCity[Standalone d2b-gascity authority] --> Managed[Managed Copilot session]
   Vendor -. unsupported by this plan .-> Managed
 ```
 
@@ -221,7 +228,9 @@ flowchart TB
 - Keep every imported skill directory complete so its relative `references/` and `scripts/` remain valid.
 - Keep run-specific served-model attribution and substitutions in transient session or handoff output. Normative model preferences belong in `AGENTS.md`; commits, PR bodies, and changelog entries carry no tool or model metadata.
 - Do not use native GitHub auto-merge, admin bypass, merge-queue bypass, or upstream CE branding.
-- Do not modify `nix/gas-city-contributor/**` and make no claim that managed sessions hide repo skills.
+- Do not modify the standalone
+  [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) or
+  make claims about its managed sessions.
 
 ### Sequencing
 
@@ -361,7 +370,7 @@ changelog.d/unified-contributor-agent-workflow.md
 
 ### U3. Centralize the contributor workflow and strategy
 
-**Goal:** Make `AGENTS.md` a concise executable index, add product strategy, and define the complete reviewed-head PR lifecycle without changing Gas City.
+**Goal:** Make `AGENTS.md` a concise executable index, add product strategy, and define the complete reviewed-head PR lifecycle without changing the standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity).
 
 **Requirements:** R4-R12, F1-F2, AE2-AE3
 
@@ -386,7 +395,9 @@ changelog.d/unified-contributor-agent-workflow.md
 4. Assign CE, Ponytail, and Caveman their R4 roles and name the required review-fix-re-review loop.
 5. State exact model preferences and the transient fallback record without adding host-specific model configuration.
 6. Put detailed reviewed-head, review-evidence recovery, babysit, merge, and blocker behavior in the existing workflow guide.
-7. Keep Gas City as a linked exception under its existing managed policy.
+7. Keep the
+   [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) as
+   an external linked exception under its standalone managed policy.
 8. Broaden existing policy coverage to validate all repository-relative links and the new skill-role, model-fallback, current-snapshot review, and merge anchors.
 9. Add a changelog fragment that describes the contributor-facing workflow and lint policy change without internal process labels or run-specific model attribution.
 
@@ -406,7 +417,10 @@ changelog.d/unified-contributor-agent-workflow.md
 - Covers AE3. An unavailable preferred profile selects a native equivalent and records the substitution only in transient handoff.
 - A review fix, CI fix, observed base update, external push, or missing review evidence invalidates readiness and requires synchronization, validation, and fresh review.
 - A PR merges only when repository, PR, reviewed head, verdict, required checks, feedback, and mergeability match current review evidence; the observed base is refreshed but not atomically guarded.
-- Gas City files and managed authority remain unchanged; this plan makes no project-skill visibility claim for managed sessions.
+- The standalone
+  [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity)
+  remains outside this plan; it makes no project-skill visibility claim for
+  managed sessions.
 - Commits, PR guidance, and changelog entries contain no run-specific tool or model attribution.
 
 **Verification:** Existing policy tests pass with the lower instruction budget and expanded authority anchors, every relative link resolves, each strategy claim traces to current code or accepted docs, and manual walkthroughs cover both Product Contract flows and the guarded merge tail.
@@ -420,7 +434,7 @@ changelog.d/unified-contributor-agent-workflow.md
 - **Policy enforcement:** The dash gate gains a closed exemption but retains fail-closed behavior for every other file.
 - **Supply chain:** Three external skill sources enter the repository with pinned commits, licenses, subsets, and hashes.
 - **GitHub lifecycle:** Agents may complete a ready PR through guarded normal squash merge without changing branch protection or native auto-merge settings.
-- **Unchanged surfaces:** Gas City, d2b runtime, NixOS modules, packages, APIs, manifests, VMs, and consumer configuration do not change.
+- **Unchanged surfaces:** The standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity), d2b runtime, NixOS modules, packages, APIs, manifests, VMs, and consumer configuration do not change.
 
 ---
 
@@ -430,14 +444,13 @@ changelog.d/unified-contributor-agent-workflow.md
 | --- | --- | --- |
 | `make check-tier0` | U1-U3 | Dash and process-marker gates pass with the new closed exemption |
 | `cd packages && cargo test -p d2b-contract-tests --test policy_dash_gate` | U1-U2 | Allowed paths pass, lookalikes and ordinary paths fail, and scanner errors remain fail-closed |
-| `make test-policy` | U1-U3 | Dash, instruction, daemon-only, link, and Gas City policy coverage passes |
+| `make test-policy` | U1-U3 | Dash, instruction, daemon-only, and link policy coverage passes |
 | `cd packages && cargo test -p d2b-contract-tests --test storage_sync_contracts` | U3 | The compact authority retains the single-repair-owner contract |
-| `cd packages && cargo test -p d2b-contract-tests --test policy_gas_city` | U3 | Existing managed instructions and direct-GitHub restrictions remain unchanged |
 | `make test-lint` | U1-U3 | Existing Rust, Nix, and shell lint remains clean |
 | `make test-changelog` | U3 | The fragment uses valid Keep a Changelog structure and vocabulary |
 | `git ls-files -s CLAUDE.md .agents/skills .claude/skills third_party/agent-skills` plus static target inspection | U2 | The selected KTD2 topology is tracked, links stay in-repo, hashes match, and documented project paths expose the approved repo inventory |
 | `copilot skill list --json` when available | U2 | Repo-owned skills are discoverable; personal or plugin duplicates do not fail repo acceptance |
-| Compare the final reviewed head with its target-branch merge base under `nix/gas-city-contributor/` | U3 | Managed Gas City policy and assets are unchanged across the complete branch diff |
+| Compare the final reviewed head with its target-branch merge base | U3 | The standalone contributor Gas City repository remains outside the complete branch diff |
 | Independent `ce-code-review` of the final head | U1-U3 | No actionable finding remains; any applied fix is validated and reviewed again |
 | PR babysit and guarded squash merge | U1-U3 | Recorded repository, PR, observed base OID, head OID, and review verdict are available at the immediate pre-merge refresh; missing evidence restarts review; required checks and feedback settle; expected-head squash merge succeeds without bypass; merged state is verified before any retry |
 
@@ -455,7 +468,9 @@ No container, VM, host-integration, live-host, hardware, or authenticated cross-
 - `STRATEGY.md` states product direction without duplicating contributor procedure.
 - Every code-bearing change has independent review tied to the current head.
 - Required gates, feedback, mergeability, reviewed head identity, observed base identity, and review verdict are refreshed before squash merge.
-- Gas City and d2b runtime files are unchanged.
+- The standalone
+  [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity)
+  remains outside the branch.
 - All Verification Contract entries pass or have an explicit non-applicability already authorized by this plan.
 - Dead-end adapters, duplicate skill copies, temporary vendor downloads, and abandoned attempts are absent from the final diff.
 - The branch lands through a reviewed pull request and the PR reaches verified merged state.
