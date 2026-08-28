@@ -458,8 +458,8 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
         "--platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
         "--extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
         "--extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64",
-        "--@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd",
-        "--@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd",
+        "--@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd",
         "--action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "--test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ] {
@@ -480,8 +480,8 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
         "--platforms=",
         "--extra_execution_platforms=",
         "--extra_toolchains=",
-        "--@rules_rust//rust/settings:extra_rustc_flag=",
-        "--@rules_rust//rust/settings:extra_exec_rustc_flag=",
+        "--@rules_rust//rust/settings:extra_rustc_flags=",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flags=",
         "--action_env=PATH",
         "--test_env=PATH",
     ] {
@@ -578,13 +578,13 @@ fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
     for profile in ["remote", "trusted-seed"] {
         assert!(
             bazelrc.contains(&format!(
-                "build:{profile} --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+                "build:{profile} --@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd"
             )),
             "{profile} target Rust actions must override the deprecated gold linker"
         );
         assert!(
             bazelrc.contains(&format!(
-                "build:{profile} --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+                "build:{profile} --@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd"
             )),
             "{profile} exec Rust actions must override the deprecated gold linker"
         );
