@@ -377,8 +377,8 @@ pkgs.testers.runNixOSTest {
     canary = ${builtins.toJSON gatewayCanary}
     gateway_vsock = "/var/lib/d2b/zones/work/guests/gateway/vsock.sock"
     machine.succeed(
-      "runuser -u d2bd -- ip tuntap add d2b-u5-gateway-probe mode tap && "
-      "runuser -u d2bd -- ip tuntap del d2b-u5-gateway-probe mode tap"
+      "runuser -u d2bd -- ip tuntap add d2b-u5-probe mode tap && "
+      "runuser -u d2bd -- ip tuntap del d2b-u5-probe mode tap"
     )
     machine.wait_for_file(gateway_vsock)
     machine.succeed(f"test -S {gateway_vsock}")
