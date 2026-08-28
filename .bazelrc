@@ -19,12 +19,25 @@ build --stamp=no
 build --noslim_profile
 build --experimental_profile_include_target_label
 build --experimental_profile_include_primary_output
+# Developer build and test commands use BuildBuddy unless a caller selects
+# another profile explicitly.
+build --config=remote
 # The local profile is the exact same target graph without any provider
 # endpoints. The bazel-check facade supplies the local repository-content
 # option outside the remote profiles.
 build:local --remote_executor=
 build:local --remote_cache=
 build:local --bes_backend=
+build:local --bes_results_url=
+build:local --credential_helper=
+build:local --remote_instance_name=
+build:local --platforms=
+build:local --extra_execution_platforms=
+build:local --extra_toolchains=
+build:local --@rules_rust//rust/settings:extra_rustc_flag=
+build:local --@rules_rust//rust/settings:extra_exec_rustc_flag=
+build:local --action_env=PATH
+build:local --test_env=PATH
 
 # Remote profiles use the d2b BuildBuddy workspace. Authentication is
 # the credential helper only. Direct API-key headers leak into BEP.

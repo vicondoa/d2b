@@ -441,6 +441,85 @@ fn committed_profiles_share_authentication_and_worker_policy() {
 }
 
 #[test]
+fn developer_defaults_and_local_opt_out_are_explicit() {
+    let bazelrc = read_text(".bazelrc");
+    assert!(
+        bazelrc.lines().any(|line| line.trim() == "build --config=remote"),
+        "bare Bazel build and test commands must select the remote profile"
+    );
+
+    for option in [
+        "--remote_executor=grpcs://d2b.buildbuddy.io",
+        "--remote_cache=grpcs://d2b.buildbuddy.io",
+        "--bes_backend=grpcs://d2b.buildbuddy.io",
+        "--bes_results_url=https://d2b.buildbuddy.io/invocation/",
+        "--credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check",
+        "--remote_instance_name=d2b/developer/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1",
+        "--platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
+        "--extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
+        "--extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64",
+        "--@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd",
+        "--action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "--test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    ] {
+        let expected = format!("build:remote {option}");
+        assert!(
+            bazelrc.lines().any(|line| line.trim() == expected),
+            "remote profile must retain {option}"
+        );
+    }
+
+    for option in [
+        "--remote_executor=",
+        "--remote_cache=",
+        "--bes_backend=",
+        "--bes_results_url=",
+        "--credential_helper=",
+        "--remote_instance_name=",
+        "--platforms=",
+        "--extra_execution_platforms=",
+        "--extra_toolchains=",
+        "--@rules_rust//rust/settings:extra_rustc_flag=",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flag=",
+        "--action_env=PATH",
+        "--test_env=PATH",
+    ] {
+        let expected = format!("build:local {option}");
+        assert!(
+            bazelrc.lines().any(|line| line.trim() == expected),
+            "local profile must neutralize {option}"
+        );
+    }
+
+    let makefile = read_text("Makefile");
+    assert!(
+        !makefile.contains("D2B_BAZEL_PROFILE ?= remote"),
+        "Make must leave the default profile to .bazelrc"
+    );
+    assert!(
+        makefile.contains(
+            "D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))"
+        ),
+        "Make must pass a profile only when the caller sets one"
+    );
+    assert!(
+        makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)"),
+        "public Make aliases must use the conditional profile argument"
+    );
+    assert!(
+        !makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=remote"),
+        "Make must not hard-code the remote profile"
+    );
+
+    let workflow = read_text(".github/workflows/pr-l1-static-fast.yml");
+    assert!(
+        workflow.contains("D2B_BAZEL_PROFILE: local"),
+        "Layer-1 CI must continue to opt into the local profile"
+    );
+}
+
+#[test]
 fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
     let scratch = repo_root().join(".scratch").join(format!(
         "tier0-shellcheck-missing-test-{}-{}",

@@ -148,10 +148,12 @@ caching, and aggregation. Make targets and fixed CI jobs are thin aliases over
 one facade suite per public target and must not grow local fan-out, discovery,
 sharding, or rollup logic.
 
-Public Make aliases run `bazel test --config=$(D2B_BAZEL_PROFILE)` directly.
-Do not wrap `make check` or `make test-*` through `tests/tools/bazel-check`.
-That script remains the BuildBuddy credential helper only. Default profile is
-`remote`; PR gates set `D2B_BAZEL_PROFILE=local`.
+Public Make aliases run `bazel test` directly and pass
+`--config=$(D2B_BAZEL_PROFILE)` only when the caller sets that variable.
+Otherwise `.bazelrc` supplies the `remote` default. Do not wrap `make check` or
+`make test-*` through `tests/tools/bazel-check`. That script remains the
+BuildBuddy credential helper only. PR gates set
+`D2B_BAZEL_PROFILE=local`.
 
 Bazel is the only supported contributor build and test interface. Cargo
 manifests and the root `Cargo.lock` own Rust package and dependency facts;
