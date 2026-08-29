@@ -6,3 +6,4 @@
 ### Fixed
 
 - Revoked stale controller assignments on disconnect or replacement and retried stale lease revocations during refresh.
+- Reused Bazel's pinned nixpkgs source across isolated Nix unit surfaces instead of fetching it during every test.

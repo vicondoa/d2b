@@ -17,6 +17,8 @@ _NIX_TOOL_LABELS = [
 
 _NIX_SURFACE_TOOL_LABELS = [
     "@nix//:bin/nix",
+    "@nixpkgs//:default.nix",
+    "@nixpkgs//:flake.lock",
     "@python3//:bin/python3",
     "//:tests/tools/peak-rss.py",
 ]
@@ -156,6 +158,8 @@ copy_input() {
 }
 
 NIX_BIN=$(runfile "__NIX_KEY__")
+NIXPKGS_DEFAULT=$(runfile "__NIXPKGS_KEY__")
+NIXPKGS_ROOT=${NIXPKGS_DEFAULT%/default.nix}
 PYTHON_BIN=$(runfile "__PYTHON_KEY__")
 PEAK_RSS=$(runfile "__PEAK_KEY__")
 OUTPUT_ROOT=${TEST_UNDECLARED_OUTPUTS_DIR:-"$PWD/.nix-surface-output"}
@@ -168,10 +172,11 @@ __COPY_INPUTS__
 cat >"$ISOLATED_ROOT/surface-spec.json" <<'SURFACE_SPEC_EOF'
 __SURFACE_SPEC_JSON__
 SURFACE_SPEC_EOF
-cat >"$ISOLATED_ROOT/surface-entry.nix" <<'SURFACE_ENTRY_EOF'
+cat >"$ISOLATED_ROOT/surface-entry.nix" <<SURFACE_ENTRY_EOF
 import ./tests/unit/nix/run-surface.nix {
   root = ./.;
   specPath = ./surface-spec.json;
+  nixpkgsPath = builtins.toPath "$NIXPKGS_ROOT";
 }
 SURFACE_ENTRY_EOF
 
@@ -211,6 +216,7 @@ def _surface_runner_script(name, surface, spec, inputs):
     copy_lines = []
     make_vars = {
         "$(rlocationpath @nix//:bin/nix)": "__NIX_RUNFILE__",
+        "$(rlocationpath @nixpkgs//:default.nix)": "__NIXPKGS_RUNFILE__",
         "$(rlocationpath @python3//:bin/python3)": "__PYTHON_RUNFILE__",
         "$(rlocationpath //:tests/tools/peak-rss.py)": "__PEAK_RUNFILE__",
     }
@@ -224,6 +230,7 @@ def _surface_runner_script(name, surface, spec, inputs):
 
     script = _NIX_SURFACE_TEST_SCRIPT
     script = script.replace("__NIX_KEY__", "$(rlocationpath @nix//:bin/nix)")
+    script = script.replace("__NIXPKGS_KEY__", "$(rlocationpath @nixpkgs//:default.nix)")
     script = script.replace("__PYTHON_KEY__", "$(rlocationpath @python3//:bin/python3)")
     script = script.replace("__PEAK_KEY__", "$(rlocationpath //:tests/tools/peak-rss.py)")
     script = script.replace("__COPY_INPUTS__", "\n".join(copy_lines))
@@ -271,7 +278,6 @@ def _surface_inputs(surface, spec):
         if module not in modules:
             modules.append(module)
     inputs = [
-        "//:flake.lock",
         "//tests/unit/nix:eval-jobs.nix",
         "//tests/unit/nix:run-surface.nix",
         _surface_expression(surface, spec),
