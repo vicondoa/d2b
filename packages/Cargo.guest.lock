@@ -777,12 +777,9 @@ dependencies = [
  "d2b-audit",
  "d2b-contracts",
  "d2b-contracts-broker",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host",
- "d2b-realm-core",
  "hmac",
  "nix 0.29.0",
  "rustix 0.38.44",
@@ -845,7 +842,7 @@ name = "d2b-contracts-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
-  "d2b-contracts-resource",
+ "d2b-contracts-resource",
  "schemars",
  "serde",
  "serde_json",
@@ -858,7 +855,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
- "protobuf",
  "schemars",
  "serde",
  "serde_json",
@@ -1047,6 +1043,7 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1113,10 +1110,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "libc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1170,11 +1164,9 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "d2b-session",
  "env_logger",
- "getrandom 0.2.17",
  "libc",
  "log",
  "nix 0.29.0",
@@ -1237,7 +1229,8 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
  "d2b-realm-core",
  "reqwest 0.12.28",
  "serde",
@@ -1504,6 +1497,7 @@ dependencies = [
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1514,7 +1508,6 @@ dependencies = [
 name = "d2bd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "arc-swap",
  "async-trait",
  "clap",
  "d2b-audit",
@@ -1527,7 +1520,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
-  "d2b-gateway",
+ "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
  "d2b-process",
@@ -1559,6 +1552,7 @@ dependencies = [
  "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
+ "d2b-zone-routing",
  "d2bd-runtime",
  "getrandom 0.2.17",
  "libc",
@@ -1566,20 +1560,17 @@ dependencies = [
  "notify-rust",
  "parking_lot",
  "protobuf",
- "regex",
  "rustix 0.38.44",
- "semver",
  "serde",
  "serde_json",
  "sha2",
  "socket2 0.5.10",
- "subtle",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "ttrpc",
- ]
+]
 
 [[package]]
 name = "d2bd-runtime"
@@ -1616,11 +1607,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "socket2 0.5.10",
- "subtle",
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "ttrpc",
  "uzers",
 ]
