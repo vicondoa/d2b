@@ -174,7 +174,11 @@ pub(crate) async fn reconcile_binding_children(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| BindingChildRuntimeError::Core(error))?;
         reconciler
-            .relist(owner_target.clone(), observed)
+            .relist_with_owner_generation(
+                owner_target.clone(),
+                owner.resource.generation,
+                observed,
+            )
             .map_err(|error| {
                 BindingChildRuntimeError::Core(BindingChildMaterializationError::OwnerReconcile(
                     error,
@@ -818,7 +822,7 @@ mod tests {
         let child_ref = target("Process", "child");
         let owner = HintTarget::new(
             ZoneId::parse("dev").unwrap(),
-            ResourceRef::parse("Binding/owner").unwrap(),
+            ResourceRef::parse("audio.d2bus.org.AudioBinding/owner").unwrap(),
             d2b_contracts_resource::v3::ResourceUid::parse(
                 "223e4567-e89b-42d3-a456-426614174000",
             )

@@ -1207,7 +1207,15 @@ impl OwnerIndex {
     ) -> Result<OwnerBatchRecovery, OwnerReconcileError> {
         let recovery = result.resolve(batch, relisted)?;
         if result.is_uncertain() {
-            self.relist(batch.owner.clone(), relisted.to_vec())?;
+            let mut merged = self
+                .children
+                .get(batch.owner())
+                .cloned()
+                .ok_or(OwnerReconcileError::OwnerNotRelisted)?;
+            for child in relisted {
+                merged.insert(child.target().resource_ref().clone(), child.clone());
+            }
+            self.relist(batch.owner.clone(), merged.into_values().collect())?;
         }
         Ok(recovery)
     }
@@ -1872,11 +1880,28 @@ mod tests {
         let owner = target("work", "Guest", "desktop", 1);
         let mut index = OwnerIndex::new(limits());
         index
-            .relist(
+            .relist_with_owner_generation(
                 owner.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
                 vec![
-                    observed("Process", "drifted", 2, 4, "old"),
-                    observed("Process", "extra", 3, 5, "extra"),
+                    ObservedChild::with_owner(
+                        target("work", "Process", "drifted", 2),
+                        &owner,
+                        d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                        ZoneRevision::new(4),
+                        "old",
+                        false,
+                    )
+                    .unwrap(),
+                    ObservedChild::with_owner(
+                        target("work", "Process", "extra", 3),
+                        &owner,
+                        d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                        ZoneRevision::new(5),
+                        "extra",
+                        false,
+                    )
+                    .unwrap(),
                 ],
             )
             .unwrap();
@@ -1897,6 +1922,52 @@ mod tests {
             plan.mutations()[2],
             OwnerMutation::RequestDeletion { .. }
         ));
+    }
+
+    #[test]
+    fn uncertain_batch_recovery_preserves_existing_siblings() {
+        let owner = target("work", "Guest", "desktop", 1);
+        let owner_generation =
+            d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
+        let existing = ObservedChild::with_owner(
+            target("work", "Process", "existing", 2),
+            &owner,
+            owner_generation,
+            ZoneRevision::new(4),
+            "existing",
+            false,
+        )
+        .unwrap();
+        let mut index = OwnerIndex::new(limits());
+        index
+            .relist_with_owner_generation(owner.clone(), owner_generation, vec![existing])
+            .unwrap();
+        let desired = vec![
+            desired("Process", "existing", "existing"),
+            desired("Process", "missing", "missing"),
+        ];
+        let batch = index
+            .plan(&owner, desired.clone())
+            .unwrap()
+            .create_batch()
+            .cloned()
+            .unwrap();
+        let recovered = ObservedChild::with_owner(
+            target("work", "Process", "missing", 3),
+            &owner,
+            owner_generation,
+            ZoneRevision::new(5),
+            "missing",
+            false,
+        )
+        .unwrap();
+
+        index
+            .recover_batch(&batch, &OwnerBatchResult::uncertain(), &[recovered])
+            .unwrap();
+
+        assert_eq!(index.child_count(&owner), 2);
+        assert!(index.plan(&owner, desired).unwrap().is_converged());
     }
 
     #[test]

@@ -872,7 +872,13 @@ mod tests {
         let endpoint = child_resource(set.child("guest-endpoint").unwrap());
         let mut reconciler = BindingChildReconciler::new(OwnerLimits::new(4, 8).unwrap());
         let parent = owner(&set);
-        reconciler.relist(parent.clone(), Vec::new()).unwrap();
+        reconciler
+            .relist_with_owner_generation(
+                parent.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
 
         assert_eq!(
             reconciler.plan(&parent, &set, std::slice::from_ref(&process)),
@@ -894,7 +900,13 @@ mod tests {
         let set = child_set();
         let mut reconciler = BindingChildReconciler::new(OwnerLimits::new(4, 8).unwrap());
         let parent = owner(&set);
-        reconciler.relist(parent.clone(), Vec::new()).unwrap();
+        reconciler
+            .relist_with_owner_generation(
+                parent.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
 
         let plan = reconciler.plan_intents(&parent, &set).unwrap();
         assert_eq!(plan.mutations().len(), 2);

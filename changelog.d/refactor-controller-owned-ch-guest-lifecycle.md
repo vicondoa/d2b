@@ -6,3 +6,4 @@
 ### Fixed
 
 - Revoked stale controller assignments on disconnect or replacement and retried stale lease revocations during refresh.
+- Preserved owner generation and existing siblings during Binding child creation and uncertain batch recovery.
