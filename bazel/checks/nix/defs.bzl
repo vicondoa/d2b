@@ -328,11 +328,5 @@ def nix_surface_suite(surfaces):
             ":nix-unit-provider-clipboard-wayland",
             ":nix-unit-provider-display-wayland",
             ":nix-unit-provider-notification-desktop",
-            ":nix-unit-provider-runtime-cloud-hypervisor",
-            ":nix-unit-provider-runtime-azure-container-apps",
-            ":nix-unit-provider-runtime-azure-virtual-machine",
-            ":nix-unit-provider-volume-virtiofs",
-            ":nix-unit-provider-observability-otel",
-            ":nix-unit-provider-shell-terminal",
         ],
     )
