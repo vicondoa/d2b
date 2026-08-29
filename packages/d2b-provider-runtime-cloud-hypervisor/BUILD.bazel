@@ -119,6 +119,34 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+rust_test(
+    name = "guest_spec_validation_test",
+    srcs = [
+        "tests/guest_spec_validation_test.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_runtime_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "redaction_test",
+    srcs = [
+        "tests/redaction_test.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_runtime_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

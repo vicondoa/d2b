@@ -21,8 +21,9 @@
 `spec.providerRef` is `Provider/runtime-cloud-hypervisor`. For each such Guest
 it:
 
-- asserts an owned VMM `Process` resource and observes Device, Network, and
-  Volume dependency readiness through `ResourceClient` before launching it;
+- asserts the complete owned VMM `Process`, control `Endpoint`, and setup
+  `Volume` child set and observes Device, Network, and Volume dependency
+  readiness through `ResourceClient` before launching it;
 - supervises the Cloud Hypervisor VMM process as a long-lived `Process`;
 - presents the running guest to the Zone resource plane with typed health status
   and conditions;
@@ -268,25 +269,67 @@ At build time the Nix compiler resolves the artifact catalog entry:
 
 ---
 
+### 4.4 Private setup descriptor and child identity boundary
+
+The public `Guest` schema remains unchanged: `spec.systemArtifactId` and the
+signed `spec.provider.settings` extension are the only Guest setup selectors.
+The controller receives a separate private setup descriptor from the trusted
+artifact catalog. The descriptor is schema version `1.0`, canonical JSON, and
+signed with the fixed `ed25519-blake3` algorithm. Its semantic payload binds:
+
+- `Provider/runtime-cloud-hypervisor` and its nonzero Provider generation;
+- the selected `systemArtifactId` and the private `nixos-system` artifact
+  commitment;
+- the fixed direct child roles `vmm`, `ch-api`, `guest-control`, and `system`;
+- the target-local seed schema, schema version, and fingerprint; and
+- the opaque bootstrap handoff class and bounded expiry.
+
+`descriptorDigest` is the domain-separated digest of that semantic payload.
+The descriptor loader rejects non-canonical JSON, duplicate or unknown fields,
+unsupported signature algorithms, digest mismatches, raw paths, socket or
+other locators, credentials, argv or environment values, numeric identities,
+and broker operation names. The descriptor and its signature are private
+catalog inputs and never appear in Guest spec, status, audit, metrics, or
+public debug output.
+
+For Guest `<name>`, the controller derives the Zone-local child references
+`Process/<name>-vmm`, `Endpoint/<name>-ch-api`,
+`Endpoint/<name>-guest-control`, and `Volume/<name>-system`. It submits those
+related creates as one UID-free batch. Every mutation carries the Guest
+`ownerRef`, its Zone, and `CreateAbsent`; Process, Endpoint, and Volume bodies
+refer to other resources by `ResourceRef` only. The store assigns child UIDs
+and the commit response maps every expected reference to its returned UID and
+revision, rejecting missing, extra, duplicate, foreign-owner, wrong-type, or
+cross-Zone rows.
+
+The private host runtime scope is a separate domain-separated digest over the
+immutable Zone UID, Guest UID, fixed role, and relevant generation. It is used
+only for private runtime fencing and never replaces a public name-based
+`ResourceRef` or appears in a Resource payload.
+
 ## 5 Owned bootstrap graph
 
-The controller owns the VMM `Process` child resource. On every reconcile it
-reads the current `Process` snapshot via `owner_index`, diffs the desired spec
-against the observed state, creates the `Process` when all dependencies are
-ready, repairs spec drift with expected-revision writes, and requests deletion
-when the Guest is being finalized.
+The controller owns the VMM `Process`, control `Endpoint`, and setup `Volume`
+child resources. On every reconcile it reads the complete direct-child snapshot
+via `owner_index`, diffs the desired set against the observed state, submits
+missing children as one `CreateAbsent` batch, repairs spec drift with
+expected-revision writes, and requests deletion when the Guest is being
+finalized.
 
 ### 5.1 Bootstrap graph topology
 
 ```
 Guest/<name>
-  └── Process/<name>-vmm    (Provider/system-minijail)
+  |-- Process/<name>-vmm             (Provider/system-minijail)
+  |-- Endpoint/<name>-ch-api
+  |-- Endpoint/<name>-guest-control
+  `-- Volume/<name>-system            (Provider/volume-local)
 ```
 
 The net-VM Guest (auto-declared by `Provider/network-local` for each Network)
-has the same single-Process shape. `ProcessRole::NetVm` in the current baseline
-maps to a `Provider/runtime-cloud-hypervisor` VMM process under a
-controller-created `Guest/<network-name>-net-vm`.
+uses the same controller-owned direct-child contract. `ProcessRole::NetVm` in
+the current baseline maps to a `Provider/runtime-cloud-hypervisor` VMM process
+under a controller-created `Guest/<network-name>-net-vm`.
 
 #### Process: `<name>-vmm`
 
@@ -339,17 +382,21 @@ controller-created `Guest/<network-name>-net-vm`.
 ### 5.2 Pre-start dependency ordering
 
 The controller enforces this ordering by watching resource statuses through
-`ResourceClient` and gating VMM Process creation in the reconcile loop:
+`ResourceClient`. It first commits the complete direct child set in one
+UID-free batch: the VMM Process is created with
+`desiredLifecycle: stopped`, and the control Endpoints and setup Volume are
+created with name-based `ResourceRef` links and `CreateAbsent`. The controller
+then gates only the transition to a running VMM:
 
 1. All `Device` resources in `Guest.spec.deviceAttachments` (including
-   `Device/kvm`) must be `Ready` before the VMM Process is created.
+   `Device/kvm`) must be `Ready` before the VMM Process is changed to running.
 2. All `Network` resources in `Guest.spec.networkAttachments` must be `Ready`
    (fabric and opaque attachment realization ready for Core resolution) before
-   the VMM Process is created.
+   the VMM Process is changed to running.
 3. All virtiofs-exported Volumes referenced by the Guest must be `Ready` per
-   `Provider/volume-virtiofs` before the VMM Process is created.
+   `Provider/volume-virtiofs` before the VMM Process is changed to running.
 
-When all conditions hold in the same reconcile turn, the controller creates the
+When all conditions hold in the same reconcile turn, the controller updates the
 VMM Process immediately - no intermediate EphemeralProcess steps. These
 dependency checks are declared as explicit `dependency` watch selectors in the
 controller descriptor; the reconcile loop receives `dependency-ready` triggers
@@ -556,35 +603,39 @@ After a Guest `spec` durable commit:
 
 - post-commit dispatcher pushes a hint immediately;
 - p95 controller handler start: ≤5 ms;
-- controller reads dependency statuses synchronously;
-- if all Device, Network, and Volume dependencies are already `Ready`: VMM
-  Process creation commit p95 ≤20 ms from hint receipt (immediate async launch);
+- controller commits the complete direct child batch synchronously with the
+  VMM Process stopped;
+- if all Device, Network, and Volume dependencies are already `Ready`: the
+  VMM Process running transition commits p95 ≤20 ms from hint receipt;
 - if any dependency is not yet `Ready`: controller writes `Guest.status` phase
   `Pending`, returns, and will be re-triggered by `dependency-ready` events.
-  When the final dependency becomes Ready the controller creates the VMM Process;
-  p95 ≤20 ms from that trigger receipt.
+  When the final dependency becomes `Ready` the controller transitions the
+  existing VMM Process to running, p95 ≤20 ms from that trigger receipt.
 
 ### 9.3 Reconcile steps
 
 1. Receive trigger (spec-generation-changed, owned-resource-changed,
    dependency-ready, dependency-changed, deletion-requested, retry-due, etc.).
-2. Read fresh Guest spec snapshot plus owner-index VMM Process snapshot.
+2. Read fresh Guest spec snapshot plus the complete owner-index direct-child
+   snapshot.
 3. Call `validateSpec`: check spec.provider.settings bounds, Endpoint resource shape,
    systemArtifactId catalog type, memoryShared+virtiofs invariant,
    controllerExecutionRef validity.
 4. Read dependency snapshots (Device/kvm and all declared Devices, all Networks,
    all virtiofs Volume statuses) through the capability-limited `ResourceClient`.
-5. If any dependency is not Ready: write Guest status `Pending`/conditions;
+5. Diff the complete descriptor-derived direct child set against the observed
+   children. If children are absent, submit one UID-free `CreateAbsent` batch;
+   if a child drifts, repair it with expected-revision writes.
+6. If any dependency is not `Ready`: write Guest status `Pending`/conditions;
    return `pending`. Controller will be re-triggered by `dependency-ready`.
-6. Diff desired VMM Process spec against observed child. If absent, create it;
-   if drifted, repair with expected-revision `update-spec`. Batch with
-   expected-revision preconditions.
-7. Stale conflict on any batch → discard result; toolkit re-reads and the
+7. If all dependencies are `Ready`, transition the existing VMM Process to
+   running with an exact UID/revision fence.
+8. Stale conflict on any batch → discard result; toolkit re-reads and the
    handler retries under policy.
-8. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
+9. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
    conditions, and Cloud Hypervisor `status.provider.details`) atomically via
    `update-status` with expected revision.
-9. Return `converged`, `pending`, `failed-retryable`, or `failed-terminal`.
+10. Return `converged`, `pending`, `failed-retryable`, or `failed-terminal`.
 
 ### 9.4 Adoption after controller restart
 
@@ -711,7 +762,7 @@ dependencySelectors:
     reason: volume-dependency-ready
 ownerChildTriggers:
   - ownerType: Guest
-    childTypes: [Process]
+    childTypes: [Process, Endpoint, Volume]
 reconcileConcurrency: 8
 maxPendingResources: 256
 finalizersOwned:
@@ -1171,12 +1222,12 @@ store handle, no ambient route table.
 | Verb | ResourceType | Purpose |
 | --- | --- | --- |
 | `list` | Guest | Initial relist on startup |
-| `watch` | Guest, Process, Device, Network, Volume | Continuous watch stream |
+| `watch` | Guest, Process, Endpoint, Volume, Device, Network | Continuous watch stream |
 | `get` | All of the above | Fresh snapshot per reconcile |
-| `create` | Process | VMM Process creation when all deps ready |
-| `update-spec` | Process | Drift repair |
+| `create` | Process, Endpoint, Volume | UID-free direct child batch |
+| `update-spec` | Process, Endpoint, Volume | Drift repair and VMM running transition |
 | `update-status` | Guest | Status write |
-| `delete` | Process | Finalizer-safe teardown |
+| `delete` | Process, Endpoint, Volume | Finalizer-safe teardown |
 | `update-finalizers` | Guest | Clear the controller-owned finalizer after finalize completes |
 
 ### 14.2 Named streams
@@ -1572,17 +1623,19 @@ directly to the single VMM Process:
 
 1. Guest spec commit → post-commit dispatcher pushes hint immediately.
 2. Controller receives hint: p95 ≤5 ms.
-3. Controller reads all dependency statuses (Device/kvm, all declared Devices,
+3. Controller derives and commits the complete direct child set as one
+   UID-free `CreateAbsent` batch, with `<name>-vmm` initially stopped.
+4. Controller reads all dependency statuses (Device/kvm, all declared Devices,
    Networks, virtiofs Volumes) through `ResourceClient`.
-4. **If all dependencies are Ready**: creates `<name>-vmm` Process; p95 ≤20 ms
-   from hint receipt. This is the immediate async launch path.
-5. **If any dependency is not Ready**: controller writes `Guest.status` phase
+5. **If all dependencies are Ready**: transitions `<name>-vmm` to running;
+   p95 ≤20 ms from hint receipt. This is the immediate async launch path.
+6. **If any dependency is not Ready**: controller writes `Guest.status` phase
    `Pending`, returns `pending`. Watch loop continues; on each
-   `dependency-ready` trigger the controller re-evaluates and creates the
+   `dependency-ready` trigger the controller re-evaluates and transitions the
    Process when the final dependency becomes Ready (p95 ≤20 ms from trigger).
-6. Watch loop dispatches independent Guests concurrently under
+7. Watch loop dispatches independent Guests concurrently under
    `reconcileConcurrency: 8` budget.
-7. VMM Process readiness and guest-control health check (observe handler)
+8. VMM Process readiness and guest-control health check (observe handler)
    complete asynchronously; Guest status is written with expected-revision
    commits.
 

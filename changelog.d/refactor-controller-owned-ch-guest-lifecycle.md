@@ -1,6 +1,7 @@
 ### Added
 
 - Added exact peer-bound controller ResourceV3 sessions with bounded bootstrap descriptor handoff and scoped Cloud Hypervisor assignments.
+- Added a strict private Cloud Hypervisor Guest setup descriptor, deterministic child ResourceRefs, UID-free create batches, and private runtime identity fencing.
 
 ### Fixed
 

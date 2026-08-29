@@ -11,7 +11,9 @@ pub mod bootstrap_graph;
 pub mod config;
 pub mod controller;
 mod controller_session;
+pub mod descriptor;
 pub mod health;
+pub mod identity;
 pub mod metrics;
 pub mod state;
 pub mod vmm_argv;
@@ -22,8 +24,18 @@ pub use controller::{
     CloudHypervisorError, CloudHypervisorPhase, CloudHypervisorReconcileOutcome,
     CloudHypervisorRecoveryState, SystemCloudHypervisorClock,
 };
+pub use descriptor::{
+    BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
+    GuestSetupDescriptorError, OpaqueDescriptorSignature, SignatureAlgorithm,
+};
 pub use health::{
     GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceProbe, GuestSessionHealth,
+};
+pub use identity::{
+    ChildCreateBody, ChildIdentityError, ChildMutation, ChildRole, ChildRoleSet,
+    CommitResponseError, CommittedChild, CommittedChildren, CreatePrecondition, EndpointCreateBody,
+    GuestChildBatch, ProcessCreateBody, VolumeCreateBody, deterministic_child_name,
+    deterministic_child_ref, map_commit_response, map_wire_commit_response,
 };
 pub use vmm_argv::{
     ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
