@@ -51,11 +51,21 @@ _SURFACES = {
         "files": [
             "packages/d2b-provider-network-local/nix/net-mdns.nix",
             "packages/d2b-provider-network-local/nix/net.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/generated/provider-catalog-shape.nix",
         ],
         "modules": [
             "packages/d2b-provider-network-local/nix/network.nix",
-            "nixos-modules/options-envs.nix",
             "packages/d2b-provider-network-local/nix/resources-network.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/options-envs.nix",
+            "nixos-modules/options-site.nix",
+            "nixos-modules/options-vms.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-resources.nix",
         ],
     },
     "storage-volume": {
@@ -94,13 +104,45 @@ _SURFACES = {
             "nixos-modules/realm-identity-config-json.nix",
             "nixos-modules/realm-workloads-launcher-json.nix",
             "nixos-modules/realm-workloads-launcher-v2-json.nix",
-            "nixos-modules/resources-zone-control.nix",
         ],
+    },
+    "zone-control": {
+        "cases": ["zone-control", "zone-link"],
+        "package": "packages/d2b-provider-volume-local",
+        "files": [
+            "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/zone-resources-json.nix",
+        ],
+        "modules": [
+            "nixos-modules/bundle-artifacts.nix",
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/options-resources.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/provider-runtime-contracts.nix",
+            "nixos-modules/resources-zones-processes.nix",
+            "nixos-modules/resources-zone-control.nix",
+            "nixos-modules/zone-resources.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+        ],
+    },
+    "allocator-topology": {
+        "cases": ["allocator-topology"],
+        "files": [
+            "nixos-modules/allocator-json.nix",
+        ],
+        "modules": [],
     },
     "desktop-interaction": {
         "cases": [],
+        "package": "packages/d2b-provider-display-wayland",
         "modules": [
-            "nixos-modules/ui-colors.nix",
+            "packages/d2b-provider-display-wayland/nix/ui-colors.nix",
         ],
     },
     "provider-catalog": {
@@ -122,11 +164,20 @@ _SURFACES = {
     },
     "examples": {
         "cases": [],
+        "package": "packages/d2b-provider-observability-otel",
+        "files": [
+            "packages/d2b-provider-observability-otel/src/nix/journald.nix",
+            "nixos-modules/gas-city-contributor/integrations.nix",
+            "nixos-modules/gas-city-contributor/network.nix",
+            "nixos-modules/gas-city-contributor/options.nix",
+            "nixos-modules/gas-city-contributor/service.nix",
+        ],
         "modules": [
-            "nixos-modules/components/observability/default.nix",
-            "nixos-modules/components/observability/guest.nix",
-            "nixos-modules/components/observability/host.nix",
-            "nixos-modules/components/observability/stack.nix",
+            "packages/d2b-provider-observability-otel/nix/default.nix",
+            "packages/d2b-provider-observability-otel/nix/guest.nix",
+            "packages/d2b-provider-observability-otel/nix/host.nix",
+            "packages/d2b-provider-observability-otel/nix/stack.nix",
+            "nixos-modules/gas-city-contributor/default.nix",
             "nixos-modules/observability-vm.nix",
         ],
     },
@@ -153,6 +204,8 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-network-local:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-network-local/nix/artifacts.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
         ],
         "modules": [
             "packages/d2b-provider-network-local/nix/default.nix",
@@ -169,7 +222,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-usbip:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/usbip.nix",
+            "packages/d2b-provider-device-usbip/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-usbip/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-usbip",
         "raw_cases": True,
@@ -183,7 +239,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-security-key:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/security-key-guest.nix",
+            "packages/d2b-provider-device-security-key/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-security-key/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-security-key",
         "raw_cases": True,
@@ -197,7 +256,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-tpm:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/tpm.nix",
+            "packages/d2b-provider-device-tpm/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-tpm/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-tpm",
         "raw_cases": True,
@@ -211,10 +273,11 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-gpu:nix/tests/default.nix",
         "files": [
+            "packages/d2b-provider-device-gpu/nix/default.nix",
             "pkgs/virtio-media-driver/default.nix",
         ],
         "modules": [
-            "nixos-modules/components/video/guest.nix",
+            "packages/d2b-provider-device-gpu/nix/video-guest.nix",
         ],
         "package": "packages/d2b-provider-device-gpu",
         "raw_cases": True,
@@ -230,6 +293,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-audio-pipewire:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-audio-pipewire/nix/default.nix",
+            "packages/d2b-provider-audio-pipewire/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-audio-pipewire",
         "raw_cases": True,
@@ -261,6 +325,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-clipboard-wayland:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-clipboard-wayland/nix/default.nix",
+            "packages/d2b-provider-clipboard-wayland/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-clipboard-wayland",
         "raw_cases": True,
@@ -273,9 +338,11 @@ nix_surface_test(
     spec = {
         "cases": [],
         "expression": "//packages/d2b-provider-activation-nixos:nix/tests/default.nix",
-        "files": [],
         "modules": [
             "packages/d2b-provider-activation-nixos/nix/default.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-activation-nixos/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-activation-nixos",
         "raw_cases": True,
@@ -289,8 +356,101 @@ nix_surface_test(
         "cases": [],
         "modules": ["packages/d2b-provider-runtime-qemu-media/nix/default.nix"],
         "expression": "//packages/d2b-provider-runtime-qemu-media:nix/tests/default.nix",
-        "files": [],
+        "files": [
+            "packages/d2b-provider-runtime-qemu-media/nix/projection.nix",
+        ],
         "package": "packages/d2b-provider-runtime-qemu-media",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-cloud-hypervisor",
+    surface = "provider-runtime-cloud-hypervisor",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-cloud-hypervisor:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-cloud-hypervisor",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-azure-container-apps",
+    surface = "provider-runtime-azure-container-apps",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-azure-container-apps:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-azure-container-apps/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-azure-container-apps",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-azure-virtual-machine",
+    surface = "provider-runtime-azure-virtual-machine",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-azure-virtual-machine:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-azure-virtual-machine/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-azure-virtual-machine",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-volume-virtiofs",
+    surface = "provider-volume-virtiofs",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-volume-virtiofs:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-volume-virtiofs/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-volume-virtiofs",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-observability-otel",
+    surface = "provider-observability-otel",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-observability-otel:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-observability-otel/nix/default.nix",
+            "packages/d2b-provider-observability-otel/nix/projection.nix",
+        ],
+        "package": "packages/d2b-provider-observability-otel",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-shell-terminal",
+    surface = "provider-shell-terminal",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-shell-terminal:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-shell-terminal/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-shell-terminal",
         "raw_cases": True,
     },
 )
@@ -304,6 +464,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-display-wayland:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-display-wayland/nix/default.nix",
+            "packages/d2b-provider-display-wayland/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-display-wayland",
         "raw_cases": True,
@@ -319,6 +480,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-notification-desktop:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-notification-desktop/nix/default.nix",
+            "packages/d2b-provider-notification-desktop/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-notification-desktop",
         "raw_cases": True,
@@ -345,6 +507,15 @@ nix_native_test(
     name = "flake-eval-x86-realized-video",
     command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" >/dev/null',
     lane = "flake-realized-video",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
+    name = "flake-eval-x86-realized-gas-city",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" >/dev/null',
+    lane = "flake-realized-gas-city",
     max_kib = 14665373,
     data = ["//:flake.lock"],
     timeout = "eternal",
@@ -403,6 +574,7 @@ test_suite(
     name = "nix_realized",
     tests = [
         ":flake-eval-x86-realized-video",
+        ":flake-eval-x86-realized-gas-city",
         ":flake-eval-x86-realized-supply-chain",
         ":flake-eval-x86-realized-package-output",
         ":flake-eval-x86-realized-provider-catalog",
