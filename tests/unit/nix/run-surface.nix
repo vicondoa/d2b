@@ -5,10 +5,10 @@
 
 let
   spec = builtins.fromJSON (builtins.readFile specPath);
-  nixpkgs = { outPath = nixpkgsPath; };
-  inputs = { inherit nixpkgs; };
   system = spec.system;
   pkgs = import nixpkgsPath { inherit system; };
+  nixpkgs = { outPath = pkgs.path; };
+  inputs = { inherit nixpkgs; };
   modules = map
     (path: root + "/${path}")
     spec.modules;

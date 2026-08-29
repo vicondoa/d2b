@@ -169,8 +169,8 @@ named Nix surface declares its expression and exact module/helper/fixture
 closure directly in `bazel/checks/nix/BUILD.bazel`; the graph has no corpus
 discovery, case-presence pins, secondary evidence, test census, or provider
 qualification gate. Surface actions copy that closure into an isolated source
-root and evaluate the expression with the Bazel-provided nixpkgs source, not
-the repository flake outputs, per-test flake input fetching, or ambient
+root and evaluate the expression with the shared Bazel-provided nixpkgs pin,
+not the repository flake outputs, per-test Git input fetching, or ambient
 `D2B_REPO_ROOT`.
 
 ### Realized Nix checks and runtime budget

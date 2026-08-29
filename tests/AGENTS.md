@@ -190,8 +190,8 @@ reports a guarded skip.
 
 Nix-unit surfaces are fixed Bazel labels with explicit source closures.
 Each action copies only its declared runfiles into an isolated source root and
-evaluates the surface directly with the Bazel-provided nixpkgs source. The
-repository flake outputs, per-test flake input fetching, and ambient
+evaluates the surface directly with the shared Bazel-provided nixpkgs pin. The
+repository flake outputs, per-test Git input fetching, and ambient
 `D2B_REPO_ROOT` do not participate.
 The shared evaluator fails closed when a surface evaluates zero cases. Do not
 add a test census, successor pin, secondary inventory, or validator.
