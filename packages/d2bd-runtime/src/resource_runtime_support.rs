@@ -411,6 +411,29 @@ pub fn compile_committed_policy(
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
         );
     }
+    system_core_rules.push(
+        PolicyRule::new(
+            &catalog,
+            [ResourceTypeName::parse("Credential")
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?],
+            [
+                ResourceVerb::Create,
+                ResourceVerb::UpdateSpec,
+                ResourceVerb::Delete,
+                ResourceVerb::AdminCredential,
+            ],
+            [],
+            [
+                "create".to_owned(),
+                "update-spec".to_owned(),
+                "delete".to_owned(),
+            ],
+            [],
+            [zone.clone()],
+            [],
+        )
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+    );
     let role_ref = ResourceRef::parse("Role/system-core-runtime")
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let system_core_role = CompiledRole::new(role_ref.clone(), system_core_rules)
@@ -2879,6 +2902,82 @@ mod tests {
                 "Guest",
                 "Process",
             ]
+        );
+    }
+
+    #[test]
+    fn system_core_policy_authorizes_credential_commit_batch_materialization() {
+        let zone = ZoneId::parse("work").unwrap();
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(7),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let authorizer =
+            NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let system_core =
+            subject_context("Provider/system-core", "11111111-1111-4111-8111-111111111111");
+        let target = |resource_type: &str,
+                      resource_name: &str,
+                      verb: ResourceVerb,
+                      subresource: Option<&str>| AuthorizationTarget {
+            resource_type: ResourceTypeName::parse(resource_type).unwrap(),
+            resource_name: Some(ResourceName::parse(resource_name).unwrap()),
+            verb,
+            subresource: subresource.map(str::to_owned),
+            execution_ref: None,
+        };
+        let request = AuthorizationRequest {
+            method: ApiMethod::CommitBatch,
+            zone: zone.clone(),
+            targets: vec![
+                target("Credential", "relay-listen", ResourceVerb::Create, None),
+                target(
+                    "Credential",
+                    "relay-listen",
+                    ResourceVerb::AdminCredential,
+                    Some("create"),
+                ),
+                target("Credential", "relay-send", ResourceVerb::Create, None),
+                target(
+                    "Credential",
+                    "relay-send",
+                    ResourceVerb::AdminCredential,
+                    Some("create"),
+                ),
+                target(
+                    "Process",
+                    "relay-listener",
+                    ResourceVerb::Get,
+                    Some("owner"),
+                ),
+            ],
+        };
+        assert!(
+            authorizer
+                .authorize(&system_core, &request, &state)
+                .is_ok()
+        );
+
+        let mut wrong_subresource = request.clone();
+        wrong_subresource.targets[1].subresource = Some("read".to_owned());
+        assert_eq!(
+            authorizer
+                .authorize(&system_core, &wrong_subresource, &state)
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
+        );
+
+        let mut wrong_verb = request;
+        wrong_verb.targets[1].verb = ResourceVerb::UseCredential;
+        assert_eq!(
+            authorizer
+                .authorize(&system_core, &wrong_verb, &state)
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 
