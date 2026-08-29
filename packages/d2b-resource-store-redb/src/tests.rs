@@ -212,6 +212,24 @@ fn create_seal_body_for_type(
     canonical_resource: Vec<u8>,
     payload_digest: String,
 ) -> MutationSealBody {
+    create_seal_body_for_type_as(
+        operation_id,
+        resource_type,
+        name,
+        canonical_resource,
+        payload_digest,
+        "Provider/system-core",
+    )
+}
+
+fn create_seal_body_for_type_as(
+    operation_id: &str,
+    resource_type: &str,
+    name: &str,
+    canonical_resource: Vec<u8>,
+    payload_digest: String,
+    subject_ref: &str,
+) -> MutationSealBody {
     let target = ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap();
     MutationSealBody {
         mutations: vec![PreparedStoreMutation::new(
@@ -234,7 +252,7 @@ fn create_seal_body_for_type(
         )],
         authorization: AdmittedAuthorization {
             zone: ZoneId::parse("work").unwrap(),
-            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_ref: ResourceRef::parse(subject_ref).unwrap(),
             subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
             targets: vec![AdmittedAuthorizationTarget {
                 resource_type: ResourceTypeName::parse(resource_type).unwrap(),
@@ -350,6 +368,7 @@ fn insert_legacy_outbox(directory: &tempfile::TempDir, operation_id: &str) {
             policy_revision: 7,
             resulting_revision: 0,
             requires_broker: false,
+            defer_broker_evidence: false,
             mutations: vec![crate::transaction::AuditOutboxMutation {
                 verb: "create".to_owned(),
                 resource_type: "Host".to_owned(),
@@ -411,6 +430,29 @@ fn create_body(name: &str) -> Vec<u8> {
     };
     metadata.remove("uid");
     value.to_canonical_bytes()
+}
+
+fn create_body_for_type(resource_type: &str, name: &str) -> Vec<u8> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&create_body(name)).expect("resource fixture");
+    value["type"] = serde_json::Value::String(resource_type.to_owned());
+    if resource_type == "Provider" {
+        value["spec"] = serde_json::json!({
+            "artifactId": "provider-wayland",
+            "config": {},
+        });
+    }
+    CanonicalJsonValue::parse(&serde_json::to_vec(&value).expect("resource fixture json"))
+        .expect("canonical resource fixture")
+        .to_canonical_bytes()
+}
+
+fn broker_evidence(operation_id: &str, outcome: DurabilityOutcome) -> DurabilityEvidence {
+    DurabilityEvidence {
+        key: ZoneOperationKey::derive("work", operation_id).unwrap(),
+        outcome,
+        effect_durable: outcome == DurabilityOutcome::Success,
+    }
 }
 
 fn seed_host(directory: &tempfile::TempDir, name: &str) {
@@ -1078,6 +1120,511 @@ async fn mutation_audit_uses_result_identity_and_failure_revision() {
         crate::audit::opaque_digest("Host/audited-denied")
     );
     assert_eq!(fields[2].resulting_revision, 1);
+}
+
+#[tokio::test]
+async fn successful_activation_mutation_defers_missing_broker_evidence() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = "system-core-bootstrap-zone";
+    let canonical = create_body_for_type("Provider", "activation-provider");
+    let result = store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            operation_id,
+            "Provider",
+            "activation-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap();
+
+    assert_eq!(result.revision.get(), 1);
+    assert!(store.audit_outbox_pending(operation_id).await.unwrap());
+    assert_eq!(
+        store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .unwrap(),
+        vec![operation_id.to_owned()]
+    );
+    assert!(store.runtime_metadata().await.is_ok());
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn caller_activation_shaped_operation_does_not_defer_missing_broker_evidence() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = format!("resource-bundle-materialization:sha256:{}", "c".repeat(64));
+    let canonical = create_body_for_type("Provider", "caller-provider");
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body_for_type_as(
+            &operation_id,
+            "Provider",
+            "caller-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+            "Provider/caller",
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), StoreErrorKind::StoreIntegrityFailure);
+    drop(store);
+}
+
+#[tokio::test]
+async fn successful_non_activation_evidence_gated_mutation_still_fails_closed() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = "provider-resource-mutation";
+    let canonical = create_body_for_type("Provider", "provider-resource");
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            operation_id,
+            "Provider",
+            "provider-resource",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), StoreErrorKind::StoreIntegrityFailure);
+}
+
+#[tokio::test]
+async fn failed_evidence_gated_mutation_appends_without_broker_evidence() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let audit = Arc::new(RecordingAudit::default());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let operation_id = "provider-resource-denied";
+    let canonical = create_body_for_type("Provider", "provider-denied");
+    let mut body = create_seal_body_for_type(
+        operation_id,
+        "Provider",
+        "provider-denied",
+        canonical.clone(),
+        canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+    );
+    body.authorization.targets.clear();
+    let error = store.commit_verified(issuer.seal(body)).await.unwrap_err();
+
+    assert_eq!(error.kind(), StoreErrorKind::AuthorizationDenied);
+    assert!(!store.audit_outbox_pending(operation_id).await.unwrap());
+    let records = audit.records();
+    assert_eq!(records.len(), 1);
+    let AuditRecordFields::ResourceMutation(fields) = records[0].fields() else {
+        panic!("resource mutation audit record");
+    };
+    assert_eq!(fields.outcome, "denied");
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn matching_broker_evidence_drains_activation_outbox() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let audit = Arc::new(RecordingAudit::default());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let operation_id = format!("resource-bundle-materialization:sha256:{}", "a".repeat(64));
+    let canonical = create_body_for_type("Provider", "materialized-provider");
+    store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            &operation_id,
+            "Provider",
+            "materialized-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap();
+    assert!(store.audit_outbox_pending(&operation_id).await.unwrap());
+
+    store
+        .ingest_broker_evidence(
+            &operation_id,
+            broker_evidence(&operation_id, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap();
+
+    assert!(!store.audit_outbox_pending(&operation_id).await.unwrap());
+    assert_eq!(audit.records().len(), 1);
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn evidence_ingestion_targets_one_operation_and_rejects_key_mismatch() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_a = format!("resource-bundle-materialization:sha256:{}", "a".repeat(64));
+    let operation_b = format!("resource-bundle-materialization:sha256:{}", "b".repeat(64));
+    for (operation_id, name) in [
+        (&operation_a, "targeted-provider-a"),
+        (&operation_b, "targeted-provider-b"),
+    ] {
+        let canonical = create_body_for_type("Provider", name);
+        store
+            .commit_verified(issuer.seal(create_seal_body_for_type(
+                operation_id,
+                "Provider",
+                name,
+                canonical.clone(),
+                canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+            )))
+            .await
+            .unwrap();
+    }
+
+    let mismatch = store
+        .ingest_broker_evidence(
+            &operation_b,
+            broker_evidence(&operation_a, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(mismatch.kind(), StoreErrorKind::StoreIntegrityFailure);
+    assert!(store.audit_outbox_pending(&operation_a).await.unwrap());
+    assert!(store.audit_outbox_pending(&operation_b).await.unwrap());
+
+    store
+        .ingest_broker_evidence(
+            &operation_a,
+            broker_evidence(&operation_a, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap();
+    assert!(!store.audit_outbox_pending(&operation_a).await.unwrap());
+    assert!(store.audit_outbox_pending(&operation_b).await.unwrap());
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pending_activation_ids_include_prior_hashes_until_each_is_drained() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_a = format!("resource-bundle-materialization:sha256:{}", "a".repeat(64));
+    let operation_b = format!("resource-bundle-materialization:sha256:{}", "b".repeat(64));
+    for (operation_id, name) in [
+        (&operation_a, "prior-hash-provider"),
+        (&operation_b, "current-hash-provider"),
+    ] {
+        let canonical = create_body_for_type("Provider", name);
+        store
+            .commit_verified(issuer.seal(create_seal_body_for_type(
+                operation_id,
+                "Provider",
+                name,
+                canonical.clone(),
+                canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+            )))
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(
+        store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .unwrap(),
+        vec![operation_a.clone(), operation_b.clone()]
+    );
+    assert_eq!(
+        store
+            .require_no_pending_deferred_activation_outboxes()
+            .await
+            .unwrap_err()
+            .reason_code(),
+        "audit-deferred-evidence-pending"
+    );
+    store
+        .ingest_broker_evidence(
+            &operation_b,
+            broker_evidence(&operation_b, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .unwrap(),
+        vec![operation_a.clone()]
+    );
+    store
+        .ingest_broker_evidence(
+            &operation_a,
+            broker_evidence(&operation_a, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .require_no_pending_deferred_activation_outboxes()
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn conflicting_broker_evidence_quarantines_store() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = "system-core-bootstrap-zone";
+    let canonical = create_body_for_type("Provider", "conflicting-provider");
+    store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            operation_id,
+            "Provider",
+            "conflicting-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap();
+
+    let error = store
+        .ingest_broker_evidence(
+            operation_id,
+            broker_evidence(operation_id, DurabilityOutcome::Failure),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), StoreErrorKind::StoreIntegrityFailure);
+}
+
+#[tokio::test]
+async fn cold_open_defers_activation_and_drains_matching_evidence() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity.clone(),
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = "system-core-bootstrap-zone";
+    let canonical = create_body_for_type("Provider", "cold-activation-provider");
+    store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            operation_id,
+            "Provider",
+            "cold-activation-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap();
+    drop(store);
+
+    let reopened = RedbResourceStore::open_owned_with_test_ports(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(directory.path().join("store.redb"))
+            .unwrap(),
+        store_identity.clone(),
+        acceptor(&store_identity),
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    assert!(reopened.audit_outbox_pending(operation_id).await.unwrap());
+    assert_eq!(
+        reopened
+            .pending_deferred_activation_operation_ids()
+            .await
+            .unwrap(),
+        vec![operation_id.to_owned()]
+    );
+    reopened
+        .ingest_broker_evidence(
+            operation_id,
+            broker_evidence(operation_id, DurabilityOutcome::Success),
+        )
+        .await
+        .unwrap();
+    assert!(!reopened.audit_outbox_pending(operation_id).await.unwrap());
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_deferred_marker_fails_closed() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned_with_test_ports(
+        file,
+        marker,
+        store_identity,
+        store_acceptor,
+        Arc::new(NoopStoreTelemetry),
+        Arc::new(RecordingAudit::default()),
+    )
+    .await
+    .unwrap();
+    let operation_id = "system-core-bootstrap-zone";
+    let canonical = create_body_for_type("Provider", "malformed-marker-provider");
+    store
+        .commit_verified(issuer.seal(create_seal_body_for_type(
+            operation_id,
+            "Provider",
+            "malformed-marker-provider",
+            canonical.clone(),
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical),
+        )))
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let database = Database::builder()
+        .set_cache_size(crate::REDB_CACHE_SIZE)
+        .create_with_backend(
+            redb::backends::FileBackend::new(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(directory.path().join("store.redb"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let key = crate::keys::encode_key(
+        crate::keys::KeySpace::Operations,
+        &[crate::keys::KeyComponent::Text(operation_id)],
+    )
+    .unwrap();
+    let mut operation = {
+        let read = database.begin_read().unwrap();
+        let table = read.open_table(crate::transaction::OPERATIONS).unwrap();
+        let value = table.get(key.as_bytes()).unwrap().unwrap();
+        crate::transaction::decode::<crate::transaction::OperationRecord>(
+            crate::ValueKind::OperationRecord,
+            value.value(),
+        )
+        .unwrap()
+    };
+    operation.audit_outbox.as_mut().unwrap().subject_digest =
+        crate::audit::opaque_digest("Provider/caller");
+    let value = crate::transaction::encode(crate::ValueKind::OperationRecord, &operation).unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    write
+        .open_table(crate::transaction::OPERATIONS)
+        .unwrap()
+        .insert(key.as_bytes(), value.as_slice())
+        .unwrap();
+    write.commit().unwrap();
+
+    let error = crate::transaction::pending_deferred_activation_operation_ids(
+        &database,
+        &ZoneId::parse("work").unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.reason_code(),
+        "audit-deferred-evidence-marker-invalid"
+    );
 }
 
 #[tokio::test]

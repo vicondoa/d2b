@@ -16132,6 +16132,10 @@ fn dispatch_broker_request(
     )
 }
 
+fn records_broker_response_evidence(request: &BrokerRequest) -> bool {
+    !matches!(request, BrokerRequest::ResourceActivationAudit(_))
+}
+
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -16139,6 +16143,7 @@ fn dispatch_broker_request_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
@@ -16155,7 +16160,9 @@ fn dispatch_broker_request_as(
             path: socket_path,
             detail: err.to_string(),
         })?;
-    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    if ingest_response_evidence {
+        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    }
     Ok(decoded)
 }
 
@@ -16182,9 +16189,10 @@ fn dispatch_broker_request_with_timeout_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let result =
         dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout));
-    if let Ok(response) = &result {
+    if ingest_response_evidence && let Ok(response) = &result {
         ingest_broker_response_evidence(state, audit_join.as_ref(), response);
     }
     result
@@ -16219,7 +16227,7 @@ fn ingest_broker_response_evidence(
         .ok()
         .and_then(|plane| plane.clone());
     if let Some(plane) = plane
-        && let Err(error) = plane.ingest_broker_evidence(evidence)
+        && let Err(error) = plane.record_broker_evidence(evidence)
     {
         tracing::debug!(error = ?error, "broker evidence ingestion skipped");
     }
@@ -16365,6 +16373,7 @@ fn dispatch_broker_request_with_optional_request_fds(
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
@@ -16396,7 +16405,9 @@ fn dispatch_broker_request_with_optional_request_fds(
             detail: err.to_string(),
         }
     })?;
-    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    if ingest_response_evidence {
+        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    }
     Ok((decoded, received_fds))
 }
 
@@ -16553,55 +16564,52 @@ fn open_zone_store_from_broker(
     }
 }
 
-fn ensure_resource_activation_broker_evidence(
+async fn ensure_resource_activation_broker_evidence(
     state: &ServerState,
     zone: &ZoneId,
-    bundle: &ResourceBundle,
+    operation_id: &str,
     broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let operation_id =
-        resource_runtime::resource_bundle_materialization_operation_id(zone, bundle)?;
-    let zone_uid = bundle
-        .zone_uid()
-        .ok_or(resource_runtime::ResourceRuntimeError::IdentityUnbound)?;
-    let zone_identity = AuditZoneId::derive(zone_uid.as_str())
+) -> Result<DurabilityEvidence, resource_runtime::ResourceRuntimeError> {
+    let zone_identity = AuditZoneId::derive(zone.as_str())
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let operation_identity = OperationIdentity::derive(&operation_id)
+    let operation_identity = OperationIdentity::derive(operation_id)
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
     let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
-    if broker_evidence
+    let evidence = if let Some(evidence) = broker_evidence
         .get(&key)
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
-        .is_some()
     {
-        return Ok(());
-    }
-    let audit_join = AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-        operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-    };
-    let response = dispatch_broker_request_with_timeout(
-        state,
-        BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest { audit_join }),
-        Duration::from_secs(10),
-    )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    match response {
-        BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
-            broker_evidence
-                .insert(DurabilityEvidence {
+        evidence
+    } else {
+        let audit_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+            operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+        };
+        let response = dispatch_broker_request_with_timeout(
+            state,
+            BrokerRequest::ResourceActivationAudit(
+                BrokerResourceActivationAuditRequest { audit_join },
+            ),
+            Duration::from_secs(10),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+        match response {
+            BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
+                DurabilityEvidence {
                     key,
                     outcome: d2b_audit::DurabilityOutcome::Success,
                     effect_durable: true,
-                })
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-            Ok(())
+                }
+            }
+            BrokerResponse::Error(_) => {
+                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+            }
+            _ => return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
         }
-        BrokerResponse::Error(_) => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
-        _ => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
-    }
+    };
+    Ok(evidence)
 }
 
 async fn shutdown_unpublished_runtimes(
@@ -16831,6 +16839,45 @@ async fn open_resource_plane(
             return Err(error);
         }
     }
+
+    for index in 0..prepared_runtimes.len() {
+        let (zone, runtime, _) = &prepared_runtimes[index];
+        let pending_operation_ids = match runtime.pending_trusted_activation_operation_ids().await {
+            Ok(operation_ids) => operation_ids,
+            Err(error) => {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(error);
+            }
+        };
+        for operation_id in pending_operation_ids {
+            let evidence = match ensure_resource_activation_broker_evidence(
+                state,
+                zone,
+                &operation_id,
+                &broker_evidence,
+            )
+            .await
+            {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = runtime
+                .ingest_broker_evidence(&operation_id, evidence)
+                .await
+            {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(error);
+            }
+        }
+        if let Err(error) = runtime.require_trusted_activation_outboxes_drained().await {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
     let commit_result = prepared_runtimes[coordinator_index]
         .1
         .commit_generation_publication(&set_generation, &prepared_generations)
@@ -16845,17 +16892,6 @@ async fn open_resource_plane(
     if let Err(error) = commit_result {
         shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
         return Err(error);
-    }
-
-    for index in 0..prepared_runtimes.len() {
-        let evidence_result = {
-            let (zone, _, bundle) = &prepared_runtimes[index];
-            ensure_resource_activation_broker_evidence(state, zone, bundle, &broker_evidence)
-        };
-        if let Err(error) = evidence_result {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
     }
 
     let mut remaining = prepared_runtimes.into_iter();
@@ -17168,8 +17204,8 @@ fn is_gateway_zone_link(link: &Value) -> bool {
 mod zone_publication_order_tests {
     #[test]
     fn complete_set_validation_and_durable_prepare_precede_all_mutating_reconcile() {
-        let source = include_str!("composition.rs");
-        let source = source
+        let full_source = include_str!("composition.rs");
+        let source = full_source
             .split_once("async fn open_resource_plane")
             .and_then(|(_, source)| source.split_once("const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT"))
             .map(|(source, _)| source)
@@ -17181,17 +17217,25 @@ mod zone_publication_order_tests {
         };
         let validation = position("validate_desired_bundle");
         let durable_prepare = position("prepare_generation_publication");
+        let store_open = position("open_zone_store_from_broker");
         let materialization = position("prepare_published_bundle");
+        let pending_query = position("pending_trusted_activation_operation_ids");
+        let evidence = position("ensure_resource_activation_broker_evidence(");
+        let ingest = position("runtime\n                .ingest_broker_evidence");
+        let barrier = position("require_trusted_activation_outboxes_drained");
         let durable_commit = position("commit_generation_publication");
-        let evidence = position("ensure_resource_activation_broker_evidence");
         let activation = position("activate_published_bundle");
         let process_reconcile = position("reconcile_process_resources");
 
         assert!(validation < durable_prepare);
         assert!(durable_prepare < materialization);
-        assert!(materialization < durable_commit);
-        assert!(durable_commit < evidence);
-        assert!(evidence < activation);
+        assert!(store_open < materialization);
+        assert!(materialization < pending_query);
+        assert!(pending_query < evidence);
+        assert!(evidence < ingest);
+        assert!(ingest < barrier);
+        assert!(barrier < durable_commit);
+        assert!(durable_commit < activation);
         assert!(activation < process_reconcile);
     }
 }

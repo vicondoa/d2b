@@ -6,6 +6,7 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, FinalizerId, RESOURCE_ENVELOPE_DOMAIN_TAG,
     ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
     RetryClass, Timestamp, ZoneId, ZoneRevision, canonical_digest,
+    is_resource_activation_operation_id,
 };
 use d2b_resource_store::{
     AdmittedAuthorization, ExpectedRevision, MutationOrdinal, PolicySnapshot,
@@ -299,6 +300,10 @@ pub(crate) struct AuditOutboxRecord {
     /// outbox may be acknowledged.
     #[serde(default)]
     pub requires_broker: bool,
+    /// Store-derived marker authorizing deferred broker evidence for a
+    /// successful system-core activation operation.
+    #[serde(default)]
+    pub defer_broker_evidence: bool,
     pub mutations: Vec<AuditOutboxMutation>,
 }
 
@@ -604,6 +609,10 @@ fn audit_outbox_for(
             }
         })
         .collect::<Vec<_>>();
+    let requires_broker = verified
+        .mutations
+        .iter()
+        .any(|prepared| requires_broker_audit(prepared.mutation().target.resource_type().as_str()));
     Ok(AuditOutboxRecord {
         zone: verified.authorization.zone.as_str().to_owned(),
         operation_id: verified.operation.operation_id.clone(),
@@ -617,9 +626,12 @@ fn audit_outbox_for(
         ),
         policy_revision: verified.policy_snapshot.policy_revision,
         resulting_revision,
-        requires_broker: verified.mutations.iter().any(|prepared| {
-            requires_broker_audit(prepared.mutation().target.resource_type().as_str())
-        }),
+        requires_broker,
+        defer_broker_evidence: requires_broker
+            && is_trusted_activation_subject(
+                &verified.authorization.subject_ref,
+                &verified.operation.operation_id,
+            ),
         mutations,
     })
 }
@@ -680,8 +692,35 @@ fn audit_outbox_for_failure(
         requires_broker: verified.mutations.iter().any(|prepared| {
             requires_broker_audit(prepared.mutation().target.resource_type().as_str())
         }),
+        defer_broker_evidence: false,
         mutations,
     })
+}
+
+const SYSTEM_CORE_SUBJECT_REF: &str = "Provider/system-core";
+
+fn is_trusted_activation_subject(subject_ref: &ResourceRef, operation_id: &str) -> bool {
+    subject_ref.to_canonical_string() == SYSTEM_CORE_SUBJECT_REF
+        && is_resource_activation_operation_id(operation_id)
+}
+
+pub(crate) fn validate_deferred_broker_evidence_marker(
+    outbox: &AuditOutboxRecord,
+) -> Result<bool, StoreError> {
+    if !outbox.defer_broker_evidence {
+        return Ok(false);
+    }
+    if !is_resource_activation_operation_id(&outbox.operation_id)
+        || outbox.subject_digest != crate::audit::opaque_digest(SYSTEM_CORE_SUBJECT_REF)
+        || !outbox.requires_broker
+        || !outbox
+            .mutations
+            .iter()
+            .all(|mutation| mutation.outcome == "ok")
+    {
+        return Err(integrity("audit-deferred-evidence-marker-invalid"));
+    }
+    Ok(true)
 }
 
 fn audit_mutation_id(operation_id: &str, ordinal: u32, revision: u64) -> String {
@@ -1598,6 +1637,7 @@ fn validate_audit_outbox(
             return Err(integrity("audit-outbox-mutation-invalid"));
         }
     }
+    validate_deferred_broker_evidence_marker(outbox)?;
     Ok(())
 }
 
@@ -2151,6 +2191,38 @@ pub(crate) fn pending_audit_outboxes(
             Err(error) => Some(Err(error)),
         })
         .collect()
+}
+
+pub(crate) const MAX_PENDING_DEFERRED_ACTIVATION_OUTBOXES: usize = 256;
+
+pub(crate) fn pending_deferred_activation_operation_ids(
+    database: &Database,
+    zone: &ZoneId,
+) -> Result<Vec<String>, StoreError> {
+    let read = database.begin_read().map_err(integrity)?;
+    let meta = read_meta(&read)?;
+    if meta.zone_name != zone.as_str() {
+        return Err(integrity("audit-outbox-zone-mismatch"));
+    }
+    let operations = read.open_table(OPERATIONS).map_err(integrity)?;
+    let mut operation_ids = Vec::new();
+    for row in operations.iter().map_err(integrity)? {
+        let (key, value) = row.map_err(integrity)?;
+        let operation_id = operation_id_from_key(key.value())?;
+        let operation: OperationRecord = decode(ValueKind::OperationRecord, value.value())?;
+        let Some(outbox) = operation.audit_outbox else {
+            continue;
+        };
+        validate_audit_outbox(&outbox, &operation_id, &meta)?;
+        if validate_deferred_broker_evidence_marker(&outbox)? {
+            operation_ids.push(operation_id);
+            if operation_ids.len() > MAX_PENDING_DEFERRED_ACTIVATION_OUTBOXES {
+                return Err(integrity("audit-deferred-evidence-list-bounded"));
+            }
+        }
+    }
+    operation_ids.sort();
+    Ok(operation_ids)
 }
 
 pub(crate) fn audit_outbox_pending(

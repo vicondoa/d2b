@@ -22,6 +22,9 @@ use d2b_contracts_zone_session::v3::{
     role_binding::RoleBindingSpec,
     zone::validate_self_resource,
 };
+pub use d2b_contracts_resource::v3::{
+    RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX, SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID,
+};
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue,
     ConfigurationGeneration,
@@ -1421,7 +1424,7 @@ pub async fn ensure_bootstrap_zone_resource(
     mutation.resource = protobuf::MessageField::some(body);
     let mut request = wire::CreateRequest::new();
     let mut meta = wire::RequestMeta::new();
-    meta.operation_id = "system-core-bootstrap-zone".to_owned();
+    meta.operation_id = SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID.to_owned();
     meta.correlation_id = meta.operation_id.clone();
     meta.idempotency_key = meta.operation_id.clone();
     request.meta = protobuf::MessageField::some(meta);
@@ -1656,7 +1659,7 @@ pub fn resource_bundle_materialization_operation_id(
         return Err(ResourceRuntimeError::IdentityUnbound);
     }
     Ok(format!(
-        "resource-bundle-materialization:{}",
+        "{RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX}{}",
         bundle.integrity().content_hash
     ))
 }

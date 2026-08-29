@@ -843,9 +843,51 @@ impl RedbResourceStore {
         Arc::clone(&self.broker_evidence)
     }
 
-    /// Ingest one terminal broker result before clearing a matching outbox.
-    pub fn ingest_broker_evidence(&self, evidence: DurabilityEvidence) -> Result<(), StoreError> {
-        self.broker_evidence.insert(evidence)
+    /// Ingest one terminal broker result and drain matching audit outboxes.
+    pub async fn ingest_broker_evidence(
+        &self,
+        operation_id: &str,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), StoreError> {
+        let expected_key = ZoneOperationKey::derive(self.identity.zone.as_str(), operation_id)
+            .map_err(|_| transaction::durability_failure("audit-operation-key-invalid"))?;
+        if evidence.key != expected_key {
+            return Err(transaction::durability_failure(
+                "audit-broker-evidence-key-mismatch",
+            ));
+        }
+        self.writer
+            .ingest_broker_evidence(operation_id.to_owned(), evidence)
+            .await
+    }
+
+    /// Return whether one operation still has a pending audit outbox.
+    pub async fn audit_outbox_pending(&self, operation_id: &str) -> Result<bool, StoreError> {
+        self.writer
+            .audit_outbox_pending(operation_id.to_owned())
+            .await
+    }
+
+    /// Return every pending trusted-deferred activation outbox in Zone order.
+    pub async fn pending_deferred_activation_operation_ids(
+        &self,
+    ) -> Result<Vec<String>, StoreError> {
+        self.writer
+            .pending_deferred_activation_operation_ids(self.identity.zone.clone())
+            .await
+    }
+
+    /// Refuse publication while any trusted-deferred activation outbox remains.
+    pub async fn require_no_pending_deferred_activation_outboxes(&self) -> Result<(), StoreError> {
+        if self
+            .pending_deferred_activation_operation_ids()
+            .await?
+            .is_empty()
+        {
+            Ok(())
+        } else {
+            Err(transaction::integrity("audit-deferred-evidence-pending"))
+        }
     }
 
     /// Whether the existing store lacked a clean-shutdown marker when opened.

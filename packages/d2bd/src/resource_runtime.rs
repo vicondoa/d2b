@@ -129,7 +129,7 @@ use d2bd_runtime::resource_runtime_support::{
 use d2bd_runtime::resource_runtime_support::compatibility_error_envelope;
 pub use d2bd_runtime::resource_runtime_support::{
     ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
-    persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
+    persist_resource_status_with_projection,
 };
 use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
 use d2bd_runtime::zone_authority::{
@@ -3663,14 +3663,54 @@ impl ZoneResourceRuntime {
         })
     }
 
-    /// Publish terminal broker evidence into the live store join index.
-    pub fn ingest_broker_evidence(
+    /// Record broker evidence for synchronous non-resource broker dispatches.
+    pub fn record_broker_evidence(
         &self,
         evidence: DurabilityEvidence,
     ) -> Result<(), ResourceRuntimeError> {
         self.store
-            .ingest_broker_evidence(evidence)
+            .broker_evidence_index()
+            .insert(evidence)
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Publish terminal broker evidence and drain the live store outbox.
+    pub async fn ingest_broker_evidence(
+        &self,
+        operation_id: &str,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.store
+            .ingest_broker_evidence(operation_id, evidence)
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Return every pending trusted-deferred activation outbox for this Zone.
+    pub(crate) async fn pending_trusted_activation_operation_ids(
+        &self,
+    ) -> Result<Vec<String>, ResourceRuntimeError> {
+        self.store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Refuse publication while any trusted-deferred activation outbox remains.
+    pub(crate) async fn require_trusted_activation_outboxes_drained(
+        &self,
+    ) -> Result<(), ResourceRuntimeError> {
+        match self
+            .store
+            .require_no_pending_deferred_activation_outboxes()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.reason_code() == "audit-deferred-evidence-pending" => {
+                Err(ResourceRuntimeError::HandlerNotReady)
+            }
+            Err(_) => Err(ResourceRuntimeError::StoreOpenFailed),
+        }
     }
 
     fn tpm_device_targets_vm(resource: &Value, vm_id: &str) -> bool {
@@ -6111,13 +6151,13 @@ impl ResourcePlane {
             .ok_or(ResourceRuntimeError::PlaneUnavailable)
     }
 
-    /// Ingest one terminal broker result into every Zone's shared live index.
-    pub fn ingest_broker_evidence(
+    /// Record one terminal broker result in every Zone's shared live index.
+    pub fn record_broker_evidence(
         &self,
         evidence: DurabilityEvidence,
     ) -> Result<(), ResourceRuntimeError> {
         for runtime in self.zones.values() {
-            runtime.ingest_broker_evidence(evidence.clone())?;
+            runtime.record_broker_evidence(evidence.clone())?;
         }
         Ok(())
     }

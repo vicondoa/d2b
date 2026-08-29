@@ -1512,6 +1512,7 @@ mod tests {
                 policy_revision: 7,
                 resulting_revision: 0,
                 requires_broker: false,
+                defer_broker_evidence: false,
                 mutations: vec![crate::transaction::AuditOutboxMutation {
                     verb: "create".to_owned(),
                     resource_type: "Host".to_owned(),
@@ -1595,6 +1596,7 @@ mod tests {
                 policy_revision: 7,
                 resulting_revision: 0,
                 requires_broker: false,
+                defer_broker_evidence: false,
                 mutations: vec![crate::transaction::AuditOutboxMutation {
                     verb: "create".to_owned(),
                     resource_type: "Host".to_owned(),
