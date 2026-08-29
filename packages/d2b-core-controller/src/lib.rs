@@ -61,7 +61,10 @@ pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
     CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,
 };
-pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
+pub use dependencies::{
+    DependencyError, DependencyEvent, DependencyIndex, DependencyTeardownPlan, DependencyTrigger,
+    UpgradeOrder,
+};
 pub use export_import::{
     AdmittedExport, AdmittedImport, ExportImportError, ProjectionServiceIdentity,
     admit_binding_target, admit_export, admit_factory_pair, admit_import, projection_identity,
@@ -77,8 +80,10 @@ pub use hints::{
     SuppressionDecision, WatchPlan, WatchPlanError, WatchRegistry, WatchSelector,
 };
 pub use owner_reconcile::{
-    DesiredChild, ObservedChild, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits,
-    OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
+    DesiredChild, ObservedChild, OwnedChildIntent, OwnedChildKind, OwnerBatchRecovery,
+    OwnerBatchResult, OwnerChildBatch, OwnerChildIdentity, OwnerGraph, OwnerGraphError, OwnerIndex,
+    OwnerLimits, OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
+    TeardownPlan, MAX_OWNER_CHILD_BATCH, MAX_OWNER_CHILD_DEPENDENCIES,
 };
 pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,

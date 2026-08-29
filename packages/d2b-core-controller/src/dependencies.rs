@@ -20,8 +20,9 @@ struct DependentBinding {
 pub struct DependencyTrigger {
     controller: ControllerLeaseKey,
     target: HintTarget,
-    dependency: HintTarget,
+    dependencies: BTreeSet<HintTarget>,
     revision: ZoneRevision,
+    reasons: BTreeSet<CoreTriggerReason>,
     reason: CoreTriggerReason,
 }
 
@@ -36,6 +37,18 @@ impl DependencyTrigger {
         &self.target
     }
 
+    /// Borrow every dependency that contributed to this coalesced trigger.
+    pub fn dependencies(&self) -> &BTreeSet<HintTarget> {
+        &self.dependencies
+    }
+
+    /// Borrow the first dependency in deterministic order.
+    pub fn dependency(&self) -> &HintTarget {
+        self.dependencies
+            .first()
+            .expect("dependency trigger always has one dependency")
+    }
+
     /// Return the high-water dependency revision.
     pub const fn revision(&self) -> ZoneRevision {
         self.revision
@@ -45,6 +58,25 @@ impl DependencyTrigger {
     pub const fn reason(&self) -> CoreTriggerReason {
         self.reason
     }
+
+    /// Borrow the complete coalesced dependency reason set.
+    pub fn reasons(&self) -> &BTreeSet<CoreTriggerReason> {
+        &self.reasons
+    }
+
+    /// Merge another trigger for the same controller and target.
+    pub fn coalesce(&mut self, newer: Self) -> Result<(), DependencyError> {
+        if self.controller != newer.controller || self.target != newer.target {
+            return Err(DependencyError::TriggerConflict);
+        }
+        self.dependencies.extend(newer.dependencies);
+        self.revision = self.revision.max(newer.revision);
+        self.reasons.extend(newer.reasons);
+        if newer.reason == CoreTriggerReason::DependencyReady {
+            self.reason = newer.reason;
+        }
+        Ok(())
+    }
 }
 
 impl core::fmt::Debug for DependencyTrigger {
@@ -52,9 +84,60 @@ impl core::fmt::Debug for DependencyTrigger {
         f.debug_struct("DependencyTrigger")
             .field("controller", &self.controller)
             .field("target", &self.target)
+            .field("dependencies", &self.dependencies.len())
+            .field("revision", &self.revision)
+            .field("reasons", &self.reasons)
+            .finish()
+    }
+}
+
+/// One dependency change used to produce controller triggers.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DependencyEvent {
+    dependency: HintTarget,
+    revision: ZoneRevision,
+    ready: bool,
+}
+
+impl DependencyEvent {
+    /// Construct one durable dependency event.
+    pub fn new(
+        dependency: HintTarget,
+        revision: ZoneRevision,
+        ready: bool,
+    ) -> Result<Self, DependencyError> {
+        if revision.get() == 0 {
+            return Err(DependencyError::InvalidRevision);
+        }
+        Ok(Self {
+            dependency,
+            revision,
+            ready,
+        })
+    }
+
+    /// Borrow the changed dependency target.
+    pub const fn dependency(&self) -> &HintTarget {
+        &self.dependency
+    }
+
+    /// Return the durable dependency revision.
+    pub const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+
+    /// Whether the event reports a Ready dependency.
+    pub const fn ready(&self) -> bool {
+        self.ready
+    }
+}
+
+impl core::fmt::Debug for DependencyEvent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DependencyEvent")
             .field("dependency", &self.dependency)
             .field("revision", &self.revision)
-            .field("reason", &self.reason)
+            .field("ready", &self.ready)
             .finish()
     }
 }
@@ -65,6 +148,8 @@ pub struct UpgradeOrder {
     drain: Vec<HintTarget>,
     recycle: HintTarget,
     restart: Vec<HintTarget>,
+    drain_ranks: BTreeMap<HintTarget, usize>,
+    restart_ranks: BTreeMap<HintTarget, usize>,
 }
 
 impl UpgradeOrder {
@@ -81,6 +166,49 @@ impl UpgradeOrder {
     /// Dependents restart nearest-first.
     pub fn restart(&self) -> &[HintTarget] {
         &self.restart
+    }
+
+    /// Return the dependent-first teardown rank for one resource.
+    pub fn drain_rank(&self, target: &HintTarget) -> Option<usize> {
+        self.drain_ranks.get(target).copied()
+    }
+
+    /// Return the dependent-first deletion rank for one resource.
+    pub fn deletion_rank(&self, target: &HintTarget) -> Option<usize> {
+        self.drain_rank(target)
+    }
+
+    /// Return the dependency-first restart rank for one resource.
+    pub fn restart_rank(&self, target: &HintTarget) -> Option<usize> {
+        self.restart_ranks.get(target).copied()
+    }
+
+    /// Return the dependency-first creation rank for one resource.
+    pub fn creation_rank(&self, target: &HintTarget) -> Option<usize> {
+        self.restart_rank(target)
+    }
+}
+
+/// Bounded dependent-first teardown projection for one dependency root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyTeardownPlan {
+    order: Vec<HintTarget>,
+}
+
+impl DependencyTeardownPlan {
+    /// Borrow the deterministic dependent-first order.
+    pub fn order(&self) -> &[HintTarget] {
+        &self.order
+    }
+
+    /// Return the number of drained dependents.
+    pub const fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether no dependents require draining.
+    pub const fn is_empty(&self) -> bool {
+        self.order.is_empty()
     }
 }
 
@@ -163,8 +291,13 @@ impl DependencyIndex {
             .map(|binding| DependencyTrigger {
                 controller: binding.controller.clone(),
                 target: binding.target.clone(),
-                dependency: dependency.clone(),
+                dependencies: BTreeSet::from([dependency.clone()]),
                 revision,
+                reasons: BTreeSet::from([if ready {
+                    CoreTriggerReason::DependencyReady
+                } else {
+                    CoreTriggerReason::DependencyChanged
+                }]),
                 reason: if ready {
                     CoreTriggerReason::DependencyReady
                 } else {
@@ -172,6 +305,47 @@ impl DependencyIndex {
                 },
             })
             .collect())
+    }
+
+    /// Emit coalesced triggers for several durable dependency events.
+    pub fn triggers_for(
+        &self,
+        events: impl IntoIterator<Item = DependencyEvent>,
+    ) -> Result<Vec<DependencyTrigger>, DependencyError> {
+        let mut triggers = Vec::new();
+        for event in events {
+            triggers.extend(self.triggers(event.dependency(), event.revision(), event.ready())?);
+        }
+        Ok(Self::coalesce_triggers(triggers))
+    }
+
+    /// Coalesce dependency triggers by their exact controller and target.
+    pub fn coalesce_triggers(
+        triggers: impl IntoIterator<Item = DependencyTrigger>,
+    ) -> Vec<DependencyTrigger> {
+        let mut coalesced: BTreeMap<(ControllerLeaseKey, HintTarget), DependencyTrigger> =
+            BTreeMap::new();
+        for trigger in triggers {
+            let key = (trigger.controller.clone(), trigger.target.clone());
+            if let Some(existing) = coalesced.get_mut(&key) {
+                existing
+                    .coalesce(trigger)
+                    .expect("coalescing uses the map's exact trigger key");
+            } else {
+                coalesced.insert(key, trigger);
+            }
+        }
+        coalesced.into_values().collect()
+    }
+
+    /// Build a bounded child-first teardown plan for one dependency root.
+    pub fn teardown_plan(
+        &self,
+        root: &HintTarget,
+    ) -> Result<DependencyTeardownPlan, DependencyError> {
+        Ok(DependencyTeardownPlan {
+            order: self.upgrade_order(root)?.drain,
+        })
     }
 
     /// Return active dependents that block a disruptive recycle.
@@ -215,15 +389,27 @@ impl DependencyIndex {
             .iter()
             .map(|(target, _)| target.clone())
             .collect::<Vec<_>>();
-        let drain = ordered
+        let drain: Vec<_> = ordered
             .into_iter()
             .rev()
             .map(|(target, _)| target)
+            .collect();
+        let drain_ranks = drain
+            .iter()
+            .enumerate()
+            .map(|(rank, target)| (target.clone(), rank))
+            .collect();
+        let restart_ranks = restart
+            .iter()
+            .enumerate()
+            .map(|(rank, target)| (target.clone(), rank))
             .collect();
         Ok(UpgradeOrder {
             drain,
             recycle: root.clone(),
             restart,
+            drain_ranks,
+            restart_ranks,
         })
     }
 
@@ -304,6 +490,7 @@ pub enum DependencyError {
     OwnershipConflict,
     Cycle,
     UpgradeSetTooLarge,
+    TriggerConflict,
 }
 
 impl core::fmt::Display for DependencyError {
@@ -314,6 +501,7 @@ impl core::fmt::Display for DependencyError {
             Self::OwnershipConflict => "dependent target belongs to another controller lease",
             Self::Cycle => "dependency graph must be acyclic",
             Self::UpgradeSetTooLarge => "dependency upgrade set exceeds its bound",
+            Self::TriggerConflict => "dependency triggers target different controller bindings",
         })
     }
 }
@@ -542,7 +730,13 @@ mod tests {
         let order = index.upgrade_order(&gpu).unwrap();
         assert_eq!(order.drain(), &[process.clone(), guest.clone()]);
         assert_eq!(order.recycle(), &gpu);
-        assert_eq!(order.restart(), &[guest, process]);
+        assert_eq!(order.restart(), &[guest.clone(), process.clone()]);
+        assert_eq!(order.drain_rank(&process), Some(0));
+        assert_eq!(order.drain_rank(&guest), Some(1));
+        assert_eq!(
+            index.teardown_plan(&gpu).unwrap().order(),
+            &[process, guest]
+        );
     }
 
     #[test]
