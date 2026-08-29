@@ -648,9 +648,7 @@ fn assignment_manifest() -> ProviderManifest {
     ProviderManifest::new(
         d2b_contracts_resource::v3::ArtifactId::parse("provider-system-core").unwrap(),
         ArtifactDigestSet {
-            package: assignment_digest(),
             executable: assignment_digest(),
-            manifest: assignment_digest(),
             config: assignment_digest(),
             schema: assignment_digest(),
             service: assignment_digest(),
@@ -1431,6 +1429,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let sequence = async {
         let first_frame = remote.receive_ttrpc().await.unwrap();
         let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
+        assert_eq!(first_internal_id % 2, 1);
         caller.cancel(&first_operation).await.unwrap();
         let second = caller.invoke_resource(
             route.clone(),
@@ -1441,6 +1440,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         let responses = async {
             let second_frame = remote.receive_ttrpc().await.unwrap();
             let second_internal_id = ttrpc_stream_id(&second_frame).unwrap();
+            assert_eq!(second_internal_id % 2, 1);
             assert_ne!(first_internal_id, second_internal_id);
             remote
                 .send_ttrpc(ttrpc_frame(first_internal_id, b"late-first"))

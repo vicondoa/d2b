@@ -838,9 +838,7 @@ use d2b_contracts_resource::v3::identity::{
         ProviderManifest::new(
             d2b_contracts_resource::v3::ArtifactId::parse("provider-runtime").unwrap(),
             ArtifactDigestSet {
-                package: assignment_digest(),
                 executable: assignment_digest(),
-                manifest: assignment_digest(),
                 config: assignment_digest(),
                 schema: assignment_digest(),
                 service: assignment_digest(),

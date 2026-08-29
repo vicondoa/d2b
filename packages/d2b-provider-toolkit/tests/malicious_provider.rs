@@ -89,9 +89,7 @@ fn trusted() -> TrustEvidence {
 fn digests() -> ArtifactDigestSet {
     let digest = ArtifactDigest::parse(DIGEST).expect("valid digest");
     ArtifactDigestSet {
-        package: digest.clone(),
         executable: digest.clone(),
-        manifest: digest.clone(),
         config: digest.clone(),
         schema: digest.clone(),
         service: digest,

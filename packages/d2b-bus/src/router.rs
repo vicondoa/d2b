@@ -74,8 +74,9 @@ pub mod production_rss;
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
+const FIRST_CORRELATION_ID: u32 = RESERVED_CORRELATION_MAX + 1;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
-    u32::MAX as u64 - RESERVED_CORRELATION_MAX as u64;
+    (u32::MAX as u64 - FIRST_CORRELATION_ID as u64) / 2 + 1;
 const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Monotonic clock used for operation deadlines.
@@ -2449,11 +2450,11 @@ impl CorrelationIds {
                 key
             }
         };
-        let input = RESERVED_CORRELATION_MAX + 1 + self.issued as u32;
+        let input = FIRST_CORRELATION_ID + (self.issued as u32) * 2;
         self.issued += 1;
         let mut candidate = permute_correlation(input, key);
         loop {
-            if candidate > RESERVED_CORRELATION_MAX {
+            if candidate > RESERVED_CORRELATION_MAX && candidate % 2 == 1 {
                 return Ok(candidate);
             }
             candidate = permute_correlation(candidate, key);
@@ -4638,6 +4639,7 @@ use d2b_contracts_resource::v3::identity::{
         for _ in 0..4 {
             let correlation = correlations.allocate().unwrap();
             assert!(correlation > RESERVED_CORRELATION_MAX);
+            assert_eq!(correlation % 2, 1);
             assert!(allocated.insert(correlation));
         }
         assert!(matches!(

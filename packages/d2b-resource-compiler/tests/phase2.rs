@@ -241,7 +241,6 @@ fn manifest(
     executable_digest: ArtifactDigest,
     config_digest: ArtifactDigest,
     execution: ComponentExecution,
-    package_digest: ArtifactDigest,
 ) -> ProviderManifest {
     let component = ComponentDescriptor::new(
         BoundedToken::parse("test-controller").unwrap(),
@@ -291,12 +290,7 @@ fn manifest(
     ProviderManifest::new(
         ArtifactId::parse(artifact_id).unwrap(),
         ArtifactDigestSet {
-            package: package_digest,
             executable: executable_digest.clone(),
-            manifest: ArtifactDigest::parse(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-            )
-            .unwrap(),
             config: config_digest,
             schema: digest(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000001",
@@ -397,7 +391,6 @@ fn fixture_for_artifact(
         executable_set.clone(),
         schema_digest.clone(),
         execution,
-        package_digest.clone(),
     );
     let manifest_bytes = canonical_json_bytes(&provider_manifest).unwrap();
     let manifest_digest = sha256_digest(&manifest_bytes);
@@ -724,6 +717,49 @@ fn nix_build_manifest_binary_ref_wire_compatible() {
     let parsed: ProviderManifest = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(canonical_json_bytes(&parsed).unwrap(), manifest_bytes);
     assert!(compile(&entry, &tree, &keys).is_ok());
+}
+
+#[test]
+fn nix_build_manifest_installation_contract_is_enforced() {
+    let (mut entry, mut tree, keys, manifest_bytes) =
+        fixture(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("test-controller").unwrap(),
+        });
+    let mut manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    manifest["components"][0]["instanceScope"] =
+        serde_json::Value::String("zone-singleton".to_owned());
+    let encoded = serde_json::to_vec(&manifest).unwrap();
+    let canonical =
+        canonical_json_bytes(&CanonicalJsonValue::parse(&encoded).unwrap()).unwrap();
+    let keypair = Ed25519KeyPair::from_seed_unchecked(&[7_u8; 32]).unwrap();
+    let signature = keypair.sign(&canonical).as_ref().to_vec();
+    tree.nodes.insert(
+        MANIFEST_PATH.to_owned(),
+        Node::File {
+            bytes: canonical.clone(),
+            mode: 0o644,
+        },
+    );
+    tree.nodes.insert(
+        SIGNATURE_PATH.to_owned(),
+        Node::File {
+            bytes: signature,
+            mode: 0o644,
+        },
+    );
+    let package_digest = entry.digests().package().clone();
+    let executable_digest = entry.digests().executable().clone();
+    let config_schema_digest = entry.digests().config_schema().clone();
+    entry = entry.with_digests(CatalogDigests::new(
+        package_digest,
+        executable_digest,
+        sha256_digest(&canonical),
+        config_schema_digest,
+    ));
+    assert_eq!(
+        kind(compile(&entry, &tree, &keys)),
+        "provider-component-execution-invalid"
+    );
 }
 
 #[test]

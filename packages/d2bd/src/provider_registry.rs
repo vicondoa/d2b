@@ -1003,9 +1003,7 @@ mod tests {
         ProviderManifest::new(
             d2b_contracts_resource::v3::ArtifactId::parse("provider-runtime").unwrap(),
             ArtifactDigestSet {
-                package: digest.clone(),
                 executable: digest.clone(),
-                manifest: digest.clone(),
                 config: digest.clone(),
                 schema: digest.clone(),
                 service: digest.clone(),

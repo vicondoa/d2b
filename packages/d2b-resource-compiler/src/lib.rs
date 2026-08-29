@@ -541,6 +541,17 @@ where
 
     let manifest_digest = sha256_digest(&manifest_bytes);
     let manifest = parse_canonical_manifest(entry, &manifest_bytes)?;
+    manifest
+        .validate_installation_contract()
+        .map_err(|_| {
+            Diagnostic::new(
+                Kind::ProviderComponentExecutionInvalid,
+                format!(
+                    "provider artifact {} has an invalid manifest installation contract",
+                    artifact_name(entry)
+                ),
+            )
+        })?;
     compare_digest(
         entry,
         "manifest",
@@ -569,14 +580,6 @@ where
             ),
         ));
     }
-    compare_digest(
-        entry,
-        "package",
-        "catalog",
-        entry.digests().package(),
-        "manifest",
-        &manifest.digests().package,
-    )?;
 
     let schema_bytes = open_bytes(
         anchor,

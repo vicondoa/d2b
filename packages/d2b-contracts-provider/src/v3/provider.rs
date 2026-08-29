@@ -418,20 +418,15 @@ impl PolicyEvaluation {
     }
 }
 
-/// The exact digests a catalog entry pins for one artifact.
+/// The digests a signed Provider manifest can carry without self-reference.
 ///
-/// The package, executable, manifest, config, schema, and service digests
-/// are separate because a Provider may ship several component binaries and
-/// a change to any one of them is a different artifact.
+/// Package and manifest digests are computed over documents that contain the
+/// manifest or its package, so they remain operator/Nix catalog values.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArtifactDigestSet {
-    /// The signed package digest.
-    pub package: ArtifactDigest,
     /// The component executable set digest.
     pub executable: ArtifactDigest,
-    /// The signed manifest digest.
-    pub manifest: ArtifactDigest,
     /// The root config projection digest.
     pub config: ArtifactDigest,
     /// The exported schema set digest.
@@ -2840,9 +2835,7 @@ mod tests {
 
     fn digests() -> ArtifactDigestSet {
         ArtifactDigestSet {
-            package: ArtifactDigest::parse(DIGEST_A).unwrap(),
             executable: ArtifactDigest::parse(DIGEST_A).unwrap(),
-            manifest: ArtifactDigest::parse(DIGEST_A).unwrap(),
             config: ArtifactDigest::parse(DIGEST_B).unwrap(),
             schema: ArtifactDigest::parse(DIGEST_B).unwrap(),
             service: ArtifactDigest::parse(DIGEST_B).unwrap(),
@@ -4293,6 +4286,26 @@ mod tests {
         // A manifest carries digests and identifiers, never a location.
         assert!(!rendered.contains("/nix/store"));
         assert!(!rendered.contains(".sock"));
+    }
+
+    #[test]
+    fn artifact_digest_set_does_not_self_reference_package_or_manifest() {
+        let value = serde_json::to_value(digests()).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["config", "executable", "schema", "service"]
+        );
+        let mut legacy = value;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("package".to_owned(), serde_json::json!(DIGEST_A));
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("manifest".to_owned(), serde_json::json!(DIGEST_A));
+        assert!(serde_json::from_value::<ArtifactDigestSet>(legacy).is_err());
     }
 
     #[test]

@@ -370,9 +370,7 @@ mod tests {
         ProviderManifest::new(
             ArtifactId::parse("provider-volume-local").unwrap(),
             ArtifactDigestSet {
-                package: digest.clone(),
                 executable: digest.clone(),
-                manifest: digest.clone(),
                 config: digest.clone(),
                 schema: digest.clone(),
                 service: digest.clone(),

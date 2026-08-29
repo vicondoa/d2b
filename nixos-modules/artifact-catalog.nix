@@ -71,7 +71,7 @@ let
   catalogPath = pkgs.runCommand "d2b-artifact-catalog.json"
     {
       buildRowsJson = builtins.toJSON buildRows;
-      nativeBuildInputs = [ pkgs.python3 ];
+      nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
       passAsFile = [ "buildRowsJson" ];
     } ''
       set -euo pipefail
@@ -79,6 +79,7 @@ let
       import hashlib
       import json
       import pathlib
+      import subprocess
       import sys
 
       rows_path, output_path = sys.argv[1:]
@@ -127,6 +128,25 @@ let
               if child.is_file()
           )
 
+      def nar_digest(path):
+          result = subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  path,
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          return "sha256:" + result.stdout.strip()
+
       def framed_digest(domain, payload):
           frame = {
               "domain": domain,
@@ -153,7 +173,14 @@ let
               "artifactId": row["artifactId"],
               "closureDigest": digest_path(row["closureRegistration"]),
               "closureSize": closure_size,
-              "packageDigest": digest_path(row["storePath"]),
+              # Provider packages use the ADR 0050 NAR digest. Legacy
+              # system-artifact activation retains its established
+              # path-and-content digest until that contract is migrated.
+              "packageDigest": (
+                  nar_digest(row["storePath"])
+                  if row["type"] == "provider"
+                  else digest_path(row["storePath"])
+              ),
               "storePath": row["storePath"],
               "type": row["type"],
           })

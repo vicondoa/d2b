@@ -8,7 +8,7 @@ let
   };
   acceptancePublisherKey = ''
     -----BEGIN PUBLIC KEY-----
-    MCowBQYDK2VwAyEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=
+    MCowBQYDK2VwAyEAu3/qwmKeWeFP7U5Z71uQOw/Zm5lBk4ZDbPVA2O7QlHg=
     -----END PUBLIC KEY-----
   '';
   providerPackage = pkgs.runCommand "d2b-acceptance-provider" {
@@ -46,7 +46,7 @@ let
     publisher = "d2b-acceptance";
     packageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     executableDigest = "sha256:f84125779653dba770042fd2af2bd01299b05ae892c039c497e6b5ce45029d9c";
-    manifestDigest = "sha256:7a3ba1efbd15c544edf574087aed31053c69fb758108177bf028d3f7d62c0635";
+    manifestDigest = "sha256:3c772c723cc2d508502132e10c325a2194c7683025d0c1e8ea9e125d163a10c3";
     componentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     descriptorDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     configDigest = "sha256:ccb5a9d66e068ea8f4e205788589675a48e9e3754a840d8ac10120d14238e914";
