@@ -5,7 +5,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_provider_runtime_cloud_hypervisor::{
     BootstrapHandoff, ChildRole, DescriptorSignature, GuestChildBatch, GuestSeedContract,
-    GuestSetupDescriptor, SignatureAlgorithm, map_commit_response,
+    GuestSetupDescriptor, GuestSetupDescriptorVerifier, SignatureAlgorithm, map_commit_response,
 };
 
 const ARTIFACT_DIGEST: &str =
@@ -36,15 +36,28 @@ fn descriptor() -> GuestSetupDescriptor {
     .unwrap()
 }
 
+struct TestVerifier;
+
+impl GuestSetupDescriptorVerifier for TestVerifier {
+    fn verify(
+        &self,
+        _key_fingerprint: &SchemaFingerprint,
+        _descriptor_digest: &SchemaFingerprint,
+        signature: &str,
+    ) -> bool {
+        signature == "signature-sentinel"
+    }
+}
+
 #[test]
-fn descriptor_is_canonical_signed_and_round_trips() {
+fn descriptor_is_canonical_and_requires_signature_verification() {
     let descriptor = descriptor();
     let canonical = descriptor.canonical_bytes().unwrap();
     assert_eq!(
         GuestSetupDescriptor::from_canonical_bytes(&canonical).unwrap(),
         descriptor
     );
-    assert_eq!(descriptor.verify().unwrap(), ());
+    assert!(descriptor.verify_with(&TestVerifier).is_ok());
     assert!(
         String::from_utf8(canonical)
             .unwrap()
@@ -91,8 +104,55 @@ fn descriptor_is_canonical_signed_and_round_trips() {
 }
 
 #[test]
+fn child_planning_rejects_unverified_and_forged_descriptors() {
+    let forged = GuestSetupDescriptor::new(
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        ResourceGeneration::new(3).unwrap(),
+        ArtifactId::parse("other-system").unwrap(),
+        ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
+        GuestSeedContract::new(
+            "guest-resource-seed",
+            SchemaVersion::new(1, 0).unwrap(),
+            SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
+        DescriptorSignature::new(
+            SignatureAlgorithm::Ed25519Blake3,
+            SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+            "forged-signature",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(forged.verify_with(&TestVerifier).is_err());
+}
+
+#[test]
+fn descriptor_semantic_tokens_are_exact() {
+    assert!(
+        GuestSeedContract::new(
+            "support",
+            SchemaVersion::new(1, 0).unwrap(),
+            SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .is_err()
+    );
+    assert!(BootstrapHandoff::new("allocator", 30_000).is_err());
+    assert!(
+        d2b_provider_runtime_cloud_hypervisor::identity::derive_private_runtime_scope(
+            &ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+            &ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
+            "socket",
+            ResourceGeneration::new(1).unwrap(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn descriptor_rejects_private_effect_inputs_and_unknown_fields() {
-    let descriptor = descriptor();
+    let descriptor = descriptor().verify_with(&TestVerifier).unwrap();
     let mut value: serde_json::Value =
         serde_json::from_slice(&descriptor.canonical_bytes().unwrap()).unwrap();
     let object = value.as_object_mut().unwrap();
@@ -126,7 +186,7 @@ fn descriptor_rejects_private_effect_inputs_and_unknown_fields() {
 
 #[test]
 fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
-    let descriptor = descriptor();
+    let descriptor = descriptor().verify_with(&TestVerifier).unwrap();
     let zone = ZoneId::parse("dev").unwrap();
     let guest = ResourceRef::parse("Guest/gateway").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
@@ -169,7 +229,7 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
 
 #[test]
 fn commit_response_maps_every_child_and_fences_bad_rows() {
-    let descriptor = descriptor();
+    let descriptor = descriptor().verify_with(&TestVerifier).unwrap();
     let zone = ZoneId::parse("dev").unwrap();
     let guest = ResourceRef::parse("Guest/gateway").unwrap();
     let batch = GuestChildBatch::from_descriptor(

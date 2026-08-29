@@ -285,12 +285,14 @@ signed with the fixed `ed25519-blake3` algorithm. Its semantic payload binds:
 - the opaque bootstrap handoff class and bounded expiry.
 
 `descriptorDigest` is the domain-separated digest of that semantic payload.
-The descriptor loader rejects non-canonical JSON, duplicate or unknown fields,
-unsupported signature algorithms, digest mismatches, raw paths, socket or
-other locators, credentials, argv or environment values, numeric identities,
-and broker operation names. The descriptor and its signature are private
-catalog inputs and never appear in Guest spec, status, audit, metrics, or
-public debug output.
+The structural parser rejects non-canonical JSON, duplicate or unknown fields,
+unsupported signature algorithms, digest mismatches, and values outside the
+closed semantic token sets. A catalog-owned signature verifier then produces a
+verified descriptor; child planning accepts only that verified type. Raw
+paths, locators, credentials, argv, environment values, numeric identities,
+and broker operation names have no descriptor fields or admitted token forms.
+The descriptor and its signature are private catalog inputs and never appear
+in Guest spec, status, audit, metrics, or public debug output.
 
 For Guest `<name>`, the controller derives the Zone-local child references
 `Process/<name>-vmm`, `Endpoint/<name>-ch-api`,

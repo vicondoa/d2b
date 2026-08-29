@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::{
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::descriptor::{GuestSetupDescriptor, GuestSetupDescriptorError};
+use crate::descriptor::{GuestSetupDescriptorError, VerifiedGuestSetupDescriptor};
 
 /// Domain tag for private Cloud Hypervisor runtime scopes.
 pub const PRIVATE_RUNTIME_SCOPE_DOMAIN_TAG: &str = "d2b:v3:ch-private-runtime-scope";
@@ -575,11 +575,9 @@ impl GuestChildBatch {
         zone: ZoneId,
         owner_ref: ResourceRef,
         execution_ref: ResourceRef,
-        descriptor: &GuestSetupDescriptor,
+        descriptor: &VerifiedGuestSetupDescriptor,
     ) -> Result<Self, ChildIdentityError> {
-        descriptor
-            .verify()
-            .map_err(|_| ChildIdentityError::DescriptorInvalid)?;
+        let descriptor = descriptor.descriptor();
         if owner_ref.resource_type().as_str() != "Guest"
             || execution_ref.resource_type().as_str() != "Host"
         {
@@ -916,12 +914,7 @@ pub fn derive_private_runtime_scope(
     role: &str,
     generation: d2b_contracts_resource::v3::ResourceGeneration,
 ) -> Result<PrivateRuntimeScope, ChildIdentityError> {
-    if role.len() > 32
-        || BoundedToken::parse(role).is_err()
-        || role.contains("path")
-        || role.contains("socket")
-        || role.contains("broker")
-    {
+    if !matches!(role, "vmm" | "ch-api" | "guest-control" | "system") {
         return Err(ChildIdentityError::InvalidRuntimeRole);
     }
     let mut digest = Sha256::new();

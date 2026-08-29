@@ -26,7 +26,8 @@ pub use controller::{
 };
 pub use descriptor::{
     BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
-    GuestSetupDescriptorError, OpaqueDescriptorSignature, SignatureAlgorithm,
+    GuestSetupDescriptorError, GuestSetupDescriptorVerifier, OpaqueDescriptorSignature,
+    SignatureAlgorithm, VerifiedGuestSetupDescriptor,
 };
 pub use health::{
     GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceProbe, GuestSessionHealth,

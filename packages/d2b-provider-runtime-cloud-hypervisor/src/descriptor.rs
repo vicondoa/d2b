@@ -30,6 +30,8 @@ pub const MAX_DESCRIPTOR_SIGNATURE_BYTES: usize = 4096;
 pub const MAX_BOOTSTRAP_HANDOFF_EXPIRY_MS: u64 = 86_400_000;
 
 const CLOUD_HYPERVISOR_PROVIDER_REF: &str = "Provider/runtime-cloud-hypervisor";
+const GUEST_RESOURCE_SEED_SCHEMA: &str = "guest-resource-seed";
+const OPAQUE_BOOTSTRAP_HANDOFF_CLASS: &str = "opaque-bootstrap";
 
 /// Closed failures while loading or validating a private setup descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +48,6 @@ pub enum GuestSetupDescriptorError {
     SchemaVersionMismatch,
     /// The fixed direct-child role set was changed.
     ChildRolesMismatch,
-    /// A forbidden private effect value was supplied.
-    ForbiddenValue,
     /// The descriptor digest did not match its signed semantic payload.
     DigestMismatch,
     /// The signature envelope was absent or invalid.
@@ -65,7 +65,6 @@ impl fmt::Display for GuestSetupDescriptorError {
             Self::ProviderMismatch => "guest-setup-descriptor-provider-mismatch",
             Self::SchemaVersionMismatch => "guest-setup-descriptor-schema-version-mismatch",
             Self::ChildRolesMismatch => "guest-setup-descriptor-child-roles-mismatch",
-            Self::ForbiddenValue => "guest-setup-descriptor-forbidden-value",
             Self::DigestMismatch => "guest-setup-descriptor-digest-mismatch",
             Self::SignatureInvalid => "guest-setup-descriptor-signature-invalid",
             Self::CanonicalJson => "guest-setup-descriptor-canonical-json",
@@ -210,7 +209,9 @@ impl GuestSeedContract {
     ) -> Result<Self, GuestSetupDescriptorError> {
         let schema = BoundedToken::parse(schema.into())
             .map_err(|_| GuestSetupDescriptorError::InvalidField)?;
-        reject_forbidden(schema.as_str())?;
+        if schema.as_str() != GUEST_RESOURCE_SEED_SCHEMA {
+            return Err(GuestSetupDescriptorError::InvalidField);
+        }
         Ok(Self {
             schema,
             schema_version,
@@ -275,7 +276,9 @@ impl BootstrapHandoff {
         }
         let class = BoundedToken::parse(class.into())
             .map_err(|_| GuestSetupDescriptorError::InvalidField)?;
-        reject_forbidden(class.as_str())?;
+        if class.as_str() != OPAQUE_BOOTSTRAP_HANDOFF_CLASS {
+            return Err(GuestSetupDescriptorError::InvalidField);
+        }
         Ok(Self { class, expiry_ms })
     }
 
@@ -341,6 +344,40 @@ pub struct GuestSetupDescriptor {
     signature: DescriptorSignature,
 }
 
+/// Cryptographic trust boundary for private setup descriptors.
+pub trait GuestSetupDescriptorVerifier {
+    /// Verify the descriptor signature against the catalog-owned trust root.
+    fn verify(
+        &self,
+        key_fingerprint: &SchemaFingerprint,
+        descriptor_digest: &SchemaFingerprint,
+        signature: &str,
+    ) -> bool;
+}
+
+/// A setup descriptor whose signature was accepted by a trusted verifier.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedGuestSetupDescriptor(GuestSetupDescriptor);
+
+impl VerifiedGuestSetupDescriptor {
+    /// Borrow the verified descriptor.
+    pub const fn descriptor(&self) -> &GuestSetupDescriptor {
+        &self.0
+    }
+
+    /// Render the verified descriptor envelope without exposing its signature
+    /// through Debug.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, GuestSetupDescriptorError> {
+        self.0.canonical_bytes()
+    }
+}
+
+impl fmt::Debug for VerifiedGuestSetupDescriptor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VerifiedGuestSetupDescriptor(<redacted>)")
+    }
+}
+
 impl GuestSetupDescriptor {
     /// Construct a descriptor and compute its canonical semantic digest.
     pub fn new(
@@ -378,7 +415,7 @@ impl GuestSetupDescriptor {
                 .map_err(|_| GuestSetupDescriptorError::CanonicalJson)?,
             ..descriptor
         };
-        descriptor.verify()?;
+        descriptor.validate_integrity()?;
         Ok(descriptor)
     }
 
@@ -391,27 +428,39 @@ impl GuestSetupDescriptor {
         serde_json::from_slice(bytes).map_err(|_| GuestSetupDescriptorError::InvalidEncoding)
     }
 
-    /// Render the exact canonical signed descriptor bytes.
+    /// Render the exact canonical descriptor envelope bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GuestSetupDescriptorError> {
-        self.verify()?;
+        self.validate_integrity()?;
         Ok(CanonicalJsonValue::parse(
             &serde_json::to_vec(self).map_err(|_| GuestSetupDescriptorError::CanonicalJson)?,
         )?
         .to_canonical_bytes())
     }
 
-    /// Verify fields, digest, and signature envelope.
-    pub fn verify(&self) -> Result<(), GuestSetupDescriptorError> {
+    /// Validate the closed fields and self-consistent semantic digest.
+    pub fn validate_integrity(&self) -> Result<(), GuestSetupDescriptorError> {
         self.validate_fields()?;
         if self.computed_digest()? != self.descriptor_digest.as_str() {
             return Err(GuestSetupDescriptorError::DigestMismatch);
         }
-        if self.signature.algorithm != SignatureAlgorithm::Ed25519Blake3
-            || self.signature.signature.0.is_empty()
-        {
+        Ok(())
+    }
+
+    /// Verify the catalog-bound signature and return the only child-planning
+    /// descriptor type.
+    pub fn verify_with(
+        &self,
+        verifier: &impl GuestSetupDescriptorVerifier,
+    ) -> Result<VerifiedGuestSetupDescriptor, GuestSetupDescriptorError> {
+        self.validate_integrity()?;
+        if !verifier.verify(
+            &self.signature.key_fingerprint,
+            &self.descriptor_digest,
+            &self.signature.signature.0,
+        ) {
             return Err(GuestSetupDescriptorError::SignatureInvalid);
         }
-        Ok(())
+        Ok(VerifiedGuestSetupDescriptor(self.clone()))
     }
 
     /// Borrow the selected Provider identity.
@@ -471,7 +520,6 @@ impl GuestSetupDescriptor {
         if !self.child_roles.is_fixed() {
             return Err(GuestSetupDescriptorError::ChildRolesMismatch);
         }
-        reject_forbidden(self.system_artifact_id.as_str())?;
         if self.signature.algorithm != SignatureAlgorithm::Ed25519Blake3 {
             return Err(GuestSetupDescriptorError::SignatureInvalid);
         }
@@ -532,34 +580,9 @@ impl<'de> Deserialize<'de> for GuestSetupDescriptor {
             bootstrap_handoff: wire.bootstrap_handoff,
             signature: wire.signature,
         };
-        descriptor.verify().map_err(serde::de::Error::custom)?;
+        descriptor
+            .validate_integrity()
+            .map_err(serde::de::Error::custom)?;
         Ok(descriptor)
     }
-}
-
-fn reject_forbidden(value: &str) -> Result<(), GuestSetupDescriptorError> {
-    let lower = value.to_ascii_lowercase();
-    if value.contains('/')
-        || value.contains('\\')
-        || [
-            "path",
-            "socket",
-            "locator",
-            "credential",
-            "argv",
-            "environment",
-            "uid",
-            "gid",
-            "broker",
-            "operation",
-            "file-descriptor",
-            "cid",
-            "port",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker))
-    {
-        return Err(GuestSetupDescriptorError::ForbiddenValue);
-    }
-    Ok(())
 }

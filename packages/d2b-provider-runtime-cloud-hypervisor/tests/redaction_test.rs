@@ -5,10 +5,23 @@ use d2b_contracts_resource::v3::{
 use d2b_provider_runtime_cloud_hypervisor::identity::derive_private_runtime_scope;
 use d2b_provider_runtime_cloud_hypervisor::{
     BootstrapHandoff, DescriptorSignature, GuestChildBatch, GuestSeedContract,
-    GuestSetupDescriptor, SignatureAlgorithm,
+    GuestSetupDescriptor, GuestSetupDescriptorVerifier, SignatureAlgorithm,
 };
 
 const DIGEST: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+struct TestVerifier;
+
+impl GuestSetupDescriptorVerifier for TestVerifier {
+    fn verify(
+        &self,
+        _key_fingerprint: &SchemaFingerprint,
+        _descriptor_digest: &SchemaFingerprint,
+        signature: &str,
+    ) -> bool {
+        signature == "private-signature-sentinel" || signature == "signature-sentinel"
+    }
+}
 
 #[test]
 fn private_descriptor_and_runtime_scope_debug_are_redacted() {
@@ -23,7 +36,7 @@ fn private_descriptor_and_runtime_scope_debug_are_redacted() {
             SchemaFingerprint::parse(DIGEST).unwrap(),
         )
         .unwrap(),
-        BootstrapHandoff::new("bootstrap-secret-sentinel", 10_000).unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 10_000).unwrap(),
         DescriptorSignature::new(
             SignatureAlgorithm::Ed25519Blake3,
             SchemaFingerprint::parse(DIGEST).unwrap(),
@@ -33,7 +46,7 @@ fn private_descriptor_and_runtime_scope_debug_are_redacted() {
     )
     .unwrap();
     let rendered = format!("{descriptor:?}");
-    assert!(!rendered.contains("bootstrap-secret-sentinel"));
+    assert!(!rendered.contains("opaque-bootstrap"));
     assert!(!rendered.contains("private-signature-sentinel"));
 
     let zone_uid =
@@ -104,7 +117,7 @@ fn child_batch_debug_and_wire_bytes_do_not_include_descriptor_payload() {
             SchemaFingerprint::parse(DIGEST).unwrap(),
         )
         .unwrap(),
-        BootstrapHandoff::new("bootstrap-handoff-sentinel", 10_000).unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 10_000).unwrap(),
         DescriptorSignature::new(
             SignatureAlgorithm::Ed25519Blake3,
             SchemaFingerprint::parse(DIGEST).unwrap(),
@@ -113,6 +126,7 @@ fn child_batch_debug_and_wire_bytes_do_not_include_descriptor_payload() {
         .unwrap(),
     )
     .unwrap();
+    let descriptor = descriptor.verify_with(&TestVerifier).unwrap();
     let batch = GuestChildBatch::from_descriptor(
         ZoneId::parse("dev").unwrap(),
         ResourceRef::parse("Guest/gateway").unwrap(),
@@ -123,7 +137,7 @@ fn child_batch_debug_and_wire_bytes_do_not_include_descriptor_payload() {
     let rendered = format!("{batch:?}");
     let bytes = String::from_utf8(batch.canonical_bytes().unwrap()).unwrap();
     for output in [rendered, bytes] {
-        assert!(!output.contains("bootstrap-handoff-sentinel"));
+        assert!(!output.contains("opaque-bootstrap"));
         assert!(!output.contains("signature-sentinel"));
     }
 }
