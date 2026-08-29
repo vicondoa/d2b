@@ -342,12 +342,13 @@ impl BundleBackedLaunchResolver {
         };
         let expected_user_ref = ticket.user_ref().map(ResourceRef::to_canonical_string);
         let legacy_intent = self.bundle.find_runner_intent(&intent_id);
-        let generic_intent = self.bundle.find_runner_intent_for_process_in_vm(
-            Some(vm_name),
+        let static_controller_intent = self.bundle.find_provider_controller_intent(
+            ticket.process_ref(),
             &expected_execution_ref,
             expected_execution_domain,
             expected_user_ref.as_deref(),
             ticket.template().as_str(),
+            None,
         );
         let (intent, legacy_identity) = match ticket.component().as_str() {
             "vm-process" => (
@@ -355,7 +356,7 @@ impl BundleBackedLaunchResolver {
                 true,
             ),
             "process-controller" => (
-                generic_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
+                static_controller_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
                 false,
             ),
             _ => return Err(ProcessEffectError::UnsupportedProvider),
@@ -369,9 +370,8 @@ impl BundleBackedLaunchResolver {
         if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
             return Err(ProcessEffectError::IdentityChanged);
         }
-        if ticket.inherited_fd_table().count() == 1
-            && role != RunnerRole::ProviderController
-        {
+        let inherited_fd_count = ticket.inherited_fd_table().count();
+        if (role == RunnerRole::ProviderController) != (inherited_fd_count == 1) {
             return Err(ProcessEffectError::IdentityChanged);
         }
         if intent.execution_ref != expected_execution_ref {

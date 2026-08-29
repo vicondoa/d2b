@@ -4,7 +4,7 @@
   "features": [
     "real-libshpool"
   ],
-  "lockSha256": "89f0e3916e11803bee8bb06dd991b28991eb1e80f0938f561216ca12bfb8f6da",
+  "lockSha256": "9fcc6f0cc7381cc97d879680d1ee32150abae1be5bb89eb1a5626b1dd9824c97",
   "policyPackageCount": 139,
   "policyPackageIds": [
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",

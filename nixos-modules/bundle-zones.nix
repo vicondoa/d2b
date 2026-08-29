@@ -421,6 +421,9 @@ let
             if catalogPath == null then null else "${catalogPath}";
           expectedArtifactCatalogDigest = catalogDigest;
           schemaRoot = "${schemaRoot}";
+          # The compiler appends signed static Provider controller Processes
+          # and their private processTemplates metadata. Those generated rows
+          # stay out of the processes.json projection.
           expectedContentHash = data.contentHash;
           inherit strictSecrets;
         });

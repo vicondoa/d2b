@@ -24,13 +24,19 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ProviderManifest,
-    provider::{BinaryRef, ComponentExecution},
+    ArtifactDigest, ProviderManifest,
+    provider::{
+        BinaryRef, ComponentExecution, ComponentType, ControllerInstanceScope,
+        ControllerTargetKind, EffectPortClass,
+    },
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, canonical_digest, canonical_json_bytes,
+    ArtifactId, CanonicalJsonValue, ResourceName, ResourceRef, ResourceTypeName, ZoneId,
+    canonical_digest, canonical_json_bytes,
+    execution_policy::{BoundedToken, BudgetSpec, ExecutionDomain},
+    process::{ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
 };
+use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_core::{
     error::Kind,
     provider_artifact::{
@@ -357,6 +363,436 @@ impl fmt::Debug for CompiledArtifact {
     }
 }
 
+/// One verified Provider artifact available to the static Process projector.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedProviderArtifact {
+    artifact_id: ArtifactId,
+    store_path: PathBuf,
+    compiled: CompiledArtifact,
+}
+
+impl VerifiedProviderArtifact {
+    /// Bind a verified compiler result to its selected package output.
+    pub fn new(
+        artifact_id: ArtifactId,
+        store_path: impl Into<PathBuf>,
+        compiled: CompiledArtifact,
+    ) -> Self {
+        Self {
+            artifact_id,
+            store_path: store_path.into(),
+            compiled,
+        }
+    }
+
+    /// Borrow the selected artifact ID.
+    pub const fn artifact_id(&self) -> &ArtifactId {
+        &self.artifact_id
+    }
+
+    /// Borrow the selected package output path.
+    pub fn store_path(&self) -> &Path {
+        &self.store_path
+    }
+
+    /// Borrow the verified artifact metadata.
+    pub const fn compiled(&self) -> &CompiledArtifact {
+        &self.compiled
+    }
+}
+
+impl fmt::Debug for VerifiedProviderArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedProviderArtifact")
+            .field("artifact_id", &self.artifact_id)
+            .field("compiled", &self.compiled)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Static controller resources and their private executable bindings.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StaticControllerProjection {
+    /// Ordinary Process resources to append to the Zone bundle.
+    pub resources: Vec<serde_json::Value>,
+    /// Private template metadata consumed by the generic Process resolver.
+    pub templates: Vec<ProcessTemplateBinding>,
+}
+
+impl fmt::Debug for StaticControllerProjection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StaticControllerProjection")
+            .field("resource_count", &self.resources.len())
+            .field("template_count", &self.templates.len())
+            .finish()
+    }
+}
+
+/// Static controller projection refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticControllerProjectionError {
+    /// The Zone name is invalid.
+    InvalidZone,
+    /// A Provider resource did not have the expected identity/spec shape.
+    InvalidProviderResource,
+    /// The selected Provider artifact was not verified.
+    VerifiedProviderMissing,
+    /// A launchable controller had no explicit execution target.
+    MissingControllerExecutionRef,
+    /// The Provider controller execution reference was malformed.
+    InvalidControllerExecutionRef,
+    /// The target kind cannot host an ordinary Process.
+    UnsupportedTargetKind,
+    /// The controller execution target was not present in this bundle.
+    ControllerTargetMissing,
+    /// The manifest did not advertise the selected target for a component.
+    ComponentTargetUnsupported,
+    /// The signed binary was absent from the verified package.
+    TemplateArtifactMissing,
+    /// The signed target artifact differed from the verified package binary.
+    ArtifactDigestMismatch,
+    /// A generated Process identity collided with another resource.
+    DuplicateProcessName,
+    /// A generated template name could not be represented as a bounded token.
+    InvalidTemplate,
+    /// A generated Process spec could not be serialized.
+    Serialization,
+    /// A private template binding could not be constructed.
+    TemplateBindingInvalid,
+}
+
+impl StaticControllerProjectionError {
+    /// Stable compiler diagnostic code.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidZone => "provider-controller-zone-invalid",
+            Self::InvalidProviderResource => "provider-controller-provider-invalid",
+            Self::VerifiedProviderMissing => "provider-controller-artifact-unverified",
+            Self::MissingControllerExecutionRef => "provider-controller-execution-ref-missing",
+            Self::InvalidControllerExecutionRef => "provider-controller-execution-ref-invalid",
+            Self::UnsupportedTargetKind => "provider-controller-target-kind-unsupported",
+            Self::ControllerTargetMissing => "provider-controller-target-missing",
+            Self::ComponentTargetUnsupported => "provider-controller-target-unsupported",
+            Self::TemplateArtifactMissing => "provider-controller-template-artifact-missing",
+            Self::ArtifactDigestMismatch => "provider-controller-artifact-digest-mismatch",
+            Self::DuplicateProcessName => "provider-controller-process-name-duplicate",
+            Self::InvalidTemplate => "provider-controller-template-invalid",
+            Self::Serialization => "provider-controller-process-serialization",
+            Self::TemplateBindingInvalid => "provider-controller-template-binding-invalid",
+        }
+    }
+}
+
+impl fmt::Display for StaticControllerProjectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for StaticControllerProjectionError {}
+
+/// Project every admitted launchable Provider controller into an ordinary
+/// Process resource and a private signed-package template binding.
+///
+/// The caller supplies only artifacts whose manifests have already passed the
+/// signature, canonicality, and executable-set checks in [`compile_artifact`].
+/// Bootstrap components remain in-process exceptions and are not projected.
+pub fn project_static_controller_processes<'a, I>(
+    zone: &str,
+    resources: &[serde_json::Value],
+    verified_artifacts: I,
+) -> Result<StaticControllerProjection, StaticControllerProjectionError>
+where
+    I: IntoIterator<Item = &'a VerifiedProviderArtifact>,
+{
+    let zone_id =
+        ZoneId::parse(zone.to_owned()).map_err(|_| StaticControllerProjectionError::InvalidZone)?;
+    let mut artifacts = BTreeMap::new();
+    for artifact in verified_artifacts {
+        if artifacts
+            .insert(artifact.artifact_id().as_str().to_owned(), artifact)
+            .is_some()
+        {
+            return Err(StaticControllerProjectionError::VerifiedProviderMissing);
+        }
+    }
+
+    let identities = resources
+        .iter()
+        .filter_map(resource_identity)
+        .collect::<BTreeSet<_>>();
+    let mut generated_identities = BTreeSet::new();
+    let mut projected_resources = Vec::new();
+    let mut templates = Vec::new();
+
+    for resource in resources {
+        if resource.get("type").and_then(serde_json::Value::as_str) != Some("Provider") {
+            continue;
+        }
+        let provider_name = resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+        if resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(serde_json::Value::as_str)
+            != Some(zone_id.as_str())
+        {
+            return Err(StaticControllerProjectionError::InvalidProviderResource);
+        }
+        let provider_ref = ResourceRef::parse(&format!("Provider/{provider_name}"))
+            .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
+        let spec = resource
+            .get("spec")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+        let artifact_id = spec
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+        let artifact = artifacts
+            .get(artifact_id)
+            .ok_or(StaticControllerProjectionError::VerifiedProviderMissing)?;
+        if artifact.compiled().artifact_id().as_str() != artifact_id
+            || artifact.compiled().manifest().artifact_id().as_str() != artifact_id
+        {
+            return Err(StaticControllerProjectionError::VerifiedProviderMissing);
+        }
+        if matches!(artifact_id, "system-core" | "system-minijail") {
+            continue;
+        }
+        let launchable_controllers = artifact
+            .compiled()
+            .manifest()
+            .components()
+            .iter()
+            .filter(|component| {
+                component.component_type() == ComponentType::Controller
+                    && component.execution().is_launchable()
+            })
+            .collect::<Vec<_>>();
+        if launchable_controllers.is_empty() {
+            continue;
+        }
+
+        let config = spec
+            .get("config")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(StaticControllerProjectionError::MissingControllerExecutionRef)?;
+        let execution_ref = config
+            .get("controllerExecutionRef")
+            .ok_or(StaticControllerProjectionError::MissingControllerExecutionRef)?
+            .as_str()
+            .ok_or(StaticControllerProjectionError::InvalidControllerExecutionRef)?;
+        let execution_ref = ResourceRef::parse(execution_ref)
+            .map_err(|_| StaticControllerProjectionError::InvalidControllerExecutionRef)?;
+        let target_kind = match execution_ref.resource_type().as_str() {
+            "Host" => ControllerTargetKind::Host,
+            "Guest" => ControllerTargetKind::Guest,
+            _ => return Err(StaticControllerProjectionError::UnsupportedTargetKind),
+        };
+        if !identities.contains(&(
+            execution_ref.resource_type().as_str().to_owned(),
+            execution_ref.name().as_str().to_owned(),
+        )) {
+            return Err(StaticControllerProjectionError::ControllerTargetMissing);
+        }
+
+        for component in launchable_controllers {
+            let scope = component
+                .instance_scope()
+                .ok_or(StaticControllerProjectionError::ComponentTargetUnsupported)?;
+            if matches!(scope, ControllerInstanceScope::ZoneSingleton)
+                || !component.supported_target_kinds().contains(&target_kind)
+            {
+                return Err(StaticControllerProjectionError::ComponentTargetUnsupported);
+            }
+            let capability = component
+                .target_capability(target_kind)
+                .ok_or(StaticControllerProjectionError::ComponentTargetUnsupported)?;
+            if !capability
+                .required_effect_classes()
+                .contains(&EffectPortClass::Process)
+            {
+                return Err(StaticControllerProjectionError::ComponentTargetUnsupported);
+            }
+            let ComponentExecution::Launchable { binary_ref } = component.execution() else {
+                continue;
+            };
+            let actual_digest = artifact
+                .compiled()
+                .executable_digests()
+                .get(binary_ref.as_str())
+                .ok_or(StaticControllerProjectionError::TemplateArtifactMissing)?;
+            if actual_digest != capability.artifact_digest() {
+                return Err(StaticControllerProjectionError::ArtifactDigestMismatch);
+            }
+            let template = static_controller_template_name(artifact_id, component)?;
+            let process_name = static_controller_process_name(
+                &zone_id,
+                &provider_ref,
+                component.component_id(),
+                &execution_ref,
+            )?;
+            let process_ref = ResourceRef::new(
+                ResourceTypeName::parse("Process")
+                    .map_err(|_| StaticControllerProjectionError::InvalidTemplate)?,
+                process_name,
+            );
+            let identity = ("Process".to_owned(), process_ref.name().as_str().to_owned());
+            if !generated_identities.insert(identity.clone()) || identities.contains(&identity) {
+                return Err(StaticControllerProjectionError::DuplicateProcessName);
+            }
+            projected_resources.push(static_controller_resource(
+                &zone_id,
+                &process_ref,
+                &provider_ref,
+                &execution_ref,
+                &template,
+            )?);
+            let binary_path = artifact
+                .store_path()
+                .join(EXECUTABLE_DIR)
+                .join(binary_ref.as_str());
+            templates.push(
+                ProcessTemplateBinding::new(
+                    process_ref,
+                    provider_ref.clone(),
+                    execution_ref.clone(),
+                    template,
+                    artifact.artifact_id().clone(),
+                    binary_ref.clone(),
+                    actual_digest.clone(),
+                    binary_path.to_string_lossy().into_owned(),
+                )
+                .map_err(|_| StaticControllerProjectionError::TemplateBindingInvalid)?,
+            );
+        }
+    }
+
+    projected_resources
+        .sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
+    templates.sort_by(|left, right| {
+        left.process_ref()
+            .to_canonical_string()
+            .cmp(&right.process_ref().to_canonical_string())
+    });
+    Ok(StaticControllerProjection {
+        resources: projected_resources,
+        templates,
+    })
+}
+
+fn resource_identity(resource: &serde_json::Value) -> Option<(String, String)> {
+    Some((
+        resource.get("type")?.as_str()?.to_owned(),
+        resource.get("metadata")?.get("name")?.as_str()?.to_owned(),
+    ))
+}
+
+/// Return the deterministic resource ordering key.
+pub fn resource_sort_key(resource: &serde_json::Value) -> (String, String) {
+    resource_identity(resource).unwrap_or_default()
+}
+
+fn static_controller_template_name(
+    artifact_id: &str,
+    component: &d2b_contracts_provider::v3::ComponentDescriptor,
+) -> Result<BoundedToken, StaticControllerProjectionError> {
+    let candidate = format!(
+        "controller-{artifact_id}-{}",
+        component.component_id().as_str()
+    );
+    if candidate.len() <= 63 {
+        return BoundedToken::parse(candidate)
+            .map_err(|_| StaticControllerProjectionError::InvalidTemplate);
+    }
+    let digest = Sha256::digest(candidate.as_bytes());
+    let suffix = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    BoundedToken::parse(format!("controller-{suffix}"))
+        .map_err(|_| StaticControllerProjectionError::InvalidTemplate)
+}
+
+fn static_controller_process_name(
+    zone: &ZoneId,
+    provider_ref: &ResourceRef,
+    component_id: &BoundedToken,
+    execution_ref: &ResourceRef,
+) -> Result<ResourceName, StaticControllerProjectionError> {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b:v3:static-controller-process-v1");
+    digest.update([0]);
+    digest.update(zone.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(provider_ref.to_canonical_string().as_bytes());
+    digest.update([0]);
+    digest.update(component_id.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(execution_ref.to_canonical_string().as_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    ResourceName::parse(format!("controller-{suffix}"))
+        .map_err(|_| StaticControllerProjectionError::InvalidTemplate)
+}
+
+fn static_controller_resource(
+    zone: &ZoneId,
+    process_ref: &ResourceRef,
+    provider_ref: &ResourceRef,
+    execution_ref: &ResourceRef,
+    template: &BoundedToken,
+) -> Result<serde_json::Value, StaticControllerProjectionError> {
+    let execution = ExecutionSpec::new(
+        execution_ref.clone(),
+        Some(ExecutionDomain::System),
+        None,
+        ProcessClass::Controller,
+        template.clone(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        SandboxSpec::default(),
+        BudgetSpec::default(),
+        None,
+        Vec::new(),
+        TelemetrySpec::default(),
+    )
+    .map_err(|_| StaticControllerProjectionError::Serialization)?;
+    let process = ProcessSpec::minimal(execution);
+    let spec = serde_json::to_value(process)
+        .map_err(|_| StaticControllerProjectionError::Serialization)?;
+    let mut spec = spec
+        .as_object()
+        .cloned()
+        .ok_or(StaticControllerProjectionError::Serialization)?;
+    spec.insert(
+        "providerRef".to_owned(),
+        serde_json::Value::String("Provider/system-minijail".to_owned()),
+    );
+    Ok(serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Process",
+        "metadata": {
+            "name": process_ref.name().as_str(),
+            "zone": zone.as_str(),
+            "ownerRef": provider_ref.to_canonical_string(),
+        },
+        "spec": spec,
+    }))
+}
+
 /// Compile one already-anchored Provider output.
 ///
 /// The method reads the detached signature and manifest before any other
@@ -541,17 +977,15 @@ where
 
     let manifest_digest = sha256_digest(&manifest_bytes);
     let manifest = parse_canonical_manifest(entry, &manifest_bytes)?;
-    manifest
-        .validate_installation_contract()
-        .map_err(|_| {
-            Diagnostic::new(
-                Kind::ProviderComponentExecutionInvalid,
-                format!(
-                    "provider artifact {} has an invalid manifest installation contract",
-                    artifact_name(entry)
-                ),
-            )
-        })?;
+    manifest.validate_installation_contract().map_err(|_| {
+        Diagnostic::new(
+            Kind::ProviderComponentExecutionInvalid,
+            format!(
+                "provider artifact {} has an invalid manifest installation contract",
+                artifact_name(entry)
+            ),
+        )
+    })?;
     compare_digest(
         entry,
         "manifest",

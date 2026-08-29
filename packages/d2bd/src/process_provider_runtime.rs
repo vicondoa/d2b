@@ -2285,16 +2285,41 @@ fn resource_ticket(
         },
         _ => return Err("provider-ticket:invalid-execution-ref".to_owned()),
     };
-    if bundle
-        .find_runner_intent_for_process_in_vm(
+    let execution_ref = execution.execution_ref().to_canonical_string();
+    let owner_ref = context
+        .owner_ref
+        .as_ref()
+        .map(ResourceRef::to_canonical_string);
+    let exact_static_controller = execution.process_class() == ProcessClass::Controller
+        && context
+            .owner_ref
+            .as_ref()
+            .is_some_and(|owner| owner.resource_type().as_str() == "Provider");
+    if execution.process_class() == ProcessClass::Controller && !exact_static_controller {
+        return Err("provider-ticket:controller-owner-invalid".to_owned());
+    }
+    let static_intent = exact_static_controller.then(|| {
+        bundle.find_provider_controller_intent(
+            context.resource_ref,
+            &execution_ref,
+            execution_domain,
+            user_ref.as_deref(),
+            execution.template().as_str(),
+            owner_ref.as_deref(),
+        )
+    });
+    let generic_intent = if exact_static_controller {
+        None
+    } else {
+        bundle.find_runner_intent_for_process_in_vm(
             target_vm_name,
-            &execution.execution_ref().to_canonical_string(),
+            &execution_ref,
             execution_domain,
             user_ref.as_deref(),
             execution.template().as_str(),
         )
-        .is_none()
-    {
+    };
+    if static_intent.flatten().is_none() && generic_intent.is_none() {
         return Err("provider-ticket:template-not-found".to_owned());
     }
     let provider_name = context.provider_ref.name().as_str();
@@ -2344,11 +2369,6 @@ fn resource_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let exact_static_controller = execution.process_class() == ProcessClass::Controller
-        && context
-            .owner_ref
-            .as_ref()
-            .is_some_and(|owner| owner.resource_type().as_str() == "Provider");
     ticket = ticket
         .with_inherited_fd_count(if exact_static_controller { 1 } else { 0 })
         .map_err(|error| format!("provider-ticket:{}", error.code()))?;
@@ -2669,10 +2689,17 @@ mod tests {
         EffectPortClass,
     };
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ZoneId,
-        ZoneRevision,
+        CanonicalJsonObject, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
+        ResourceTypeName, Timestamp, ZoneId, ZoneRevision,
         execution_policy::{BoundedToken, ExecutionDomain},
         identity::ReconnectGeneration,
+    };
+    use d2b_contracts_zone_session::v3::resource_bundle::{
+        BundleResource, BundleResourceMetadata, ResourceBundle,
+    };
+    use d2b_core::{
+        bundle::{Bundle, BundleGeneration},
+        processes::ProcessesJson,
     };
     use d2bd_runtime::target_runtime::ProviderDeployment;
 
@@ -2910,5 +2937,178 @@ mod tests {
         assert!(!ticket.has_assignment_binding());
         assert!(ticket.resource_client_binding().is_none());
         assert!(ticket.execution_commitment().is_some());
+    }
+
+    #[test]
+    fn static_controller_resource_ticket_resolves_private_intent_and_one_fd() {
+        let zone = ZoneId::parse("dev").expect("zone");
+        let owner = ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("owner");
+        let provider = ResourceRef::parse("Provider/system-minijail").expect("provider");
+        let target = ResourceRef::parse("Host/dev-host").expect("target");
+        let process_ref = ResourceRef::parse("Process/controller-test").expect("process ref");
+        let template = BoundedToken::parse("controller-test").expect("template");
+        let execution = d2b_contracts_resource::v3::process::ExecutionSpec::new(
+            target.clone(),
+            Some(ExecutionDomain::System),
+            None,
+            ProcessClass::Controller,
+            template.clone(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            d2b_contracts_resource::v3::process::SandboxSpec::default(),
+            d2b_contracts_resource::v3::execution_policy::BudgetSpec::default(),
+            None,
+            Vec::new(),
+            d2b_contracts_resource::v3::process::TelemetrySpec::default(),
+        )
+        .expect("execution");
+        let process = BundleResource::new(
+            ResourceTypeName::parse("Process").expect("process type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("controller-test").expect("process name"),
+                zone.clone(),
+                Some(owner.clone()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"domain":"system","executionRef":"Host/dev-host","processClass":"controller","providerRef":"Provider/system-minijail","template":"controller-test"}"#,
+            )
+            .expect("process spec"),
+        )
+        .expect("process resource");
+        let provider_resource = BundleResource::new(
+            ResourceTypeName::parse("Provider").expect("provider type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("runtime-cloud-hypervisor").expect("provider name"),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"artifactId":"runtime-cloud-hypervisor","config":{"controllerExecutionRef":"Host/dev-host"}}"#,
+            )
+            .expect("provider spec"),
+        )
+        .expect("provider resource");
+        let resource_bundle = ResourceBundle::new(
+            zone.clone(),
+            vec![process, provider_resource],
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle")
+        .with_process_templates(vec![
+            d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding::new(
+                process_ref.clone(),
+                owner.clone(),
+                target.clone(),
+                template.clone(),
+                d2b_contracts_resource::v3::ArtifactId::parse("runtime-cloud-hypervisor")
+                    .expect("artifact"),
+                d2b_contracts_provider::v3::BinaryRef::parse("d2b-cloud-hypervisor-controller")
+                    .expect("binary"),
+                d2b_contracts_provider::v3::ArtifactDigest::parse(format!(
+                    "sha256:{}",
+                    "a".repeat(64)
+                ))
+                .expect("digest"),
+                "/nix/store/runtime-cloud-hypervisor/bin/d2b-cloud-hypervisor-controller",
+            )
+            .expect("template binding"),
+        ])
+        .expect("process templates");
+        let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([(
+                "dev".to_owned(),
+                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
+            )]),
+        );
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let context = ProcessResourceContext::new(
+            zone,
+            &process_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_owner_ref(Some(owner));
+        let ticket = resource_ticket(
+            &resolver,
+            &context,
+            &execution,
+            None,
+            b"process-spec",
+            ManagedProvider::Minijail,
+            DaemonMode::Host,
+            Duration::from_secs(5),
+            Some(ReadinessClass::ReadyCondition),
+        )
+        .expect("static controller ticket");
+        assert_eq!(ticket.inherited_fd_table().count(), 1);
+        assert_eq!(ticket.process_ref(), &process_ref);
+        assert_eq!(ticket.template(), &template);
+        let wrong_owner = ResourceRef::parse("Provider/wrong-owner").expect("wrong owner");
+        let wrong_owner_context = context.clone().with_owner_ref(Some(wrong_owner));
+        assert_eq!(
+            resource_ticket(
+                &resolver,
+                &wrong_owner_context,
+                &execution,
+                None,
+                b"process-spec",
+                ManagedProvider::Minijail,
+                DaemonMode::Host,
+                Duration::from_secs(5),
+                Some(ReadinessClass::ReadyCondition),
+            ),
+            Err("provider-ticket:template-not-found".to_owned())
+        );
     }
 }

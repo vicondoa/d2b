@@ -90,11 +90,13 @@ use d2b_contracts_resource::v3::{
     IfName,
     NetworkIfRole,
     NetworkProvenance,
-    ResourceUid,
+    ResourceRef, ResourceUid,
     derive_network_ifname, derive_network_route_name, network::NetworkSpec,
     storage::ZoneStoreStorageRow,
 };
-use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
+use d2b_contracts_zone_session::v3::resource_bundle::{
+    ProcessTemplateBinding, ResourceBundle,
+};
 use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
@@ -151,6 +153,7 @@ struct ParsedBundleArtifacts {
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
@@ -356,6 +359,8 @@ pub struct ResolvedRunnerIntent {
     pub vm_name: String,
     /// Canonical Host or Guest execution target bound by the private bundle.
     pub execution_ref: String,
+    /// Optional semantic owner for a static Provider controller Process.
+    pub owner_ref: Option<String>,
     /// Canonical execution domain bound by the private bundle.
     pub execution_domain: ProcessExecutionDomain,
     /// Canonical User resource for a user-domain launch.
@@ -461,6 +466,7 @@ impl ResolvedRunnerIntent {
             intent_id: intent_id_runner(vm_name, &node.id.0),
             vm_name: vm_name.to_owned(),
             execution_ref,
+            owner_ref: None,
             execution_domain,
             user_ref: node.user_ref.clone(),
             role_id: node.id.0.clone(),
@@ -1141,6 +1147,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
                 sync: None,
@@ -1150,6 +1157,51 @@ impl BundleResolver {
                 unsafe_local_workloads: None,
                 manifest,
                 closures,
+            },
+            true,
+        )
+    }
+
+    /// Variant for tests and embedded callers that already hold verified
+    /// per-Zone resource-bundle bytes.
+    pub fn from_artifacts_with_zone_resource_bundles(
+        bundle: Bundle,
+        host: HostJson,
+        processes: ProcessesJson,
+        manifest: ManifestV04,
+        zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    ) -> Self {
+        let bundle_hash = stable_digest_bytes(
+            serde_json::to_vec(&bundle)
+                .expect("bundle serialization for audit hashing must succeed")
+                .as_slice(),
+        );
+        let provider_controller_templates = zone_resource_bundles
+            .values()
+            .flat_map(|bytes| {
+                ResourceBundle::from_json(bytes)
+                    .expect("zone resource bundle bytes must be verified")
+                    .process_templates
+            })
+            .collect();
+        Self::from_parsed_artifacts(
+            bundle,
+            bundle_hash,
+            ParsedBundleArtifacts {
+                allocator: None,
+                host,
+                processes,
+                zone_resource_bundles,
+                provider_controller_templates,
+                zone_storage_rows: BTreeMap::new(),
+                storage: None,
+                sync: None,
+                realm_controllers: None,
+                realm_identity: None,
+                realm_workloads_launcher_v2: None,
+                unsafe_local_workloads: None,
+                manifest,
+                closures: Vec::new(),
             },
             true,
         )
@@ -1166,6 +1218,7 @@ impl BundleResolver {
             host,
             processes,
             zone_resource_bundles,
+            provider_controller_templates,
             zone_storage_rows,
             storage,
             sync,
@@ -1238,7 +1291,10 @@ impl BundleResolver {
         let nm_unmanaged_intents = build_nm_unmanaged_intents(&host);
         let usbip_firewall_intents = build_usbip_firewall_intents(&host);
         let usbip_bind_intents = build_usbip_bind_intents(&host);
-        let runner_intents = build_runner_intents(&processes);
+        let mut runner_intents = build_runner_intents(&processes);
+        runner_intents.extend(build_provider_controller_intents(
+            &provider_controller_templates,
+        ));
         let socket_intents = build_socket_intents(&processes);
         let installer_intents = build_installer_intents(&bundle);
         let migrate_intents = build_migrate_intents(&processes);
@@ -1317,6 +1373,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage,
                 sync,
@@ -1360,7 +1417,8 @@ impl BundleResolver {
         let processes: ProcessesJson = serde_json::from_slice(&processes_bytes).map_err(|e| {
             Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
         })?;
-        let zone_resource_bundles = load_zone_resource_bundles(&bundle, bundle_root, policy)?;
+        let (zone_resource_bundles, provider_controller_templates) =
+            load_zone_resource_bundles(&bundle, bundle_root, policy)?;
         let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
         let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
@@ -1384,6 +1442,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles,
+                provider_controller_templates,
                 zone_storage_rows,
                 storage,
                 sync,
@@ -1835,7 +1894,8 @@ impl BundleResolver {
         template: &str,
     ) -> Option<&ResolvedRunnerIntent> {
         let mut matches = self.runner_intents.values().filter(|intent| {
-            vm_name.is_none_or(|vm| intent.vm_name == vm)
+            intent.role != ProcessRole::ProviderController
+                && vm_name.is_none_or(|vm| intent.vm_name == vm)
                 && intent.execution_ref == execution_ref
                 && intent.execution_domain == execution_domain
                 && intent.user_ref.as_deref() == user_ref
@@ -1843,6 +1903,34 @@ impl BundleResolver {
                     || intent.profile_id == template
                     || runner_template_name(&intent.role) == Some(template)
                     || process_template_name_matches(intent, template))
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
+    /// Find the static Provider controller intent for one exact Process
+    /// resource. The Process identity disambiguates multiple installations of
+    /// the same Provider artifact on one execution target.
+    pub fn find_provider_controller_intent(
+        &self,
+        process_ref: &ResourceRef,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        user_ref: Option<&str>,
+        template: &str,
+        owner_ref: Option<&str>,
+    ) -> Option<&ResolvedRunnerIntent> {
+        if process_ref.resource_type().as_str() != "Process" {
+            return None;
+        }
+        let mut matches = self.runner_intents.values().filter(|intent| {
+            intent.role == ProcessRole::ProviderController
+                && intent.role_id == process_ref.name().as_str()
+                && intent.execution_ref == execution_ref
+                && intent.execution_domain == execution_domain
+                && intent.user_ref.as_deref() == user_ref
+                && owner_ref.is_none_or(|owner| intent.owner_ref.as_deref() == Some(owner))
+                && intent.profile_id == template
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -3873,6 +3961,81 @@ fn build_runner_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedR
     out
 }
 
+fn build_provider_controller_intents(
+    templates: &[ProcessTemplateBinding],
+) -> BTreeMap<String, ResolvedRunnerIntent> {
+    let mut out = BTreeMap::new();
+    for binding in templates {
+        let vm_name = binding.execution_ref().name().as_str().to_owned();
+        let role_id = binding.process_ref().name().as_str().to_owned();
+        let profile_id = binding.template().as_str().to_owned();
+        let principal = format!(
+            "{}:{}:{}",
+            binding.owner_ref().to_canonical_string(),
+            binding.process_ref().to_canonical_string(),
+            binding.execution_ref().to_canonical_string()
+        );
+        let profile_hash = sha2::Sha256::digest(principal.as_bytes());
+        let profile_suffix = profile_hash
+            .iter()
+            .take(8)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let principal_id = 50_000_u32.saturating_add(
+            u32::from_be_bytes(
+                profile_hash[..4]
+                    .try_into()
+                    .expect("SHA-256 always has four-byte prefixes"),
+            ) & 0x00ff_ffff,
+        );
+        let intent = ResolvedRunnerIntent {
+            intent_id: intent_id_runner(&vm_name, &role_id),
+            vm_name,
+            execution_ref: binding.execution_ref().to_canonical_string(),
+            owner_ref: Some(binding.owner_ref().to_canonical_string()),
+            execution_domain: ProcessExecutionDomain::System,
+            user_ref: None,
+            role_id,
+            role: ProcessRole::ProviderController,
+            binary_path: PathBuf::from(binding.binary_path()),
+            argv: vec![binding.binary_ref().as_str().to_owned()],
+            env: Vec::new(),
+            uid: principal_id,
+            gid: principal_id,
+            supplementary_groups: Vec::new(),
+            capabilities: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: true,
+                pid: false,
+                net: false,
+                ipc: true,
+                uts: false,
+                user: false,
+            },
+            seccomp_policy_ref: Some("provider-controller".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec!["/nix/store".to_owned()],
+                writable_paths: Vec::new(),
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: format!("d2b.slice/provider-controller/{profile_suffix}"),
+                controllers: vec!["cpu".to_owned(), "memory".to_owned(), "pids".to_owned()],
+                delegated: false,
+            },
+            root_carve_out: false,
+            profile_id,
+            user_namespace: None,
+            umask: Some(0o022),
+        };
+        out.insert(intent.intent_id.clone(), intent);
+    }
+    out
+}
+
 fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
     // Provider controller intents are committed Provider metadata, not
     // processes.json runner entries.
@@ -4314,10 +4477,11 @@ fn load_zone_resource_bundles(
     bundle: &Bundle,
     bundle_root: &Path,
     policy: &BundleVerifyPolicy,
-) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+) -> Result<(BTreeMap<String, Vec<u8>>, Vec<ProcessTemplateBinding>), Error> {
     let mut bundles = BTreeMap::new();
+    let mut process_templates = Vec::new();
     let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
-        return Ok(bundles);
+        return Ok((bundles, process_templates));
     };
     for key in artifact_hashes.keys() {
         let Some(zone_path) = key.strip_prefix("zones/") else {
@@ -4335,14 +4499,18 @@ fn load_zone_resource_bundles(
         let zone_path = resolve_bundle_ref(bundle_root, key);
         let bytes = secure_open_and_read(&zone_path, policy)?;
         verify_artifact_hash(&zone_path, &bytes, bundle.artifact_hashes.as_ref(), key)?;
+        let parsed = ResourceBundle::from_json(&bytes).map_err(|_| {
+            Error::manifest_parse_error("resource-bundle.json", "resource bundle is invalid")
+        })?;
         if bundles.insert(zone_name.to_owned(), bytes).is_some() {
             return Err(Error::manifest_parse_error(
                 "resource-bundle.json",
                 "duplicate Zone resource bundle",
             ));
         }
+        process_templates.extend(parsed.process_templates);
     }
-    Ok(bundles)
+    Ok((bundles, process_templates))
 }
 
 /// Load the integrity-pinned per-Zone storage rows emitted by Nix.
@@ -4829,6 +4997,189 @@ mod tests {
         };
 
         assert!(ResolvedRunnerIntent::from_process_node("host-system", &node).is_none());
+    }
+
+    #[test]
+    fn provider_controller_intent_uses_private_bundle_metadata_exactly() {
+        let zone = ZoneId::parse("dev").expect("zone");
+        let process_ref = ResourceRef::parse("Process/controller-test").expect("process ref");
+        let owner_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("owner ref");
+        let template = "controller-test";
+        let process = BundleResource::new(
+            ResourceTypeName::parse("Process").expect("process type"),
+            BundleResourceMetadata::new(
+                process_ref.name().clone(),
+                zone.clone(),
+                Some(owner_ref.clone()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"domain":"system","executionRef":"Host/dev-host","processClass":"controller","providerRef":"Provider/system-minijail","template":"controller-test"}"#,
+            )
+            .expect("process spec"),
+        )
+        .expect("process resource");
+        let provider = BundleResource::new(
+            ResourceTypeName::parse("Provider").expect("provider type"),
+            BundleResourceMetadata::new(
+                owner_ref.name().clone(),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"artifactId":"runtime-cloud-hypervisor","config":{"controllerExecutionRef":"Host/dev-host"}}"#,
+            )
+            .expect("provider spec"),
+        )
+        .expect("provider resource");
+        let resource_bundle = ResourceBundle::new(
+            zone,
+            vec![process, provider],
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle");
+        let mut resource_bundle_value =
+            serde_json::to_value(&resource_bundle).expect("resource bundle value");
+        resource_bundle_value["processTemplates"] = serde_json::json!([{
+            "processRef": "Process/controller-test",
+            "ownerRef": "Provider/runtime-cloud-hypervisor",
+            "executionRef": "Host/dev-host",
+            "template": "controller-test",
+            "artifactId": "runtime-cloud-hypervisor",
+            "binaryRef": "d2b-cloud-hypervisor-controller",
+            "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+            "binaryPath": "/nix/store/runtime-cloud-hypervisor/bin/d2b-cloud-hypervisor-controller"
+        }]);
+        let resource_bundle_bytes =
+            serde_json::to_vec(&resource_bundle_value).expect("resource bundle bytes");
+        ResourceBundle::from_json(&resource_bundle_bytes).expect("process templates");
+        let host = serde_json::from_str::<HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let processes = ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: Vec::new(),
+        };
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            processes,
+            manifest,
+            BTreeMap::from([("dev".to_owned(), resource_bundle_bytes)]),
+        );
+        let resolved = resolver
+            .find_provider_controller_intent(
+                &process_ref,
+                "Host/dev-host",
+                ProcessExecutionDomain::System,
+                None,
+                template,
+                Some("Provider/runtime-cloud-hypervisor"),
+            )
+            .expect("private controller intent");
+        assert_eq!(resolved.role, ProcessRole::ProviderController);
+        assert_eq!(
+            resolved.binary_path,
+            PathBuf::from(
+                "/nix/store/runtime-cloud-hypervisor/bin/d2b-cloud-hypervisor-controller"
+            )
+        );
+        assert!(
+            resolver
+                .find_runner_intent_for_process_in_vm(
+                    None,
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    template,
+                )
+                .is_none(),
+            "ProviderController must remain excluded from processes.json intents"
+        );
+        assert!(
+            resolver
+                .find_provider_controller_intent(
+                    &process_ref,
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    template,
+                    Some("Provider/wrong-owner"),
+                )
+                .is_none()
+        );
+        assert!(
+            resolver
+                .find_provider_controller_intent(
+                    &process_ref,
+                    "Host/wrong-target",
+                    ProcessExecutionDomain::System,
+                    None,
+                    template,
+                    Some("Provider/runtime-cloud-hypervisor"),
+                )
+                .is_none()
+        );
+        assert!(
+            resolver
+                .find_provider_controller_intent(
+                    &process_ref,
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "controller-wrong",
+                    Some("Provider/runtime-cloud-hypervisor"),
+                )
+                .is_none()
+        );
+        let wrong_kind = ResourceRef::parse("EphemeralProcess/controller-test").expect("ref");
+        assert!(
+            resolver
+                .find_provider_controller_intent(
+                    &wrong_kind,
+                    "Host/dev-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    template,
+                    Some("Provider/runtime-cloud-hypervisor"),
+                )
+                .is_none()
+        );
     }
 
     fn build_personal_dev_bundle(root: &Path) -> BundleResolver {

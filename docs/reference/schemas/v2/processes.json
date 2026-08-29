@@ -392,6 +392,13 @@
           ]
         },
         {
+          "description": "A static Provider controller launched from a signed Process template.",
+          "type": "string",
+          "enum": [
+            "provider-controller"
+          ]
+        },
+        {
           "description": "Store and virtiofs preflight validation.",
           "type": "string",
           "enum": [

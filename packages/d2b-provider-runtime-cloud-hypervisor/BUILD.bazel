@@ -9,7 +9,7 @@ exports_files(
 rust_library(
     name = "d2b_provider_runtime_cloud_hypervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = ["Cargo.toml", "provider-manifest.json"],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -132,6 +132,7 @@ filegroup(
             "examples/**/*.rs",
             "integration/**/*",
             "nix/**/*",
+            "provider-manifest.json",
             "README.md",
             "src/**/*.rs",
             "tests/**/*.rs",

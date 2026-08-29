@@ -353,6 +353,17 @@ mod tests {
     }
 
     #[test]
+    fn provider_manifest_is_the_packaged_canonical_contract() {
+        let packaged = include_bytes!("../provider-manifest.json");
+        let manifest = provider_manifest().expect("packaged Provider manifest");
+        assert_eq!(
+            d2b_contracts_resource::v3::canonical_json_bytes(&manifest)
+                .expect("canonical Provider manifest"),
+            packaged
+        );
+    }
+
+    #[test]
     fn cloud_assignment_expectation_separates_primary_and_owner_child_verbs() {
         let expectation = cloud_assignment_expectation(1).unwrap();
         assert!(

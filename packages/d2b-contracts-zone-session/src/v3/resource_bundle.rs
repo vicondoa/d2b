@@ -11,8 +11,10 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use d2b_contracts_provider::v3::{ArtifactDigest, BinaryRef};
 use d2b_contracts_resource::v3::{
-    ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    ArtifactId, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    execution_policy::BoundedToken,
     resource_schema::{
         CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
         is_canonical_digest,
@@ -201,6 +203,141 @@ impl<'de> Deserialize<'de> for BundleResource {
     }
 }
 
+/// Private binding from a generic controller Process template to the signed
+/// Provider package executable.
+///
+/// This metadata is carried by the integrity-pinned private Zone bundle, not
+/// by the public Process resource spec. It is the runtime resolver's only
+/// executable binding for static Provider controller Processes.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessTemplateBinding {
+    process_ref: ResourceRef,
+    owner_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    template: BoundedToken,
+    artifact_id: ArtifactId,
+    binary_ref: BinaryRef,
+    artifact_digest: ArtifactDigest,
+    binary_path: String,
+}
+
+impl ProcessTemplateBinding {
+    /// Construct one private signed-package template binding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        process_ref: ResourceRef,
+        owner_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        template: BoundedToken,
+        artifact_id: ArtifactId,
+        binary_ref: BinaryRef,
+        artifact_digest: ArtifactDigest,
+        binary_path: impl Into<String>,
+    ) -> Result<Self, ResourceBundleError> {
+        let binary_path = binary_path.into();
+        if process_ref.resource_type().as_str() != "Process"
+            || owner_ref.resource_type().as_str() != "Provider"
+            || !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
+            || binary_path.is_empty()
+            || binary_path.len() > 4096
+            || !binary_path.starts_with('/')
+            || binary_path.contains('\0')
+            || binary_path
+                .split('/')
+                .any(|segment| matches!(segment, "." | ".."))
+            || !binary_path.ends_with(&format!("/bin/{}", binary_ref.as_str()))
+        {
+            return Err(ResourceBundleError::InvalidProcessTemplate);
+        }
+        Ok(Self {
+            process_ref,
+            owner_ref,
+            execution_ref,
+            template,
+            artifact_id,
+            binary_ref,
+            artifact_digest,
+            binary_path,
+        })
+    }
+
+    /// Borrow the bound Process resource reference.
+    pub const fn process_ref(&self) -> &ResourceRef {
+        &self.process_ref
+    }
+
+    /// Borrow the owning Provider reference.
+    pub const fn owner_ref(&self) -> &ResourceRef {
+        &self.owner_ref
+    }
+
+    /// Borrow the Process execution target.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Borrow the generic Process template name.
+    pub const fn template(&self) -> &BoundedToken {
+        &self.template
+    }
+
+    /// Borrow the selected Provider artifact ID.
+    pub const fn artifact_id(&self) -> &ArtifactId {
+        &self.artifact_id
+    }
+
+    /// Borrow the signed executable reference.
+    pub const fn binary_ref(&self) -> &BinaryRef {
+        &self.binary_ref
+    }
+
+    /// Borrow the signed executable digest.
+    pub const fn artifact_digest(&self) -> &ArtifactDigest {
+        &self.artifact_digest
+    }
+
+    /// Borrow the private package executable path.
+    pub fn binary_path(&self) -> &str {
+        &self.binary_path
+    }
+}
+
+impl core::fmt::Debug for ProcessTemplateBinding {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ProcessTemplateBinding(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for ProcessTemplateBinding {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            process_ref: ResourceRef,
+            owner_ref: ResourceRef,
+            execution_ref: ResourceRef,
+            template: BoundedToken,
+            artifact_id: ArtifactId,
+            binary_ref: BinaryRef,
+            artifact_digest: ArtifactDigest,
+            binary_path: String,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.process_ref,
+            wire.owner_ref,
+            wire.execution_ref,
+            wire.template,
+            wire.artifact_id,
+            wire.binary_ref,
+            wire.artifact_digest,
+            wire.binary_path,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
 /// Private integrity metadata carried alongside the public resource array.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -241,6 +378,9 @@ pub struct ResourceBundle {
     pub integrity: BundleIntegrityPin,
     /// Sorted desired-state resources.
     pub resources: Vec<BundleResource>,
+    /// Private signed-package bindings for static controller Processes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_templates: Vec<ProcessTemplateBinding>,
     /// Stable generation timestamp supplied by the compiler.
     pub generated_at: d2b_contracts_resource::v3::Timestamp,
 }
@@ -297,6 +437,7 @@ impl ResourceBundle {
                 provider_schema_digests,
             },
             resources,
+            process_templates: Vec::new(),
             generated_at,
         })
     }
@@ -310,6 +451,30 @@ impl ResourceBundle {
     /// Borrow the immutable Zone self-resource identity, when supplied.
     pub const fn zone_uid(&self) -> Option<&ResourceUid> {
         self.zone_uid.as_ref()
+    }
+
+    /// Attach private static Process template bindings to this bundle.
+    pub fn with_process_templates(
+        mut self,
+        mut process_templates: Vec<ProcessTemplateBinding>,
+    ) -> Result<Self, ResourceBundleError> {
+        if process_templates.len() > MAX_BUNDLE_RESOURCES {
+            return Err(ResourceBundleError::TooLarge);
+        }
+        process_templates.sort_by(|left, right| {
+            left.process_ref()
+                .to_canonical_string()
+                .cmp(&right.process_ref().to_canonical_string())
+        });
+        if process_templates
+            .windows(2)
+            .any(|pair| pair[0].process_ref() == pair[1].process_ref())
+        {
+            return Err(ResourceBundleError::DuplicateProcessTemplate);
+        }
+        self.process_templates = process_templates;
+        self.verify_process_templates()?;
+        Ok(self)
     }
 
     /// Parse and verify a bundle through canonical duplicate-key decoding.
@@ -353,12 +518,97 @@ impl ResourceBundle {
         if digest_resources(&self.resources)? != self.integrity.content_hash {
             return Err(ResourceBundleError::ContentHashMismatch);
         }
+        self.verify_process_templates()?;
         Ok(())
     }
 
     /// Borrow the bundle's integrity fields.
     pub const fn integrity(&self) -> &BundleIntegrityPin {
         &self.integrity
+    }
+
+    fn verify_process_templates(&self) -> Result<(), ResourceBundleError> {
+        let resources = self
+            .resources
+            .iter()
+            .map(|resource| {
+                (
+                    ResourceRef::new(
+                        resource.resource_type().clone(),
+                        resource.metadata().name().clone(),
+                    ),
+                    resource,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut process_refs = std::collections::BTreeSet::new();
+        for binding in &self.process_templates {
+            if !process_refs.insert(binding.process_ref()) {
+                return Err(ResourceBundleError::DuplicateProcessTemplate);
+            }
+            let Some(resource) = resources.get(binding.process_ref()) else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            let Some(owner) = resources.get(binding.owner_ref()) else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if resource.resource_type().as_str() != "Process"
+                || resource.metadata().owner_ref() != Some(binding.owner_ref())
+                || owner.resource_type().as_str() != "Provider"
+            {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let CanonicalJsonValue::String(owner_artifact_id) = owner
+                .spec()
+                .get("artifactId")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if owner_artifact_id != binding.artifact_id().as_str() {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let CanonicalJsonValue::String(execution_ref) = resource
+                .spec()
+                .get("executionRef")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            let CanonicalJsonValue::String(template) = resource
+                .spec()
+                .get("template")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if execution_ref != &binding.execution_ref().to_canonical_string()
+                || template != binding.template().as_str()
+            {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let CanonicalJsonValue::String(provider_ref) = resource
+                .spec()
+                .get("providerRef")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if provider_ref != "Provider/system-minijail" {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let CanonicalJsonValue::String(process_class) = resource
+                .spec()
+                .get("processClass")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if process_class != "controller" {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -398,6 +648,12 @@ pub enum ResourceBundleError {
     UnsortedResources,
     /// The recorded content hash differs from the resource array.
     ContentHashMismatch,
+    /// A static Process template binding is malformed.
+    InvalidProcessTemplate,
+    /// A static Process template binding is duplicated.
+    DuplicateProcessTemplate,
+    /// A static Process template binding does not match its Process resource.
+    ProcessTemplateMismatch,
     /// A canonical rendering operation failed.
     CanonicalJsonEncode(d2b_contracts_resource::v3::resource_schema::CanonicalJsonError),
 }
@@ -416,6 +672,13 @@ impl core::fmt::Display for ResourceBundleError {
             Self::UnsupportedVersion => "resource bundle version is unsupported",
             Self::UnsortedResources => "resource bundle resources are not sorted",
             Self::ContentHashMismatch => "resource bundle content hash does not match resources",
+            Self::InvalidProcessTemplate => "resource bundle contains an invalid process template",
+            Self::DuplicateProcessTemplate => {
+                "resource bundle contains a duplicate process template"
+            }
+            Self::ProcessTemplateMismatch => {
+                "resource bundle process template does not match its Process resource"
+            }
             Self::CanonicalJsonEncode(_) => "resource bundle could not be rendered canonically",
         })
     }
@@ -488,6 +751,31 @@ mod tests {
 
     fn timestamp() -> Timestamp {
         Timestamp::parse("2026-07-22T00:00:00.000Z").unwrap()
+    }
+
+    #[test]
+    fn process_template_binding_rejects_mismatched_binary_path() {
+        let process_ref = ResourceRef::parse("Process/controller").unwrap();
+        let owner_ref = ResourceRef::parse("Provider/runtime").unwrap();
+        let execution_ref = ResourceRef::parse("Host/host").unwrap();
+        let template = BoundedToken::parse("controller-runtime").unwrap();
+        let artifact_id = ArtifactId::parse("runtime").unwrap();
+        let binary_ref = BinaryRef::parse("controller").unwrap();
+        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        assert_eq!(
+            ProcessTemplateBinding::new(
+                process_ref,
+                owner_ref,
+                execution_ref,
+                template,
+                artifact_id,
+                binary_ref,
+                digest,
+                "/nix/store/runtime/bin/wrong",
+            )
+            .unwrap_err(),
+            ResourceBundleError::InvalidProcessTemplate
+        );
     }
 
     #[test]

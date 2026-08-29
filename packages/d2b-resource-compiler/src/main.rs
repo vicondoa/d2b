@@ -24,8 +24,11 @@ use d2b_contracts_resource::v3::{
     framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
     resource::RESOURCE_API_VERSION, ResourceUid,
 };
+use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_resource_compiler::{
-    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
+    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys,
+    VerifiedProviderArtifact, compile_linux_artifact, project_static_controller_processes,
+    resource_sort_key,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -179,6 +182,7 @@ struct BundleOutput<'a> {
     generated_at: &'static str,
     provider_schema_digests: &'a BTreeMap<String, String>,
     resources: &'a [Value],
+    process_templates: &'a [ProcessTemplateBinding],
     schema_version: u32,
     zone: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,7 +192,7 @@ struct BundleOutput<'a> {
 #[derive(Debug)]
 struct CompiledProvider {
     input: ProviderInput,
-    manifest: ProviderManifest,
+    verified: VerifiedProviderArtifact,
     config_schema_digest: String,
     config_schema: Value,
 }
@@ -299,31 +303,59 @@ fn compile(
     check_resource_type_collisions(&compiled_providers)?;
     validate_resources(&input, strict_secrets)?;
 
-    let resources_bytes = canonical_value_bytes(&Value::Array(input.resources.clone()))?;
-    let content_hash = framed_canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &resources_bytes);
+    let authored_resources_bytes = canonical_value_bytes(&Value::Array(input.resources.clone()))?;
+    let authored_content_hash =
+        framed_canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &authored_resources_bytes);
     if let Some(expected) = input.expected_content_hash.as_deref()
-        && expected != content_hash
+        && expected != authored_content_hash
     {
         return Err(CliError::new(
             "resource-compiler-content-hash-mismatch",
             format!(
                 "resource bundle contentHash differs between declared ({}) and compiler ({})",
                 safe_token(expected),
-                safe_token(&content_hash)
+                safe_token(&authored_content_hash)
             ),
         ));
     }
+    let projection = project_static_controller_processes(
+        &input.zone,
+        &input.resources,
+        compiled_providers.iter().map(|provider| &provider.verified),
+    )
+    .map_err(|error| {
+        CliError::new(
+            error.code(),
+            "static Provider controller projection was rejected",
+        )
+    })?;
+    let mut resources = input.resources.clone();
+    resources.extend(projection.resources);
+    if resources.len() > MAX_RESOURCES {
+        return Err(CliError::new(
+            "resource-compiler-resource-bound",
+            "declared and generated resource count exceeds the compiler bound",
+        ));
+    }
+    resources.sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
+    let mut compiled_input = input;
+    compiled_input.resources = resources;
+    validate_resources(&compiled_input, strict_secrets)?;
+
+    let resources_bytes = canonical_value_bytes(&Value::Array(compiled_input.resources.clone()))?;
+    let content_hash = framed_canonical_digest(RESOURCE_BUNDLE_DOMAIN_TAG, &resources_bytes);
 
     let output = BundleOutput {
         artifact_catalog_digest: &artifact_catalog_digest,
         bundle_version: 1,
         content_hash: &content_hash,
         generated_at: "1970-01-01T00:00:00.000Z",
-        provider_schema_digests: &input.provider_schema_digests,
-        resources: &input.resources,
+        provider_schema_digests: &compiled_input.provider_schema_digests,
+        resources: &compiled_input.resources,
+        process_templates: &projection.templates,
         schema_version: 3,
-        zone: &input.zone,
-        zone_uid: input.zone_uid.as_deref(),
+        zone: &compiled_input.zone,
+        zone_uid: compiled_input.zone_uid.as_deref(),
     };
     let output_bytes = canonical_json_bytes(&output).map_err(|_| {
         CliError::new(
@@ -457,7 +489,7 @@ fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliE
             parse_digest(&provider.config_schema_digest)?,
         );
         let entry = ArtifactCatalogEntry::new(
-            artifact_id,
+            artifact_id.clone(),
             provider.store_path.clone(),
             provider.publisher.clone(),
             provider.signature_id.clone(),
@@ -471,18 +503,23 @@ fn compile_providers(input: &CompileInput) -> Result<Vec<CompiledProvider>, CliE
             signing_key,
         );
         let compiled = compile_linux_artifact(&entry, &keys).map_err(CliError::from)?;
+        let verified =
+            VerifiedProviderArtifact::new(artifact_id, provider.store_path.clone(), compiled);
         providers.push(CompiledProvider {
             input: clone_provider_input(provider),
-            config_schema_digest: compiled.config_schema_digest().as_str().to_owned(),
-            config_schema: serde_json::from_slice(compiled.config_schema_bytes()).map_err(
-                |_| {
+            config_schema_digest: verified
+                .compiled()
+                .config_schema_digest()
+                .as_str()
+                .to_owned(),
+            config_schema: serde_json::from_slice(verified.compiled().config_schema_bytes())
+                .map_err(|_| {
                     CliError::new(
                         "provider-config-schema-invalid",
                         "verified Provider config schema could not be decoded",
                     )
-                },
-            )?,
-            manifest: compiled.manifest().clone(),
+                })?,
+            verified,
         });
     }
     Ok(providers)
@@ -608,7 +645,7 @@ fn check_provider_resource_admission(
 fn check_resource_type_collisions(providers: &[CompiledProvider]) -> Result<(), CliError> {
     let mut owners = BTreeMap::<String, String>::new();
     for provider in providers {
-        for resource_type in provider_resource_types(&provider.manifest) {
+        for resource_type in provider_resource_types(provider.verified.compiled().manifest()) {
             if let Some(previous) =
                 owners.insert(resource_type.clone(), provider.input.artifact_id.clone())
                 && previous != provider.input.artifact_id
@@ -1050,7 +1087,7 @@ fn validate_resource_ref_value(
 }
 
 fn is_bootstrap_external_reference(resource_type: &str, resource_name: &str) -> bool {
-    resource_type == "Provider" && resource_name == "system-core"
+    resource_type == "Provider" && matches!(resource_name, "system-core" | "system-minijail")
 }
 
 fn schema_shape_matches(schema: &Value, value: &Value) -> bool {

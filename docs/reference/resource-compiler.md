@@ -40,6 +40,12 @@ canonical ordering, content hash, artifact-catalog digest, and strict
 secret-shaped material policy. Diagnostics are bounded and do not include
 store paths, manifest contents, configuration values, or key material.
 
+After verification, each admitted non-bootstrap launchable controller
+component is projected into an ordinary `Process` resource owned by its
+Provider. The private bundle also carries the signed template-to-package
+binding in `processTemplates` used by the generic Process Provider; executable
+paths and arguments never enter the public Process spec.
+
 Interpreted Provider entry points must be packaged with
 `d2b.lib.buildProviderElfShim`. The shim is built and checked as an ELF
 executable before the compiler can admit it as a Provider entry point.

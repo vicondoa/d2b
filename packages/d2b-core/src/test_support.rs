@@ -390,6 +390,7 @@ impl ResolvedRunnerIntentBuilder {
             intent_id: self.intent_id,
             vm_name: self.vm_name,
             execution_ref: self.execution_ref,
+            owner_ref: None,
             execution_domain: self.execution_domain,
             user_ref: self.user_ref,
             role_id: self.role_id,

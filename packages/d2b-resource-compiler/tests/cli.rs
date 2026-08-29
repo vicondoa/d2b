@@ -103,10 +103,10 @@ fn cli_emits_a_stable_bundle_from_declared_inputs() {
             .expect("run compiler");
         assert!(result.status.success(), "{result:?}");
     }
-    assert_eq!(
-        fs::read(&output_a).expect("read first output"),
-        fs::read(&output_b).expect("read second output")
-    );
+    let bytes_a = fs::read(&output_a).expect("read first output");
+    assert_eq!(bytes_a, fs::read(&output_b).expect("read second output"));
+    let bundle: serde_json::Value = serde_json::from_slice(&bytes_a).expect("parse bundle");
+    assert!(bundle["processTemplates"].is_array());
 }
 
 #[test]
