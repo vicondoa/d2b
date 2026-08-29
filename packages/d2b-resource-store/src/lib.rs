@@ -298,6 +298,40 @@ pub struct ResourceAssignmentFence {
     pub target: ResourceRef,
     pub session_generation: ReconnectGeneration,
     pub epoch: u64,
+    pub scope: ResourceAssignmentScope,
+}
+
+/// The primary or owner-child target bound to an assignment fence.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ResourceAssignmentScope {
+    /// The assigned resource itself.
+    Primary,
+    /// A child bound to the exact assigned resource identity.
+    OwnerChild {
+        owner_ref: ResourceRef,
+        owner_uid: ResourceUid,
+        owner_revision: ZoneRevision,
+        owner_generation: ResourceGeneration,
+    },
+}
+
+impl core::fmt::Debug for ResourceAssignmentScope {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Primary => formatter.write_str("ResourceAssignmentScope::Primary"),
+            Self::OwnerChild {
+                owner_revision,
+                owner_generation,
+                ..
+            } => formatter
+                .debug_struct("ResourceAssignmentScope::OwnerChild")
+                .field("owner_ref", &"<redacted>")
+                .field("owner_uid", &"<redacted>")
+                .field("owner_revision", owner_revision)
+                .field("owner_generation", owner_generation)
+                .finish(),
+        }
+    }
 }
 
 impl core::fmt::Debug for ResourceAssignmentFence {
@@ -312,6 +346,7 @@ impl core::fmt::Debug for ResourceAssignmentFence {
             .field("target", &"<redacted>")
             .field("session_generation", &self.session_generation)
             .field("epoch", &"<redacted>")
+            .field("scope", &self.scope)
             .finish()
     }
 }

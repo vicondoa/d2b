@@ -14,9 +14,9 @@ use d2b_resource_store::mutation_seal::{
 };
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
-    PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
-    StoreError, StoreErrorKind, StoreMutation, StoreOperationContext, StoreProjection, StoreSlot,
-    StoreWatchRequest,
+    PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreFilter, StoreGetRequest,
+    StoreListRequest, StoreError, StoreErrorKind, StoreMutation, StoreOperationContext,
+    StoreProjection, StoreSlot, StoreWatchRequest,
 };
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
@@ -430,6 +430,86 @@ fn create_body(name: &str) -> Vec<u8> {
     };
     metadata.remove("uid");
     value.to_canonical_bytes()
+}
+
+fn owned_guest_body(name: &str) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(&stored_body(name)).unwrap();
+    value["type"] = serde_json::Value::String("Guest".to_owned());
+    value["metadata"].as_object_mut().unwrap().remove("uid");
+    value["spec"] =
+        serde_json::to_value(d2b_contracts_resource::v3::guest::GuestSpec::system_default())
+            .unwrap();
+    CanonicalJsonValue::parse(&serde_json::to_vec(&value).unwrap())
+        .unwrap()
+        .to_canonical_bytes()
+}
+
+fn owned_process_body(name: &str, owner: &ResourceRef) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(&stored_body(name)).unwrap();
+    value["type"] = serde_json::Value::String("Process".to_owned());
+    value["metadata"]["ownerRef"] = serde_json::Value::String(owner.to_canonical_string());
+    value["metadata"].as_object_mut().unwrap().remove("uid");
+    let execution = d2b_contracts_resource::v3::process::ExecutionSpec::minimal(
+        ResourceRef::parse("Host/host-system").unwrap(),
+        d2b_contracts_resource::v3::process::ProcessClass::Service,
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("test").unwrap(),
+    )
+    .unwrap();
+    value["spec"] = serde_json::to_value(
+        d2b_contracts_resource::v3::process::ProcessSpec::minimal(execution),
+    )
+    .unwrap();
+    CanonicalJsonValue::parse(&serde_json::to_vec(&value).unwrap())
+        .unwrap()
+        .to_canonical_bytes()
+}
+
+fn create_owned_seal_body(
+    operation_id: &str,
+    target: ResourceRef,
+    owner: ResourceRef,
+    canonical_resource: Vec<u8>,
+) -> MutationSealBody {
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
+    MutationSealBody {
+        mutations: vec![PreparedStoreMutation::new(
+            StoreMutation {
+                kind: ResourceMutationKind::Create,
+                zone: ZoneId::parse("work").unwrap(),
+                target: target.clone(),
+                expected: ExpectedRevision::CreateAbsent,
+                expected_uid: None,
+                owner: Some(owner),
+                canonical_resource: Some(canonical_resource),
+                add_finalizers: Vec::new(),
+                remove_finalizers: Vec::new(),
+                wait_for_reconcile: false,
+                reconcile_deadline_ms: None,
+                assignment: None,
+            },
+            None,
+            Some(payload_digest),
+        )],
+        authorization: AdmittedAuthorization {
+            zone: ZoneId::parse("work").unwrap(),
+            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
+            targets: vec![AdmittedAuthorizationTarget {
+                resource_type: target.resource_type().clone(),
+                resource_name: Some(target.name().clone()),
+                verb: AdmittedVerb::Create,
+                subresource: None,
+                execution_ref: None,
+            }],
+        },
+        policy_snapshot: PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 8,
+            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+            controller_generation: None,
+        },
+        operation: operation(operation_id),
+    }
 }
 
 fn create_body_for_type(resource_type: &str, name: &str) -> Vec<u8> {
@@ -2769,6 +2849,133 @@ async fn public_watch_replays_and_delivers_one_shared_committed_batch() {
         .await
         .unwrap();
     assert_eq!(store.watch_signals().unwrap().budget_used, 0);
+}
+
+#[tokio::test]
+async fn public_owner_child_list_and_watch_are_bound_to_one_owner_uid() {
+    let (directory, file) = owned_file();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let mut marker = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.marker"))
+        .unwrap();
+    write_provisioning_marker(&mut marker, &store_identity).unwrap();
+    let store = RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+        .await
+        .unwrap();
+
+    let guest = ResourceRef::parse("Guest/guest").unwrap();
+    let sibling = ResourceRef::parse("Guest/sibling").unwrap();
+    for (operation_id, target, body) in [
+        ("owner-list-guest", guest.clone(), owned_guest_body("guest")),
+        (
+            "owner-list-sibling",
+            sibling.clone(),
+            owned_guest_body("sibling"),
+        ),
+    ] {
+        let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &body);
+        store
+            .commit_verified(issuer.seal(create_seal_body_for_type(
+                operation_id,
+                target.resource_type().as_str(),
+                target.name().as_str(),
+                body,
+                payload_digest,
+            )))
+            .await
+            .unwrap();
+    }
+
+    let guest_child = ResourceRef::parse("Process/guest-child").unwrap();
+    let sibling_child = ResourceRef::parse("Process/sibling-child").unwrap();
+    for (operation_id, target, owner) in [
+        ("owner-list-guest-child", guest_child.clone(), guest.clone()),
+        (
+            "owner-list-sibling-child",
+            sibling_child,
+            sibling.clone(),
+        ),
+    ] {
+        store
+            .commit_verified(issuer.seal(create_owned_seal_body(
+                operation_id,
+                target.clone(),
+                owner.clone(),
+                owned_process_body(target.name().as_str(), &owner),
+            )))
+            .await
+            .unwrap();
+    }
+
+    let guest_uid = store
+        .get(StoreGetRequest {
+            operation: operation("owner-list-get"),
+            zone: ZoneId::parse("work").unwrap(),
+            target: guest,
+            expected_uid: None,
+            projection: StoreProjection::MetadataOnly,
+        })
+        .await
+        .unwrap()
+        .uid;
+
+    let listed = store
+        .list(StoreListRequest {
+            operation: operation("owner-list"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Process").unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![StoreFilter {
+                field: "owner.resourceUid".to_owned(),
+                values: vec![guest_uid.as_str().to_owned()],
+            }],
+            page_size: 10,
+            cursor: None,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .resources
+            .iter()
+            .map(|resource| resource.resource_ref.clone())
+            .collect::<Vec<_>>(),
+        vec![guest_child.clone()]
+    );
+
+    let (_receipt, mut stream) = store
+        .watch_stream(StoreWatchRequest {
+            operation: operation("owner-watch"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Process").unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![StoreFilter {
+                field: "owner.resourceUid".to_owned(),
+                values: vec![guest_uid.as_str().to_owned()],
+            }],
+            after_revision: ZoneRevision::new(0),
+            initial_credits: 4,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .unwrap();
+    let batch = stream.recv().await.unwrap();
+    assert_eq!(batch.entries().len(), 1);
+    assert_eq!(
+        batch.entries().next().unwrap().resource_name(),
+        guest_child.name()
+    );
+    store
+        .acknowledge_watch(stream.id(), batch.revision())
+        .await
+        .unwrap();
+    assert_eq!(store.watch_signals().unwrap().budget_used, 0);
+    store.unregister_watch(stream.id()).await.unwrap();
 }
 
 #[test]

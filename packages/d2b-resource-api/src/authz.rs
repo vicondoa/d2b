@@ -22,7 +22,8 @@ use d2b_core_controller::controller_assignment::{
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
-    ResourceAssignmentFence, StoreMutation, StoreOperationContext, StoreSealIdentity, StoreSlot,
+    ResourceAssignmentFence, ResourceAssignmentScope, StoreMutation, StoreOperationContext,
+    StoreSealIdentity, StoreSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -968,6 +969,7 @@ pub fn assignment_fence(
         target,
         session_generation: identity.session_generation(),
         epoch: identity.epoch().get(),
+        scope: d2b_resource_store::ResourceAssignmentScope::Primary,
     })
 }
 
@@ -975,7 +977,16 @@ pub fn assignment_fence(
 pub fn assignment_fence_for_mutation(
     mutation: &ScopedResourceMutation,
 ) -> Result<ResourceAssignmentFence, AssignmentError> {
-    assignment_fence(mutation.assignment())
+    let mut fence = assignment_fence(mutation.assignment())?;
+    if let Some(scope) = mutation.scope().owner_child() {
+        fence.scope = ResourceAssignmentScope::OwnerChild {
+            owner_ref: scope.owner_ref().clone(),
+            owner_uid: scope.owner_uid().clone(),
+            owner_revision: scope.owner_revision(),
+            owner_generation: scope.owner_generation(),
+        };
+    }
+    Ok(fence)
 }
 
 impl core::fmt::Debug for AuthorizationGrant {

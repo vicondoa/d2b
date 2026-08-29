@@ -23,10 +23,10 @@ use d2b_contracts_resource::v3::{
     MAX_WATCH_FILTERS,
     MAX_WATCH_RESOURCE_TYPES,
     RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceGeneration,
     ResourceEnvelope,
     ResourceError,
     ResourceErrorKind,
+    ResourceGeneration,
     ResourceName,
     ResourceRef,
     ResourceTypeName,
@@ -36,7 +36,10 @@ use d2b_contracts_resource::v3::{
     canonical_digest,
 };
 use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext;
-use d2b_core_controller::controller_assignment::{AssignmentVerb, ScopedResourceMutation};
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
+use d2b_core_controller::controller_assignment::{
+    AssignmentVerb, ScopedResourceMutation,
+};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation,
@@ -418,6 +421,8 @@ where
             zone: zone.clone(),
             resource_ref: target.clone(),
             uid: None,
+            generation: None,
+            revision: None,
         };
         let grant = self.authorize(
             &trusted,
@@ -1400,6 +1405,8 @@ struct ParsedIdentity {
     zone: ZoneId,
     resource_ref: ResourceRef,
     uid: Option<ResourceUid>,
+    generation: Option<ResourceGeneration>,
+    revision: Option<ZoneRevision>,
 }
 
 struct ParsedMutation {
@@ -1437,6 +1444,34 @@ fn attach_scoped_fences(
                 "scoped batch mutation is outside its assignment",
             ));
         }
+        if let Some(scope) = scoped.scope().owner_child() {
+            if route.identity.resource_ref.resource_type().as_str() != PROCESS_RESOURCE_TYPE {
+                return Err(ResourceError::terminal(
+                    ResourceErrorKind::AuthorizationDenied,
+                    "scoped owner-child mutation is outside its owner",
+                ));
+            }
+            if route.kind == ResourceMutationKind::Create {
+                let owner = route.owner.as_ref().ok_or_else(|| {
+                    schema_error("scoped owner-child create requires an owner")
+                })?;
+                if owner.resource_ref != *scope.owner_ref() {
+                    return Err(ResourceError::terminal(
+                        ResourceErrorKind::AuthorizationDenied,
+                        "scoped owner-child mutation is outside its owner",
+                    ));
+                }
+                if owner.uid.as_ref() != Some(scope.owner_uid())
+                    || owner.generation != Some(scope.owner_generation())
+                    || owner.revision != Some(scope.owner_revision())
+                {
+                    return Err(ResourceError::terminal(
+                        ResourceErrorKind::AuthorizationDenied,
+                        "scoped owner-child owner identity is stale",
+                    ));
+                }
+            }
+        }
         let mut fence = assignment_fence_for_mutation(scoped).map_err(|_| {
             ResourceError::terminal(
                 ResourceErrorKind::InternalIntegrityFailure,
@@ -1445,7 +1480,7 @@ fn attach_scoped_fences(
         })?;
         // Keep the first fence at the admitted snapshot for stale-batch and
         // single-write fencing; later mutations follow the staged revision.
-        if ordinal > 0 {
+        if ordinal > 0 && scoped.scope().owner_child().is_none() {
             let ExpectedRevision::Exact(revision) = parsed.store.expected else {
                 return Err(schema_error("scoped batch assignment requires an exact revision"));
             };
@@ -1515,10 +1550,22 @@ fn parse_identity(value: Option<&wire::ResourceIdentity>) -> Result<ParsedIdenti
         .map(|value| ResourceUid::parse(value.as_str()))
         .transpose()
         .map_err(|_| ref_error("resource UID is invalid"))?;
+    let generation = value
+        .generation
+        .map(ResourceGeneration::new)
+        .transpose()
+        .map_err(|_| ref_error("resource generation is invalid"))?;
+    let revision = match value.revision {
+        Some(0) => return Err(ref_error("resource revision is invalid")),
+        Some(revision) => Some(ZoneRevision::new(revision)),
+        None => None,
+    };
     Ok(ParsedIdentity {
         zone,
         resource_ref: ResourceRef::new(resource_type, name),
         uid,
+        generation,
+        revision,
     })
 }
 
@@ -2188,6 +2235,7 @@ mod tests {
         ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceUid,
         SchemaFingerprint, ZoneId,
     };
+    use d2b_core_controller::controller_assignment::ScopedCommitTransport;
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         MutationOrdinal, StoreError, StoreErrorKind, StoreListResult, StoreResolvedIdentity,
@@ -2963,6 +3011,217 @@ mod tests {
         );
     }
 
+    #[test]
+    fn collection_parser_preserves_owner_uid_filter_for_owned_processes() {
+        let mut owner_filter = wire::ListFilter::new();
+        owner_filter.field = "owner.resourceUid".to_owned();
+        owner_filter.values =
+            vec!["123e4567-e89b-42d3-a456-426614174000".to_owned()];
+        let parsed = parse_collection_request(
+            &[PROCESS_RESOURCE_TYPE.to_owned()],
+            &[owner_filter],
+            MAX_LIST_RESOURCE_TYPES,
+            MAX_LIST_FILTERS,
+        )
+        .unwrap();
+        assert_eq!(parsed.resource_types[0].as_str(), PROCESS_RESOURCE_TYPE);
+        assert_eq!(parsed.filters[0].field, "owner.resourceUid");
+        assert_eq!(
+            parsed.filters[0].values,
+            vec!["123e4567-e89b-42d3-a456-426614174000".to_owned()]
+        );
+    }
+
+    #[test]
+    fn scoped_owner_child_updates_and_deletes_keep_the_owner_fence() {
+        for (kind, verb) in [
+            (
+                ResourceMutationKind::UpdateSpec,
+                "UpdateSpec",
+            ),
+            (ResourceMutationKind::Delete, "Delete"),
+        ] {
+            let transport = ScopedCommitTransport::decode(
+                format!(
+                    r#"{{"version":1,"assignment":{{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"zone","zone":"dev"}},"sessionGeneration":1,"epoch":9}},"mutations":[{{"target":"Process/work","verb":"{verb}","scope":{{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}}}]}}"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let target = ResourceRef::parse("Process/work").unwrap();
+            let mut parsed = [ParsedMutation {
+                store: StoreMutation {
+                    kind,
+                    zone: ZoneId::parse("dev").unwrap(),
+                    target: target.clone(),
+                    expected: ExpectedRevision::Exact(ZoneRevision::new(7)),
+                    expected_uid: Some(
+                        ResourceUid::parse(
+                            "223e4567-e89b-42d3-a456-426614174001",
+                        )
+                        .unwrap(),
+                    ),
+                    owner: None,
+                    canonical_resource: None,
+                    add_finalizers: Vec::new(),
+                    remove_finalizers: Vec::new(),
+                    wait_for_reconcile: false,
+                    reconcile_deadline_ms: None,
+                    assignment: None,
+                },
+            }];
+            let routes = [ParsedMutationRoute {
+                identity: ParsedIdentity {
+                    zone: ZoneId::parse("dev").unwrap(),
+                    resource_ref: target,
+                    uid: Some(
+                        ResourceUid::parse(
+                            "223e4567-e89b-42d3-a456-426614174001",
+                        )
+                        .unwrap(),
+                    ),
+                    generation: None,
+                    revision: None,
+                },
+                owner: None,
+                kind,
+                authorizations: Vec::new(),
+            }];
+            attach_scoped_fences(&mut parsed, transport.mutations(), &routes).unwrap();
+            assert!(matches!(
+                &parsed[0].store.assignment.as_ref().unwrap().scope,
+                d2b_resource_store::ResourceAssignmentScope::OwnerChild { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn scoped_owner_child_create_requires_exact_owner_identity_and_process_target() {
+        let transport = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let owner_ref = ResourceRef::parse("Guest/guest").unwrap();
+        let owner_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let build = |target: ResourceRef,
+                     owner_ref: ResourceRef,
+                     owner_uid: Option<ResourceUid>,
+                     owner_generation: Option<ResourceGeneration>,
+                     owner_revision: Option<ZoneRevision>| {
+            let parsed = [ParsedMutation {
+                store: StoreMutation {
+                    kind: ResourceMutationKind::Create,
+                    zone: ZoneId::parse("dev").unwrap(),
+                    target: target.clone(),
+                    expected: ExpectedRevision::CreateAbsent,
+                    expected_uid: None,
+                    owner: Some(owner_ref.clone()),
+                    canonical_resource: None,
+                    add_finalizers: Vec::new(),
+                    remove_finalizers: Vec::new(),
+                    wait_for_reconcile: false,
+                    reconcile_deadline_ms: None,
+                    assignment: None,
+                },
+            }];
+            let routes = [ParsedMutationRoute {
+                identity: ParsedIdentity {
+                    zone: ZoneId::parse("dev").unwrap(),
+                    resource_ref: target,
+                    uid: None,
+                    generation: None,
+                    revision: None,
+                },
+                owner: Some(ParsedIdentity {
+                    zone: ZoneId::parse("dev").unwrap(),
+                    resource_ref: owner_ref,
+                    uid: owner_uid,
+                    generation: owner_generation,
+                    revision: owner_revision,
+                }),
+                kind: ResourceMutationKind::Create,
+                authorizations: Vec::new(),
+            }];
+            (parsed, routes)
+        };
+
+        let (mut parsed, routes) = build(
+            ResourceRef::parse("Process/work").unwrap(),
+            owner_ref.clone(),
+            Some(owner_uid.clone()),
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(ZoneRevision::new(7)),
+        );
+        attach_scoped_fences(&mut parsed, transport.mutations(), &routes).unwrap();
+        let fence = parsed[0].store.assignment.as_ref().unwrap();
+        assert_eq!(fence.resource_uid, owner_uid);
+        assert_eq!(fence.resource_revision, ZoneRevision::new(7));
+        assert!(matches!(
+            &fence.scope,
+            d2b_resource_store::ResourceAssignmentScope::OwnerChild {
+                owner_ref,
+                owner_uid,
+                owner_revision,
+                owner_generation,
+            } if owner_ref == &ResourceRef::parse("Guest/guest").unwrap()
+                && owner_uid.as_str() == "123e4567-e89b-42d3-a456-426614174000"
+                && *owner_revision == ZoneRevision::new(7)
+                && *owner_generation == ResourceGeneration::new(1).unwrap()
+        ));
+
+        for (owner_ref, owner_uid, owner_generation, owner_revision) in [
+            (
+                ResourceRef::parse("Guest/other").unwrap(),
+                Some(owner_uid.clone()),
+                Some(ResourceGeneration::new(1).unwrap()),
+                Some(ZoneRevision::new(7)),
+            ),
+            (
+                owner_ref.clone(),
+                Some(ResourceUid::parse(
+                    "223e4567-e89b-42d3-a456-426614174001",
+                ).unwrap()),
+                Some(ResourceGeneration::new(1).unwrap()),
+                Some(ZoneRevision::new(7)),
+            ),
+            (
+                owner_ref.clone(),
+                Some(owner_uid.clone()),
+                Some(ResourceGeneration::new(2).unwrap()),
+                Some(ZoneRevision::new(7)),
+            ),
+            (
+                owner_ref.clone(),
+                Some(owner_uid.clone()),
+                Some(ResourceGeneration::new(1).unwrap()),
+                Some(ZoneRevision::new(8)),
+            ),
+        ] {
+            let target = ResourceRef::parse("Process/work").unwrap();
+            let (mut parsed, routes) =
+                build(target, owner_ref, owner_uid, owner_generation, owner_revision);
+            let error = attach_scoped_fences(&mut parsed, transport.mutations(), &routes)
+                .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                ResourceErrorKind::AuthorizationDenied
+            );
+        }
+
+        let (mut parsed, routes) = build(
+            ResourceRef::parse("Host/work").unwrap(),
+            ResourceRef::parse("Guest/guest").unwrap(),
+            Some(ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            ).unwrap()),
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(ZoneRevision::new(7)),
+        );
+        let error = attach_scoped_fences(&mut parsed, transport.mutations(), &routes).unwrap_err();
+        assert_eq!(error.kind(), ResourceErrorKind::AuthorizationDenied);
+    }
+
     #[tokio::test]
     async fn batch_and_schema_responses_enforce_the_byte_limit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -3102,6 +3361,8 @@ mod tests {
             zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             resource_ref: ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap(),
             uid: Some(ResourceUid::parse(UID_SENTINEL).unwrap()),
+            generation: None,
+            revision: None,
         };
         let protected_mutation = StoreMutation {
             kind: ResourceMutationKind::UpdateSpec,
@@ -3125,11 +3386,15 @@ mod tests {
                 zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
                 resource_ref: ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap(),
                 uid: Some(ResourceUid::parse(UID_SENTINEL).unwrap()),
+                generation: None,
+                revision: None,
             },
             owner: Some(ParsedIdentity {
                 zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
                 resource_ref: ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap(),
                 uid: Some(ResourceUid::parse(UID_SENTINEL).unwrap()),
+                generation: None,
+                revision: None,
             }),
             kind: ResourceMutationKind::UpdateSpec,
             authorizations: vec![AuthorizationTarget {

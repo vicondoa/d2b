@@ -49,8 +49,9 @@ pub use binding_children::{
 pub use controller_assignment::{
     AssignmentEpoch, AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest,
     AssignmentTarget, AssignmentTransportError, AssignmentVerb, ControllerAssignmentRegistry,
-    ControllerRoleContract, MAX_SCOPED_COMMIT_TRANSPORT_BYTES, ResourceClientLease,
-    ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
+    ControllerRoleContract, MAX_SCOPED_COMMIT_TRANSPORT_BYTES, OwnerChildScope,
+    ResourceClientLease, ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation,
+    ScopedResourceQuery, ScopedResourceScope,
 };
 pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,

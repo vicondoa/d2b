@@ -13,6 +13,7 @@ use d2b_contracts_provider::v3::{
     ComponentType, ControllerInstanceScope, ControllerTargetKind, ProviderManifest,
 };
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, PlacementAnchor, PlacementTarget,
     PlacementTargetKind, ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef,
@@ -27,6 +28,10 @@ pub const MAX_SCOPED_COMMIT_TRANSPORT_BYTES: usize = 64 * 1024;
 pub const MAX_ASSIGNMENTS: usize = 16_384;
 /// Maximum child ownership entries retained by one assignment.
 pub const MAX_ASSIGNED_CHILDREN: usize = 4_096;
+/// Assignment-bound query filter for the primary resource UID.
+pub const ASSIGNMENT_UID_FILTER: &str = "assignment.resourceUid";
+/// Assignment-bound query filter for an owned child resource UID.
+pub const OWNER_UID_FILTER: &str = "owner.resourceUid";
 
 /// A monotonically increasing, nonzero assignment epoch.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -335,9 +340,7 @@ impl ScopedCommitTransport {
         if mutations.is_empty()
             || mutations.len() > 128
             || mutations.iter().any(|mutation| {
-                mutation.assignment() != &assignment
-                    || !mutation.verb().is_mutating()
-                    || mutation.verb() == AssignmentVerb::CommitBatch
+                mutation.assignment() != &assignment || !transport_mutation_is_valid(mutation)
             })
         {
             return Err(AssignmentTransportError::Malformed);
@@ -412,7 +415,15 @@ impl ScopedCommitTransport {
                 let object = value
                     .as_object()
                     .ok_or(AssignmentTransportError::Malformed)?;
-                require_exact_keys(object, &["target", "verb"])?;
+                let scope = match object.get("scope") {
+                    None => ScopedResourceScope::Primary,
+                    Some(scope) => decode_scoped_resource_scope(scope)?,
+                };
+                if matches!(scope, ScopedResourceScope::Primary) {
+                    require_exact_keys(object, &["target", "verb"])?;
+                } else {
+                    require_exact_keys(object, &["target", "verb", "scope"])?;
+                }
                 let target = ResourceRef::parse(
                     object
                         .get("target")
@@ -430,10 +441,33 @@ impl ScopedCommitTransport {
                     assignment: assignment.clone(),
                     target,
                     verb,
+                    scope,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
         Self::new(assignment, mutations)
+    }
+}
+
+fn transport_mutation_is_valid(mutation: &ScopedResourceMutation) -> bool {
+    match mutation.scope() {
+        ScopedResourceScope::Primary => matches!(
+            mutation.verb(),
+            AssignmentVerb::Create
+                | AssignmentVerb::UpdateStatus
+                | AssignmentVerb::UpdateFinalizers
+        ),
+        ScopedResourceScope::OwnerChild(scope) => {
+            scope.owner_uid() == mutation.assignment().resource_uid()
+                && scope.owner_revision() == mutation.assignment().resource_revision()
+                && mutation.target().resource_type().as_str() == PROCESS_RESOURCE_TYPE
+                && matches!(
+                    mutation.verb(),
+                    AssignmentVerb::Create
+                        | AssignmentVerb::UpdateSpec
+                        | AssignmentVerb::Delete
+                )
+        }
     }
 }
 
@@ -474,10 +508,82 @@ fn encode_assignment(identity: &AssignmentIdentity) -> Value {
 }
 
 fn encode_mutation(mutation: &ScopedResourceMutation) -> Value {
-    json!({
+    let mut value = json!({
         "target": mutation.target().to_canonical_string(),
         "verb": encode_assignment_verb(mutation.verb()),
     })
+    .as_object()
+    .cloned()
+    .expect("scoped mutation encoding is an object");
+    if let ScopedResourceScope::OwnerChild(scope) = mutation.scope() {
+        value.insert("scope".to_owned(), encode_owner_child_scope(scope));
+    }
+    Value::Object(value)
+}
+
+fn encode_owner_child_scope(scope: &OwnerChildScope) -> Value {
+    json!({
+        "kind": "owner-child",
+        "ownerRef": scope.owner_ref().to_canonical_string(),
+        "ownerUid": scope.owner_uid().as_str(),
+        "ownerRevision": scope.owner_revision().get(),
+        "ownerGeneration": scope.owner_generation().get(),
+    })
+}
+
+fn decode_scoped_resource_scope(
+    value: &Value,
+) -> Result<ScopedResourceScope, AssignmentTransportError> {
+    let object = value
+        .as_object()
+        .ok_or(AssignmentTransportError::Malformed)?;
+    require_exact_keys(
+        object,
+        &[
+            "kind",
+            "ownerRef",
+            "ownerUid",
+            "ownerRevision",
+            "ownerGeneration",
+        ],
+    )?;
+    if object.get("kind").and_then(Value::as_str) != Some("owner-child") {
+        return Err(AssignmentTransportError::Malformed);
+    }
+    let owner_ref = ResourceRef::parse(
+        object
+            .get("ownerRef")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let owner_uid = ResourceUid::parse(
+        object
+            .get("ownerUid")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let owner_revision = ZoneRevision::new(
+        object
+            .get("ownerRevision")
+            .and_then(Value::as_u64)
+            .filter(|revision| *revision != 0)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    );
+    let owner_generation = ResourceGeneration::new(
+        object
+            .get("ownerGeneration")
+            .and_then(Value::as_u64)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    Ok(ScopedResourceScope::OwnerChild(OwnerChildScope {
+        owner_ref,
+        owner_uid,
+        owner_revision,
+        owner_generation,
+    }))
 }
 
 fn encode_assignment_verb(verb: AssignmentVerb) -> &'static str {
@@ -728,7 +834,7 @@ impl ControllerRoleContract {
         manifest: &ProviderManifest,
     ) -> Result<Self, AssignmentError> {
         if provider_ref.resource_type().as_str() != "Provider"
-            || role_ref.resource_type().as_str() != "Process"
+            || role_ref.resource_type().as_str() != PROCESS_RESOURCE_TYPE
             || manifest.validate_installation_contract().is_err()
         {
             return Err(AssignmentError::InvalidRole);
@@ -837,6 +943,80 @@ impl<'a> AssignmentRequest<'a> {
     }
 }
 
+/// The exact owner identity bound to an owner-child admission.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OwnerChildScope {
+    owner_ref: ResourceRef,
+    owner_uid: ResourceUid,
+    owner_revision: ZoneRevision,
+    owner_generation: ResourceGeneration,
+}
+
+impl OwnerChildScope {
+    /// Borrow the exact owner reference.
+    pub const fn owner_ref(&self) -> &ResourceRef {
+        &self.owner_ref
+    }
+
+    /// Borrow the immutable owner UID.
+    pub const fn owner_uid(&self) -> &ResourceUid {
+        &self.owner_uid
+    }
+
+    /// Return the owner revision captured at assignment time.
+    pub const fn owner_revision(&self) -> ZoneRevision {
+        self.owner_revision
+    }
+
+    /// Return the owner generation captured at assignment time.
+    pub const fn owner_generation(&self) -> ResourceGeneration {
+        self.owner_generation
+    }
+}
+
+impl fmt::Debug for OwnerChildScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnerChildScope")
+            .field("owner_ref", &"<redacted>")
+            .field("owner_uid", &"<redacted>")
+            .field("owner_revision", &self.owner_revision)
+            .field("owner_generation", &self.owner_generation)
+            .finish()
+    }
+}
+
+/// The non-widenable scope of an assignment-scoped query or mutation.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ScopedResourceScope {
+    /// The assigned resource itself.
+    Primary,
+    /// A child resource owned by the exact assigned resource identity.
+    OwnerChild(OwnerChildScope),
+}
+
+impl ScopedResourceScope {
+    /// Borrow the owner-child scope when this is a child admission.
+    pub const fn owner_child(&self) -> Option<&OwnerChildScope> {
+        match self {
+            Self::Primary => None,
+            Self::OwnerChild(scope) => Some(scope),
+        }
+    }
+}
+
+impl fmt::Debug for ScopedResourceScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Primary => formatter.write_str("ScopedResourceScope::Primary"),
+            Self::OwnerChild(scope) => formatter
+                .debug_tuple("ScopedResourceScope::OwnerChild")
+                .field(scope)
+                .finish(),
+        }
+    }
+}
+
 /// A controller's non-widenable query scope.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ScopedResourceQuery {
@@ -844,6 +1024,7 @@ pub struct ScopedResourceQuery {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<ScopedResourceFilter>,
+    scope: ScopedResourceScope,
 }
 
 impl ScopedResourceQuery {
@@ -867,20 +1048,32 @@ impl ScopedResourceQuery {
         &self.filters
     }
 
-    /// Consume the query into transport-neutral parts.
-    pub fn into_parts(
+    /// Borrow the exact scope minted by the assignment lease.
+    pub const fn scope(&self) -> &ScopedResourceScope {
+        &self.scope
+    }
+
+    /// Borrow the owner-child scope when this is an owner-child query.
+    pub const fn owner_child_scope(&self) -> Option<&OwnerChildScope> {
+        self.scope.owner_child()
+    }
+
+    /// Consume the query while retaining its exact scope.
+    pub fn into_parts_with_scope(
         self,
     ) -> (
         AssignmentIdentity,
         Vec<ResourceTypeName>,
         Vec<ResourceName>,
         Vec<ScopedResourceFilter>,
+        ScopedResourceScope,
     ) {
         (
             self.assignment,
             self.resource_types,
             self.resource_names,
             self.filters,
+            self.scope,
         )
     }
 }
@@ -923,7 +1116,7 @@ impl ScopedResourceFilter {
                         .bytes()
                         .all(|byte| byte.is_ascii_graphic() || byte == b' ')
             })
-            || field == "assignment.resourceUid"
+            || matches!(field.as_str(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER)
         {
             return Err(AssignmentError::QueryWidened);
         }
@@ -967,6 +1160,7 @@ pub struct ScopedResourceMutation {
     assignment: AssignmentIdentity,
     target: ResourceRef,
     verb: AssignmentVerb,
+    scope: ScopedResourceScope,
 }
 
 impl ScopedResourceMutation {
@@ -984,6 +1178,11 @@ impl ScopedResourceMutation {
     pub const fn verb(&self) -> AssignmentVerb {
         self.verb
     }
+
+    /// Borrow the exact scope minted by the assignment lease.
+    pub const fn scope(&self) -> &ScopedResourceScope {
+        &self.scope
+    }
 }
 
 impl fmt::Debug for ScopedResourceMutation {
@@ -992,6 +1191,7 @@ impl fmt::Debug for ScopedResourceMutation {
             .debug_struct("ScopedResourceMutation")
             .field("target", &"<redacted>")
             .field("verb", &self.verb)
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -1000,6 +1200,7 @@ impl fmt::Debug for ScopedResourceMutation {
 pub struct ResourceClientLease {
     identity: AssignmentIdentity,
     resource_ref: ResourceRef,
+    resource_generation: ResourceGeneration,
     resource_types: BTreeSet<ResourceTypeName>,
     state: Arc<AssignmentLeaseState>,
     allowed_verbs: BTreeSet<AssignmentVerb>,
@@ -1016,6 +1217,11 @@ impl ResourceClientLease {
         &self.resource_ref
     }
 
+    /// Return the assigned resource generation bound to child admissions.
+    pub const fn resource_generation(&self) -> ResourceGeneration {
+        self.resource_generation
+    }
+
     /// Borrow the exact assigned placement target.
     pub const fn target(&self) -> &AssignmentTarget {
         self.identity.target()
@@ -1026,6 +1232,33 @@ impl ResourceClientLease {
         AssignmentPhase::from_code(self.state.phase.load(Ordering::Acquire))
     }
 
+    fn ensure_watch(&self) -> Result<(), AssignmentError> {
+        let phase = self.phase();
+        if phase.admits_watch() {
+            return Ok(());
+        }
+        Err(match phase {
+            AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
+            AssignmentPhase::Stale
+            | AssignmentPhase::Draining
+            | AssignmentPhase::Released
+            | AssignmentPhase::Quarantined => AssignmentError::StaleAssignment,
+            AssignmentPhase::Pending => AssignmentError::AssignmentMissing,
+            AssignmentPhase::Assigned => AssignmentError::StaleAssignment,
+        })
+    }
+
+    fn ensure_mutation(&self) -> Result<(), AssignmentError> {
+        let phase = self.phase();
+        if phase.admits_mutation() {
+            return Ok(());
+        }
+        Err(match phase {
+            AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
+            _ => AssignmentError::StaleAssignment,
+        })
+    }
+
     /// Mint a query whose assignment filter cannot be removed or widened.
     pub fn query(
         &self,
@@ -1033,18 +1266,7 @@ impl ResourceClientLease {
         resource_names: Vec<ResourceName>,
         filters: Vec<ScopedResourceFilter>,
     ) -> Result<ScopedResourceQuery, AssignmentError> {
-        let phase = self.phase();
-        if !phase.admits_watch() {
-            return Err(match phase {
-                AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
-                AssignmentPhase::Stale
-                | AssignmentPhase::Draining
-                | AssignmentPhase::Released
-                | AssignmentPhase::Quarantined => AssignmentError::StaleAssignment,
-                AssignmentPhase::Pending => AssignmentError::AssignmentMissing,
-                AssignmentPhase::Assigned => AssignmentError::StaleAssignment,
-            });
-        }
+        self.ensure_watch()?;
         if resource_types
             .iter()
             .any(|resource_type| !self.resource_types.contains(resource_type))
@@ -1053,13 +1275,18 @@ impl ResourceClientLease {
         }
         if filters
             .iter()
-            .any(|filter| filter.field() == "assignment.resourceUid")
+            .any(|filter| {
+                matches!(
+                    filter.field(),
+                    ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER
+                )
+            })
         {
             return Err(AssignmentError::QueryWidened);
         }
         let mut filters = filters;
         filters.push(ScopedResourceFilter {
-            field: "assignment.resourceUid".to_owned(),
+            field: ASSIGNMENT_UID_FILTER.to_owned(),
             values: vec![self.identity.resource_uid().as_str().to_owned()],
             assignment_bound: true,
         });
@@ -1068,6 +1295,44 @@ impl ResourceClientLease {
             resource_types,
             resource_names,
             filters,
+            scope: ScopedResourceScope::Primary,
+        })
+    }
+
+    /// Mint a query limited to Process children owned by this assignment.
+    pub fn child_query(
+        &self,
+        resource_types: Vec<ResourceTypeName>,
+        resource_names: Vec<ResourceName>,
+        filters: Vec<ScopedResourceFilter>,
+    ) -> Result<ScopedResourceQuery, AssignmentError> {
+        self.ensure_watch()?;
+        if resource_types.is_empty()
+            || resource_types
+                .iter()
+                .any(|resource_type| resource_type.as_str() != PROCESS_RESOURCE_TYPE)
+            || filters.iter().any(|filter| {
+                matches!(
+                    filter.field(),
+                    ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER
+                )
+            })
+        {
+            return Err(AssignmentError::QueryWidened);
+        }
+        let owner_scope = self.owner_child_scope();
+        let mut filters = filters;
+        filters.push(ScopedResourceFilter {
+            field: OWNER_UID_FILTER.to_owned(),
+            values: vec![owner_scope.owner_uid().as_str().to_owned()],
+            assignment_bound: true,
+        });
+        Ok(ScopedResourceQuery {
+            assignment: self.identity.clone(),
+            resource_types,
+            resource_names,
+            filters,
+            scope: ScopedResourceScope::OwnerChild(owner_scope),
         })
     }
 
@@ -1077,13 +1342,7 @@ impl ResourceClientLease {
         target: ResourceRef,
         verb: AssignmentVerb,
     ) -> Result<ScopedResourceMutation, AssignmentError> {
-        let phase = self.phase();
-        if !phase.admits_mutation() {
-            return Err(match phase {
-                AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
-                _ => AssignmentError::StaleAssignment,
-            });
-        }
+        self.ensure_mutation()?;
         if verb == AssignmentVerb::CommitBatch || !self.allowed_verbs.contains(&verb) {
             return Err(AssignmentError::VerbNotAllowed);
         }
@@ -1094,7 +1353,47 @@ impl ResourceClientLease {
             assignment: self.identity.clone(),
             target,
             verb,
+            scope: ScopedResourceScope::Primary,
         })
+    }
+
+    /// Admit a mutation against one Process child owned by this lease.
+    ///
+    /// Successful commit receipts must be handed to
+    /// [`ControllerAssignmentRegistry::record_child`] and
+    /// [`ControllerAssignmentRegistry::remove_child`] by the controller
+    /// owner. Minting this capability does not pre-account a child that may
+    /// never commit.
+    pub fn child_mutation(
+        &self,
+        target: ResourceRef,
+        verb: AssignmentVerb,
+    ) -> Result<ScopedResourceMutation, AssignmentError> {
+        self.ensure_mutation()?;
+        if !matches!(
+            verb,
+            AssignmentVerb::Create | AssignmentVerb::UpdateSpec | AssignmentVerb::Delete
+        ) {
+            return Err(AssignmentError::VerbNotAllowed);
+        }
+        if target.resource_type().as_str() != PROCESS_RESOURCE_TYPE {
+            return Err(AssignmentError::QueryWidened);
+        }
+        Ok(ScopedResourceMutation {
+            assignment: self.identity.clone(),
+            target,
+            verb,
+            scope: ScopedResourceScope::OwnerChild(self.owner_child_scope()),
+        })
+    }
+
+    fn owner_child_scope(&self) -> OwnerChildScope {
+        OwnerChildScope {
+            owner_ref: self.resource_ref.clone(),
+            owner_uid: self.identity.resource_uid().clone(),
+            owner_revision: self.identity.resource_revision(),
+            owner_generation: self.resource_generation,
+        }
     }
 
     /// Verify that a placement target remains exactly the admitted target.
@@ -1283,6 +1582,7 @@ impl ControllerAssignmentRegistry {
                 resource_type.clone(),
                 request.resource.metadata().name().clone(),
             ),
+            resource_generation: request.resource.metadata().generation(),
             resource_types: request.role.resource_types.clone(),
             state,
             allowed_verbs,
@@ -1531,8 +1831,8 @@ mod tests {
 
     use super::{
         AssignmentError, AssignmentPhase, AssignmentRequest, AssignmentTarget, AssignmentVerb,
-        ControllerAssignmentRegistry, ControllerRoleContract, ScopedCommitTransport,
-        ScopedResourceFilter,
+        ControllerAssignmentRegistry, ControllerRoleContract, PROCESS_RESOURCE_TYPE,
+        ScopedCommitTransport, ScopedResourceFilter,
     };
 
     const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -1546,7 +1846,7 @@ mod tests {
     }
 
     fn manifest() -> ProviderManifest {
-        let process = ResourceTypeName::parse("Process").unwrap();
+        let process = ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
         let component = ComponentDescriptor::new(
             BoundedToken::parse("process-controller").unwrap(),
             ComponentType::Controller,
@@ -1652,7 +1952,7 @@ mod tests {
         };
         let value = serde_json::json!({
             "apiVersion": "resources.d2bus.org/v3",
-            "type": "Process",
+            "type": PROCESS_RESOURCE_TYPE,
             "metadata": {
                 "name": name,
                 "zone": "dev",
@@ -1815,6 +2115,31 @@ mod tests {
     }
 
     #[test]
+    fn scoped_commit_transport_round_trips_owner_child_scope() {
+        let owner = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&owner, &role, 1, 1, 1)).unwrap();
+        let mutation = lease
+            .child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            )
+            .unwrap();
+        let transport =
+            ScopedCommitTransport::new(lease.identity().clone(), vec![mutation]).unwrap();
+        let encoded = transport.encode().unwrap();
+        let decoded = ScopedCommitTransport::decode(&encoded).unwrap();
+        let scope = decoded.mutations()[0].scope().owner_child().unwrap();
+
+        assert_eq!(decoded.assignment(), lease.identity());
+        assert_eq!(scope.owner_ref(), lease.resource_ref());
+        assert_eq!(scope.owner_uid(), owner.metadata().uid());
+        assert_eq!(scope.owner_revision(), owner.metadata().revision());
+        assert_eq!(scope.owner_generation(), owner.metadata().generation());
+    }
+
+    #[test]
     fn same_epoch_rebind_updates_the_active_writer_revision() {
         let resource = process("process", "Guest/dev-vm", 7);
         let role = role();
@@ -1899,6 +2224,21 @@ mod tests {
             Err(AssignmentError::SessionRevoked)
         );
         assert_eq!(
+            lease.child_query(
+                vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(AssignmentError::SessionRevoked)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-child").unwrap(),
+                AssignmentVerb::Create,
+            ),
+            Err(AssignmentError::SessionRevoked)
+        );
+        assert_eq!(
             registry.validate_writer(
                 lease.identity(),
                 resource.metadata().uid(),
@@ -1918,7 +2258,7 @@ mod tests {
         let lease = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
         let query = lease
             .query(
-                vec![ResourceTypeName::parse("Process").unwrap()],
+                vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
                 vec![],
                 vec![
                     ScopedResourceFilter::narrow("metadata.name", vec!["process".to_owned()])
@@ -1960,6 +2300,139 @@ mod tests {
                 reference: ResourceRef::parse("Host/host-system").unwrap(),
             }),
             Err(AssignmentError::TargetMismatch)
+        );
+    }
+
+    #[test]
+    fn assigned_lease_mints_an_exact_process_child_scope() {
+        let owner = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&owner, &role, 1, 1, 1)).unwrap();
+        let process_type = ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
+
+        let query = lease
+            .child_query(vec![process_type.clone()], vec![], vec![])
+            .unwrap();
+        assert_eq!(query.resource_types(), &[process_type]);
+        let owner_filter = query
+            .filters()
+            .iter()
+            .find(|filter| filter.field() == "owner.resourceUid")
+            .expect("owner UID filter");
+        assert!(owner_filter.assignment_bound());
+        assert_eq!(
+            owner_filter.values(),
+            &[owner.metadata().uid().as_str().to_owned()]
+        );
+        assert_eq!(
+            query.owner_child_scope().unwrap().owner_ref(),
+            &ResourceRef::new(
+                owner.resource_type().clone(),
+                owner.metadata().name().clone()
+            )
+        );
+
+        let child = lease
+            .child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            )
+            .unwrap();
+        assert_eq!(child.target(), &ResourceRef::parse("Process/process-vmm").unwrap());
+        let child_scope = child.scope().owner_child().unwrap();
+        assert_eq!(child_scope.owner_uid(), owner.metadata().uid());
+        assert_eq!(
+            child_scope.owner_revision(),
+            owner.metadata().revision()
+        );
+        assert_eq!(
+            child_scope.owner_generation(),
+            owner.metadata().generation()
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::UpdateStatus,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Host/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            ),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_query(Vec::new(), Vec::new(), Vec::new()),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_query(
+                vec![ResourceTypeName::parse("Host").unwrap()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::UpdateFinalizers,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        for field in [super::ASSIGNMENT_UID_FILTER, super::OWNER_UID_FILTER] {
+            let forged = ScopedResourceFilter {
+                field: field.to_owned(),
+                values: vec![owner.metadata().uid().as_str().to_owned()],
+                assignment_bound: false,
+            };
+            assert_eq!(
+                lease.child_query(
+                    vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+                    Vec::new(),
+                    vec![forged],
+                ),
+                Err(AssignmentError::QueryWidened)
+            );
+        }
+        assert_eq!(
+            lease.mutation(
+                ResourceRef::new(
+                    owner.resource_type().clone(),
+                    owner.metadata().name().clone()
+                ),
+                AssignmentVerb::UpdateSpec,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        assert_eq!(
+            lease.mutation(
+                ResourceRef::new(
+                    owner.resource_type().clone(),
+                    owner.metadata().name().clone()
+                ),
+                AssignmentVerb::Delete,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        registry.begin_drain(lease.identity()).unwrap();
+        assert_eq!(
+        lease.child_query(
+            vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+            Vec::new(),
+            Vec::new(),
+        ),
+        Err(AssignmentError::StaleAssignment)
+        );
+        assert_eq!(
+        lease.child_mutation(
+            ResourceRef::parse("Process/process-vmm").unwrap(),
+            AssignmentVerb::Create,
+        ),
+        Err(AssignmentError::StaleAssignment)
         );
     }
 

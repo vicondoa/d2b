@@ -2298,7 +2298,13 @@ fn read_list(
         }
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let mut resource = stored_resource(&request.zone, &resource_ref, &record)?;
-        if !filters_match(&request.filters, resource_type, name, &resource.uid) {
+        if !filters_match(
+            &request.filters,
+            resource_type,
+            name,
+            &resource.uid,
+            record.owner_uid.as_deref(),
+        ) {
             continue;
         }
         project_resource(&mut resource, request.projection)?;
@@ -2430,11 +2436,16 @@ fn filters_match(
     resource_type: &str,
     name: &str,
     uid: &ResourceUid,
+    owner_uid: Option<&str>,
 ) -> bool {
     filters.iter().all(|filter| match filter.field.as_str() {
         "metadata.name" => filter.values.iter().any(|value| value == name),
         "type" => filter.values.iter().any(|value| value == resource_type),
         "assignment.resourceUid" => filter.values.iter().any(|value| value == uid.as_str()),
+        "owner.resourceUid" => filter
+            .values
+            .iter()
+            .any(|value| owner_uid == Some(value.as_str())),
         _ => false,
     })
 }
@@ -2581,6 +2592,7 @@ mod tests {
             "Process",
             "worker",
             &uid,
+            None,
         ));
         assert!(!filters_match(
             &[StoreFilter {
@@ -2590,6 +2602,33 @@ mod tests {
             "Process",
             "worker",
             &uid,
+            None,
+        ));
+    }
+
+    #[test]
+    fn owner_filter_matches_only_the_exact_owner_uid() {
+        let child_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let owner_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let filter = [StoreFilter {
+            field: "owner.resourceUid".to_owned(),
+            values: vec![owner_uid.as_str().to_owned()],
+        }];
+        assert!(filters_match(
+            &filter,
+            "Process",
+            "worker",
+            &child_uid,
+            Some(owner_uid.as_str()),
+        ));
+        assert!(!filters_match(
+            &filter,
+            "Process",
+            "worker",
+            &child_uid,
+            None,
         ));
     }
 

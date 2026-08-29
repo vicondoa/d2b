@@ -20,9 +20,12 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceName, ResourceRef, ResourceTypeName,
 };
 use d2b_core_controller::controller_assignment::{
-    AssignmentError, AssignmentVerb, ResourceClientLease, ScopedResourceFilter, ScopedResourceQuery,
+    AssignmentError, AssignmentVerb, ResourceClientLease, ScopedResourceFilter,
 };
-pub use d2b_core_controller::controller_assignment::{AssignmentIdentity, ScopedResourceMutation};
+pub use d2b_core_controller::controller_assignment::{
+    AssignmentIdentity, OwnerChildScope, ScopedResourceMutation, ScopedResourceQuery,
+    ScopedResourceScope,
+};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
@@ -500,6 +503,17 @@ where
         filters: Vec<ScopedResourceFilter>,
     ) -> Result<ScopedResourceQuery, AssignmentError> {
         lease.query(resource_types, resource_names, filters)
+    }
+
+    /// Mint an owner-bound Process child query for the controller lease.
+    pub fn scoped_child_query(
+        &self,
+        lease: &ResourceClientLease,
+        resource_types: Vec<ResourceTypeName>,
+        resource_names: Vec<ResourceName>,
+        filters: Vec<ScopedResourceFilter>,
+    ) -> Result<ScopedResourceQuery, AssignmentError> {
+        lease.child_query(resource_types, resource_names, filters)
     }
 
     /// Resolve a target and prepare one bounded Resource call.

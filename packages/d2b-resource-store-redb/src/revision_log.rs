@@ -97,6 +97,11 @@ impl WatchSelector {
                     .values
                     .iter()
                     .any(|value| value == entry.resource_uid().as_str()),
+                "owner.resourceUid" => filter.values.iter().any(|value| {
+                    entry
+                        .owner_uid()
+                        .is_some_and(|owner_uid| value == owner_uid.as_str())
+                }),
                 _ => false,
             })
     }
@@ -706,6 +711,54 @@ mod tests {
         )
         .unwrap();
         assert!(selector.matches(&entry));
+    }
+
+    #[test]
+    fn replay_selector_keeps_owner_uid_fence() {
+        let owner_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let selector = WatchSelector::new(
+            [ResourceTypeName::parse("Process").unwrap()],
+            [],
+            [StoreFilter {
+                field: "owner.resourceUid".to_owned(),
+                values: vec![owner_uid.as_str().to_owned()],
+            }],
+        );
+        let entry = crate::transaction::ChangeEntry::new(
+            0,
+            ResourceTypeName::parse("Process").unwrap(),
+            ResourceName::parse("worker").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            crate::transaction::ChangeEvent::StatusUpdated,
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(owner_uid.clone()),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned(),
+            None,
+            "operation".to_owned(),
+            "correlation".to_owned(),
+        )
+        .unwrap();
+        assert!(selector.matches(&entry));
+        let other = crate::transaction::ChangeEntry::new(
+            0,
+            ResourceTypeName::parse("Process").unwrap(),
+            ResourceName::parse("worker").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            crate::transaction::ChangeEvent::StatusUpdated,
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(ResourceGeneration::new(1).unwrap()),
+            None,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned(),
+            None,
+            "operation".to_owned(),
+            "correlation".to_owned(),
+        )
+        .unwrap();
+        assert!(!selector.matches(&other));
     }
 
     #[test]

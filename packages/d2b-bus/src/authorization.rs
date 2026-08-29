@@ -1076,6 +1076,76 @@ use d2b_contracts_resource::v3::identity::{
     }
 
     #[test]
+    fn assignment_authorization_preserves_owner_child_scope_for_processes() {
+        let resource = assignment_resource();
+        let role = assignment_role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry
+            .admit(AssignmentRequest::new(
+                &resource,
+                &role,
+                ResourceGeneration::new(2).unwrap(),
+                ControllerGeneration::new(3).unwrap(),
+                ReconnectGeneration::new(4).unwrap(),
+                true,
+            ))
+            .unwrap();
+        let query = lease
+            .child_query(
+                vec![ResourceTypeName::parse("Process").unwrap()],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap();
+        let query = ResourceQuery::from_scoped(query).unwrap();
+        let owner_scope = query.scope().unwrap().owner_child().unwrap();
+        assert_eq!(owner_scope.owner_ref(), lease.resource_ref());
+        assert_eq!(owner_scope.owner_uid(), resource.metadata().uid());
+        assert_eq!(query.filters()[0].field(), "owner.resourceUid");
+
+        let child = lease
+            .child_mutation(
+                ResourceRef::parse("Process/process-child").unwrap(),
+                AssignmentVerb::Create,
+            )
+            .unwrap();
+        let identity = lease.identity().clone();
+        let call = ResourceCall::ScopedCommitBatch {
+            assignment: identity.clone(),
+            mutations: vec![child],
+        };
+        let context = context_with_session(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+            4,
+        )
+        .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap());
+        let registry = std::sync::Arc::new(Mutex::new(registry));
+        let authorizer = assignment_authorizer(
+            &context,
+            std::sync::Arc::clone(&registry),
+            &[
+                ResourceVerb::Watch,
+                ResourceVerb::Create,
+                ResourceVerb::UpdateSpec,
+                ResourceVerb::Delete,
+            ],
+        );
+        let route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/CommitBatch").unwrap(),
+            4,
+        );
+        assert_eq!(
+            authorizer.authorize_dispatch(&context, &route, Some(&call), false),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn assignment_authorization_rejects_session_and_target_mismatch() {
         let (valid_context, registry, _identity, query, _, _) = assignment_fixture();
         let call = ResourceCall::Watch(ResourceQuery::from_scoped(query).unwrap());

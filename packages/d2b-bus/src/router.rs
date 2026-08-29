@@ -11,6 +11,9 @@ use std::{
 
 use d2b_contracts_resource::v3::{
     ControllerGeneration,
+    MAX_FILTER_VALUES,
+    MAX_LIST_FILTERS,
+    MAX_LIST_RESOURCE_TYPES,
     ResourceGeneration,
     ResourceName,
     ResourceRef,
@@ -25,9 +28,11 @@ use d2b_contracts_resource::v3::identity::{
     ServiceName,
     SessionBinding,
 };
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_core_controller::controller_assignment::{
-    AssignmentIdentity, AssignmentVerb, ScopedCommitTransport, ScopedResourceFilter,
-    ScopedResourceMutation, ScopedResourceQuery,
+    ASSIGNMENT_UID_FILTER, AssignmentIdentity, AssignmentVerb, OWNER_UID_FILTER,
+    ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
+    ScopedResourceScope,
 };
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
@@ -224,6 +229,7 @@ pub struct ResourceQuery {
     resource_names: Vec<ResourceName>,
     filters: Vec<ResourceFilter>,
     assignment: Option<AssignmentIdentity>,
+    scope: Option<ScopedResourceScope>,
 }
 
 impl ResourceQuery {
@@ -245,17 +251,20 @@ impl ResourceQuery {
             resource_names,
             filters,
             assignment: None,
+            scope: None,
         })
     }
 
     /// Consume a controller-minted query without allowing its assignment
     /// filter to be dropped or widened.
     pub fn from_scoped(query: ScopedResourceQuery) -> Result<Self, BusError> {
-        let (assignment, resource_types, resource_names, scoped_filters) = query.into_parts();
+        let (assignment, resource_types, resource_names, scoped_filters, scope) =
+            query.into_parts_with_scope();
         if resource_types.is_empty()
-            || resource_types.len() > 64
-            || resource_names.len() > 64
-            || scoped_filters.len() > 64
+            || resource_types.len() > MAX_LIST_RESOURCE_TYPES
+            || resource_names.len() > MAX_FILTER_VALUES
+            || scoped_filters.len() > MAX_LIST_FILTERS
+            || scoped_filters.len() + usize::from(!resource_names.is_empty()) > MAX_LIST_FILTERS
         {
             return Err(BusError::InvalidResourceCall);
         }
@@ -263,18 +272,15 @@ impl ResourceQuery {
             .into_iter()
             .map(resource_filter_from_scoped)
             .collect::<Result<Vec<_>, _>>()?;
-        if !filters
-            .iter()
-            .any(|filter| filter.field == "assignment.resourceUid")
-        {
-            return Err(BusError::InvalidResourceCall);
-        }
-        Ok(Self {
+        let query = Self {
             resource_types,
             resource_names,
             filters,
             assignment: Some(assignment),
-        })
+            scope: Some(scope),
+        };
+        query.validate_scoped()?;
+        Ok(query)
     }
 
     /// Borrow the ResourceType selector in its exact received order.
@@ -295,6 +301,51 @@ impl ResourceQuery {
     /// Borrow the assignment evidence, when this query is controller-scoped.
     pub const fn assignment(&self) -> Option<&AssignmentIdentity> {
         self.assignment.as_ref()
+    }
+
+    /// Borrow the controller-minted query scope, when present.
+    pub const fn scope(&self) -> Option<&ScopedResourceScope> {
+        self.scope.as_ref()
+    }
+
+    fn validate_scoped(&self) -> Result<(), BusError> {
+        let (Some(assignment), Some(scope)) = (&self.assignment, &self.scope) else {
+            return if self.assignment.is_none() && self.scope.is_none() {
+                Ok(())
+            } else {
+                Err(BusError::InvalidResourceCall)
+            };
+        };
+        let (bound_field, bound_value) = match scope {
+            ScopedResourceScope::Primary => (
+                ASSIGNMENT_UID_FILTER,
+                assignment.resource_uid().as_str(),
+            ),
+            ScopedResourceScope::OwnerChild(owner) => {
+                if owner.owner_uid() != assignment.resource_uid()
+                    || self.resource_types.is_empty()
+                    || self
+                        .resource_types
+                        .iter()
+                        .any(|resource_type| resource_type.as_str() != PROCESS_RESOURCE_TYPE)
+                {
+                    return Err(BusError::InvalidResourceCall);
+                }
+                (OWNER_UID_FILTER, owner.owner_uid().as_str())
+            }
+        };
+        let bound_filters = self
+            .filters
+            .iter()
+            .filter(|filter| filter.field == bound_field)
+            .collect::<Vec<_>>();
+        if bound_filters.len() != 1
+            || bound_filters[0].values.len() != 1
+            || bound_filters[0].values[0] != bound_value
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        Ok(())
     }
 }
 
@@ -340,8 +391,14 @@ impl ResourceCall {
                 ApiMethod::Get,
                 vec![exact_target(target, ResourceVerb::Get, None)],
             ),
-            Self::List(query) => (ApiMethod::List, query_targets(query, ResourceVerb::List)),
-            Self::Watch(query) => (ApiMethod::Watch, query_targets(query, ResourceVerb::Watch)),
+            Self::List(query) => {
+                query.validate_scoped()?;
+                (ApiMethod::List, query_targets(query, ResourceVerb::List))
+            }
+            Self::Watch(query) => {
+                query.validate_scoped()?;
+                (ApiMethod::Watch, query_targets(query, ResourceVerb::Watch))
+            }
             Self::Create(target) => (
                 ApiMethod::Create,
                 vec![exact_target(target, ResourceVerb::Create, None)],
@@ -410,14 +467,7 @@ impl ResourceCall {
                 assignment,
                 mutations,
             } => {
-                if mutations.is_empty()
-                    || mutations.len() > 128
-                    || mutations.iter().any(|mutation| {
-                        mutation.assignment() != assignment
-                            || !mutation.verb().is_mutating()
-                            || mutation.verb() == AssignmentVerb::CommitBatch
-                    })
-                {
+                if ScopedCommitTransport::new(assignment.clone(), mutations.clone()).is_err() {
                     return Err(BusError::InvalidResourceCall);
                 }
                 (
@@ -627,7 +677,8 @@ fn resource_filter_from_scoped(filter: ScopedResourceFilter) -> Result<ResourceF
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
         || filter.values().is_empty()
         || filter.values().len() > 64
-        || (filter.field() == "assignment.resourceUid" && !filter.assignment_bound())
+        || (matches!(filter.field(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER)
+            && !filter.assignment_bound())
     {
         return Err(BusError::InvalidResourceCall);
     }
@@ -2713,6 +2764,28 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
+        if let Some((query, watch)) = match request.resource_call() {
+            Some(ResourceCall::List(query)) if query.scope().is_some() => Some((query, false)),
+            Some(ResourceCall::Watch(query)) if query.scope().is_some() => Some((query, true)),
+            _ => None,
+        } {
+            let filters = query
+                .filters
+                .iter()
+                .map(|filter| d2b_resource_store::StoreFilter {
+                    field: filter.field.clone(),
+                    values: filter.values.clone(),
+                })
+                .collect::<Vec<_>>();
+            outbound_frame = d2b_resource_api::attach_scoped_query_frame(
+                &outbound_frame,
+                query.resource_types(),
+                query.resource_names(),
+                &filters,
+                watch,
+            )
+            .map_err(|_| EndpointError::Rejected)?;
+        }
         if let Some(ResourceCall::ScopedCommitBatch {
             assignment,
             mutations,
@@ -5667,6 +5740,65 @@ use d2b_contracts_resource::v3::identity::{
             Err(BusError::Authorization(AuthorizationError::Native(
                 d2b_resource_api::authz::AuthorizationDenial::RelayTargetGrantMissing
             )))
+        );
+    }
+
+    #[test]
+    fn scoped_owner_child_queries_reject_non_process_and_mismatched_scope() {
+        let first = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let second = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"223e4567-e89b-42d3-a456-426614174001","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":10},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"223e4567-e89b-42d3-a456-426614174001","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let owner_uid = first.assignment().resource_uid().clone();
+        let owner_scope = first.mutations()[0].scope().clone();
+        let owner_filter = ResourceFilter::new(
+            OWNER_UID_FILTER,
+            vec![owner_uid.as_str().to_owned()],
+        )
+        .unwrap();
+        let zone = ZoneId::parse("dev").unwrap();
+
+        let non_process = ResourceQuery {
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![owner_filter.clone()],
+            assignment: Some(first.assignment().clone()),
+            scope: Some(owner_scope.clone()),
+        };
+        assert_eq!(
+            ResourceCall::List(non_process).authorization_request(zone.clone()),
+            Err(BusError::InvalidResourceCall)
+        );
+
+        let mismatched_scope = ResourceQuery {
+            resource_types: vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![owner_filter],
+            assignment: Some(second.assignment().clone()),
+            scope: Some(owner_scope),
+        };
+        assert_eq!(
+            ResourceCall::Watch(mismatched_scope).authorization_request(zone),
+            Err(BusError::InvalidResourceCall)
+        );
+    }
+
+    #[test]
+    fn unscoped_process_queries_remain_available_to_native_rbac() {
+        let query = ResourceQuery::new(
+            vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            ResourceCall::List(query)
+                .authorization_request(ZoneId::parse("dev").unwrap())
+                .is_ok()
         );
     }
 

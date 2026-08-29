@@ -10,8 +10,9 @@ use async_trait::async_trait;
 use d2b_bus::{
     AuthorizationError, BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId,
     EndpointError, OperationSpec, ResourceCall, RouteGenerations, RouteKey, RouteMember,
-    RouteTarget, ZoneBus, ZoneRegistrar,
+    ResourceQuery, RouteTarget, ZoneBus, ZoneRegistrar,
 };
+use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_provider::v3::{
     ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
     ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
@@ -36,6 +37,7 @@ use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentRequest, AssignmentVerb, ControllerAssignmentRegistry,
     ControllerRoleContract, ScopedCommitTransport,
 };
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_resource_api::authz::{
     ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
     CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
@@ -56,7 +58,7 @@ use d2b_session::{
     TransportPacket, serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
-use protobuf::Message;
+use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::sync::{Notify, mpsc};
 use ttrpc::proto::{MessageHeader, Request as TtrpcRequest};
 
@@ -578,7 +580,8 @@ fn assignment_fingerprint() -> SchemaFingerprint {
 }
 
 fn assignment_manifest() -> ProviderManifest {
-    let process = d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap();
+    let process =
+        d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
     let component = ComponentDescriptor::new(
         d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller")
             .unwrap(),
@@ -706,8 +709,13 @@ fn scoped_bus() -> (
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
         &catalog,
-        [d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap()],
-        [ResourceVerb::UpdateStatus, ResourceVerb::UpdateFinalizers],
+        [d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+        [
+            ResourceVerb::List,
+            ResourceVerb::Watch,
+            ResourceVerb::UpdateStatus,
+            ResourceVerb::UpdateFinalizers,
+        ],
         [
             SessionVerb::Connect,
             SessionVerb::Invoke,
@@ -769,6 +777,8 @@ fn scoped_bus() -> (
 struct ScopedStore {
     acceptor: MutationSealAcceptor,
     commits: std::sync::Arc<std::sync::Mutex<Vec<Vec<(ResourceMutationKind, bool)>>>>,
+    lists: std::sync::Arc<std::sync::Mutex<Vec<StoreListRequest>>>,
+    watches: std::sync::Arc<std::sync::Mutex<Vec<StoreWatchRequest>>>,
 }
 
 impl ResourceStoreBackend for ScopedStore {
@@ -776,12 +786,22 @@ impl ResourceStoreBackend for ScopedStore {
         unreachable!("scoped commit proof does not read through the backend")
     }
 
-    async fn list(&self, _: StoreListRequest) -> Result<StoreListResult, StoreError> {
-        unreachable!("scoped commit proof does not list through the backend")
+    async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
+        self.lists.lock().unwrap().push(request);
+        Ok(StoreListResult {
+            resources: Vec::new(),
+            snapshot_revision: ZoneRevision::new(8),
+            next_cursor: None,
+            truncated: false,
+        })
     }
 
-    async fn watch(&self, _: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
-        unreachable!("scoped commit proof does not watch through the backend")
+    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        self.watches.lock().unwrap().push(request);
+        Ok(StoreWatchReceipt {
+            stream_name: "scoped-watch".to_owned(),
+            snapshot_revision: ZoneRevision::new(8),
+        })
     }
 
     async fn resolve_ref(
@@ -825,7 +845,7 @@ fn commit_batch_frame(operation_id: &str) -> Vec<u8> {
     let envelope = assignment_resource();
     let identity = d2b_contracts_resource::resource_proto::ResourceIdentity {
         zone: "dev".to_owned(),
-        resource_type: "Process".to_owned(),
+        resource_type: PROCESS_RESOURCE_TYPE.to_owned(),
         name: "work".to_owned(),
         uid: Some(envelope.metadata().uid().as_str().to_owned()),
         generation: Some(envelope.metadata().generation().get()),
@@ -885,6 +905,240 @@ fn commit_batch_frame(operation_id: &str) -> Vec<u8> {
     frame
 }
 
+fn query_frame(method: &str) -> Vec<u8> {
+    let mut meta = resource_wire::RequestMeta::new();
+    meta.operation_id = format!("query-{method}");
+    meta.idempotency_key = format!("query-{method}-key");
+    meta.correlation_id = format!("query-{method}-correlation");
+    meta.deadline_ms = 10_000;
+    let payload = if method == "Watch" {
+        let mut request = resource_wire::WatchRequest::new();
+        request.meta = MessageField::some(meta);
+        request.resource_types.push("Host".to_owned());
+        request.filters.push(resource_wire::ListFilter {
+            field: "metadata.name".to_owned(),
+            values: vec!["caller-supplied".to_owned()],
+            ..resource_wire::ListFilter::default()
+        });
+        let mut projection = resource_wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(
+            resource_wire::ProjectionKind::PROJECTION_KIND_FULL,
+        );
+        request.projection = MessageField::some(projection);
+        request.write_to_bytes().unwrap()
+    } else {
+        let mut request = resource_wire::ListRequest::new();
+        request.meta = MessageField::some(meta);
+        request.resource_types.push("Host".to_owned());
+        request.filters.push(resource_wire::ListFilter {
+            field: "metadata.name".to_owned(),
+            values: vec!["caller-supplied".to_owned()],
+            ..resource_wire::ListFilter::default()
+        });
+        let mut projection = resource_wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(
+            resource_wire::ProjectionKind::PROJECTION_KIND_FULL,
+        );
+        request.projection = MessageField::some(projection);
+        request.write_to_bytes().unwrap()
+    };
+    let rpc = TtrpcRequest {
+        service: "d2b.resource.v3.ResourceService".to_owned(),
+        method: method.to_owned(),
+        payload,
+        ..TtrpcRequest::default()
+    };
+    let body = rpc.write_to_bytes().unwrap();
+    let header = MessageHeader::new_request(1, body.len() as u32);
+    let mut frame = Vec::with_capacity(ttrpc::proto::MESSAGE_HEADER_LENGTH + body.len());
+    frame.extend_from_slice(&Vec::from(header));
+    frame.extend_from_slice(&body);
+    frame
+}
+
+#[tokio::test]
+async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
+    let (_bus, mut registrar, assignments, native, state) = scoped_bus();
+    let resource = assignment_resource();
+    let role = ControllerRoleContract::from_signed_manifest(
+        ResourceRef::parse("Provider/system-core").unwrap(),
+        ResourceRef::parse("Process/process-controller").unwrap(),
+        &assignment_manifest(),
+    )
+    .unwrap();
+    let lease = assignments
+        .lock()
+        .unwrap()
+        .admit(AssignmentRequest::new(
+            &resource,
+            &role,
+            ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+            true,
+        ))
+        .unwrap();
+    let owner_uid = resource.metadata().uid().clone();
+    let query = ResourceQuery::from_scoped(
+        lease
+            .child_query(
+                vec![d2b_contracts_resource::v3::ResourceTypeName::parse(
+                    PROCESS_RESOURCE_TYPE,
+                )
+                .unwrap()],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        lease.child_query(
+            vec![d2b_contracts_resource::v3::ResourceTypeName::parse("Host").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        ),
+        Err(AssignmentError::QueryWidened)
+    );
+
+    let store_identity = StoreSealIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        ZoneId::parse("dev").unwrap(),
+        ResourceUid::parse("99999999-9999-4999-8999-999999999999").unwrap(),
+    );
+    let acceptor = native.take_store_seal(store_identity).unwrap();
+    let lists = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let store = Arc::new(ScopedStore {
+        acceptor,
+        commits: Arc::new(std::sync::Mutex::new(Vec::new())),
+        lists: Arc::clone(&lists),
+        watches: Arc::clone(&watches),
+    });
+    let service = Arc::new(ResourceService::new(Arc::clone(&store), Arc::clone(&native)).unwrap());
+    let (resource_endpoint, resource_remote, resource_echo) = admit_without_echo(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let endpoint_subject = native
+        .issue_authenticated_subject(
+            resource_endpoint.route_binding().context().clone(),
+            state,
+        )
+        .unwrap();
+    let adapter = Arc::new(ResourceBusAdapter::bind_component_session(service, endpoint_subject).unwrap());
+    let service_task = tokio::spawn(serve_ttrpc_services(
+        Arc::new(resource_remote),
+        adapter.ttrpc_services(),
+    ));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let _resource_ingress = registrar
+        .register_component_session(resource_endpoint)
+        .await
+        .unwrap();
+
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    for (method, call) in [
+        ("List", ResourceCall::List(query.clone())),
+        ("Watch", ResourceCall::Watch(query)),
+    ] {
+        let response = caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    &format!("ResourceService/{method}"),
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(
+                    OperationId::parse(&format!("owner-child-{method}")).unwrap(),
+                    10_000,
+                )
+                .unwrap(),
+                call,
+                query_frame(method),
+            )
+            .await
+            .unwrap();
+        let response = ttrpc::proto::Response::parse_from_bytes(
+            &response.as_bytes()[ttrpc::proto::MESSAGE_HEADER_LENGTH..],
+        )
+        .unwrap();
+        assert_eq!(
+            response.status.as_ref().map(|status| status.code()),
+            Some(ttrpc::proto::Code::OK),
+            "ttrpc status: {:?}",
+            response.status
+        );
+        if method == "List" {
+            let response = resource_wire::ListResponse::parse_from_bytes(&response.payload).unwrap();
+            assert!(response.error.is_none());
+            assert_eq!(response.snapshot_revision, 8);
+        } else {
+            let response =
+                resource_wire::WatchResponse::parse_from_bytes(&response.payload).unwrap();
+            assert!(response.error.is_none());
+            assert_eq!(response.snapshot_revision, 8);
+        }
+    }
+
+    let lists = lists.lock().unwrap();
+    assert_eq!(lists.len(), 1);
+    assert_eq!(
+        lists[0].resource_types,
+        vec![
+            d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()
+        ]
+    );
+    assert_eq!(lists[0].resource_names, Vec::new());
+    assert_eq!(lists[0].filters.len(), 1);
+    assert_eq!(lists[0].filters[0].field, "owner.resourceUid");
+    assert_eq!(lists[0].filters[0].values, vec![owner_uid.as_str().to_owned()]);
+    drop(lists);
+
+    let watches = watches.lock().unwrap();
+    assert_eq!(watches.len(), 1);
+    assert_eq!(
+        watches[0].resource_types,
+        vec![
+            d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()
+        ]
+    );
+    assert_eq!(watches[0].resource_names, Vec::new());
+    assert_eq!(watches[0].filters.len(), 1);
+    assert_eq!(watches[0].filters[0].field, "owner.resourceUid");
+    assert_eq!(watches[0].filters[0].values, vec![owner_uid.as_str().to_owned()]);
+
+    service_task.abort();
+    let _ = service_task.await;
+    resource_echo.abort();
+    caller_echo.abort();
+}
+
 #[tokio::test]
 async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
@@ -938,9 +1192,13 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     );
     let acceptor = native.take_store_seal(store_identity).unwrap();
     let commits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lists = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let store = std::sync::Arc::new(ScopedStore {
         acceptor,
         commits: std::sync::Arc::clone(&commits),
+        lists: Arc::clone(&lists),
+        watches: Arc::clone(&watches),
     });
     let service = std::sync::Arc::new(
         ResourceService::new(
