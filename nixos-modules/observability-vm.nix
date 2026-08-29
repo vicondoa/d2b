@@ -35,7 +35,7 @@ in
 
       config = {
         imports = [
-          ../packages/d2b-provider-observability-otel/nix/stack.nix
+          ./components/observability/stack.nix
         ];
         d2b.observability = {
           retention = lib.mkDefault cfg.retention;
