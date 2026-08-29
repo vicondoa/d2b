@@ -3,9 +3,10 @@
 let
   cfg = config.d2b;
   d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  enabledVms = d2bLib.enabledVms gatewayVms;
+  normalNixosVms = d2bLib.normalNixosVms gatewayVms;
+  qemuMediaVms = d2bLib.qemuMediaVms gatewayVms;
   tpmVms = lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms;
   audioVms = lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms;
   processDags = cfg._bundle.processesJson.data.vms or [ ];

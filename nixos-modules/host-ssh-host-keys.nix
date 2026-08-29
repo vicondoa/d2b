@@ -41,7 +41,7 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  normalNixosVms = d2bLib.normalNixosVms (d2bLib.gatewayVms cfg);
 
   # Path strings used both here AND in store.nix's share declaration
   # AND in guest-sshd-host-keys.nix. Encoded as a `let` here so the

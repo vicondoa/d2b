@@ -51,8 +51,8 @@ use crate::clipd_host::protocol::{
     RealmKind,
 };
 use crate::clipd_host::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
-use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
+use d2b_contracts::workload_identity::WorkloadTarget;
+use d2b_contracts_resource::v3::WorkloadProviderKind;
 use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 

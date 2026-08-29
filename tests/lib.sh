@@ -658,6 +658,17 @@ flake.nixosModules.default
             lanSubnet = "10.20.0.0/24";
             uplinkSubnet = "192.0.2.0/30";
           };
+          d2b.realms.work = {
+            placement = "gateway-vm";
+            env = "work";
+            network.envs = [ "work" ];
+            workloads.corp = {
+              enable = true;
+              kind = "local-vm";
+              legacyVmName = "corp-vm";
+              launcher.label = "Corp VM";
+            };
+          };
           d2b.vms.corp-vm = {
             enable = true; env = "work"; index = 10; ssh.user = "alice";
             config = {

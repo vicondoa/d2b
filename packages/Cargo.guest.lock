@@ -981,6 +981,7 @@ dependencies = [
  "azure_core",
  "base64",
  "chacha20poly1305",
+ "d2b-contracts-resource",
  "d2b-gateway",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",
@@ -999,6 +1000,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
+ "zeroize",
 ]
 
 [[package]]
@@ -1085,11 +1087,10 @@ name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
  "command-fds",
+ "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "env_logger",
  "html2text",
  "log",
@@ -1170,9 +1171,7 @@ dependencies = [
  "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "d2b-session",
  "env_logger",
  "getrandom 0.2.17",
@@ -1352,13 +1351,20 @@ dependencies = [
  "async-trait",
  "base64",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
+ "d2b-session",
+ "futures-util",
  "hmac",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "urlencoding",
+ "webpki-roots 0.26.11",
  "zeroize",
 ]
 

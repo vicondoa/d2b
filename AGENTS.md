@@ -6,17 +6,24 @@ configuration, start with [`README.md`](README.md).
 
 d2b is an opinionated NixOS desktop microVM framework for a single trusted
 Wayland host and untrusted, isolated workloads. Its daemon-only control plane
-is `d2bd` plus `d2b-broker`; its declarative modules own networking,
-per-VM store views, mediated devices, and versioned bundle contracts.
+is `d2bd` plus `d2b-broker`; Zone-owned resources and declarative modules own
+networking, per-Zone runtime isolation, per-Guest store views, mediated
+devices, and versioned bundle contracts. Generic environment terminology may
+describe workload context, but Zone is the only active product and
+control-plane hierarchy. Real Unix users and authorization groups remain
+host admission mechanisms, not product grouping.
 Product direction is in [`STRATEGY.md`](./STRATEGY.md); the threat model is
 in [`docs/explanation/design.md`](./docs/explanation/design.md). Binding
 decisions include [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md),
 [ADR 0018](./docs/adr/0018-microvm-nix-removal.md), [ADR
 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md), [ADR
-0032](./docs/adr/0032-d2b-v2-constellation-control-plane.md), [ADR
+0032](./docs/adr/0032-d2b-v2-constellation-control-plane.md), the historical
+constellation model, [ADR
 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md), and
-[ADR 0043](./docs/adr/0043-realm-native-control-plane.md), the accepted
-realm-native successor.
+[ADR 0043](./docs/adr/0043-realm-native-control-plane.md), the historical
+realm-native and gateway-isolation predecessor, and [ADR
+0046](./docs/adr/0046-d2b-3-provider-control-plane.md), the current
+Zone-native control-plane decision.
 
 Existing code is canon. When a plan, specification, README, or reference
 document disagrees with committed, passing code, keep the code and document
@@ -148,8 +155,9 @@ The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).
 Read the relevant section before changing any of these:
 
-- networking and firewall neutralization; per-VM closure-only `/nix/store`;
-  TPM persistence; USBIP; GPU and video sidecars; audio; UI color contract;
+- networking and firewall neutralization; per-Zone runtime isolation and
+  closure-only per-Guest `/nix/store` views; TPM persistence; USBIP; GPU and
+  video sidecars; audio; UI color contract;
 - daemon and broker control plane; manifest and private bundle contracts;
   storage lifecycle, restart adoption, synchronization, and the **single
   repair owner** rule;
@@ -179,10 +187,11 @@ Read the relevant section before changing any of these:
 - Spell dashes with ASCII `-` only. The non-ASCII prohibition includes
   U+2010, U+2011, U+2012, U+2013, U+2014, U+2015, U+2212, U+FE58, and
   U+FF0D. Tests that need one use an escape such as `"\u{2014}"`.
-- Do not let the host hold realm credentials, remote node registries, provider
-  configuration, or realm audit. Keep them in the per-realm gateway guest;
-  relay identity is never local auth, and work and personal realms never share
-  a gateway guest or L2 bridge.
+- When gateway-backed isolation is used, do not let the host hold Gateway
+  Guest credentials, remote node registries, provider configuration, or Zone
+  audit. Keep them in the Gateway Guest execution context; relay identity is
+  never local auth, and separate Zones never share a gateway Guest or L2
+  bridge.
 - Do not add ad-hoc storage, ACL, cleanup, or lock ownership. Follow ADR 0034:
   broker-resolved opaque ids, anchored paths, `O_CLOEXEC` OFD locks, explicit
   fd transfer, restart adoption before cleanup, typed degraded state, and a
@@ -208,8 +217,9 @@ d2b declares exactly three root-visible units: `d2bd.service`,
 `d2b-broker.socket`, and `d2b-broker.service`. The binding decision
 is [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 
-- `d2bd` supervises every per-VM DAG. The broker dispatches audited host
-  mutations and launches runners through `SpawnRunner`, returning pidfds.
+- `d2bd` supervises each isolated Zone runtime and its Guest/Process DAG. The
+  broker dispatches audited host mutations and launches runners through
+  `SpawnRunner`, returning pidfds.
 - No framework-declared per-VM systemd units or host-singleton framework
   services exist. The Rust `d2b` binary is the only CLI surface.
 - The retired bash fallback and legacy environment knobs are removed or

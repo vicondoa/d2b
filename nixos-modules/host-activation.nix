@@ -35,8 +35,9 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  normalNixosVms = d2bLib.normalNixosVms gatewayVms;
+  qemuMediaVms = d2bLib.qemuMediaVms gatewayVms;
   roleAclVms = normalNixosVms // qemuMediaVms;
   prebuilt =
     if cfg.site.usePrebuiltHostTools
@@ -342,7 +343,7 @@ in
           ${pkgs.acl}/bin/setfacl -d -m "u:d2b-${name}-gpu:rw" /var/lib/d2b/vms/${name} || true
         fi
       '')
-      (lib.filterAttrs (_: vm: vm.graphics.enable) (d2bLib.normalNixosVms cfg.vms))));
+      (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms)));
 
   # TPM parent traversal ACLs are tmpfiles-owned. The swtpm subdir itself is
   # broker-provisioned at VM start (issue #64).
@@ -360,7 +361,7 @@ in
       (name: _: ''
           : # var.img ownership/creation is broker DiskInit-owned.
       '')
-      (lib.filterAttrs (_: vm: !vm.graphics.enable) (d2bLib.normalNixosVms cfg.vms))));
+      (lib.filterAttrs (_: vm: !vm.graphics.enable) normalNixosVms)));
 
   system.activationScripts.d2bMigrateOwnership = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
@@ -407,7 +408,7 @@ in
           fi
         ''}
       '')
-      (d2bLib.normalNixosVms cfg.vms)));
+      normalNixosVms));
 
   # Grant the ephemeral per-role UIDs from processes.json access to
   # the per-VM state directories. v1.1.1's `stablePrincipalId` mints a unique
@@ -423,6 +424,7 @@ in
     set +u
     bundle_json=/etc/d2b/processes.json
     if [ -r "$bundle_json" ]; then
+      :
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
           qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)

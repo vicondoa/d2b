@@ -129,7 +129,7 @@ use d2bd_runtime::resource_runtime_support::{
 use d2bd_runtime::resource_runtime_support::compatibility_error_envelope;
 pub use d2bd_runtime::resource_runtime_support::{
     ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
-    persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
+    persist_resource_status_with_projection,
 };
 use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
 use d2bd_runtime::zone_authority::{
@@ -1594,7 +1594,15 @@ impl ZoneResourceRuntime {
         &self,
         bundle: &ResourceBundle,
     ) -> Result<(), ResourceRuntimeError> {
-        self.materialize_desired_bundle(bundle).await?;
+        self.materialize_desired_bundle(bundle)
+            .await
+            .inspect_err(|error| {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    error = ?error,
+                    "resource runtime desired bundle materialization failed"
+                );
+            })?;
         if self.bootstrap_provisioned_store {
             let client = self.status_client()?;
             if let Some(authority) = self.authority_identity.as_ref() {
@@ -1604,9 +1612,24 @@ impl ZoneResourceRuntime {
                     &self.store,
                     &client,
                 )
-                .await?;
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "resource runtime Zone self bootstrap failed"
+                    );
+                })?;
             }
-            ensure_bootstrap_host_resource(&self.zone, &self.store, &client).await?;
+            ensure_bootstrap_host_resource(&self.zone, &self.store, &client)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "resource runtime Host bootstrap failed"
+                    );
+                })?;
         }
         Ok(())
     }
@@ -1769,6 +1792,21 @@ impl ZoneResourceRuntime {
     /// Borrow the authoritative Zone identity.
     pub const fn zone(&self) -> &ZoneId {
         &self.zone
+    }
+
+    /// Borrow the immutable Zone UID bound at production startup.
+    pub(crate) fn authority_zone_uid(&self) -> Option<&ResourceUid> {
+        self.authority_identity
+            .as_ref()
+            .map(ZoneAuthorityIdentity::zone_uid)
+    }
+
+    /// Borrow the content-addressed bundle generation bound at production
+    /// startup.
+    pub(crate) fn authority_bundle_generation(&self) -> Option<&ResourceBundleGenerationId> {
+        self.authority_identity
+            .as_ref()
+            .map(ZoneAuthorityIdentity::bundle_generation)
     }
 
     /// Borrow the opaque store id used for the broker request.
@@ -3359,6 +3397,143 @@ impl ZoneResourceRuntime {
         }
     }
 
+    /// Forward a public Resource request through the authenticated Gateway
+    /// Guest ComponentSession.
+    ///
+    /// The local runtime supplies only committed Zone metadata needed to
+    /// encode the public wire request. The Guest session owns authorization,
+    /// Provider execution, and the target store; no host Resource API client
+    /// is consulted for the forwarded operation.
+    pub(crate) async fn dispatch_gateway_resource_request(
+        &self,
+        session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
+        request: &Value,
+        operation_id: &str,
+    ) -> Result<Value, ResourceRuntimeError> {
+        if session.identity().zone() != &self.zone {
+            return Err(ResourceRuntimeError::RouteMismatch);
+        }
+        session
+            .identity()
+            .validate_route(&session.route_binding())
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        if !route_service_matches(request.get("service"), method)? {
+            return Err(ResourceRuntimeError::RouteMismatch);
+        }
+        let client = session.resource_service_client();
+        match method {
+            "Get" => {
+                let target = public_target_ref(request)?;
+                let mut meta = public_request_meta(operation_id);
+                meta.deadline_ms = 30_000;
+                let response = client
+                    .get(
+                        ttrpc::context::Context::default(),
+                        &wire::GetRequest {
+                            meta: protobuf::MessageField::some(meta),
+                            target: protobuf::MessageField::some(public_identity(
+                                self,
+                                target.resource_type(),
+                                target.name().as_str(),
+                                None,
+                                None,
+                                None,
+                            )),
+                            projection: {
+                                let mut projection = wire::Projection::new();
+                                projection.kind = protobuf::EnumOrUnknown::new(
+                                    wire::ProjectionKind::PROJECTION_KIND_FULL,
+                                );
+                                protobuf::MessageField::some(projection)
+                            },
+                            special_fields: protobuf::SpecialFields::new(),
+                        },
+                    )
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                d2bd_runtime::resource_runtime_support::encode_public_get_response(response)
+            }
+            "List" => {
+                let parsed = parse_list_request(request)?;
+                let response = client
+                    .list(
+                        ttrpc::context::Context::default(),
+                        &public_list_request(parsed, operation_id),
+                    )
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                d2bd_runtime::resource_runtime_support::encode_public_list_response(response)
+            }
+            "Create" => {
+                let request_wire = public_create_request(self, request, operation_id).await?;
+                let response = client
+                    .create(ttrpc::context::Context::default(), &request_wire)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                encode_public_create_response(response)
+            }
+            "UpdateSpec" => {
+                let target = public_target_ref(request)?;
+                let current = gateway_get_resource(&client, self, &target, operation_id).await?;
+                if current.get("type").and_then(Value::as_str) == Some("error") {
+                    return Ok(current);
+                }
+                let request_wire = public_update_spec_request_from_current(
+                    self,
+                    request,
+                    operation_id,
+                    &target,
+                    current,
+                )?;
+                let response = client
+                    .update_spec(ttrpc::context::Context::default(), &request_wire)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                encode_public_update_spec_response(response)
+            }
+            "UpdateStatus" => {
+                let target = public_target_ref(request)?;
+                let current = gateway_get_resource(&client, self, &target, operation_id).await?;
+                if current.get("type").and_then(Value::as_str) == Some("error") {
+                    return Ok(current);
+                }
+                let request_wire = public_update_status_request_from_current(
+                    self,
+                    request,
+                    operation_id,
+                    &target,
+                    current,
+                )?;
+                let response = client
+                    .update_status(ttrpc::context::Context::default(), &request_wire)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                encode_public_update_status_response(response)
+            }
+            "UpdateFinalizers" => {
+                let request_wire = public_update_finalizers_request(self, request, operation_id)?;
+                let response = client
+                    .update_finalizers(ttrpc::context::Context::default(), &request_wire)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                encode_public_update_finalizers_response(response)
+            }
+            "Delete" => {
+                let request_wire = public_delete_request(self, request, operation_id).await?;
+                let response = client
+                    .delete(ttrpc::context::Context::default(), &request_wire)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+                encode_public_delete_response(response)
+            }
+            _ => Err(ResourceRuntimeError::CapabilityUnavailable),
+        }
+    }
+
     /// Verify the trusted persisted Device row used by the TPM reconcile
     /// adapter and return Core's sealed legacy-state decision. The VM binding
     /// is read from the authenticated Device record, while the legacy-state
@@ -3488,14 +3663,54 @@ impl ZoneResourceRuntime {
         })
     }
 
-    /// Publish terminal broker evidence into the live store join index.
-    pub fn ingest_broker_evidence(
+    /// Record broker evidence for synchronous non-resource broker dispatches.
+    pub fn record_broker_evidence(
         &self,
         evidence: DurabilityEvidence,
     ) -> Result<(), ResourceRuntimeError> {
         self.store
-            .ingest_broker_evidence(evidence)
+            .broker_evidence_index()
+            .insert(evidence)
             .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Publish terminal broker evidence and drain the live store outbox.
+    pub async fn ingest_broker_evidence(
+        &self,
+        operation_id: &str,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.store
+            .ingest_broker_evidence(operation_id, evidence)
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Return every pending trusted-deferred activation outbox for this Zone.
+    pub(crate) async fn pending_trusted_activation_operation_ids(
+        &self,
+    ) -> Result<Vec<String>, ResourceRuntimeError> {
+        self.store
+            .pending_deferred_activation_operation_ids()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+    }
+
+    /// Refuse publication while any trusted-deferred activation outbox remains.
+    pub(crate) async fn require_trusted_activation_outboxes_drained(
+        &self,
+    ) -> Result<(), ResourceRuntimeError> {
+        match self
+            .store
+            .require_no_pending_deferred_activation_outboxes()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.reason_code() == "audit-deferred-evidence-pending" => {
+                Err(ResourceRuntimeError::HandlerNotReady)
+            }
+            Err(_) => Err(ResourceRuntimeError::StoreOpenFailed),
+        }
     }
 
     fn tpm_device_targets_vm(resource: &Value, vm_id: &str) -> bool {
@@ -4793,6 +5008,16 @@ async fn public_update_spec_request(
 ) -> Result<wire::UpdateSpecRequest, ResourceRuntimeError> {
     let target = public_target_ref(request)?;
     let current = public_get_resource(client, runtime, &target, operation_id).await?;
+    public_update_spec_request_from_current(runtime, request, operation_id, &target, current)
+}
+
+fn public_update_spec_request_from_current(
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+    target: &ResourceRef,
+    current: Value,
+) -> Result<wire::UpdateSpecRequest, ResourceRuntimeError> {
     let spec = request
         .get("spec")
         .cloned()
@@ -4830,6 +5055,16 @@ async fn public_update_status_request(
 ) -> Result<wire::UpdateStatusRequest, ResourceRuntimeError> {
     let target = public_target_ref(request)?;
     let current = public_get_resource(client, runtime, &target, operation_id).await?;
+    public_update_status_request_from_current(runtime, request, operation_id, &target, current)
+}
+
+fn public_update_status_request_from_current(
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+    target: &ResourceRef,
+    current: Value,
+) -> Result<wire::UpdateStatusRequest, ResourceRuntimeError> {
     let status = request
         .get("status")
         .cloned()
@@ -5031,6 +5266,41 @@ async fn public_get_resource(
         .as_ref()
         .ok_or(ResourceRuntimeError::ResponseInvalid)?;
     encode_public_resource(resource)
+}
+
+async fn gateway_get_resource(
+    client: &d2b_resource_api::generated::d2b_resource_v3_ttrpc::ResourceServiceClient,
+    runtime: &ZoneResourceRuntime,
+    target: &ResourceRef,
+    operation_id: &str,
+) -> Result<Value, ResourceRuntimeError> {
+    let mut meta = public_request_meta(operation_id);
+    meta.deadline_ms = 30_000;
+    let response = client
+        .get(
+            ttrpc::context::Context::default(),
+            &wire::GetRequest {
+                meta: protobuf::MessageField::some(meta),
+                target: protobuf::MessageField::some(public_identity(
+                    runtime,
+                    target.resource_type(),
+                    target.name().as_str(),
+                    None,
+                    None,
+                    None,
+                )),
+                projection: {
+                    let mut projection = wire::Projection::new();
+                    projection.kind =
+                        protobuf::EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+                    protobuf::MessageField::some(projection)
+                },
+                special_fields: protobuf::SpecialFields::new(),
+            },
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::ProviderPathUnavailable)?;
+    d2bd_runtime::resource_runtime_support::encode_public_get_response(response)
 }
 
 fn public_identity(
@@ -5810,6 +6080,10 @@ fn parse_network_marker(marker: &str) -> Option<(NetworkAdmissionKey, String)> {
 pub struct ResourcePlane {
     zones: BTreeMap<ZoneId, Arc<ZoneResourceRuntime>>,
     network_admission_index: Arc<tokio::sync::Mutex<HostNetworkAdmissionIndex>>,
+    topology_root: Option<ZoneId>,
+    gateway_zone_links:
+        BTreeMap<ZoneId, Arc<crate::ZoneLinkGatewayComposition>>,
+    gateway_zone_link_refused: BTreeSet<ZoneId>,
 }
 
 impl core::fmt::Debug for ResourcePlane {
@@ -5829,6 +6103,9 @@ impl ResourcePlane {
             network_admission_index: Arc::new(tokio::sync::Mutex::new(
                 HostNetworkAdmissionIndex::default(),
             )),
+            topology_root: None,
+            gateway_zone_links: BTreeMap::new(),
+            gateway_zone_link_refused: BTreeSet::new(),
         }
     }
 
@@ -5837,6 +6114,16 @@ impl ResourcePlane {
         &self,
     ) -> Arc<tokio::sync::Mutex<HostNetworkAdmissionIndex>> {
         Arc::clone(&self.network_admission_index)
+    }
+
+    /// Bind the sealed topology root selected during Zone publication.
+    pub(crate) fn set_topology_root(&mut self, root: ZoneId) {
+        self.topology_root = Some(root);
+    }
+
+    /// Borrow the sealed topology root.
+    pub(crate) fn topology_root(&self) -> Option<&ZoneId> {
+        self.topology_root.as_ref()
     }
 
     /// Insert a freshly opened Zone runtime.
@@ -5864,13 +6151,13 @@ impl ResourcePlane {
             .ok_or(ResourceRuntimeError::PlaneUnavailable)
     }
 
-    /// Ingest one terminal broker result into every Zone's shared live index.
-    pub fn ingest_broker_evidence(
+    /// Record one terminal broker result in every Zone's shared live index.
+    pub fn record_broker_evidence(
         &self,
         evidence: DurabilityEvidence,
     ) -> Result<(), ResourceRuntimeError> {
         for runtime in self.zones.values() {
-            runtime.ingest_broker_evidence(evidence.clone())?;
+            runtime.record_broker_evidence(evidence.clone())?;
         }
         Ok(())
     }
@@ -5897,6 +6184,40 @@ impl ResourcePlane {
     /// Return the authoritative Zone identities currently owned by the plane.
     pub fn zone_ids(&self) -> Vec<ZoneId> {
         self.zones.keys().cloned().collect()
+    }
+
+    /// Install the one child-local Gateway Guest composition for a Zone.
+    pub(crate) fn insert_gateway_zone_link(
+        &mut self,
+        composition: crate::ZoneLinkGatewayComposition,
+    ) -> Result<(), ResourceRuntimeError> {
+        let zone = composition.zone().clone();
+        if self.gateway_zone_links.contains_key(&zone) {
+            return Err(ResourceRuntimeError::DuplicateZone);
+        }
+        self.gateway_zone_link_refused.remove(&zone);
+        self.gateway_zone_links
+            .insert(zone, Arc::new(composition));
+        Ok(())
+    }
+
+    /// Mark a committed gateway-backed Zone as refused so public dispatch
+    /// cannot fall back to its host-local Resource API.
+    pub(crate) fn refuse_gateway_zone_link(&mut self, zone: ZoneId) {
+        self.gateway_zone_link_refused.insert(zone);
+    }
+
+    /// Return whether a committed gateway-backed Zone failed composition.
+    pub(crate) fn gateway_zone_link_is_refused(&self, zone: &ZoneId) -> bool {
+        self.gateway_zone_link_refused.contains(zone)
+    }
+
+    /// Borrow a Zone's Gateway Guest route composition, when one is installed.
+    pub(crate) fn gateway_zone_link(
+        &self,
+        zone: &ZoneId,
+    ) -> Option<Arc<crate::ZoneLinkGatewayComposition>> {
+        self.gateway_zone_links.get(zone).cloned()
     }
 
     /// Drain runtimes and close every production backend.

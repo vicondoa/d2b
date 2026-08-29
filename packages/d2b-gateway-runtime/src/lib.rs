@@ -23,6 +23,362 @@ pub mod credential;
 pub mod display_listener;
 pub mod production;
 pub mod relay_bridge;
+pub mod zone_link {
+//! Gateway Guest-local ZoneLink transport composition.
+
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+    sync::Arc,
+};
+
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_provider_transport_azure_relay::{
+    AzureRelaySocketConnector, AzureRelayTransportProvider, RelayComponentSessionTransport,
+    RelayCredentialBinding, RelayCredentialRole, RelayEnrollmentProof, RelayEnrollmentVerifier,
+    RelayRole, RelayTransportConfig, RelayTransportError, RelayTransportSettings,
+};
+
+use crate::{
+    CredentialError, CredentialFilePolicy, GatewayGuestCredentialPort, SealingKey, system_now_unix,
+};
+
+/// Closed failures while composing the Gateway Guest ZoneLink transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayGuestZoneLinkError {
+    /// The execution or egress Network reference has the wrong ResourceType.
+    InvalidPlacement,
+    /// The Guest-local sealed credential or sealing key could not be opened.
+    CredentialUnavailable,
+    /// The selected Relay Provider rejected its non-secret configuration.
+    TransportConfiguration,
+    /// The Relay carriage or its enrollment proof was refused.
+    TransportUnavailable,
+    /// The non-secret Guest-local open observation could not be persisted.
+    ObservationUnavailable,
+}
+
+impl GatewayGuestZoneLinkError {
+    /// Return the stable path-free error code.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidPlacement => "gateway-guest-zonelink-placement-invalid",
+            Self::CredentialUnavailable => "gateway-guest-zonelink-credential-unavailable",
+            Self::TransportConfiguration => "gateway-guest-zonelink-transport-invalid",
+            Self::TransportUnavailable => "gateway-guest-zonelink-transport-unavailable",
+            Self::ObservationUnavailable => "gateway-guest-zonelink-observation-unavailable",
+        }
+    }
+}
+
+impl std::fmt::Display for GatewayGuestZoneLinkError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for GatewayGuestZoneLinkError {}
+
+impl From<CredentialError> for GatewayGuestZoneLinkError {
+    fn from(_: CredentialError) -> Self {
+        Self::CredentialUnavailable
+    }
+}
+
+impl From<RelayTransportError> for GatewayGuestZoneLinkError {
+    fn from(_: RelayTransportError) -> Self {
+        Self::TransportUnavailable
+    }
+}
+
+/// Gateway Guest-local Azure Relay Provider and credential boundary.
+///
+/// The sealed credential is opened only by this Guest-local constructor. The
+/// resulting Provider never exposes credential bytes and returns only an
+/// authenticated `OwnedTransport` carrying protected ComponentSession data.
+pub struct GatewayGuestZoneLinkRuntime {
+    provider: AzureRelayTransportProvider<GatewayGuestCredentialPort, AzureRelaySocketConnector>,
+    credential_generation: u64,
+    credential_send_key_digest: [u8; 32],
+}
+
+impl std::fmt::Debug for GatewayGuestZoneLinkRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GatewayGuestZoneLinkRuntime(<redacted>)")
+    }
+}
+
+impl GatewayGuestZoneLinkRuntime {
+    /// Open the Guest-local sealed credential and compose the Relay Provider.
+    pub fn from_sealed(
+        credential_path: impl AsRef<Path>,
+        seal_key_path: impl AsRef<Path>,
+        execution_ref: ResourceRef,
+        network_ref: ResourceRef,
+        settings: RelayTransportSettings,
+        max_concurrent_sessions: u32,
+        connect_timeout_seconds: u32,
+        policy: &CredentialFilePolicy,
+    ) -> Result<Self, GatewayGuestZoneLinkError> {
+        if execution_ref.resource_type().as_str() != "Guest"
+            || network_ref.resource_type().as_str() != "Network"
+        {
+            return Err(GatewayGuestZoneLinkError::InvalidPlacement);
+        }
+        let sealing_key = SealingKey::load(seal_key_path, policy)?;
+        let credentials = GatewayGuestCredentialPort::from_sealed(
+            credential_path,
+            &sealing_key,
+            policy,
+            system_now_unix(),
+        )?;
+        let credential_generation = credentials.credential_generation();
+        let credential_send_key_digest = credentials.safe_observation_digest();
+        let provider = AzureRelayTransportProvider::new(
+            RelayTransportConfig {
+                execution_ref,
+                network_ref,
+                max_concurrent_sessions,
+                connect_timeout_seconds,
+            },
+            d2b_provider_transport_azure_relay::RelayEndpoint { settings },
+            Arc::new(credentials),
+            Arc::new(AzureRelaySocketConnector::new()),
+        )
+        .map_err(|_| GatewayGuestZoneLinkError::TransportConfiguration)?;
+        Ok(Self {
+            provider,
+            credential_generation,
+            credential_send_key_digest,
+        })
+    }
+
+    /// Persist a non-secret marker after the sealed credential and Guest
+    /// runtime have been successfully composed.
+    pub fn write_open_observation(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), GatewayGuestZoneLinkError> {
+        let path = path.as_ref();
+        let parent = path
+            .parent()
+            .ok_or(GatewayGuestZoneLinkError::ObservationUnavailable)?;
+        fs::create_dir_all(parent)
+            .map_err(|_| GatewayGuestZoneLinkError::ObservationUnavailable)?;
+        let file_name = path
+            .file_name()
+            .ok_or(GatewayGuestZoneLinkError::ObservationUnavailable)?
+            .to_string_lossy();
+        let temporary = parent.join(format!(".{file_name}.{}", std::process::id()));
+        let marker = format!(
+            "schemaVersion=1\ngeneration={}\ndigest=sha256:{}\n",
+            self.credential_generation,
+            digest_hex(&self.credential_send_key_digest),
+        );
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temporary)
+                .map_err(|_| GatewayGuestZoneLinkError::ObservationUnavailable)?;
+            file.write_all(marker.as_bytes())
+                .map_err(|_| GatewayGuestZoneLinkError::ObservationUnavailable)?;
+            file.sync_all()
+                .map_err(|_| GatewayGuestZoneLinkError::ObservationUnavailable)?;
+            fs::rename(&temporary, path)
+                .map_err(|_| GatewayGuestZoneLinkError::ObservationUnavailable)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+
+    /// Open and enroll one exact Relay carriage for a ZoneLink session.
+    pub async fn open_authenticated_transport<V: RelayEnrollmentVerifier>(
+        &self,
+        role: RelayRole,
+        binding: RelayCredentialBinding,
+        deadline_ms: u32,
+        verifier: &V,
+        transcript: &[u8],
+    ) -> Result<RelayComponentSessionTransport, GatewayGuestZoneLinkError> {
+        let connection = self
+            .provider
+            .open_bound(role, binding, deadline_ms)
+            .await
+            .map_err(GatewayGuestZoneLinkError::from)?;
+        let proof = RelayEnrollmentProof::authenticate(
+            verifier,
+            transcript,
+            &connection.enrollment_challenge(),
+        )
+        .map_err(|_| GatewayGuestZoneLinkError::TransportUnavailable)?;
+        connection
+            .enroll(proof)
+            .await
+            .map_err(GatewayGuestZoneLinkError::from)?;
+        Ok(RelayComponentSessionTransport::from_connection(connection))
+    }
+
+    /// Return the Guest-local Relay Provider's exact credential role mapping.
+    pub const fn credential_role(role: RelayRole) -> RelayCredentialRole {
+        match role {
+            RelayRole::Listener => RelayCredentialRole::Listen,
+            RelayRole::Sender => RelayCredentialRole::Send,
+        }
+    }
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GatewayCredential;
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::Path;
+
+    fn sealed_runtime(dir: &Path) -> GatewayGuestZoneLinkRuntime {
+        let credential_path = dir.join("credential.sealed.json");
+        let seal_key = SealingKey::from_bytes([7_u8; crate::GATEWAY_SEAL_KEY_LEN]);
+        GatewayCredential::enroll_sealed(
+            &credential_path,
+            &seal_key,
+            crate::GatewayCredentialMaterial {
+                listen_key_name: "gateway-listen".to_owned(),
+                listen_key: "listen-secret".to_owned(),
+                send_key_name: "gateway-send".to_owned(),
+                send_key: "send-secret".to_owned(),
+            },
+            crate::CredentialEnvelopeMeta::first(None),
+            1,
+        )
+        .expect("sealed credential");
+        let seal_key_path = dir.join("seal.key");
+        fs::write(&seal_key_path, [7_u8; crate::GATEWAY_SEAL_KEY_LEN]).expect("seal key");
+        fs::set_permissions(&seal_key_path, fs::Permissions::from_mode(0o600))
+            .expect("seal key mode");
+        GatewayGuestZoneLinkRuntime::from_sealed(
+            credential_path,
+            seal_key_path,
+            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
+            32,
+            30,
+            &CredentialFilePolicy::default(),
+        )
+        .expect("Guest runtime")
+    }
+
+    #[test]
+    fn relay_roles_are_selected_without_exposing_credential_material() {
+        assert_eq!(
+            GatewayGuestZoneLinkRuntime::credential_role(RelayRole::Listener),
+            RelayCredentialRole::Listen
+        );
+        assert_eq!(
+            GatewayGuestZoneLinkRuntime::credential_role(RelayRole::Sender),
+            RelayCredentialRole::Send
+        );
+    }
+
+    #[test]
+    fn host_execution_is_refused_before_guest_credential_open() {
+        let result = GatewayGuestZoneLinkRuntime::from_sealed(
+            "credential.sealed.json",
+            "seal.key",
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("Network/relay").unwrap(),
+            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").unwrap(),
+            32,
+            30,
+            &CredentialFilePolicy::default(),
+        );
+        assert!(matches!(
+            result,
+            Err(GatewayGuestZoneLinkError::InvalidPlacement)
+        ));
+    }
+
+    #[test]
+    fn open_observation_is_emitted_only_after_successful_sealed_open() {
+        let dir = tempfile::tempdir().expect("temporary Guest state");
+        let runtime = sealed_runtime(dir.path());
+        let marker = dir.path().join("opened");
+
+        runtime
+            .write_open_observation(&marker)
+            .expect("open observation");
+
+        let marker_text = fs::read_to_string(marker).expect("marker");
+        assert_eq!(
+            fs::metadata(dir.path().join("opened"))
+                .expect("marker metadata")
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(marker_text.contains("schemaVersion=1\n"));
+        assert!(marker_text.contains("generation=1\n"));
+        assert!(marker_text.contains("digest=sha256:"));
+        assert!(!marker_text.contains("listen-secret"));
+        assert!(!marker_text.contains("send-secret"));
+    }
+
+    #[test]
+    fn missing_or_invalid_sealed_open_emits_no_observation() {
+        let dir = tempfile::tempdir().expect("temporary Guest state");
+        let missing_marker = dir.path().join("missing-opened");
+        let missing = GatewayGuestZoneLinkRuntime::from_sealed(
+            dir.path().join("missing.sealed.json"),
+            dir.path().join("missing.key"),
+            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
+            32,
+            30,
+            &CredentialFilePolicy::default(),
+        );
+        assert!(missing.is_err());
+        assert!(!missing_marker.exists());
+
+        let invalid_credential = dir.path().join("invalid.sealed.json");
+        let invalid_key = dir.path().join("invalid.key");
+        fs::write(&invalid_credential, b"not-a-sealed-envelope").expect("invalid credential");
+        fs::write(&invalid_key, [7_u8; crate::GATEWAY_SEAL_KEY_LEN]).expect("invalid key");
+        fs::set_permissions(&invalid_credential, fs::Permissions::from_mode(0o600))
+            .expect("invalid credential mode");
+        fs::set_permissions(&invalid_key, fs::Permissions::from_mode(0o600))
+            .expect("invalid key mode");
+        let invalid_marker = dir.path().join("invalid-opened");
+        let invalid = GatewayGuestZoneLinkRuntime::from_sealed(
+            invalid_credential,
+            invalid_key,
+            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+            ResourceRef::parse("Network/relay-egress").expect("Network ref"),
+            RelayTransportSettings::new("relns-d2b-prod", "hc-d2b").expect("Relay settings"),
+            32,
+            30,
+            &CredentialFilePolicy::default(),
+        );
+        assert!(invalid.is_err());
+        assert!(!invalid_marker.exists());
+    }
+}
+
+}
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
     default_entra_token_snippet, relay_sas_token_snippet,
@@ -31,11 +387,13 @@ pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
 pub use credential::{
     CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
     GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
-    GatewayCredential, GatewayCredentialMaterial, MintedRelaySendToken, SealingKey,
+    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort,
+    MintedRelaySendToken, SealingKey,
 };
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;
 pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
+pub use zone_link::{GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime};
 
 use d2b_gateway::{
     Handshake, SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame,

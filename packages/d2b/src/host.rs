@@ -4,11 +4,16 @@ use clap::{Args, Subcommand};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    CliFailure,
-    context::{OutputMode, RequestDeadline, ZoneContext},
+    CliFailure, doctor, host_validate, print_json, print_stdout,
+    context::{CliContext, OutputMode, RequestDeadline, ZoneContext},
+    dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
     dispatch::{GenericGetArgs, GenericListArgs},
     resource,
 };
+use d2b_contracts_control::cli_output::{
+    HostCheckFindingV2, HostCheckOutputV2, HostCheckSeverityV2, HostCheckSummaryV2,
+};
+use d2b_core::host_check;
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct HostArgs {
@@ -164,17 +169,17 @@ pub(crate) fn run(
         HostCommand::Destroy(args) => mutation(context, "destroy", args, mode, deadline),
         HostCommand::Doctor(args) => {
             if !args.read_only {
-                // Keep the established command-local refusal envelope. This
-                // helper only renders the mandatory-flag error; it does not
-                // open a daemon, broker, SSH, or executable fallback path.
-                let legacy = crate::LegacyContext::from_env()?;
-                return crate::cmd_host_doctor(
-                    &legacy,
-                    &crate::HostDoctorArgs {
-                        read_only: false,
-                        json: mode.is_json(),
-                        human: !mode.is_json(),
-                    },
+                return emit_host_error(
+                    &host_error_envelope(
+                        "host doctor requires the explicit --read-only flag",
+                        "--read-only-required",
+                        78,
+                        "host doctor invocation flags.",
+                        "--read-only flag missing",
+                        "Re-run as `d2b host doctor --read-only`. The doctor verb is read-only; mutation forms are future deliverables.",
+                        "docs/reference/error-codes.md#--read-only-required",
+                    ),
+                    mode.is_json(),
                 );
             }
             let value = match context.invoke(
@@ -193,22 +198,7 @@ pub(crate) fn run(
             Ok(0)
         }
         HostCommand::Install(args) => install(context, args, mode, deadline),
-        HostCommand::Validate(args) => {
-            let legacy = crate::LegacyContext::from_env()?;
-            crate::cmd_host_validate(
-                &legacy,
-                &crate::HostValidateArgs {
-                    dry_run: args.dry_run,
-                    apply: args.apply,
-                    wave: args.wave.clone(),
-                    operator_signature: args.operator_signature.clone(),
-                    evidence_dir: args.evidence_dir.clone(),
-                    scripts_dir: args.scripts_dir.clone(),
-                    json: mode.is_json(),
-                    human: !mode.is_json(),
-                },
-            )
-        }
+        HostCommand::Validate(args) => validate(args, mode),
         HostCommand::Reconcile(args) => reconcile(context, args, mode, deadline),
     }
 }
@@ -220,16 +210,15 @@ fn can_fallback_to_local_state(error: &CliFailure) -> bool {
     )
 }
 
-fn local_doctor(args: &HostDoctorArgs, mode: OutputMode) -> Result<i32, CliFailure> {
-    let context = crate::LegacyContext::from_env()?;
-    crate::cmd_host_doctor(
-        &context,
-        &crate::HostDoctorArgs {
-            read_only: args.read_only,
-            json: mode.is_json(),
-            human: !mode.is_json(),
-        },
-    )
+fn local_doctor(_args: &HostDoctorArgs, mode: OutputMode) -> Result<i32, CliFailure> {
+    let context = CliContext::from_env()?;
+    let report = doctor::run_doctor(&context);
+    if mode.is_json() {
+        print_json(&doctor::render_summary(&report))?;
+    } else {
+        print_stdout(&doctor::render_human(&report));
+    }
+    Ok(report.exit_code())
 }
 
 fn ensure_host_posture(mut value: Value) -> Value {
@@ -307,16 +296,29 @@ fn local_host_check(args: &HostCheckArgs, mode: OutputMode) -> Result<i32, CliFa
             "ref-invalid: host check --strict requires --read-only",
         ));
     }
-    let context = crate::LegacyContext::from_env()?;
-    crate::cmd_host_check(
-        &context,
-        &crate::HostCheckArgs {
-            read_only: args.read_only,
-            strict: args.strict,
-            json: mode.is_json(),
-            human: !mode.is_json(),
-        },
-    )
+    let context = CliContext::from_env()?;
+    let bundle = context.load_bundle_context()?.ok_or_else(|| {
+        CliFailure::new(
+            1,
+            format!(
+                "{} is required for host check",
+                context.bundle_path.display()
+            ),
+        )
+    })?;
+    let host = bundle
+        .host
+        .as_ref()
+        .ok_or_else(|| CliFailure::new(1, "bundle did not include host.json"))?;
+    let report = host_check::run(host, bundle.closures.values(), args.strict)
+        .map_err(CliFailure::host_check_probe_error)?;
+    let output = map_host_check_report(report);
+    if mode.is_json() {
+        print_json(&output)?;
+    } else {
+        print_stdout(&render_host_check_human(&output));
+    }
+    Ok(i32::from(output.exit_code))
 }
 
 fn mutation(
@@ -458,4 +460,168 @@ fn reconcile(
     )?;
     context.emit(&value, mode)?;
     Ok(0)
+}
+
+fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure> {
+    if !args.dry_run && !args.apply {
+        return emit_host_error(
+            &missing_mutation_flag_envelope("host validate"),
+            mode.is_json(),
+        );
+    }
+    let validation_mode = if args.apply {
+        host_validate::ValidateMode::Apply
+    } else {
+        host_validate::ValidateMode::DryRun
+    };
+    let mut request = host_validate::ValidateRequest::from_env_defaults(validation_mode);
+    if let Some(directory) = &args.evidence_dir {
+        request.evidence_dir = directory.clone();
+    }
+    if let Some(directory) = &args.scripts_dir {
+        request.scripts_dir = directory.clone();
+    }
+    if let Some(wave) = &args.wave {
+        request.only_wave = Some(wave.clone());
+    }
+    if let Some(signature) = &args.operator_signature {
+        request.operator_signature = Some(signature.clone());
+    }
+
+    if let Some(only_wave) = &request.only_wave {
+        let known = host_validate::WAVE_CATALOG
+            .iter()
+            .any(|spec| spec.wave == only_wave);
+        if !known {
+            let known_list: Vec<&str> =
+                host_validate::WAVE_CATALOG.iter().map(|spec| spec.wave).collect();
+            return emit_host_error(
+                &host_error_envelope(
+                    "host validate --wave value is not a known readiness wave",
+                    "unknown-wave",
+                    78,
+                    "host validate --wave argument.",
+                    &format!("--wave {only_wave} is not in the readiness-wave catalog"),
+                    &format!(
+                        "Re-run with one of: {}. The catalog mirrors readinessWaveSpecs in nixos-modules/options-daemon.nix.",
+                        known_list.join(", ")
+                    ),
+                    "docs/reference/host-validate.md#waves",
+                ),
+                mode.is_json(),
+            );
+        }
+    }
+
+    let report = host_validate::run_host_validate(&request);
+    let exit_code = host_validate::exit_code(&report);
+    if mode.is_json() {
+        let mut rendered = serde_json::to_string_pretty(&host_validate::render_summary(&report))
+            .map_err(|error| {
+                CliFailure::new(
+                    1,
+                    format!("failed to serialize host validate summary: {error}"),
+                )
+            })?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&host_validate::render_human(&report));
+    }
+    Ok(exit_code)
+}
+
+pub(crate) fn map_host_check_report(report: host_check::HostCheckReport) -> HostCheckOutputV2 {
+    HostCheckOutputV2 {
+        mode: "read-only".to_owned(),
+        strict: report.strict,
+        summary: HostCheckSummaryV2 {
+            pass: report.summary.pass,
+            warn: report.summary.warn,
+            fail: report.summary.fail,
+        },
+        exit_code: report.exit_code(),
+        findings: report
+            .findings
+            .into_iter()
+            .map(map_host_check_finding)
+            .collect(),
+    }
+}
+
+fn map_host_check_finding(finding: host_check::HostCheckFinding) -> HostCheckFindingV2 {
+    HostCheckFindingV2 {
+        id: finding.id,
+        severity: map_host_check_severity(finding.severity),
+        message: finding.message,
+        remediation: finding.remediation,
+        vm: finding.vm,
+        detail: finding.detail,
+        details: finding.details,
+    }
+}
+
+fn map_host_check_severity(
+    severity: host_check::HostCheckSeverity,
+) -> HostCheckSeverityV2 {
+    match severity {
+        host_check::HostCheckSeverity::Pass => HostCheckSeverityV2::Pass,
+        host_check::HostCheckSeverity::Warn => HostCheckSeverityV2::Warn,
+        host_check::HostCheckSeverity::Fail => HostCheckSeverityV2::Fail,
+    }
+}
+
+pub(crate) fn render_host_check_human(output: &HostCheckOutputV2) -> String {
+    let mut text = String::new();
+    let _ = std::fmt::Write::write_fmt(
+        &mut text,
+        format_args!(
+            "mode: {}\nstrict: {}\nsummary: pass={} warn={} fail={}\nexit-code: {}\n",
+            output.mode,
+            output.strict,
+            output.summary.pass,
+            output.summary.warn,
+            output.summary.fail,
+            output.exit_code
+        ),
+    );
+    for severity in [
+        HostCheckSeverityV2::Pass,
+        HostCheckSeverityV2::Warn,
+        HostCheckSeverityV2::Fail,
+    ] {
+        let label = match severity {
+            HostCheckSeverityV2::Pass => "PASS",
+            HostCheckSeverityV2::Warn => "WARN",
+            HostCheckSeverityV2::Fail => "FAIL",
+        };
+        let matching = output
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == severity)
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            continue;
+        }
+        let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{label}\n"));
+        for finding in matching {
+            if let Some(vm) = &finding.vm {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("- [{vm}] {}: {}\n", finding.id, finding.message),
+                );
+            } else {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut text,
+                    format_args!("- {}: {}\n", finding.id, finding.message),
+                );
+            }
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!("  hint: {}\n", finding.remediation),
+            );
+        }
+        text.push('\n');
+    }
+    text
 }

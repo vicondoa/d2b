@@ -22,6 +22,9 @@ use d2b_contracts_zone_session::v3::{
     role_binding::RoleBindingSpec,
     zone::validate_self_resource,
 };
+pub use d2b_contracts_resource::v3::{
+    RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX, SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID,
+};
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue,
     ConfigurationGeneration,
@@ -408,6 +411,29 @@ pub fn compile_committed_policy(
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
         );
     }
+    system_core_rules.push(
+        PolicyRule::new(
+            &catalog,
+            [ResourceTypeName::parse("Credential")
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?],
+            [
+                ResourceVerb::Create,
+                ResourceVerb::UpdateSpec,
+                ResourceVerb::Delete,
+                ResourceVerb::AdminCredential,
+            ],
+            [],
+            [
+                "create".to_owned(),
+                "update-spec".to_owned(),
+                "delete".to_owned(),
+            ],
+            [],
+            [zone.clone()],
+            [],
+        )
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+    );
     let role_ref = ResourceRef::parse("Role/system-core-runtime")
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let system_core_role = CompiledRole::new(role_ref.clone(), system_core_rules)
@@ -1313,6 +1339,52 @@ pub async fn ensure_bootstrap_host_resource(
     Ok(())
 }
 
+fn bootstrap_zone_resource_payload(zone: &ZoneId) -> Result<Vec<u8>, ResourceRuntimeError> {
+    let bytes = serde_json::to_vec(&json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "metadata": {
+            "name": zone.as_str(),
+            "zone": zone.as_str(),
+            "generation": 1,
+            "revision": 1,
+            "ownerRef": null,
+            "finalizers": [],
+            "deletionRequestedAt": null,
+            "createdAt": "1970-01-01T00:00:00.000Z",
+            "updatedAt": "1970-01-01T00:00:00.000Z",
+            "managedBy": "controller"
+        },
+        "spec": {},
+        "status": {
+            "completedAt": null,
+            "conditions": [],
+            "lastReconciledAt": null,
+            "observedGeneration": 0,
+            "outcome": null,
+            "phase": "Pending",
+            "resource": {},
+            "startedAt": null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": null,
+                "observedGeneration": 0,
+                "operationId": null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": 1
+            }
+        },
+        "type": "Zone"
+    }))
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let value =
+        CanonicalJsonValue::parse(&bytes).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    Ok(value.to_canonical_bytes())
+}
+
 /// Ensure the store-owned Zone self-resource exists before publishing a
 /// provisioned runtime.
 pub async fn ensure_bootstrap_zone_resource(
@@ -1350,43 +1422,7 @@ pub async fn ensure_bootstrap_zone_resource(
         );
     }
 
-    let payload = CanonicalJsonValue::parse(
-        &serde_json::to_vec(&json!({
-            "apiVersion": "resources.d2bus.org/v3",
-            "metadata": {
-                "ownerRef": null,
-                "finalizers": [],
-                "deletionRequestedAt": null
-            },
-            "spec": {},
-            "status": {
-                "completedAt": null,
-                "conditions": [],
-                "lastReconciledAt": null,
-                "observedGeneration": 0,
-                "outcome": null,
-                "phase": "Pending",
-                "resource": {},
-                "startedAt": null,
-                "update": {
-                    "dependencies": {"count": 0, "refs": []},
-                    "disruption": "None",
-                    "lastAssessedAt": null,
-                    "observedGeneration": 0,
-                    "operationId": null,
-                    "owned": {"count": 0, "refs": []},
-                    "preserveState": true,
-                    "reasons": [],
-                    "state": "Unknown",
-                    "targetGeneration": 1
-                }
-            },
-            "type": "Zone"
-        }))
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-    )
-    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
-    .to_canonical_bytes();
+    let payload = bootstrap_zone_resource_payload(zone)?;
     let identity = resource_identity(
         zone,
         &zone_type,
@@ -1411,13 +1447,20 @@ pub async fn ensure_bootstrap_zone_resource(
     mutation.resource = protobuf::MessageField::some(body);
     let mut request = wire::CreateRequest::new();
     let mut meta = wire::RequestMeta::new();
-    meta.operation_id = "system-core-bootstrap-zone".to_owned();
+    meta.operation_id = SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID.to_owned();
     meta.correlation_id = meta.operation_id.clone();
     meta.idempotency_key = meta.operation_id.clone();
     request.meta = protobuf::MessageField::some(meta);
     request.mutation = protobuf::MessageField::some(mutation);
     let response = client.create(request).await;
-    if response.error.is_some() {
+    if let Some(error) = response.error.as_ref() {
+        tracing::error!(
+            zone = %zone.as_str(),
+            error_kind = ?error.kind,
+            reason = %error.reason.as_str(),
+            retry_class = ?error.retry_class,
+            "bootstrap Zone create failed",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     validate_zone_self_resource(store, zone, zone_uid, store.identity().store_uid()).await
@@ -1482,7 +1525,14 @@ async fn plan_zone_resource_bundle(
 ) -> Result<Vec<wire::Mutation>, ResourceRuntimeError> {
     bundle
         .verify()
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        .map_err(|error| {
+            tracing::error!(
+                zone = %zone,
+                error = ?error,
+                "resource bundle verification failed",
+            );
+            ResourceRuntimeError::HandlerNotReady
+        })?;
     let bundle_zone_uid = bundle
         .zone_uid()
         .ok_or(ResourceRuntimeError::IdentityUnbound)?;
@@ -1535,6 +1585,11 @@ async fn plan_zone_resource_bundle(
                 .owner_ref()
                 .is_none_or(|owner| admitted_refs.contains(owner))
         }) else {
+            tracing::error!(
+                zone = %zone,
+                pending_resource_count = pending.len(),
+                "resource bundle owner graph could not be ordered",
+            );
             return Err(ResourceRuntimeError::HandlerNotReady);
         };
         let resource = pending.remove(index);
@@ -1627,7 +1682,7 @@ pub fn resource_bundle_materialization_operation_id(
         return Err(ResourceRuntimeError::IdentityUnbound);
     }
     Ok(format!(
-        "resource-bundle-materialization:{}",
+        "{RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX}{}",
         bundle.integrity().content_hash
     ))
 }
@@ -2595,6 +2650,40 @@ mod tests {
     };
     use d2b_contracts_resource::v3::ResourceGeneration;
 
+    #[test]
+    fn bootstrap_zone_create_body_is_complete_after_uid_placeholder() {
+        let zone = ZoneId::parse("work").unwrap();
+        let mut payload =
+            CanonicalJsonValue::parse(&bootstrap_zone_resource_payload(&zone).unwrap()).unwrap();
+        let CanonicalJsonValue::Object(root) = &mut payload else {
+            unreachable!();
+        };
+        let CanonicalJsonValue::Object(metadata) = root.get_mut("metadata").unwrap() else {
+            unreachable!();
+        };
+        assert!(!metadata.contains_key("uid"));
+        metadata.insert(
+            "uid".to_owned(),
+            CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
+        );
+
+        let envelope = ResourceEnvelope::from_json(&payload.to_canonical_bytes())
+            .expect("bootstrap Zone create body must be a complete resource envelope");
+        assert_eq!(envelope.resource_type().as_str(), "Zone");
+        assert_eq!(envelope.metadata().name().as_str(), zone.as_str());
+        assert_eq!(envelope.metadata().zone(), &zone);
+        assert_eq!(
+            envelope.metadata().generation(),
+            ResourceGeneration::new(1).unwrap()
+        );
+        assert_eq!(envelope.metadata().revision(), ZoneRevision::new(1));
+        assert_eq!(
+            envelope.metadata().uid().as_str(),
+            "00000000-0000-4000-8000-000000000000"
+        );
+        assert_eq!(envelope.metadata().managed_by(), ManagedBy::Controller);
+    }
+
     fn user_resource(
         name: &str,
         uid: &str,
@@ -2813,6 +2902,82 @@ mod tests {
                 "Guest",
                 "Process",
             ]
+        );
+    }
+
+    #[test]
+    fn system_core_policy_authorizes_credential_commit_batch_materialization() {
+        let zone = ZoneId::parse("work").unwrap();
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(7),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let authorizer =
+            NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let system_core =
+            subject_context("Provider/system-core", "11111111-1111-4111-8111-111111111111");
+        let target = |resource_type: &str,
+                      resource_name: &str,
+                      verb: ResourceVerb,
+                      subresource: Option<&str>| AuthorizationTarget {
+            resource_type: ResourceTypeName::parse(resource_type).unwrap(),
+            resource_name: Some(ResourceName::parse(resource_name).unwrap()),
+            verb,
+            subresource: subresource.map(str::to_owned),
+            execution_ref: None,
+        };
+        let request = AuthorizationRequest {
+            method: ApiMethod::CommitBatch,
+            zone: zone.clone(),
+            targets: vec![
+                target("Credential", "relay-listen", ResourceVerb::Create, None),
+                target(
+                    "Credential",
+                    "relay-listen",
+                    ResourceVerb::AdminCredential,
+                    Some("create"),
+                ),
+                target("Credential", "relay-send", ResourceVerb::Create, None),
+                target(
+                    "Credential",
+                    "relay-send",
+                    ResourceVerb::AdminCredential,
+                    Some("create"),
+                ),
+                target(
+                    "Process",
+                    "relay-listener",
+                    ResourceVerb::Get,
+                    Some("owner"),
+                ),
+            ],
+        };
+        assert!(
+            authorizer
+                .authorize(&system_core, &request, &state)
+                .is_ok()
+        );
+
+        let mut wrong_subresource = request.clone();
+        wrong_subresource.targets[1].subresource = Some("read".to_owned());
+        assert_eq!(
+            authorizer
+                .authorize(&system_core, &wrong_subresource, &state)
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
+        );
+
+        let mut wrong_verb = request;
+        wrong_verb.targets[1].verb = ResourceVerb::UseCredential;
+        assert_eq!(
+            authorizer
+                .authorize(&system_core, &wrong_verb, &state)
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 

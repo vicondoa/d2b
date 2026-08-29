@@ -2,6 +2,7 @@
 
 let
   cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
 
   sortNames = names: lib.sort lib.lessThan names;
   sortedAttrNames = attrs: sortNames (lib.attrNames attrs);
@@ -9,7 +10,7 @@ let
     map (name: f name attrs.${name}) (sortedAttrNames attrs);
 
   realmRows = cfg._index.realms.enabledList;
-  enabledVms = cfg._index.enabledVms;
+  enabledVms = d2bLib.gatewayVms cfg;
   runtimeRows = cfg._index.runtime.byVm;
   runtimeProviders = cfg._index.runtime.providers;
   allocatorData = cfg._bundle.allocatorJson.data;

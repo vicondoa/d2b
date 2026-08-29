@@ -66,6 +66,7 @@
 //!   role→binary mapping; the resolver shape keeps that wiring drop
 //!   purely additive.
 
+use crate::allocator_config::{AllocatorJson, AllocatorZoneTopology};
 use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
@@ -107,6 +108,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct BundleResolver {
     pub bundle: Bundle,
+    pub allocator: Option<AllocatorJson>,
     pub host: HostJson,
     pub processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
@@ -145,6 +147,7 @@ pub struct BundleResolver {
 }
 
 struct ParsedBundleArtifacts {
+    allocator: Option<AllocatorJson>,
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
@@ -1134,6 +1137,7 @@ impl BundleResolver {
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
+                allocator: None,
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
@@ -1158,6 +1162,7 @@ impl BundleResolver {
         include_fixture_network_intents: bool,
     ) -> Self {
         let ParsedBundleArtifacts {
+            allocator,
             host,
             processes,
             zone_resource_bundles,
@@ -1252,6 +1257,7 @@ impl BundleResolver {
             audit_bundle_hash: bundle_hash,
             installed_generation_identity,
             bundle,
+            allocator,
             host,
             processes,
             zone_resource_bundles,
@@ -1307,6 +1313,7 @@ impl BundleResolver {
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
+                allocator: None,
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
@@ -1355,6 +1362,7 @@ impl BundleResolver {
         })?;
         let zone_resource_bundles = load_zone_resource_bundles(&bundle, bundle_root, policy)?;
         let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
+        let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
@@ -1372,6 +1380,7 @@ impl BundleResolver {
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
+                allocator,
                 host,
                 processes,
                 zone_resource_bundles,
@@ -1391,6 +1400,13 @@ impl BundleResolver {
 
     pub fn audit_bundle_version(&self) -> &str {
         &self.audit_bundle_version
+    }
+
+    /// Return the sealed Zone topology, when the allocator artifact carries it.
+    pub fn zone_topology(&self) -> Option<&AllocatorZoneTopology> {
+        self.allocator
+            .as_ref()
+            .and_then(|allocator| allocator.zone_topology.as_ref())
     }
 
     /// Return the verified Nix-authored resource bundle bytes for one Zone.
@@ -4362,6 +4378,31 @@ fn load_zone_storage_rows(
         }
     }
     Ok(rows)
+}
+
+fn load_optional_allocator_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<AllocatorJson>, Error> {
+    let Some(allocator_ref) = bundle.allocator_path.as_deref() else {
+        return Ok(None);
+    };
+    let allocator_path = resolve_bundle_ref(bundle_root, allocator_ref);
+    let bytes = secure_open_and_read(&allocator_path, policy)?;
+    verify_artifact_hash(
+        &allocator_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        allocator_ref,
+    )?;
+    let allocator: AllocatorJson = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error(
+            "allocator.json",
+            manifest_parse_reason(&error.to_string()),
+        )
+    })?;
+    Ok(Some(allocator))
 }
 
 fn load_optional_storage_artifact(

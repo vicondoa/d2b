@@ -1222,6 +1222,7 @@ dependencies = [
  "azure_core",
  "base64",
  "chacha20poly1305",
+ "d2b-contracts-resource",
  "d2b-gateway",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",
@@ -1240,6 +1241,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
+ "zeroize",
 ]
 
 [[package]]
@@ -1307,6 +1309,7 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1347,11 +1350,10 @@ name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
  "command-fds",
+ "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "env_logger",
  "html2text",
  "log",
@@ -1468,9 +1470,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "d2b-session",
  "env_logger",
  "libc",
@@ -1676,13 +1676,20 @@ dependencies = [
  "async-trait",
  "base64",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
+ "d2b-session",
+ "futures-util",
  "hmac",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "urlencoding",
+ "webpki-roots 0.26.11",
  "zeroize",
 ]
 
@@ -1910,6 +1917,7 @@ dependencies = [
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1964,6 +1972,7 @@ dependencies = [
  "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
+ "d2b-zone-routing",
  "d2bd-runtime",
  "getrandom 0.2.17",
  "libc",

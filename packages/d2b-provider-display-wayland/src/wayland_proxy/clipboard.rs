@@ -3,7 +3,7 @@
 //! d2b-wayland-proxy synthesizes the guest-visible standard
 //! `wl_data_device_manager` path locally. Downstream `wl_data_*` objects are never
 //! bound into the host compositor clipboard namespace. Same-endpoint transfers are
-//! routed within the proxy; host and cross-realm materialization routes through
+//! routed within the proxy; host and cross-Zone materialization routes through
 //! d2b-clipd.
 
 use std::collections::BTreeSet;
@@ -67,7 +67,7 @@ pub fn object_forwarding(interface: &str) -> ClipboardObjectForwarding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardRoute {
     SameEndpoint,
-    HostOrCrossRealm,
+    HostOrCrossZone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,10 +99,10 @@ impl ClipboardMimePolicy {
     pub fn decide(&self, route: ClipboardRoute, mime: &str) -> MimeDecision {
         match route {
             ClipboardRoute::SameEndpoint => MimeDecision::PreserveSameEndpointRichMime,
-            ClipboardRoute::HostOrCrossRealm if self.external_allowlist.contains(mime) => {
+            ClipboardRoute::HostOrCrossZone if self.external_allowlist.contains(mime) => {
                 MimeDecision::MaterializeViaBridge
             }
-            ClipboardRoute::HostOrCrossRealm => MimeDecision::Deny,
+            ClipboardRoute::HostOrCrossZone => MimeDecision::Deny,
         }
     }
 
@@ -176,11 +176,11 @@ mod tests {
         let policy = ClipboardMimePolicy::v1_defaults();
 
         assert_eq!(
-            policy.decide(ClipboardRoute::HostOrCrossRealm, "text/plain;charset=utf-8"),
+            policy.decide(ClipboardRoute::HostOrCrossZone, "text/plain;charset=utf-8"),
             MimeDecision::MaterializeViaBridge
         );
         assert_eq!(
-            policy.decide(ClipboardRoute::HostOrCrossRealm, "application/octet-stream"),
+            policy.decide(ClipboardRoute::HostOrCrossZone, "application/octet-stream"),
             MimeDecision::Deny
         );
     }

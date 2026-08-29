@@ -6,9 +6,11 @@
 //! Three things the cross-Zone routing and per-hop relay modules could not do
 //! without a session layer:
 //!
-//! - **Opening the next-hop ComponentSession.** [`ZoneLinkSession::establish`]
-//!   admits a driver only against a link that reached `Ready`, so a next-hop
-//!   session cannot exist before the enrolled KK handshake completed.
+//! - **Opening the next-hop ComponentSession.**
+//!   [`ZoneLinkSession::establish_authenticated`] admits a driver only against
+//!   a link that reached `Ready` and an exact authenticated ZoneLink profile,
+//!   so a next-hop session cannot exist before the enrolled KK handshake
+//!   completed.
 //! - **Per-hop named-stream credit forwarding.** A relayed stream's credit is
 //!   granted on the *next* hop as the local side consumes, which is what keeps
 //!   a slow terminal consumer from being paid for by an intermediate Zone's
@@ -29,20 +31,22 @@
 //!
 //! # No authority
 //!
-//! The session holds a driver handle and a generation. It holds no admission
-//! evidence, no subject, no capability, and no key. It resolves nothing and
-//! mints nothing.
+//! The session consumes one verified route admission and its authenticated
+//! driver owner. It exposes no admission evidence, subject, capability, or
+//! key, resolves nothing, and mints nothing.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     CloseReason, Remediation, RequestId, SessionErrorCode,
-},
 };
-use d2b_session::{Cancellation, ComponentSessionDriver, StreamId};
+use d2b_session::{
+    AuthenticatedComponentSession, AuthenticatedSessionDriver, Cancellation,
+    ComponentSessionDriver, StreamId,
+};
 
+use crate::session::contract::{RouteAdmissionError, VerifiedRouteAdmission};
 use crate::session::enrollment::{LinkEpoch, ZoneLinkEnrollment, ZoneLinkEnrollmentError};
 
 /// A closed refusal raised by a ZoneLink session.
@@ -55,6 +59,8 @@ pub enum ZoneLinkSessionError {
     ZoneLinkDisconnected,
     /// The enrollment governing this session was durably revoked.
     ZoneLinkRevoked,
+    /// The runtime-owned route admission was revoked or became stale.
+    RouteAdmission(RouteAdmissionError),
     /// The underlying session refused, with its closed code.
     Session(SessionErrorCode),
 }
@@ -66,6 +72,7 @@ impl ZoneLinkSessionError {
             Self::ResourceTrafficBeforeReady => "resource-traffic-before-ready",
             Self::ZoneLinkDisconnected => "zone-link-disconnected",
             Self::ZoneLinkRevoked => "zone-link-revoked",
+            Self::RouteAdmission(error) => error.as_str(),
             Self::Session(code) => code.as_str(),
         }
     }
@@ -98,13 +105,15 @@ const FENCE_REVOKED: u8 = 2;
 
 /// One established ZoneLink ComponentSession.
 ///
-/// The driver handle is shared rather than owned exclusively because a relayed
-/// call and its cancel are concurrent by nature. Sharing a *driver* shares no
-/// authority: the driver is the transport-side drive loop, and every
-/// authorization decision was already made before a session could exist.
+/// The private driver owner is shared behind an `Arc` only after this type has
+/// consumed the authenticated session that created it. Sharing the transport
+/// implementation shares no authority: the consumed session owner retains its
+/// liveness and single-owner authorization state.
 pub struct ZoneLinkSession {
     driver: Arc<dyn ComponentSessionDriver>,
     epoch: LinkEpoch,
+    admission: Option<VerifiedRouteAdmission>,
+    liveness: Option<d2b_session::SessionLiveness>,
     fence: AtomicU8,
 }
 
@@ -124,12 +133,52 @@ impl core::fmt::Debug for ZoneLinkSession {
 }
 
 impl ZoneLinkSession {
-    /// Establish a session over an enrolled link that reached `Ready`.
+    /// Establish a driver lane from one verified route admission and its
+    /// owning authenticated ComponentSession.
     ///
-    /// The enrollment is borrowed for the check and not retained: this type is
-    /// not a second owner of the enrollment state machine, and it cannot
-    /// advance it.
-    pub fn establish(
+    /// The admission is consumed, and the session is consumed into a
+    /// non-cloneable driver owner. No caller-supplied policy, subject, Zone,
+    /// enrollment identity, or driver handle can substitute for either sealed
+    /// input; the enrollment argument is used only for its Ready/epoch gate.
+    pub fn establish_authenticated(
+        enrollment: &ZoneLinkEnrollment,
+        admission: VerifiedRouteAdmission,
+        session: AuthenticatedComponentSession<()>,
+    ) -> Result<Self, ZoneLinkSessionError> {
+        admission.revalidate().map_err(route_admission_error)?;
+        enrollment.admit_resource_traffic()?;
+        let epoch = enrollment
+            .epoch()
+            .ok_or(ZoneLinkSessionError::ResourceTrafficBeforeReady)?;
+        let route = session.route_binding();
+        admission
+            .session_binding()
+            .matches_authenticated_session(&route)
+            .map_err(|_| RouteAdmissionError::SessionBindingMismatch)
+            .map_err(route_admission_error)?;
+        if !route.liveness().is_live() {
+            return Err(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::SessionNotLive,
+            ));
+        }
+        let generation = admission.reconnect_generation().get();
+        let driver: AuthenticatedSessionDriver = session.into_authenticated_driver();
+        if driver.generation() != generation {
+            return Err(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::ReconnectGenerationMismatch,
+            ));
+        }
+        Ok(Self {
+            driver: Arc::new(driver),
+            epoch,
+            admission: Some(admission),
+            liveness: Some(route.liveness()),
+            fence: AtomicU8::new(FENCE_OPEN),
+        })
+    }
+
+    #[cfg(test)]
+    fn establish_for_tests(
         enrollment: &ZoneLinkEnrollment,
         driver: Arc<dyn ComponentSessionDriver>,
     ) -> Result<Self, ZoneLinkSessionError> {
@@ -140,6 +189,8 @@ impl ZoneLinkSession {
         Ok(Self {
             driver,
             epoch,
+            admission: None,
+            liveness: None,
             fence: AtomicU8::new(FENCE_OPEN),
         })
     }
@@ -156,7 +207,22 @@ impl ZoneLinkSession {
 
     /// Whether the session may still carry traffic.
     pub fn is_open(&self) -> bool {
-        self.fence.load(Ordering::Acquire) == FENCE_OPEN
+        if self.fence.load(Ordering::Acquire) != FENCE_OPEN
+            || self
+                .liveness
+                .as_ref()
+                .is_some_and(|liveness| !liveness.is_live())
+        {
+            return false;
+        }
+        if let Some(admission) = &self.admission
+            && (admission.revalidate().is_err()
+                || self.driver.generation() != admission.reconnect_generation().get())
+        {
+            self.fence.store(FENCE_REVOKED, Ordering::Release);
+            return false;
+        }
+        true
     }
 
     /// Fence the session because the uplink disconnected.
@@ -179,7 +245,30 @@ impl ZoneLinkSession {
 
     fn admit(&self) -> Result<(), ZoneLinkSessionError> {
         match self.fence.load(Ordering::Acquire) {
-            FENCE_OPEN => Ok(()),
+            FENCE_OPEN => {
+                if self
+                    .liveness
+                    .as_ref()
+                    .is_some_and(|liveness| !liveness.is_live())
+                {
+                    return Err(ZoneLinkSessionError::ZoneLinkDisconnected);
+                }
+                if let Some(admission) = &self.admission
+                    && let Err(error) = admission.revalidate()
+                {
+                    self.fence.store(FENCE_REVOKED, Ordering::Release);
+                    return Err(ZoneLinkSessionError::RouteAdmission(error));
+                }
+                if self.admission.as_ref().is_some_and(|admission| {
+                    self.driver.generation() != admission.reconnect_generation().get()
+                }) {
+                    self.fence.store(FENCE_REVOKED, Ordering::Release);
+                    return Err(ZoneLinkSessionError::RouteAdmission(
+                        RouteAdmissionError::ReconnectGenerationMismatch,
+                    ));
+                }
+                Ok(())
+            }
             FENCE_REVOKED => Err(ZoneLinkSessionError::ZoneLinkRevoked),
             _ => Err(ZoneLinkSessionError::ZoneLinkDisconnected),
         }
@@ -259,6 +348,27 @@ impl ZoneLinkSession {
         if self.fence.load(Ordering::Acquire) == FENCE_REVOKED {
             return Err(ZoneLinkSessionError::ZoneLinkRevoked);
         }
+        if self
+            .liveness
+            .as_ref()
+            .is_some_and(|liveness| !liveness.is_live())
+        {
+            return Err(ZoneLinkSessionError::ZoneLinkDisconnected);
+        }
+        if let Some(admission) = &self.admission
+            && let Err(error) = admission.revalidate()
+        {
+            self.fence.store(FENCE_REVOKED, Ordering::Release);
+            return Err(ZoneLinkSessionError::RouteAdmission(error));
+        }
+        if self.admission.as_ref().is_some_and(|admission| {
+            self.driver.generation() != admission.reconnect_generation().get()
+        }) {
+            self.fence.store(FENCE_REVOKED, Ordering::Release);
+            return Err(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::ReconnectGenerationMismatch,
+            ));
+        }
         self.driver
             .reset_named_stream(stream)
             .await
@@ -313,19 +423,41 @@ fn session_error(error: d2b_session::SessionError) -> ZoneLinkSessionError {
     ZoneLinkSessionError::Session(error.code())
 }
 
+fn route_admission_error(error: RouteAdmissionError) -> ZoneLinkSessionError {
+    ZoneLinkSessionError::RouteAdmission(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::contract::{
+        RouteAdmissionVerifier, RuntimeRouteAdmissionAuthority, ZoneLinkRouteAdmissionRequest,
+    };
     use crate::session::enrollment::{
         BOOTSTRAP_PSK_TTL_MS_DEFAULT, BootstrapPskIssuance, EnrollmentFingerprint, EnrollmentRecord,
     };
     use async_trait::async_trait;
+    use d2b_contracts_resource::v3::{
+        ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+        identity::{AuthenticatedSubjectContext, BindingDigest, EvidenceClass, SessionBinding},
+    };
+    use d2b_contracts_zone_session::v3::component_session::{
+        AuthorizationLease, EndpointPolicy, OperationClass, OperationId,
+    };
+    use d2b_contracts_zone_session::v3::zone_routing::{
+        ZoneLabelId, ZoneLinkControllerGeneration, ZonePath, ZoneRouteCapability, ZoneTreeEdge,
+    };
     use d2b_session::{
-        OwnedAttachment, RequestRegistry, Result as SessionResult, SessionError, SessionEvent,
-        StreamEvent,
+        AuthenticatedComponentSession, HandshakeCredentials, OwnedAttachment, OwnedTransport,
+        RequestRegistry, Result as SessionResult, SessionAcceptor, SessionAuthenticationBinding,
+        SessionAuthorizationRequest, SessionEngine, SessionError, SessionEvent, StreamEvent,
+        TransportDescriptor, TransportEvidence, TransportPacket, TransportReader, TransportWriter,
+        serialized_transport_split, x25519_public_key,
     };
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Instant;
+    use tokio::sync::mpsc;
 
     /// What the fake driver was asked to do, in order.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -484,6 +616,211 @@ mod tests {
         Err(SessionError::new(SessionErrorCode::InternalInvariant))
     }
 
+    struct RouteTestTransport {
+        sender: mpsc::Sender<TransportPacket>,
+        receiver: mpsc::Receiver<TransportPacket>,
+        descriptor: TransportDescriptor,
+    }
+
+    #[async_trait]
+    impl OwnedTransport for RouteTestTransport {
+        fn descriptor(&self) -> TransportDescriptor {
+            self.descriptor
+        }
+
+        fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+            serialized_transport_split(self)
+        }
+
+        async fn receive(
+            &mut self,
+            protected_limit: usize,
+        ) -> Result<TransportPacket, d2b_session::TransportError> {
+            let packet = self
+                .receiver
+                .recv()
+                .await
+                .ok_or(d2b_session::TransportError::Disconnected)?;
+            if packet.as_bytes().len() > protected_limit {
+                return Err(d2b_session::TransportError::LimitExceeded);
+            }
+            Ok(packet)
+        }
+
+        async fn send(
+            &mut self,
+            packet: TransportPacket,
+        ) -> Result<(), d2b_session::TransportError> {
+            self.sender
+                .send(packet)
+                .await
+                .map_err(|_| d2b_session::TransportError::Disconnected)
+        }
+
+        async fn close(&mut self) -> Result<(), d2b_session::TransportError> {
+            Ok(())
+        }
+    }
+
+    fn route_test_transport_pair(
+        policy: &EndpointPolicy,
+    ) -> (RouteTestTransport, RouteTestTransport) {
+        let (left_sender, left_receiver) = mpsc::channel(16);
+        let (right_sender, right_receiver) = mpsc::channel(16);
+        let descriptor = TransportDescriptor {
+            class: policy.transport_binding.transport,
+            locality: policy.transport_binding.locality,
+            packet_atomic: false,
+            supports_attachments: false,
+        };
+        (
+            RouteTestTransport {
+                sender: left_sender,
+                receiver: right_receiver,
+                descriptor,
+            },
+            RouteTestTransport {
+                sender: right_sender,
+                receiver: left_receiver,
+                descriptor,
+            },
+        )
+    }
+
+    async fn authenticated_route(
+        generation: u64,
+    ) -> (
+        AuthenticatedComponentSession<()>,
+        VerifiedRouteAdmission,
+        RouteAdmissionVerifier,
+    ) {
+        let policy = crate::session::contract::fixtures::enrolled_zone_link(generation);
+        let wire_policy = policy.lower().expect("lower the enrolled ZoneLink policy");
+        let parent_private = [2_u8; 32];
+        let guest_private = [3_u8; 32];
+        let parent_public = x25519_public_key(&parent_private).expect("parent public key");
+        let guest_public = x25519_public_key(&guest_private).expect("guest public key");
+        let (initiator_transport, responder_transport) = route_test_transport_pair(&wire_policy);
+        let (initiator, responder) = tokio::join!(
+            SessionEngine::establish_initiator(
+                initiator_transport,
+                wire_policy.clone(),
+                HandshakeCredentials::Kk {
+                    local_private: d2b_session::Secret32::new(parent_private)
+                        .expect("parent private key"),
+                    remote_public: guest_public,
+                },
+                Instant::now(),
+            ),
+            SessionEngine::establish_responder(
+                responder_transport,
+                wire_policy.clone(),
+                HandshakeCredentials::Kk {
+                    local_private: d2b_session::Secret32::new(guest_private)
+                        .expect("guest private key"),
+                    remote_public: parent_public,
+                },
+                Instant::now(),
+            ),
+        );
+        let zone = ZoneId::parse("work").expect("test Zone");
+        let acceptor = SessionAcceptor::from_verified_adapter(
+            wire_policy.clone(),
+            zone.clone(),
+            move |evidence: TransportEvidence,
+                  binding: &SessionAuthenticationBinding,
+                  expected_zone: &ZoneId,
+                  now_tick| {
+                if evidence.class() != EvidenceClass::EnrolledKk || expected_zone != &zone {
+                    return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+                }
+                let subject_ref = ResourceRef::parse("Provider/zone-link").expect("subject ref");
+                let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                    .expect("subject uid");
+                let zone_ref = ResourceRef::parse("Zone/work").expect("Zone ref");
+                let session = SessionBinding::new(
+                    binding.schema_fingerprint().clone(),
+                    binding.transport_binding().clone(),
+                    binding.reconnect_generation(),
+                    binding.transcript_hash().clone(),
+                );
+                let subject = AuthenticatedSubjectContext::new(
+                    subject_ref,
+                    subject_uid,
+                    zone_ref,
+                    binding.evidence_class(),
+                    binding.purpose().clone(),
+                    binding.service().clone(),
+                    session,
+                );
+                let lease = AuthorizationLease::new(1, now_tick.saturating_add(100))
+                    .expect("session lease");
+                Ok((subject, lease))
+            },
+            move |_subject: &AuthenticatedSubjectContext,
+                  _request: &SessionAuthorizationRequest,
+                  previous,
+                  now_tick| {
+                if previous.is_valid_at(now_tick) {
+                    Ok(previous)
+                } else {
+                    Err(SessionError::new(SessionErrorCode::PolicyDenied))
+                }
+            },
+            (),
+        )
+        .expect("session acceptor");
+        let session = acceptor
+            .admit(
+                initiator.expect("initiator handshake"),
+                TransportEvidence::new(
+                    EvidenceClass::EnrolledKk,
+                    BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
+                        .expect("binding digest"),
+                ),
+                1,
+            )
+            .await
+            .expect("authenticated route");
+        let _ = responder.expect("responder handshake");
+        let route = session.route_binding();
+        let clock = Arc::new(AtomicU64::new(1_000));
+        let clock_for_config = Arc::clone(&clock);
+        let authority = RuntimeRouteAdmissionAuthority::new(
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("link UID"),
+            ZoneTreeEdge::new(
+                ZonePath::new(vec![ZoneLabelId::parse("parent").expect("Zone label")])
+                    .expect("source path"),
+                ZonePath::new(vec![
+                    ZoneLabelId::parse("child").expect("Zone label"),
+                    ZoneLabelId::parse("parent").expect("Zone label"),
+                ])
+                .expect("target path"),
+            )
+            .expect("Zone edge"),
+            ZoneLinkControllerGeneration::parse("generation-1").expect("controller generation"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("source Zone UID"),
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("target Zone UID"),
+            ZoneRouteCapability::parse("resource-read").expect("capability"),
+            OperationClass::Invoke,
+            ZoneRevision::new(9),
+            &wire_policy,
+            &route,
+            Arc::new(move || clock_for_config.load(Ordering::Acquire)),
+        )
+        .expect("route admission config");
+        let request = ZoneLinkRouteAdmissionRequest::new(
+            OperationId::new(vec![0x11; 16]).expect("operation ID"),
+            OperationClass::Invoke,
+        )
+        .expect("route operation");
+        let (verifier, evidence) = authority.issue(request).expect("issue route admission");
+        let admission = verifier
+            .verify(evidence)
+            .expect("verify route admission");
+        (session, admission, verifier)
+    }
+
     fn ready_link() -> ZoneLinkEnrollment {
         let mut link = ZoneLinkEnrollment::new_unenrolled();
         link.begin_bootstrap(
@@ -503,7 +840,7 @@ mod tests {
     }
 
     fn session(driver: Arc<FakeDriver>) -> ZoneLinkSession {
-        ZoneLinkSession::establish(&ready_link(), driver).expect("establish a session")
+        ZoneLinkSession::establish_for_tests(&ready_link(), driver).expect("establish a session")
     }
 
     fn request_id() -> RequestId {
@@ -512,6 +849,88 @@ mod tests {
 
     fn stream_id() -> StreamId {
         StreamId::new(0x0100).expect("a named-stream channel")
+    }
+
+    #[tokio::test]
+    async fn authenticated_driver_lane_binds_the_exact_zone_link_profile() {
+        let (authenticated, admission, _verifier) = authenticated_route(3).await;
+        let session =
+            ZoneLinkSession::establish_authenticated(&ready_link(), admission, authenticated)
+                .expect("establish an authenticated driver lane");
+
+        assert_eq!(session.generation(), 3);
+        assert!(session.is_open());
+    }
+
+    #[tokio::test]
+    async fn stale_or_revoked_route_admission_fences_the_driver_lane() {
+        let (authenticated, admission, verifier) = authenticated_route(3).await;
+        let session =
+            ZoneLinkSession::establish_authenticated(&ready_link(), admission, authenticated)
+                .expect("establish an authenticated driver lane");
+        verifier.revoke();
+        assert_eq!(
+            session.open_forwarded_stream(stream_id(), 1, 1).await.err(),
+            Some(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::Revoked
+            ))
+        );
+        assert!(!session.is_open());
+        assert_eq!(
+            session.reset_forwarded_stream(stream_id()).await.err(),
+            Some(ZoneLinkSessionError::ZoneLinkRevoked)
+        );
+    }
+
+    #[tokio::test]
+    async fn route_admission_cannot_be_substituted_across_authenticated_sessions() {
+        let (original, admission, _verifier) = authenticated_route(3).await;
+        let (substitute, _other_admission, _other_verifier) = authenticated_route(3).await;
+        let substitute_route = substitute.route_binding();
+        assert_eq!(
+            ZoneLinkSession::establish_authenticated(&ready_link(), admission, substitute).err(),
+            Some(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::SessionBindingMismatch
+            ))
+        );
+        assert!(!substitute_route.liveness().is_live());
+        drop(original);
+    }
+
+    #[tokio::test]
+    async fn current_policy_revision_is_rechecked_before_driver_use() {
+        let (authenticated, admission, verifier) = authenticated_route(3).await;
+        let session =
+            ZoneLinkSession::establish_authenticated(&ready_link(), admission, authenticated)
+                .expect("establish an authenticated driver lane");
+        verifier
+            .update_policy(
+                ZoneRouteCapability::parse("resource-write").expect("capability"),
+                OperationClass::Invoke,
+                ZoneRevision::new(10),
+            )
+            .expect("advance route policy");
+        assert_eq!(
+            session.open_forwarded_stream(stream_id(), 1, 1).await.err(),
+            Some(ZoneLinkSessionError::RouteAdmission(
+                RouteAdmissionError::CapabilityMismatch
+            ))
+        );
+        assert!(!session.is_open());
+    }
+
+    #[tokio::test]
+    async fn unready_enrollment_rejects_a_verified_route_before_driver_admission() {
+        let (authenticated, admission, _verifier) = authenticated_route(3).await;
+        assert_eq!(
+            ZoneLinkSession::establish_authenticated(
+                &ZoneLinkEnrollment::new_unenrolled(),
+                admission,
+                authenticated,
+            )
+            .err(),
+            Some(ZoneLinkSessionError::ResourceTrafficBeforeReady)
+        );
     }
 
     #[test]
@@ -529,7 +948,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                ZoneLinkSession::establish(&link, driver.clone()).err(),
+                ZoneLinkSession::establish_for_tests(&link, driver.clone()).err(),
                 Some(ZoneLinkSessionError::ResourceTrafficBeforeReady)
             );
         }

@@ -30,7 +30,7 @@ let
   sortedMapAttrsToList = f: attrs:
     map (name: f name attrs.${name}) (sortedAttrNames attrs);
 
-  enabledVms = cfg._index.enabledVms;
+  enabledVms = d2bLib.gatewayVms cfg;
   realmWorkloads = cfg._index.realms.workloads.enabled;
 
   # Derive vsockCid for a workload whose legacyVmName points to a local

@@ -1,66 +1,59 @@
 //! `d2b-wayland-proxy` host-side Wayland proxy argv generator.
 //!
-//! Pure Rust function that emits the argv for the per-VM
-//! `d2b-<vm>-wlproxy` role spawned by `d2b-broker`
+//! Pure Rust function that emits the argv for one Zone display proxy role
+//! spawned by `d2b-broker`
 //! via `SpawnRunner { role: WaylandProxy }`.
 //!
-//! The proxy runs as a dedicated `d2b-<vm>-wlproxy` UID with:
+//! The proxy runs as a dedicated `d2b-<workload>-wlproxy` UID with:
 //!   - empty host capabilities (mandatory);
 //!   - mandatory seccomp policy (w1-wayland-proxy);
 //!   - no PipeWire/Pulse socket access;
-//!   - dedicated per-VM runtime dir `/run/d2b-wlproxy/<vm>`;
+//!   - dedicated per-target runtime dir `/run/d2b-wlproxy/<identity>`;
 //!   - host compositor socket bind-mounted at the in-jail upstream
-//!     path `/run/d2b-wlproxy/<vm>/upstream`.
+//!     path `/run/d2b-wlproxy/<identity>/upstream`.
 //!
-//! Shape (Wave 2 / Lane A will fill the binary and policy):
+//! Shape:
 //!
 //! ```text
 //! d2b-wayland-proxy \
-//!   --listen /run/d2b-wlproxy/<vm>/wayland-0 \
-//!   --connect /run/d2b-wlproxy/<vm>/upstream \
-//!   --target <workload>.<realm>.d2b \
+//!   --listen /run/d2b-wlproxy/<identity>/wayland-0 \
+//!   --connect /run/d2b-wlproxy/<identity>/upstream \
+//!   --target <workload>.<zone>.d2b \
 //!   --provider-kind local-vm \
-//!   --vm-name <vm>
 //! ```
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use std::num::NonZeroU32;
 
+use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 use serde::{Deserialize, Serialize};
-
-// =========================================================================
-// Input / output types
-// =========================================================================
 
 /// Input parameters for the wayland-proxy argv generator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandProxyArgvInput {
-    /// VM name (used to derive socket paths and the app-id prefix).
-    pub vm_name: String,
+    /// Authenticated workload target.
+    pub target: WorkloadTarget,
+    /// Authenticated workload provider kind.
+    pub provider_kind: WorkloadProviderKind,
     /// In-jail path for the filter listen socket (where crosvm connects).
     ///
-    /// Default: `/run/d2b-wlproxy/<vm>/wayland-0`
+    /// Default: `/run/d2b-wlproxy/<identity>/wayland-0`
     pub listen_socket: String,
     /// In-jail path for the upstream host compositor socket bind-mount.
     ///
-    /// Default: `/run/d2b-wlproxy/<vm>/upstream`
+    /// Default: `/run/d2b-wlproxy/<identity>/upstream`
     pub upstream_socket: String,
     /// App-id prefix injected by the proxy for all guest toplevels.
     ///
-    /// Default: `d2b.<vm>.`
+    /// Default: the identity's provider-specific prefix.
     pub app_id_prefix: String,
-    /// Canonical realm target asserted by d2b host metadata.
-    ///
-    /// Default: `<vm>.local.d2b` for the transitional host-local realm.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub realm_target: Option<String>,
     /// Title prefix prepended to guest window titles.
     ///
-    /// Default: `[<vm>] `
+    /// Default: the identity's provider-specific prefix.
     pub title_prefix: String,
-    /// Effective VM identity border configuration.
+    /// Effective workload identity border configuration.
     ///
     /// Default: `None` (no border flags emitted). Nix enables borders by
     /// passing a populated config when the wayland-proxy node is emitted.
@@ -68,7 +61,7 @@ pub struct WaylandProxyArgvInput {
     pub border: Option<WaylandProxyBorderConfig>,
 }
 
-/// Effective proxy-drawn VM identity border settings.
+/// Effective proxy-drawn workload identity border settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandProxyBorderConfig {
@@ -80,18 +73,18 @@ pub struct WaylandProxyBorderConfig {
     pub urgent_color: String,
     /// Side/bottom border thickness in logical pixels.
     pub thickness: NonZeroU32,
-    /// Label configuration. Defaults to enabled VM-name label.
+    /// Label configuration. Defaults to the authenticated workload label.
     #[serde(default)]
     pub label: WaylandProxyBorderLabelConfig,
 }
 
-/// Proxy-drawn VM identity label settings.
+/// Proxy-drawn workload identity label settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandProxyBorderLabelConfig {
     /// Whether to emit label argv.
     pub enable: bool,
-    /// Optional label override. `None` means the authenticated VM name.
+    /// Optional label override. `None` means the authenticated workload label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Label position.
@@ -108,7 +101,7 @@ impl Default for WaylandProxyBorderLabelConfig {
     }
 }
 
-/// Proxy-drawn VM identity label position.
+/// Proxy-drawn workload identity label position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WaylandProxyBorderLabelPosition {
@@ -126,20 +119,23 @@ impl WaylandProxyBorderLabelPosition {
 }
 
 impl WaylandProxyArgvInput {
-    /// Construct a default-shaped input for `vm_name`.
-    pub fn for_vm(vm_name: impl Into<String>) -> Self {
-        let vm_name = vm_name.into();
-        let listen_socket = format!("/run/d2b-wlproxy/{vm_name}/wayland-0");
-        let upstream_socket = format!("/run/d2b-wlproxy/{vm_name}/upstream");
-        let app_id_prefix = format!("d2b.{vm_name}.");
-        let realm_target = Some(format!("{vm_name}.local.d2b"));
-        let title_prefix = format!("[{vm_name}] ");
+    /// Construct a default-shaped input for an authenticated target.
+    pub fn for_target(target: WorkloadTarget, provider_kind: WorkloadProviderKind) -> Self {
+        let identity = crate::wayland_proxy::identity::ProxyIdentity::canonical(
+            target.clone(),
+            provider_kind,
+        );
+        let identity_component = identity.bridge_component();
+        let listen_socket = format!("/run/d2b-wlproxy/{identity_component}/wayland-0");
+        let upstream_socket = format!("/run/d2b-wlproxy/{identity_component}/upstream");
+        let app_id_prefix = identity.default_app_id_prefix();
+        let title_prefix = identity.default_title_prefix();
         Self {
-            vm_name,
+            target,
+            provider_kind,
             listen_socket,
             upstream_socket,
             app_id_prefix,
-            realm_target,
             title_prefix,
             border: None,
         }
@@ -150,8 +146,6 @@ impl WaylandProxyArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum WaylandProxyArgvError {
-    /// The VM name is empty.
-    EmptyVmName,
     /// A required socket path is not an absolute path.
     RelativeSocketPath { path: String },
 }
@@ -164,39 +158,31 @@ pub enum WaylandProxyArgvError {
 pub fn generate_wayland_proxy_argv(
     input: &WaylandProxyArgvInput,
 ) -> Result<Vec<String>, WaylandProxyArgvError> {
-    if input.vm_name.is_empty() {
-        return Err(WaylandProxyArgvError::EmptyVmName);
-    }
     for path in [&input.listen_socket, &input.upstream_socket] {
         if !path.starts_with('/') {
             return Err(WaylandProxyArgvError::RelativeSocketPath { path: path.clone() });
         }
     }
 
+    let identity = crate::wayland_proxy::identity::ProxyIdentity::canonical(
+        input.target.clone(),
+        input.provider_kind,
+    );
     let mut argv = vec![
-        format!("d2b-{}-wlproxy", input.vm_name),
+        format!("d2b-{}-wlproxy", identity.log_label()),
         "--listen".to_owned(),
         input.listen_socket.clone(),
         "--connect".to_owned(),
         input.upstream_socket.clone(),
-        "--vm-name".to_owned(),
-        input.vm_name.clone(),
+        "--target".to_owned(),
+        identity.canonical_target(),
+        "--provider-kind".to_owned(),
+        identity.provider_kind_label().to_owned(),
     ];
 
     if !input.app_id_prefix.is_empty() {
         argv.push("--app-id-prefix".to_owned());
         argv.push(input.app_id_prefix.clone());
-    }
-    if let Some(realm_target) = &input.realm_target
-        && !realm_target.is_empty()
-    {
-        argv.push("--target".to_owned());
-        argv.push(realm_target.clone());
-        argv.push("--provider-kind".to_owned());
-        argv.push("local-vm".to_owned());
-        // Keep the old spelling during the compatibility window.
-        argv.push("--realm-target".to_owned());
-        argv.push(realm_target.clone());
     }
     if !input.title_prefix.is_empty() {
         argv.push("--title-prefix".to_owned());
@@ -214,7 +200,12 @@ pub fn generate_wayland_proxy_argv(
         argv.push(border.thickness.to_string());
 
         if border.label.enable {
-            let label = border.label.text.as_deref().unwrap_or(&input.vm_name);
+            let identity_label = identity.log_label();
+            let label = border
+                .label
+                .text
+                .as_deref()
+                .unwrap_or(identity_label.as_str());
             if !label.is_empty() {
                 argv.push("--border-label".to_owned());
                 argv.push(label.to_owned());
@@ -230,6 +221,21 @@ pub fn generate_wayland_proxy_argv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
+
+    fn input() -> WaylandProxyArgvInput {
+        WaylandProxyArgvInput::for_target(
+            WorkloadTarget::parse("work.local.d2b").unwrap(),
+            WorkloadProviderKind::LocalVm,
+        )
+    }
+
+    fn input_for(workload: &str) -> WaylandProxyArgvInput {
+        WaylandProxyArgvInput::for_target(
+            WorkloadTarget::parse(&format!("{workload}.local.d2b")).unwrap(),
+            WorkloadProviderKind::LocalVm,
+        )
+    }
 
     fn nonzero(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test thickness must be non-zero")
@@ -254,24 +260,30 @@ mod tests {
 
     #[test]
     fn default_argv_shape() {
-        let input = WaylandProxyArgvInput::for_vm("work");
+        let input = input();
         let argv = generate_wayland_proxy_argv(&input).expect("valid input");
         assert_eq!(argv[0], "d2b-work-wlproxy", "argv[0] is process title");
         assert!(argv.contains(&"--listen".to_owned()));
         assert!(argv.contains(&"--connect".to_owned()));
-        assert!(argv.contains(&"--vm-name".to_owned()));
+        assert!(argv.contains(&"--target".to_owned()));
+        assert!(argv.contains(&"--provider-kind".to_owned()));
         let listen_idx = argv.iter().position(|a| a == "--listen").unwrap();
-        assert_eq!(argv[listen_idx + 1], "/run/d2b-wlproxy/work/wayland-0");
+        assert_eq!(
+            argv[listen_idx + 1],
+            "/run/d2b-wlproxy/endpoint-8b555a7dbefa45d6213de81a/wayland-0"
+        );
         let connect_idx = argv.iter().position(|a| a == "--connect").unwrap();
-        assert_eq!(argv[connect_idx + 1], "/run/d2b-wlproxy/work/upstream");
-        assert_eq!(flag_value(&argv, "--realm-target"), Some("work.local.d2b"));
+        assert_eq!(
+            argv[connect_idx + 1],
+            "/run/d2b-wlproxy/endpoint-8b555a7dbefa45d6213de81a/upstream"
+        );
         assert_eq!(flag_value(&argv, "--target"), Some("work.local.d2b"));
         assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
     }
 
     #[test]
     fn default_argv_omits_border_flags() {
-        let input = WaylandProxyArgvInput::for_vm("work");
+        let input = input();
         let argv = generate_wayland_proxy_argv(&input).expect("valid input");
         assert!(!argv.contains(&"--border-enable".to_owned()));
         assert!(flag_value(&argv, "--border-color-active").is_none());
@@ -281,17 +293,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_vm_name_errors() {
-        let input = WaylandProxyArgvInput::for_vm("");
-        assert_eq!(
-            generate_wayland_proxy_argv(&input),
-            Err(WaylandProxyArgvError::EmptyVmName)
-        );
-    }
-
-    #[test]
     fn relative_socket_path_errors() {
-        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut input = input();
         input.listen_socket = "relative/path".to_owned();
         let err = generate_wayland_proxy_argv(&input).unwrap_err();
         assert!(matches!(
@@ -302,24 +305,32 @@ mod tests {
 
     #[test]
     fn app_id_prefix_in_argv() {
-        let input = WaylandProxyArgvInput::for_vm("dev");
+        let input = input_for("dev");
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         let prefix_idx = argv.iter().position(|a| a == "--app-id-prefix").unwrap();
         assert_eq!(argv[prefix_idx + 1], "d2b.dev.");
     }
 
     #[test]
-    fn realm_target_in_argv() {
-        let input = WaylandProxyArgvInput::for_vm("dev");
+    fn target_and_provider_are_always_in_argv() {
+        let input = input_for("dev");
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
-        assert_eq!(flag_value(&argv, "--realm-target"), Some("dev.local.d2b"));
         assert_eq!(flag_value(&argv, "--target"), Some("dev.local.d2b"));
         assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
     }
 
     #[test]
+    fn proxy_argv_does_not_emit_retired_identity_aliases() {
+        let input = input_for("dev");
+        let argv = generate_wayland_proxy_argv(&input).expect("valid");
+
+        assert!(!argv.contains(&"--realm-target".to_owned()));
+        assert!(!argv.contains(&"--vm-name".to_owned()));
+    }
+
+    #[test]
     fn empty_app_id_prefix_omitted() {
-        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut input = input();
         input.app_id_prefix = String::new();
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         assert!(!argv.contains(&"--app-id-prefix".to_owned()));
@@ -327,7 +338,7 @@ mod tests {
 
     #[test]
     fn title_prefix_in_argv() {
-        let input = WaylandProxyArgvInput::for_vm("dev");
+        let input = input_for("dev");
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         let prefix_idx = argv.iter().position(|a| a == "--title-prefix").unwrap();
         assert_eq!(argv[prefix_idx + 1], "[dev] ");
@@ -335,7 +346,7 @@ mod tests {
 
     #[test]
     fn enabled_border_flags_include_colors_thickness_and_default_label() {
-        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut input = input();
         input.border = Some(border_config());
 
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
@@ -357,7 +368,7 @@ mod tests {
 
     #[test]
     fn custom_border_label_and_position_are_emitted() {
-        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut input = input();
         let mut border = border_config();
         border.label.text = Some("Work Desktop".to_owned());
         border.label.position = WaylandProxyBorderLabelPosition::TopCenter;
@@ -374,7 +385,7 @@ mod tests {
 
     #[test]
     fn disabled_border_label_omits_label_flags() {
-        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut input = input();
         let mut border = border_config();
         border.label.enable = false;
         input.border = Some(border);

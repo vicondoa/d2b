@@ -15,6 +15,8 @@ rust_library(
     ],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-session:d2b_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -32,6 +34,8 @@ rust_library(
     crate_name = "d2b_provider_transport_azure_relay",
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-session:d2b_session_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -68,6 +72,8 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-session:d2b_session",
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -104,6 +110,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_azure_relay",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

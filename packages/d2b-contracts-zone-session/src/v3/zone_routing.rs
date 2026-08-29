@@ -25,6 +25,7 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
+use super::component_session::{OperationClass, OperationId};
 use d2b_contracts_resource::v3::{
     execution_policy::{
     BoundedToken, MAX_BOUNDED_TOKEN_BYTES, PrimitiveSpecError, parsed_deserialize, redacted_debug,
@@ -421,6 +422,41 @@ impl JsonSchema for ZoneRouteCapabilitySet {
             ..Default::default()
         })
     }
+}
+
+/// Untrusted immutable operation intent for one ZoneLink route admission.
+///
+/// This request deliberately carries no ZoneLink identity, Zone UID,
+/// generation, capability, policy revision, connectivity state, or time claim.
+/// Those values are supplied by the runtime-owned admission issuer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneLinkRouteAdmissionRequest {
+    operation_id: OperationId,
+    verb: OperationClass,
+}
+
+impl ZoneLinkRouteAdmissionRequest {
+    /// Construct an immutable operation intent.
+    pub fn new(
+        operation_id: OperationId,
+        verb: OperationClass,
+    ) -> Result<Self, PrimitiveSpecError> {
+        if verb == OperationClass::Attach {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        Ok(Self { operation_id, verb })
+    }
+
+    /// Borrow the operation identity.
+    pub const fn operation_id(&self) -> &OperationId {
+        &self.operation_id
+    }
+
+    /// Return the immutable session verb.
+    pub const fn verb(&self) -> OperationClass {
+        self.verb
+    }
+
 }
 
 /// Signature algorithm for a route advertisement.
@@ -1968,6 +2004,24 @@ mod tests {
         assert_eq!(
             ZoneLabelId::parse("K0"),
             Err(PrimitiveSpecError::InvalidToken)
+        );
+    }
+
+    #[test]
+    fn route_admission_request_has_only_untrusted_operation_intent() {
+        let request = ZoneLinkRouteAdmissionRequest::new(
+            OperationId::new(vec![0x11; 16]).expect("valid operation id"),
+            OperationClass::Invoke,
+        )
+        .expect("valid route admission request");
+        assert_eq!(request.verb(), OperationClass::Invoke);
+        assert_eq!(request.operation_id().as_bytes(), &[0x11; 16]);
+        assert!(
+            ZoneLinkRouteAdmissionRequest::new(
+                OperationId::new(vec![0x12; 16]).expect("valid operation id"),
+                OperationClass::Attach,
+            )
+            .is_err()
         );
     }
 

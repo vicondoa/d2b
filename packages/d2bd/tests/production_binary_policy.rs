@@ -17,6 +17,12 @@ fn production_binary_contains_no_peer_override_surface() {
         "dispatch_exec_management",
         "dispatch_read_guest_config",
         "exec_owner_io",
+        "load_gateway_file_config",
+        "relay_auth_snippet_from_config",
+        "GatewayOrchestrator",
+        "run_gateway_display_owner",
+        "gateway_deps_from_config",
+        "display_listener_from_config",
     ] {
         assert!(
             !rendered.contains(retired),

@@ -49,7 +49,7 @@ let
   cfg = config.d2b;
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ../../../nixos-modules/lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  normalNixosVms = d2bLib.normalNixosVms (d2bLib.gatewayVms cfg);
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ../../../nixos-modules/prebuilt-packages.nix { inherit pkgs lib; }
@@ -884,6 +884,7 @@ in
         echo "d2bStoreSync: refusing non-directory runtime parent /run/d2b" >&2
         exit 1
       else
+        :
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: gen: ''
             if [ -L /run/d2b/${name} ]; then

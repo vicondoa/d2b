@@ -619,6 +619,26 @@ async fn native_rbac_connect_and_invoke_are_executed() {
 }
 
 #[tokio::test]
+async fn authenticated_route_binding_retains_purpose_class_and_endpoint_roles() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let session = session_acceptor(
+        policy.clone(),
+        zone,
+        [SessionVerb::Connect],
+    )
+    .admit(engine(&policy).await, evidence(), 1)
+    .await
+    .unwrap();
+    let binding = session.route_binding();
+    assert_eq!(binding.endpoint_locality(), policy.transport_binding.locality);
+    assert_eq!(binding.purpose_class(), policy.purpose_class);
+    assert_eq!(binding.initiator_role(), policy.initiator_role);
+    assert_eq!(binding.responder_role(), policy.responder_role);
+    assert_eq!(binding.transport_class(), policy.transport_binding.transport);
+}
+
+#[tokio::test]
 async fn admitted_session_retains_transport_and_consumes_send_permits() {
     let zone = ZoneId::parse("work").unwrap();
     let policy = endpoint_policy();

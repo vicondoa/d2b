@@ -38,18 +38,18 @@
 //! encoding with committed golden vectors, in a file this work item does not
 //! own. See that module for the full argument and the resulting gap.
 //!
-//! # No authority is minted here
+//! # Public session boundary
 //!
-//! Nothing in this module resolves a subject, admits a peer, or mints a
+//! Public session APIs do not resolve a subject, admit a peer, or mint a
 //! capability. [`crate::session::prologue`] digests an *already authenticated*
 //! subject context that the registrar resolved; it borrows and never stores
 //! one, constructs none, and accepts no caller-supplied subject reference,
 //! uid, or claim. [`crate::session::zone_link`] holds a driver handle and an
 //! enrollment state, never admission evidence. The sealed `SessionAuthority`
 //! supertrait, the single-owner admission consumption, and the registrar's
-//! exclusive ownership of subject resolution are untouched: this module adds
-//! no implementation of any of them, no clone of an admission, and no
-//! accessor that would let a caller reuse one.
+//! exclusive ownership of subject resolution are untouched. The crate-private
+//! route-admission issuer in `contract` is the only runtime-owned minting
+//! boundary for downstream verification.
 
 pub mod contract;
 pub mod enrollment;
@@ -59,7 +59,11 @@ pub mod zone_link;
 #[cfg(test)]
 mod noise_vectors;
 
-pub use contract::{ZoneEndpointPolicy, ZoneEndpointPolicyIdentity, ZonePolicyError};
+pub use contract::{
+    RouteAdmissionError, RouteAdmissionEvidence, RouteAdmissionSessionBinding,
+    RouteAdmissionVerifier, RuntimeRouteAdmissionAuthority, VerifiedRouteAdmission,
+    ZoneEndpointPolicy, ZoneEndpointPolicyIdentity, ZoneLinkRouteAdmissionRequest, ZonePolicyError,
+};
 pub use enrollment::{
     BOOTSTRAP_PSK_TTL_MS_DEFAULT, BOOTSTRAP_PSK_TTL_MS_MAX, BOOTSTRAP_PSK_TTL_MS_MIN,
     BootstrapPskIssuance, EnrollmentFingerprint, EnrollmentRecord,

@@ -2,6 +2,11 @@
 
 let
   cfg = config.d2b;
+  hasExplicitZoneTopology =
+    builtins.hasAttr "localRoot" cfg._zoneCompiler
+    && builtins.isString cfg._zoneCompiler.localRoot
+    && builtins.hasAttr "topology" cfg._zoneCompiler
+    && builtins.isAttrs cfg._zoneCompiler.topology;
 
   sortNames = names: lib.sort lib.lessThan names;
   sortedAttrNames = attrs: sortNames (lib.attrNames attrs);
@@ -110,6 +115,12 @@ let
 
   data = {
     schemaVersion = "v2";
+    zoneTopology = {
+      root = cfg._zoneCompiler.localRoot;
+      parentMap = lib.mapAttrs
+        (_: topology: topology.parentZone)
+        cfg._zoneCompiler.topology;
+    };
     allocator = {
       enabled = realmRows != [ ];
       runtimeState = "metadata-only";
@@ -137,7 +148,7 @@ let
 
 in
 {
-  config = {
+  config = lib.mkIf hasExplicitZoneTopology {
     assertions = [
       {
         assertion = builtins.substring 0 9 allocatorRootSocket == "/run/d2b/";

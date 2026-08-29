@@ -41,7 +41,6 @@ d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-boot
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 hmac = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

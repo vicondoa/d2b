@@ -819,6 +819,18 @@
 
           d2b.zones.local-root = { };
 
+          d2b.realms.work = {
+            placement = "gateway-vm";
+            env = "work";
+            network.envs = [ "work" ];
+            workloads.corp = {
+              enable = true;
+              kind = "local-vm";
+              legacyVmName = "corp-vm";
+              launcher.label = "Corp VM";
+            };
+          };
+
           d2b.realms.host = {
             allowedUsers = [ "alice" ];
             policy.allowUnsafeLocal = true;
@@ -1025,6 +1037,18 @@
                 isNormalUser = true;
                 uid = 1000;
               };
+            };
+          };
+
+          d2b.realms.work = {
+            placement = "gateway-vm";
+            env = "work";
+            network.envs = [ "work" ];
+            workloads.corp-full = {
+              enable = true;
+              kind = "local-vm";
+              legacyVmName = "corp-full";
+              launcher.label = "Corp Full";
             };
           };
         };

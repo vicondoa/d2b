@@ -15,6 +15,92 @@ let
       name = builtins.elemAt parts 1;
     } else null;
 
+  attrOr = attrs: name: fallback:
+    if builtins.isAttrs attrs && builtins.hasAttr name attrs
+    then attrs.${name}
+    else fallback;
+
+  secretKey = key:
+    builtins.elem key [
+      "accessKey"
+      "accessToken"
+      "apiKey"
+      "clientSecret"
+      "connectionString"
+      "credential"
+      "credentialBytes"
+      "key"
+      "password"
+      "privateKey"
+      "rawCredential"
+      "sasKey"
+      "sasToken"
+      "secret"
+      "token"
+    ]
+    || lib.hasSuffix "Password" key
+    || lib.hasSuffix "Secret" key
+    || lib.hasSuffix "Token" key
+    || lib.hasSuffix "Key" key;
+
+  secretText = value:
+    if !builtins.isString value
+    then false
+    else
+      let text = lib.toLower value;
+      in lib.hasInfix "-----begin" text
+        || lib.hasPrefix "eyj" text
+        || lib.hasInfix "accountkey" text
+        || lib.hasInfix "bearer " text
+        || lib.hasInfix "clientsecret" text
+        || lib.hasInfix "privatekey" text
+        || lib.hasInfix "sharedaccess" text
+        || (lib.hasInfix "?sv=" text && lib.hasInfix "&sig=" text);
+
+  containsSecretMaterial = value:
+    if builtins.isString value
+    then secretText value
+    else if builtins.isList value
+    then lib.any containsSecretMaterial value
+    else if builtins.isAttrs value
+    then lib.any
+      (key: secretKey key || containsSecretMaterial value.${key})
+      (builtins.attrNames value)
+    else false;
+
+  locatorKey = key:
+    builtins.elem key [
+      "argv"
+      "binaryPath"
+      "cid"
+      "command"
+      "commandLine"
+      "devicePath"
+      "env"
+      "envVars"
+      "environment"
+      "hostPath"
+      "nodeRegistry"
+      "path"
+      "program"
+      "rawCid"
+      "remoteNodeRegistry"
+      "socket"
+      "socketPath"
+      "tapFd"
+      "tapName"
+      "unit"
+    ];
+
+  containsLocator = value:
+    if builtins.isAttrs value
+    then lib.any
+      (key: locatorKey key || containsLocator value.${key})
+      (builtins.attrNames value)
+    else if builtins.isList value
+    then lib.any containsLocator value
+    else false;
+
   resourcesFor = zone:
     lib.mapAttrsToList
       (name: resource: {
@@ -54,6 +140,7 @@ let
     "Provider/runtime-azure-virtual-machine"
     "Provider/runtime-cloud-hypervisor"
     "Provider/transport-azure-relay"
+    "Provider/transport-unix"
     "Provider/transport-vsock"
   ];
 
@@ -76,7 +163,9 @@ let
   providerAssertions = row:
     let
       spec = row.resource.spec or { };
-      providerConfig = spec.config or { };
+      configValue = attrOr spec "config" { };
+      providerConfig =
+        if builtins.isAttrs configValue then configValue else { };
       providerRef =
         if row.resource.type == "Provider"
         then "Provider/${row.name}"
@@ -124,7 +213,21 @@ let
           && (credentialSpec.audience or null) == "https://management.azure.com/"
           && ((credentialSpec.scope or { }).executionRef or null) == gatewayRef;
     in
-      (if providerRef == "Provider/runtime-cloud-hypervisor" then [
+      (if lib.elem providerRef runtimeProviderRefs then [
+        {
+          assertion = builtins.isAttrs configValue;
+          message = "${row.path}.spec.config must be an attribute set.";
+        }
+        {
+          assertion = !containsSecretMaterial providerConfig;
+          message = "${row.path}.spec.config Provider config must not contain credential material.";
+        }
+        {
+          assertion = !containsLocator providerConfig;
+          message = "${row.path}.spec.config Provider config must not contain raw host locators or argv.";
+        }
+      ] else [ ])
+      ++ (if providerRef == "Provider/runtime-cloud-hypervisor" then [
         {
           assertion = resolvesAs row "Host" (providerConfig.controllerExecutionRef or null);
           message = "${row.path}.spec.config.controllerExecutionRef must resolve to Host.";
@@ -182,6 +285,12 @@ let
           message = "${row.path}.spec.config.networkRef must resolve to a Network.";
         }
       ] else [ ])
+      ++ (if providerRef == "Provider/transport-unix" then [
+        {
+          assertion = resolvesAs row "Host" (providerConfig.executionRef or null);
+          message = "${row.path}.spec.config.executionRef must resolve to a Host.";
+        }
+      ] else [ ])
       ++ (if providerRef == "Provider/transport-vsock" then [
         {
           assertion = resolvesAs row "Host" (providerConfig.executionRef or null)
@@ -194,8 +303,16 @@ let
     let
       spec = row.resource.spec or { };
       providerRef = spec.providerRef or "";
-      providerEnvelope = spec.provider or { };
-      settings = providerEnvelope.settings or { };
+      providerEnvelopeValue = attrOr spec "provider" { };
+      providerEnvelope =
+        if builtins.isAttrs providerEnvelopeValue
+        then providerEnvelopeValue
+        else { };
+      settingsValue = attrOr providerEnvelope "settings" { };
+      settings =
+        if builtins.isAttrs settingsValue
+        then settingsValue
+        else { };
       providerResolution =
         if lib.elem providerRef runtimeProviderRefs then [
           {
@@ -240,6 +357,11 @@ let
           assertion = !forbiddenPresent && !forbiddenSpecPresent;
           message = "${row.path}.spec.provider.settings must not contain raw host locators or argv.";
         }
+        {
+          assertion = !containsSecretMaterial providerEnvelope
+            && !containsSecretMaterial spec;
+          message = "${row.path}.spec.provider.settings must not contain credential material.";
+        }
       ] else [ ])
       ++ (if providerRef == "Provider/runtime-azure-virtual-machine" then [
         {
@@ -269,6 +391,8 @@ let
       if providerRef == "Provider/runtime-azure-container-apps"
       then providerConfig.gatewayExecutionRef or null
       else if providerRef == "Provider/transport-azure-relay"
+      then providerConfig.executionRef or null
+      else if providerRef == "Provider/transport-unix"
       then providerConfig.executionRef or null
       else if providerRef == "Provider/transport-vsock"
       then providerConfig.executionRef or null
@@ -352,7 +476,9 @@ let
       ];
     in [
       {
-        assertion = lib.all (key: !secretKey key) (lib.attrNames settings);
+        assertion = lib.all (key: !secretKey key) (lib.attrNames settings)
+          && !containsSecretMaterial settings
+          && !containsLocator settings;
         message = "${row.path}.spec.transportSettings must not contain credential or locator fields.";
       }
     ]

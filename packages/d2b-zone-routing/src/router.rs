@@ -14,6 +14,7 @@ use d2b_contracts_resource::v3::{
     ResourceTypeName,
     ResourceUid,
     execution_policy::BoundedToken,
+    identity::AuthenticatedSubjectContext,
 };
 
 /// The per-Zone concurrent mutation ceiling.
@@ -50,15 +51,16 @@ pub struct DedupKey {
 }
 
 impl DedupKey {
-    /// Construct a key from authenticated principal evidence.
+    /// Construct a key from an already authenticated subject context.
     pub fn new(
         zone: ZonePath,
         resource_type: ResourceTypeName,
         resource_name: Option<ResourceName>,
         verb: MutationVerb,
         idempotency_key: BoundedToken,
-        authenticated_principal: ResourceRef,
+        authenticated_subject: &AuthenticatedSubjectContext,
     ) -> Result<Self, RouterError> {
+        let authenticated_principal = authenticated_subject.subject_ref().clone();
         if authenticated_principal.resource_type().as_str() != "User" {
             return Err(RouterError::PrincipalBinding);
         }
@@ -371,13 +373,38 @@ mod tests {
     use super::*;
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
     use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceTypeName,
-    ZoneId,
-};
+        ResourceName, ResourceTypeName, ZoneId, SchemaFingerprint,
+    };
+    use d2b_contracts_resource::v3::identity::{
+        BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName, SessionBinding,
+        SessionPurpose, TranscriptHash, TransportBinding,
+    };
 
     fn zone() -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse("dev").unwrap()]).unwrap()
+    }
+
+    fn subject(subject_ref: &str) -> AuthenticatedSubjectContext {
+        let digest =
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let session = SessionBinding::new(
+            SchemaFingerprint::parse(digest).unwrap(),
+            TransportBinding::new(
+                Locality::Local,
+                BindingDigest::parse(digest).unwrap(),
+            ),
+            ReconnectGeneration::new(1).unwrap(),
+            TranscriptHash::from_bytes([0; 32]),
+        );
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse(subject_ref).unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("router-test").unwrap(),
+            ServiceName::parse("d2b.router.v3").unwrap(),
+            session,
+        )
     }
 
     fn key() -> DedupKey {
@@ -387,7 +414,7 @@ mod tests {
             Some(ResourceName::parse("worker").unwrap()),
             MutationVerb::Create,
             BoundedToken::parse("request-1").unwrap(),
-            ResourceRef::parse("User/alice").unwrap(),
+            &subject("User/alice"),
         )
         .unwrap()
     }
@@ -487,5 +514,21 @@ mod tests {
         assert!(table.remove(&operation).unwrap());
         assert_eq!(table.len().unwrap(), 0);
         let _ = ZoneId::parse("dev").unwrap();
+    }
+
+    #[test]
+    fn dedup_namespace_rejects_a_non_user_authenticated_subject() {
+        assert_eq!(
+            DedupKey::new(
+                zone(),
+                ResourceTypeName::parse("Process").unwrap(),
+                Some(ResourceName::parse("worker").unwrap()),
+                MutationVerb::Create,
+                BoundedToken::parse("request-1").unwrap(),
+                &subject("Process/caller"),
+            )
+            .err(),
+            Some(RouterError::PrincipalBinding)
+        );
     }
 }

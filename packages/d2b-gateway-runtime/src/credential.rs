@@ -5,19 +5,30 @@
 //! gateway principal uid, redacts all key/token debug output, and mints
 //! short-lived Relay Send tokens from a least-privilege send rule.
 
+use std::collections::HashMap;
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use d2b_provider_transport_azure_relay::auth::{
     MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas,
 };
+use d2b_provider_transport_azure_relay::{
+    MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_LEASE_TTL_MS, RelayCredentialBinding, RelayCredentialError,
+    RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole,
+    RelaySecret,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Required file mode for gateway credential envelopes.
 pub const GATEWAY_CREDENTIAL_MODE: u32 = 0o600;
@@ -91,6 +102,12 @@ impl core::fmt::Debug for SealingKey {
     }
 }
 
+impl Drop for SealingKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// Plaintext credential material accepted by the in-guest enrollment flow.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GatewayCredentialMaterial {
@@ -112,6 +129,15 @@ impl core::fmt::Debug for GatewayCredentialMaterial {
             .field("send_key_name", &self.send_key_name)
             .field("send_key", &"<redacted>")
             .finish()
+    }
+}
+
+impl Drop for GatewayCredentialMaterial {
+    fn drop(&mut self) {
+        self.listen_key_name.zeroize();
+        self.listen_key.zeroize();
+        self.send_key_name.zeroize();
+        self.send_key.zeroize();
     }
 }
 
@@ -155,6 +181,15 @@ impl core::fmt::Debug for GatewayCredential {
             .field("generation", &self.generation)
             .field("not_after", &self.not_after)
             .finish()
+    }
+}
+
+impl Drop for GatewayCredential {
+    fn drop(&mut self) {
+        self.listen_key_name.zeroize();
+        self.listen_key.zeroize();
+        self.send_key_name.zeroize();
+        self.send_key.zeroize();
     }
 }
 
@@ -221,6 +256,7 @@ impl GatewayCredential {
                 },
             )
             .map_err(|_| CredentialError::Crypto)?;
+        let plaintext = Zeroizing::new(plaintext);
         let plaintext = std::str::from_utf8(&plaintext).map_err(|_| CredentialError::Malformed)?;
         Self::from_material(
             Self::parse_material_json(plaintext)?,
@@ -324,12 +360,24 @@ impl GatewayCredential {
 
     fn parse_material_json(raw: &str) -> Result<GatewayCredentialMaterial, CredentialError> {
         let v: Value = serde_json::from_str(raw).map_err(|_| CredentialError::Malformed)?;
-        Ok(GatewayCredentialMaterial {
+        let material = GatewayCredentialMaterial {
             listen_key_name: required_str(&v, &["relayListen", "keyName"])?,
             listen_key: required_str(&v, &["relayListen", "key"])?,
             send_key_name: required_str(&v, &["relaySend", "keyName"])?,
             send_key: required_str(&v, &["relaySend", "key"])?,
-        })
+        };
+        if [
+            &material.listen_key_name,
+            &material.listen_key,
+            &material.send_key_name,
+            &material.send_key,
+        ]
+        .iter()
+        .any(|value| !valid_material_text(value))
+        {
+            return Err(CredentialError::Malformed);
+        }
+        Ok(material)
     }
 
     fn from_material(
@@ -337,10 +385,10 @@ impl GatewayCredential {
         meta: CredentialEnvelopeMeta,
     ) -> Result<Self, CredentialError> {
         Ok(Self {
-            listen_key_name: material.listen_key_name,
-            listen_key: material.listen_key,
-            send_key_name: material.send_key_name,
-            send_key: material.send_key,
+            listen_key_name: material.listen_key_name.clone(),
+            listen_key: material.listen_key.clone(),
+            send_key_name: material.send_key_name.clone(),
+            send_key: material.send_key.clone(),
             generation: meta.generation,
             not_after: meta.not_after,
         })
@@ -361,6 +409,198 @@ impl MintedRelaySendToken {
 impl core::fmt::Debug for MintedRelaySendToken {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("MintedRelaySendToken(<redacted>)")
+    }
+}
+
+impl Drop for MintedRelaySendToken {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+#[derive(Clone)]
+struct ActiveRelayLease {
+    role: RelayCredentialRole,
+    binding: RelayCredentialBinding,
+}
+
+/// Gateway Guest-local implementation of [`RelayCredentialPort`].
+///
+/// The port owns the sealed credential after it has been opened by the Guest.
+/// Only a binding-aware acquisition can mint a lease, and the active lease
+/// table keeps revocation exact without exposing token bytes to callers.
+#[derive(Clone)]
+pub struct GatewayGuestCredentialPort {
+    credential: Arc<GatewayCredential>,
+    active: Arc<Mutex<HashMap<u64, ActiveRelayLease>>>,
+    now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+}
+
+impl GatewayGuestCredentialPort {
+    /// Build a Guest-local port using the system Unix-millisecond clock.
+    pub fn new(credential: Arc<GatewayCredential>) -> Self {
+        Self::with_clock(credential, Arc::new(system_now_unix_ms))
+    }
+
+    /// Build a Guest-local port with an injected clock for deterministic tests.
+    pub fn with_clock(
+        credential: Arc<GatewayCredential>,
+        now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        Self {
+            credential,
+            active: Arc::new(Mutex::new(HashMap::new())),
+            now_unix_ms,
+        }
+    }
+
+    /// Load a sealed credential directly inside the Guest and own its port.
+    pub fn from_sealed(
+        path: impl AsRef<Path>,
+        sealing_key: &SealingKey,
+        policy: &CredentialFilePolicy,
+        now_unix: u64,
+    ) -> Result<Self, CredentialError> {
+        Ok(Self::new(Arc::new(GatewayCredential::load_sealed(
+            path,
+            sealing_key,
+            policy,
+            now_unix,
+        )?)))
+    }
+
+    /// Return the generation of the sealed credential envelope.
+    pub fn credential_generation(&self) -> u64 {
+        self.credential.generation()
+    }
+
+    /// Return a non-secret digest for Guest-local observation.
+    ///
+    /// The digest is emitted only as a test/diagnostic marker after the
+    /// sealed envelope has been opened; credential bytes never leave this
+    /// port.
+    pub fn safe_observation_digest(&self) -> [u8; 32] {
+        Sha256::digest(self.credential.send_key.as_bytes()).into()
+    }
+
+    /// Return the number of currently revocable leases.
+    pub fn active_lease_count(&self) -> usize {
+        self.active.lock().map(|leases| leases.len()).unwrap_or(0)
+    }
+
+    fn material_for(
+        &self,
+        role: RelayCredentialRole,
+    ) -> Result<RelayCredentialMaterial, RelayCredentialError> {
+        let (key_name, key) = match role {
+            RelayCredentialRole::Listen => (
+                &self.credential.listen_key_name,
+                &self.credential.listen_key,
+            ),
+            RelayCredentialRole::Send => {
+                (&self.credential.send_key_name, &self.credential.send_key)
+            }
+        };
+        Ok(RelayCredentialMaterial::SasRule {
+            key_name: RelaySecret::new(key_name.as_bytes().to_vec())?,
+            key: RelaySecret::new(key.as_bytes().to_vec())?,
+        })
+    }
+}
+
+impl fmt::Debug for GatewayGuestCredentialPort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayGuestCredentialPort")
+            .field("credential_generation", &self.credential.generation())
+            .field("active_lease_count", &self.active_lease_count())
+            .finish()
+    }
+}
+
+#[async_trait]
+impl RelayCredentialPort for GatewayGuestCredentialPort {
+    async fn acquire(
+        &self,
+        _: RelayCredentialRole,
+        _: u32,
+    ) -> Result<RelayCredentialLease, RelayCredentialError> {
+        Err(RelayCredentialError::BindingRequired)
+    }
+
+    async fn acquire_bound(
+        &self,
+        role: RelayCredentialRole,
+        binding: &RelayCredentialBinding,
+        deadline_ms: u32,
+    ) -> Result<RelayCredentialLease, RelayCredentialError> {
+        if deadline_ms == 0 {
+            return Err(RelayCredentialError::Expired);
+        }
+        if self.credential.generation() == 0 {
+            return Err(RelayCredentialError::Unavailable);
+        }
+        let now = (self.now_unix_ms)();
+        let requested_ttl = u64::from(deadline_ms).min(MAX_RELAY_LEASE_TTL_MS);
+        let mut expires_at = now.saturating_add(requested_ttl).saturating_add(1_000);
+        if let Some(not_after) = self
+            .credential
+            .not_after()
+            .map(|seconds| seconds.saturating_mul(1_000))
+        {
+            expires_at = expires_at.min(not_after.saturating_sub(1));
+        }
+        if expires_at <= now {
+            return Err(RelayCredentialError::Expired);
+        }
+        let mut lease = RelayCredentialLease::new_bound(
+            self.material_for(role)?,
+            role,
+            expires_at,
+            binding.clone(),
+        )?;
+        let lease_id = lease.lease_id();
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| RelayCredentialError::Unavailable)?;
+        if active.len() >= MAX_ACTIVE_RELAY_LEASES {
+            return Err(RelayCredentialError::Unavailable);
+        }
+        active.insert(
+            lease_id,
+            ActiveRelayLease {
+                role,
+                binding: binding.clone(),
+            },
+        );
+        let active_for_drop = Arc::clone(&self.active);
+        lease.set_drop_hook(Arc::new(move |lease_id| {
+            if let Ok(mut active) = active_for_drop.lock() {
+                active.remove(&lease_id);
+            }
+        }));
+        Ok(lease)
+    }
+
+    async fn revoke(&self, lease: RelayCredentialLease) -> Result<(), RelayCredentialError> {
+        let binding = lease
+            .binding()
+            .ok_or(RelayCredentialError::BindingRequired)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| RelayCredentialError::Unavailable)?;
+        let result = match active.get(&lease.lease_id()) {
+            Some(record) if record.role == lease.role() && record.binding == *binding => {
+                active.remove(&lease.lease_id());
+                Ok(())
+            }
+            Some(_) => Err(RelayCredentialError::BindingMismatch),
+            None => Err(RelayCredentialError::UnknownLease),
+        };
+        drop(active);
+        result
     }
 }
 
@@ -457,7 +697,7 @@ fn read_policy_file(
     path: &Path,
     required_mode: u32,
     policy: &CredentialFilePolicy,
-) -> Result<Vec<u8>, CredentialError> {
+) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
     if path.starts_with("/nix/store") {
         return Err(CredentialError::NixStorePath);
     }
@@ -478,7 +718,7 @@ fn read_policy_file(
     {
         return Err(CredentialError::BadOwner(meta.uid()));
     }
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     file.read_to_end(&mut bytes)
         .map_err(|_| CredentialError::Unreadable)?;
     Ok(bytes)
@@ -557,8 +797,9 @@ fn write_sealed(
     meta: CredentialEnvelopeMeta,
     replace_existing: bool,
 ) -> Result<(), CredentialError> {
-    let plaintext =
-        serde_json::to_vec(&material_json(material)).map_err(|_| CredentialError::Malformed)?;
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&material_json(material)).map_err(|_| CredentialError::Malformed)?,
+    );
     let mut nonce = [0_u8; GATEWAY_CREDENTIAL_NONCE_LEN];
     getrandom::getrandom(&mut nonce).map_err(|_| CredentialError::Crypto)?;
     let aad = credential_aad(meta.generation, meta.not_after);
@@ -654,6 +895,19 @@ fn required_str(v: &Value, path: &[&str]) -> Result<String, CredentialError> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .ok_or(CredentialError::Malformed)
+}
+
+fn system_now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn valid_material_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16 * 1024
+        && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
 #[cfg(test)]
@@ -1014,5 +1268,154 @@ mod tests {
                 max: MAX_RELAY_SEND_TOKEN_TTL_SECS
             }
         );
+    }
+
+    #[tokio::test]
+    async fn guest_port_requires_exact_binding_and_revokes_exact_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential.sealed.json");
+        GatewayCredential::enroll_sealed(
+            &path,
+            &sealing_key(),
+            material(),
+            CredentialEnvelopeMeta::first(None),
+            1,
+        )
+        .unwrap();
+        let credential = Arc::new(
+            GatewayCredential::load_sealed(
+                &path,
+                &sealing_key(),
+                &CredentialFilePolicy::default(),
+                1,
+            )
+            .unwrap(),
+        );
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        assert!(matches!(
+            port.acquire(RelayCredentialRole::Send, 1_000).await,
+            Err(RelayCredentialError::BindingRequired)
+        ));
+        let binding = RelayCredentialBinding::new("link-canary", "session-canary", 4).unwrap();
+        let lease = port
+            .acquire_bound(RelayCredentialRole::Send, &binding, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(port.active_lease_count(), 1);
+        assert_eq!(lease.binding(), Some(&binding));
+        let port_debug = format!("{port:?}");
+        assert!(!port_debug.contains("send-secret"));
+        let debug = format!("{lease:?}");
+        assert!(!debug.contains("send-secret"));
+        assert!(!debug.contains("link-canary"));
+        port.revoke(lease).await.unwrap();
+        assert_eq!(port.active_lease_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn guest_port_removes_active_row_when_lease_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential.sealed.json");
+        GatewayCredential::enroll_sealed(
+            &path,
+            &sealing_key(),
+            material(),
+            CredentialEnvelopeMeta::first(None),
+            1,
+        )
+        .unwrap();
+        let credential = Arc::new(
+            GatewayCredential::load_sealed(
+                &path,
+                &sealing_key(),
+                &CredentialFilePolicy::default(),
+                1,
+            )
+            .unwrap(),
+        );
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        let binding = RelayCredentialBinding::new("link-drop", "session-drop", 1).unwrap();
+        let lease = port
+            .acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(port.active_lease_count(), 1);
+        drop(lease);
+        assert_eq!(port.active_lease_count(), 0);
+    }
+
+    #[test]
+    fn sealed_guest_port_does_not_materialize_canary_in_file_or_debug() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential.sealed.json");
+        GatewayCredential::enroll_sealed(
+            &path,
+            &sealing_key(),
+            material(),
+            CredentialEnvelopeMeta::first(None),
+            1,
+        )
+        .unwrap();
+        let port = GatewayGuestCredentialPort::from_sealed(
+            &path,
+            &sealing_key(),
+            &CredentialFilePolicy::default(),
+            1,
+        )
+        .unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("listen-secret"));
+        assert!(!raw.contains("send-secret"));
+        let debug = format!("{port:?}");
+        assert!(!debug.contains("listen-secret"));
+        assert!(!debug.contains("send-secret"));
+        assert!(!debug.contains(path.to_string_lossy().as_ref()));
+    }
+
+    #[tokio::test]
+    async fn guest_port_rejects_legacy_plaintext_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let credential = Arc::new(
+            GatewayCredential::load(fixture(dir.path()), &CredentialFilePolicy::default()).unwrap(),
+        );
+        let port = GatewayGuestCredentialPort::new(credential);
+        let binding = RelayCredentialBinding::new("link", "session", 1).unwrap();
+        assert!(matches!(
+            port.acquire_bound(RelayCredentialRole::Send, &binding, 1_000)
+                .await,
+            Err(RelayCredentialError::Unavailable)
+        ));
+        assert_eq!(port.active_lease_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn guest_port_rejects_expired_envelope_without_materializing_a_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential.sealed.json");
+        GatewayCredential::enroll_sealed(
+            &path,
+            &sealing_key(),
+            material(),
+            CredentialEnvelopeMeta::first(Some(10)),
+            1,
+        )
+        .unwrap();
+        let credential = Arc::new(
+            GatewayCredential::load_sealed(
+                &path,
+                &sealing_key(),
+                &CredentialFilePolicy::default(),
+                2,
+            )
+            .unwrap(),
+        );
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 10_000));
+        let binding = RelayCredentialBinding::new("link", "session", 1).unwrap();
+        assert!(matches!(
+            port.acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)
+                .await,
+            Err(RelayCredentialError::Expired)
+        ));
+        assert_eq!(port.active_lease_count(), 0);
     }
 }

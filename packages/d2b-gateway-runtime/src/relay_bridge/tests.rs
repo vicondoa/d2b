@@ -344,6 +344,17 @@ fn credential_debug_redacts_secrets() {
 }
 
 #[test]
+fn connection_errors_redact_transport_canaries() {
+    let error = RelayConnectError::Handshake(
+        "SharedAccessSignature secret-canary; /run/d2b/credential".into(),
+    );
+    assert!(!format!("{error:?}").contains("secret-canary"));
+    assert!(!format!("{error}").contains("secret-canary"));
+    assert!(!format!("{error:?}").contains("/run/d2b/credential"));
+    assert!(!format!("{error}").contains("/run/d2b/credential"));
+}
+
+#[test]
 fn pre_minted_sas_sender_puts_token_in_url_without_key() {
     let ep = endpoint();
     let cred = RelayCredential::SasToken("SharedAccessSignature sr=x&sig=y".into());

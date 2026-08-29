@@ -5,10 +5,14 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 
 [dependencies]
+d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
@@ -17,3 +21,9 @@ d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 [[bench]]
 name = "route_decision"
 harness = false
+required-features = ["test-support"]
+
+[[test]]
+name = "route_engine_vectors"
+path = "tests/route_engine_vectors.rs"
+required-features = ["test-support"]

@@ -15,8 +15,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    BundleContext, Context, ManifestDocument, ManifestVm, RUNTIME_UNKNOWN,
-    read_live_pool_integrity, read_symlink_target, read_vm_api_ready, systemctl_state,
+    context::{
+        BundleContext, ManifestDocument, ManifestVm, RUNTIME_UNKNOWN,
+        read_symlink_target,
+    },
+    legacy::{LegacyContext, read_live_pool_integrity, read_vm_api_ready, systemctl_state},
 };
 
 #[derive(Debug, Deserialize)]
@@ -34,7 +37,7 @@ struct QemuMediaRegistryRecord {
 }
 
 pub(crate) fn list_output_from_manifest(
-    context: &Context,
+    context: &LegacyContext,
     manifest: &ManifestDocument,
     bundle: Option<&BundleContext>,
 ) -> ListOutputV2 {
@@ -232,7 +235,7 @@ fn capability_name_for_output(capability: &str) -> &str {
 }
 
 fn qemu_media_status(
-    context: &Context,
+    context: &LegacyContext,
     vm: &ManifestVm,
     bundle: Option<&BundleContext>,
     process_vm: Option<&d2b_core::processes::VmProcessDag>,
@@ -311,7 +314,7 @@ fn qemu_media_sources_for_vm<'a>(
 }
 
 fn qemu_media_source_status(
-    context: &Context,
+    context: &LegacyContext,
     bundle: Option<&BundleContext>,
     source: &d2b_core::host::QemuMediaSourceIntent,
 ) -> IpcQemuMediaSourceStatus {
@@ -341,7 +344,7 @@ fn qemu_media_format_name(format: d2b_core::host::QemuMediaFormat) -> &'static s
 }
 
 fn qemu_media_registry_status(
-    _context: &Context,
+    _context: &LegacyContext,
     bundle: Option<&BundleContext>,
     source: &d2b_core::host::QemuMediaSourceIntent,
 ) -> IpcQemuMediaRegistryStatus {
@@ -445,7 +448,7 @@ fn unix_socket_listening_for_status(path: &str) -> bool {
 }
 
 pub(crate) fn build_vm_status_output(
-    context: &Context,
+    context: &LegacyContext,
     vm: &ManifestVm,
     bundle: Option<&BundleContext>,
 ) -> StatusVmOutputV2 {
@@ -514,7 +517,7 @@ pub(crate) fn build_vm_status_output(
 }
 
 pub(crate) fn build_vm_status_output_from_public(
-    context: &Context,
+    context: &LegacyContext,
     vm: &ManifestVm,
     bundle: Option<&BundleContext>,
     public: &IpcVmStatus,
@@ -616,7 +619,7 @@ fn status_services_from_public(services: &PublicVmServices) -> StatusServicesOut
 }
 
 pub(crate) fn vm_service_states(
-    context: &Context,
+    context: &LegacyContext,
     vm: &ManifestVm,
     process_vm: Option<&d2b_core::processes::VmProcessDag>,
 ) -> StatusServicesOutputV2 {
@@ -674,15 +677,15 @@ fn vm_runner_role_id(
     }
 }
 
-pub(crate) fn pidfd_role_state(context: &Context, vm: &str, role: &str) -> String {
+pub(crate) fn pidfd_role_state(context: &LegacyContext, vm: &str, role: &str) -> String {
     pidfd_role_state_matching(context, vm, |candidate| candidate == role)
 }
 
-fn pidfd_role_prefix_state(context: &Context, vm: &str, prefix: &str) -> String {
+fn pidfd_role_prefix_state(context: &LegacyContext, vm: &str, prefix: &str) -> String {
     pidfd_role_state_matching(context, vm, |candidate| candidate.starts_with(prefix))
 }
 
-fn pidfd_role_state_matching<F>(context: &Context, vm: &str, role_matches: F) -> String
+fn pidfd_role_state_matching<F>(context: &LegacyContext, vm: &str, role_matches: F) -> String
 where
     F: Fn(&str) -> bool,
 {
@@ -712,15 +715,15 @@ where
     if running { "running" } else { "stopped" }.to_owned()
 }
 
-pub(crate) fn current_symlink(context: &Context, vm: &ManifestVm) -> Option<String> {
+pub(crate) fn current_symlink(context: &LegacyContext, vm: &ManifestVm) -> Option<String> {
     read_symlink_target(&vm_state_dir(context, vm).join("current"))
 }
 
-pub(crate) fn booted_symlink(context: &Context, vm: &ManifestVm) -> Option<String> {
+pub(crate) fn booted_symlink(context: &LegacyContext, vm: &ManifestVm) -> Option<String> {
     read_symlink_target(&vm_state_dir(context, vm).join("booted"))
 }
 
-pub(crate) fn vm_state_dir(context: &Context, vm: &ManifestVm) -> PathBuf {
+pub(crate) fn vm_state_dir(context: &LegacyContext, vm: &ManifestVm) -> PathBuf {
     context
         .state_root
         .as_ref()
@@ -896,7 +899,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::ManifestRuntime;
+    use crate::context::ManifestRuntime;
 
     fn manifest_vm_with_runtime(kind: &str, capabilities: BTreeMap<String, bool>) -> ManifestVm {
         ManifestVm {

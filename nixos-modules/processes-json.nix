@@ -10,8 +10,10 @@ let
     else { };
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  gatewayEnvMeta = d2bLib.gatewayEnvMeta cfg cfg._index.usbip.envMeta;
+  normalNixosVms = d2bLib.normalNixosVms gatewayVms;
+  qemuMediaVms = d2bLib.qemuMediaVms gatewayVms;
   obsOtlpPort = cfg._index.observability.sourceBasePort;
   obsSourcePort = name: cfg._index.observability.sourcePorts.${name} or obsOtlpPort;
   waylandUid =
@@ -178,11 +180,11 @@ let
       throw "Unsupported system ${pkgs.stdenv.hostPlatform.system} for qemu-media argv emission";
 
   qemuMediaMac = name:
-    let vm = cfg.vms.${name};
+    let vm = gatewayVms.${name};
     in d2bLib.mkMac vm.env "lan" vm.index;
   qemuMediaArgv = name:
     let
-      vm = cfg.vms.${name};
+      vm = gatewayVms.${name};
       resources = vm.qemuMedia.resources;
       security = vm.qemuMedia.security;
       memoryBackendFlags = [
@@ -904,7 +906,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       # daemon-supervised. These unit names are only transient-effect
       # metadata for broker-owned auxiliary processes, never persistent
       # per-VM framework services or a second lifecycle authority.
-      _vm = cfg.vms.${name};
       emitUnit = unit != null;
       emitRunner = binaryPath != null;
     in
@@ -1329,7 +1330,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     vms =
     (lib.mapAttrsToList vmDag normalNixosVms)
     ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
-    ++ (lib.mapAttrsToList usbipdDag cfg._index.usbip.envMeta);
+    ++ (lib.mapAttrsToList usbipdDag gatewayEnvMeta);
   };
 
   guestProcessResourceRows = lib.filter
