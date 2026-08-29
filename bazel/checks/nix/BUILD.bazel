@@ -104,7 +104,7 @@ _SURFACES = {
         ],
     },
     "provider-catalog": {
-        "cases": ["provider-catalog", "provider-elf-shim"],
+        "cases": ["provider-catalog", "provider-elf-shim", "provider-runtime-contracts"],
         "package": "packages/d2b-provider-activation-nixos",
         "files": [
             "nix/provider-elf-shim.nix",
