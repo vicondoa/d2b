@@ -3043,7 +3043,7 @@ mod tests {
         ] {
             let transport = ScopedCommitTransport::decode(
                 format!(
-                    r#"{{"version":1,"assignment":{{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"zone","zone":"dev"}},"sessionGeneration":1,"epoch":9}},"mutations":[{{"target":"Process/work","verb":"{verb}","scope":{{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}}}]}}"#
+                    r#"{{"version":1,"assignment":{{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"zone","zone":"dev"}},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9}},"mutations":[{{"target":"Process/work","verb":"{verb}","scope":{{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}}}]}}"#
                 )
                 .as_bytes(),
             )
@@ -3098,7 +3098,7 @@ mod tests {
     #[test]
     fn scoped_owner_child_create_requires_exact_owner_identity_and_process_target() {
         let transport = ScopedCommitTransport::decode(
-            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
         )
         .unwrap();
         let owner_ref = ResourceRef::parse("Guest/guest").unwrap();

@@ -2082,6 +2082,28 @@ pub mod pidfd_sys {
     /// broker-socket=3, connection-fd=4, sync-pipe-read=5).
     pub const RENDER_NODE_INHERITED_FD: libc::c_int = 10;
 
+    /// Install the child-side pre-opened fd mapping before seccomp/exec.
+    ///
+    /// This helper is intentionally limited to raw syscalls so the clone/fork
+    /// child closure and the root-free fd inheritance proof exercise the same
+    /// production logic.
+    #[allow(unsafe_code)]
+    pub(super) fn install_pre_opened_fds(pre_opened_raw_fds: &[RawFd]) -> Result<(), ()> {
+        for (index, &source_fd) in pre_opened_raw_fds.iter().enumerate() {
+            let destination_fd = RENDER_NODE_INHERITED_FD + index as libc::c_int;
+            if source_fd != destination_fd {
+                if unsafe { libc::dup2(source_fd, destination_fd) } < 0 {
+                    return Err(());
+                }
+                unsafe { libc::close(source_fd) };
+            }
+            if unsafe { libc::fcntl(destination_fd, libc::F_SETFD, 0) } < 0 {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
     /// Single-entry uid/gid mapping for a runner's user namespace.
     /// The child sees `0` mapped to `host_uid_for_zero` on the
     /// host (and `host_gid_for_zero` for groups). All other UIDs
@@ -3286,28 +3308,13 @@ pub mod pidfd_sys {
                 // dup2/fcntl calls must precede seccomp installation so the
                 // filter does not need to permit them at runtime.
                 //
-                // Each fd is dup2'd to RENDER_NODE_INHERITED_FD + index:
-                //   - dup2 does NOT copy CLOEXEC; fcntl(F_SETFD,0) is defensive
-                //     no-op (CLOEXEC was already absent on the dup2 target) but
-                //     explicit for future-proofing.
-                //   - If src == dst (already at the target slot), skip dup2/close
-                //     but still clear CLOEXEC (dup2(a,a) is a POSIX no-op AND
-                //     does not clear CLOEXEC on the destination).
-                //   - OwnedFds holding the original fds are in the closure and
-                //     dropped by the PARENT after fork; in the child _exit(2) is
-                //     called (no Rust destructors) after execve. No double-close.
-                for (i, &src_fd) in pre_opened_raw_fds.iter().enumerate() {
-                    let dst_fd = RENDER_NODE_INHERITED_FD + i as libc::c_int;
-                    if src_fd != dst_fd {
-                        if libc::dup2(src_fd, dst_fd) < 0 {
-                            let m = b"DEBUG: dup2 pre-opened device fd failed\n";
-                            libc::write(2, m.as_ptr() as *const _, m.len());
-                            libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
-                        }
-                        libc::close(src_fd);
-                    }
-                    // Clear CLOEXEC so the fd survives execve.
-                    libc::fcntl(dst_fd, libc::F_SETFD, 0);
+                // OwnedFds holding the original fds are in the closure and
+                // dropped by the PARENT after fork; in the child _exit(2) is
+                // called (no Rust destructors) after execve. No double-close.
+                if install_pre_opened_fds(&pre_opened_raw_fds).is_err() {
+                    let m = b"DEBUG: dup2 pre-opened device fd failed\n";
+                    libc::write(2, m.as_ptr() as *const _, m.len());
+                    libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
                 }
                 if let Some(program) = seccomp_program.as_ref()
                     && apply_seccomp(program).is_err()
@@ -3495,7 +3502,7 @@ mod tests {
     use nix::libc;
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     use nix::sys::wait::{WaitStatus, waitpid};
-    use nix::unistd::Pid;
+    use nix::unistd::{ForkResult, Pid, fork};
     use tempfile::tempdir;
 
     fn test_namespaces(pid: bool) -> NamespaceSet {
@@ -3773,8 +3780,7 @@ mod tests {
             vec![
                 binary,
                 CString::new("-c").expect("shell option"),
-                CString::new(r#"read -r value && [ "$value" = expected ]"#)
-                    .expect("shell script"),
+                CString::new(r#"read -r value && [ "$value" = expected ]"#).expect("shell script"),
             ],
             Vec::new(),
             current_uid,
@@ -3784,7 +3790,10 @@ mod tests {
         )
         .expect("activation stdin runner should spawn");
         let status = waitpid(Pid::from_raw(outcome.pid), None).expect("wait for runner");
-        assert!(matches!(status, WaitStatus::Exited(_, 0)), "status: {status:?}");
+        assert!(
+            matches!(status, WaitStatus::Exited(_, 0)),
+            "status: {status:?}"
+        );
     }
 
     #[test]
@@ -3792,7 +3801,8 @@ mod tests {
         let mut isolation = isolation_with_user_namespace(None);
         isolation.activation_stdin = Some(vec![
             0;
-            d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES + 1
+            d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
+                + 1
         ]);
         let binary = CString::new("/bin/true").expect("true path");
         let error = clone3_spawn_runner(
@@ -3806,6 +3816,43 @@ mod tests {
         )
         .expect_err("oversized activation stdin must be refused");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn request_inherited_fd_reaches_exec_at_fd_10_without_cloexec() {
+        let (read_fd, write_fd) =
+            nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).expect("pipe2 failed");
+        rustix::io::write(&write_fd, b"bootstrap\n").expect("write bootstrap marker");
+
+        let child = match unsafe { fork() }.expect("fork inherited fd proof") {
+            ForkResult::Child => {
+                if super::pidfd_sys::install_pre_opened_fds(&[read_fd.as_raw_fd()]).is_err() {
+                    unsafe { libc::_exit(1) };
+                }
+                let flags = unsafe { libc::fcntl(10, libc::F_GETFD) };
+                if flags < 0 || flags & libc::FD_CLOEXEC != 0 {
+                    unsafe { libc::_exit(2) };
+                }
+                let mut marker = [0u8; 10];
+                let read = unsafe {
+                    libc::read(10, marker.as_mut_ptr().cast::<libc::c_void>(), marker.len())
+                };
+                if read != marker.len() as isize || &marker != b"bootstrap\n" {
+                    unsafe { libc::_exit(3) };
+                }
+                unsafe { libc::_exit(0) };
+            }
+            ForkResult::Parent { child } => child,
+        };
+        drop(read_fd);
+        drop(write_fd);
+
+        let status = waitpid(child, None).expect("wait for inherited fd proof");
+        assert!(
+            matches!(status, WaitStatus::Exited(pid, 0) if pid == child),
+            "status: {status:?}"
+        );
     }
 
     #[test]

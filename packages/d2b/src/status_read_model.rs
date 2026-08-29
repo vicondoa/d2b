@@ -828,6 +828,7 @@ pub(crate) fn public_lifecycle_list_status_label(
 fn process_role_name(role: &d2b_core::processes::ProcessRole) -> String {
     match role {
         d2b_core::processes::ProcessRole::HostReconcile => "host-reconcile",
+        d2b_core::processes::ProcessRole::ProviderController => "provider-controller",
         d2b_core::processes::ProcessRole::StoreVirtiofsPreflight => "store-virtiofs-preflight",
         d2b_core::processes::ProcessRole::SwtpmPreStartFlush => "swtpm-pre-start-flush",
         d2b_core::processes::ProcessRole::Swtpm => "swtpm",

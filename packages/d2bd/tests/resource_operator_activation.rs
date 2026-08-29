@@ -1796,7 +1796,7 @@ async fn scoped_status_finalizer_batch_reaches_redb_atomically_and_rebinds_assig
     };
     let transport = ScopedCommitTransport::decode(
         format!(
-            r#"{{"version":1,"assignment":{{"resourceUid":"{}","resourceRevision":{},"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"execution","targetKind":"host","reference":"Host/host-system"}},"sessionGeneration":1,"epoch":1}},"mutations":[{{"target":"Host/host-system","verb":"UpdateStatus"}},{{"target":"Host/host-system","verb":"UpdateFinalizers"}}]}}"#,
+            r#"{{"version":1,"assignment":{{"resourceUid":"{}","resourceRevision":{},"providerRef":"Provider/system-core","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"execution","targetKind":"host","reference":"Host/host-system"}},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":1}},"mutations":[{{"target":"Host/host-system","verb":"UpdateStatus"}},{{"target":"Host/host-system","verb":"UpdateFinalizers"}}]}}"#,
             uid.as_str(),
             initial_revision,
         )

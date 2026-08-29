@@ -5755,11 +5755,9 @@ fn process_ticket_for_session(
     target_ref: Option<&ResourceRef>,
     session_digest: [u8; 32],
 ) -> Result<ProcessLaunchTicket, WorkerEffectError> {
-    let (role_name, template_name, selected_provider, inherited_fd_count) = match binding.role() {
-        DisplayProcessRole::HostProxy => ("host-proxy", "wayland-proxy", "system-minijail", 2),
-        DisplayProcessRole::GuestFrontend => {
-            ("guest-frontend", "wayland-proxy", "system-systemd", 1)
-        }
+    let (role_name, template_name, selected_provider) = match binding.role() {
+        DisplayProcessRole::HostProxy => ("host-proxy", "wayland-proxy", "system-minijail"),
+        DisplayProcessRole::GuestFrontend => ("guest-frontend", "wayland-proxy", "system-systemd"),
     };
     let suffix = display_session_suffix(session_digest);
     let process_ref = ResourceRef::parse(&format!("Process/display-{role_name}-{suffix}"))
@@ -5822,10 +5820,7 @@ fn process_ticket_for_session(
     } else {
         ticket
     };
-    ticket
-        .with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness"))
-        .with_inherited_fd_count(inherited_fd_count)
-        .map_err(|_| WorkerEffectError::LaunchRejected)
+    Ok(ticket.with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness")))
 }
 
 #[cfg(test)]

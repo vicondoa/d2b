@@ -7,6 +7,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -24,8 +26,8 @@ use d2b_resource_api::{
     service::{UnavailableUpgradeDispatcher, UpgradeDispatcher},
 };
 use d2b_resource_store::{
-    StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
-    StoreWatchRequest, StoreErrorKind, StoredResource,
+    StoreErrorKind, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
+    StoreWatchRequest, StoredResource,
 };
 use d2b_resource_store_redb::RedbResourceStore;
 use sha2::{Digest, Sha256};
@@ -45,6 +47,25 @@ const WAYLAND_SESSION_TYPE: &str = "display-wayland.d2bus.org.WaylandSession";
 const WAYLAND_SESSION_FINALIZER: &str = "display-wayland.d2bus.org/proxy-stopped";
 pub(crate) const PROCESS_RESTART_ANNOTATION: &str = "d2b.d2bus.org/restart-generation";
 
+pub(crate) type ProcessWatchHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), ()>> + Send + 'static>> + Send + Sync>;
+pub(crate) type ProcessProviderIdentityHook = Arc<
+    dyn Fn(
+            BTreeSet<ResourceRef>,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
+                            (),
+                        >,
+                    > + Send
+                    + 'static,
+            >,
+        > + Send
+        + Sync,
+>;
+
 /// Stable failures for the daemon-owned generic process path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessResourceRuntimeError {
@@ -58,6 +79,8 @@ pub(crate) enum ProcessResourceRuntimeError {
     IdentityAmbiguous,
     /// A Provider effect failed.
     ProviderEffect,
+    /// A static controller has no committed Provider identity projection.
+    ProviderIdentityUnavailable,
     /// The durable store could not be listed or watched.
     Store,
 }
@@ -70,6 +93,7 @@ impl core::fmt::Display for ProcessResourceRuntimeError {
             Self::TemplateUnavailable => "process-resource-template-unavailable",
             Self::IdentityAmbiguous => "process-resource-identity-ambiguous",
             Self::ProviderEffect => "process-resource-provider-effect-failed",
+            Self::ProviderIdentityUnavailable => "process-resource-provider-identity-unavailable",
             Self::Store => "process-resource-store-failed",
         })
     }
@@ -79,10 +103,8 @@ impl std::error::Error for ProcessResourceRuntimeError {}
 
 #[async_trait::async_trait]
 pub(crate) trait ProcessResourceClient: Send + Sync {
-    async fn update_status(
-        &self,
-        request: wire::UpdateStatusRequest,
-    ) -> wire::UpdateStatusResponse;
+    async fn update_status(&self, request: wire::UpdateStatusRequest)
+    -> wire::UpdateStatusResponse;
 
     async fn update_finalizers(
         &self,
@@ -131,6 +153,8 @@ struct DesiredRecord {
     zone_uid: Option<ResourceUid>,
     policy_revision: Option<u64>,
     provider_assignment_generation: Option<ResourceGeneration>,
+    controller_provider_uid: Option<ResourceUid>,
+    controller_provider_generation: Option<ResourceGeneration>,
 }
 
 impl DesiredRecord {
@@ -159,6 +183,8 @@ impl DesiredRecord {
             && restart_annotation(&self.resource) == restart_annotation(&other.resource)
             && self.provider_ref == other.provider_ref
             && self.process == other.process
+            && self.controller_provider_uid == other.controller_provider_uid
+            && self.controller_provider_generation == other.controller_provider_generation
     }
 
     fn owner_ref(&self) -> Option<ResourceRef> {
@@ -207,6 +233,7 @@ pub(crate) struct ProcessResourceRuntime {
     completed_at: BTreeMap<ResourceRef, Instant>,
     next_restart_at: BTreeMap<ResourceRef, Instant>,
     controller_generation: ControllerGeneration,
+    controller_provider_identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
     guest_execution: Option<GuestExecutionBinding>,
     zone_uid: Option<ResourceUid>,
     policy_revision: Option<u64>,
@@ -264,6 +291,7 @@ impl ProcessResourceRuntime {
             next_restart_at: BTreeMap::new(),
             controller_generation: ControllerGeneration::new(1)
                 .expect("controller generation one is valid"),
+            controller_provider_identities: BTreeMap::new(),
             guest_execution: None,
             zone_uid: None,
             policy_revision: None,
@@ -275,6 +303,13 @@ impl ProcessResourceRuntime {
 
     pub(crate) fn set_controller_generation(&mut self, generation: ControllerGeneration) {
         self.controller_generation = generation;
+    }
+
+    pub(crate) fn set_controller_provider_identities(
+        &mut self,
+        identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
+    ) {
+        self.controller_provider_identities = identities;
     }
 
     pub(crate) fn set_guest_execution_binding(&mut self, binding: GuestExecutionBinding) {
@@ -307,9 +342,14 @@ impl ProcessResourceRuntime {
     }
 
     fn context<'a>(&self, record: &'a DesiredRecord) -> ProcessResourceContext<'a> {
-        let target_ref =
-            scoped_target_ref(record, self.target_owner_ref.as_ref(), self.target_ref.as_ref());
+        let target_ref = scoped_target_ref(
+            record,
+            self.target_owner_ref.as_ref(),
+            self.target_ref.as_ref(),
+        );
+        let owner_ref = record.owner_ref();
         ProcessResourceContext::new(
+            self.zone.clone(),
             &record.resource.resource_ref,
             &record.resource.uid,
             record.resource.generation,
@@ -325,6 +365,11 @@ impl ProcessResourceRuntime {
             self.guest_execution
                 .as_ref()
                 .map(GuestExecutionBinding::provider_generation),
+        )
+        .with_owner_ref(owner_ref)
+        .with_provider_identity(
+            record.controller_provider_uid.as_ref(),
+            record.controller_provider_generation,
         )
     }
 
@@ -366,6 +411,17 @@ impl ProcessResourceRuntime {
         }
 
         for (key, mut record) in desired {
+            let provider_identity = if is_static_controller(&record) {
+                record
+                    .owner_ref()
+                    .filter(|owner| owner.resource_type().as_str() == "Provider")
+                    .and_then(|owner| self.controller_provider_identities.get(&owner).cloned())
+            } else {
+                None
+            };
+            record.controller_provider_uid = provider_identity.as_ref().map(|(uid, _)| uid.clone());
+            record.controller_provider_generation =
+                provider_identity.map(|(_, generation)| generation);
             let was_present = self.records.contains_key(&key);
             let replace = self
                 .records
@@ -545,7 +601,17 @@ impl ProcessResourceRuntime {
             }
 
             if was_present && !replace {
-                match self.probe_record(&record).await? {
+                let liveness = if controller_requires_stop(
+                    &record,
+                    self.providers
+                        .controller_bootstrap_present(&self.zone, &key),
+                ) {
+                    self.stop_record(&record).await?;
+                    ProviderLiveness::Exited
+                } else {
+                    self.probe_record(&record).await?
+                };
+                match liveness {
                     ProviderLiveness::Alive => {}
                     ProviderLiveness::Unknown => {
                         self.terminal.insert(key.clone());
@@ -642,6 +708,10 @@ impl ProcessResourceRuntime {
         &self,
         record: &DesiredRecord,
     ) -> Result<bool, ProcessResourceRuntimeError> {
+        if !controller_provider_identity_available(record) {
+            self.stop_record(record).await?;
+            return Err(ProcessResourceRuntimeError::ProviderIdentityUnavailable);
+        }
         let adoption = match &record.process {
             DesiredProcess::Process(spec)
                 if spec.adoption_policy()
@@ -660,8 +730,39 @@ impl ProcessResourceRuntime {
                 .await
                 .map_err(map_provider_error)?,
         };
+        if let Some(plan) = start_record_plan(&adoption, &record.process)? {
+            if plan.adopted {
+                return Ok(true);
+            }
+            let DesiredProcess::Process(spec) = &record.process else {
+                unreachable!("controller bootstrap restart plan requires Process");
+            };
+            for effect in plan.effects {
+                match effect {
+                    StartRecordEffect::StopAndFinalize => {
+                        // The Provider owns exact stop and finalization before
+                        // the replacement launch can proceed.
+                        self.providers
+                            .stop_resource(
+                                self.context(record),
+                                spec,
+                                process_drain_timeout(spec),
+                                Duration::from_secs(30),
+                            )
+                            .await
+                            .map_err(map_provider_error)?;
+                    }
+                    StartRecordEffect::Launch => {
+                        self.launch_record(record).await?;
+                    }
+                }
+            }
+            return Ok(false);
+        }
         match adoption {
-            ProviderAdoption::Adopted(_) => Ok(true),
+            ProviderAdoption::Adopted(_) | ProviderAdoption::ControllerBootstrapMissing => {
+                unreachable!("handled by start record plan")
+            }
             ProviderAdoption::Quarantined(_) => Err(ProcessResourceRuntimeError::IdentityAmbiguous),
             ProviderAdoption::Stale { candidate } => {
                 let provider_ref = self.context(record).provider_ref.clone();
@@ -683,14 +784,16 @@ impl ProcessResourceRuntime {
         &self,
         record: &DesiredRecord,
     ) -> Result<(), ProcessResourceRuntimeError> {
+        if is_static_controller(record)
+            && (record.controller_provider_uid.is_none()
+                || record.controller_provider_generation.is_none())
+        {
+            return Err(ProcessResourceRuntimeError::ProviderIdentityUnavailable);
+        }
         match &record.process {
             DesiredProcess::Process(spec) => self
                 .providers
-                .launch_resource(
-                    self.context(record),
-                    spec,
-                    launch_timeout(&record.process),
-                )
+                .launch_resource(self.context(record), spec, launch_timeout(&record.process))
                 .await
                 .map_err(map_provider_error)?,
             DesiredProcess::Ephemeral(spec) => self
@@ -715,6 +818,7 @@ impl ProcessResourceRuntime {
         let identity_failure = matches!(
             error,
             ProcessResourceRuntimeError::IdentityAmbiguous
+                | ProcessResourceRuntimeError::ProviderIdentityUnavailable
                 | ProcessResourceRuntimeError::TemplateUnavailable
         );
         let restart = !identity_failure
@@ -1029,6 +1133,7 @@ fn start_failure_code(error: ProcessResourceRuntimeError) -> &'static str {
         ProcessResourceRuntimeError::UnsupportedProvider => "provider-unsupported",
         ProcessResourceRuntimeError::InvalidResource => "resource-invalid",
         ProcessResourceRuntimeError::ProviderEffect => "provider-start-failed",
+        ProcessResourceRuntimeError::ProviderIdentityUnavailable => "provider-identity-unavailable",
         ProcessResourceRuntimeError::Store => "store-failed",
     }
 }
@@ -1046,6 +1151,9 @@ fn start_failure_message(error: ProcessResourceRuntimeError) -> &'static str {
         }
         ProcessResourceRuntimeError::InvalidResource => "the process resource is invalid",
         ProcessResourceRuntimeError::ProviderEffect => "the Provider failed to start the process",
+        ProcessResourceRuntimeError::ProviderIdentityUnavailable => {
+            "the committed Provider identity is unavailable"
+        }
         ProcessResourceRuntimeError::Store => "the durable resource store failed",
     }
 }
@@ -1056,7 +1164,9 @@ fn stale_candidate_for_deletion(
     match adoption {
         ProviderAdoption::Quarantined(_) => Err(ProcessResourceRuntimeError::IdentityAmbiguous),
         ProviderAdoption::Stale { candidate } => Ok(Some(candidate)),
-        ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => Ok(None),
+        ProviderAdoption::Adopted(_)
+        | ProviderAdoption::ControllerBootstrapMissing
+        | ProviderAdoption::Absent => Ok(None),
     }
 }
 
@@ -1393,6 +1503,74 @@ fn map_provider_error(error: String) -> ProcessResourceRuntimeError {
     }
 }
 
+fn is_static_controller(record: &DesiredRecord) -> bool {
+    matches!(
+        &record.process,
+        DesiredProcess::Process(spec)
+            if spec.execution().process_class()
+                == d2b_contracts_resource::v3::process::ProcessClass::Controller
+            && record
+                .owner_ref()
+                .is_some_and(|owner| owner.resource_type().as_str() == "Provider")
+    )
+}
+
+fn controller_provider_identity_available(record: &DesiredRecord) -> bool {
+    !is_static_controller(record)
+        || (record.controller_provider_uid.is_some()
+            && record.controller_provider_generation.is_some())
+}
+
+fn controller_requires_stop(record: &DesiredRecord, bootstrap_present: bool) -> bool {
+    is_static_controller(record)
+        && (!bootstrap_present || !controller_provider_identity_available(record))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartRecordEffect {
+    StopAndFinalize,
+    Launch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartRecordPlan {
+    adopted: bool,
+    effects: &'static [StartRecordEffect],
+}
+
+const NO_START_RECORD_EFFECTS: &[StartRecordEffect] = &[];
+const CONTROLLER_BOOTSTRAP_RESTART_EFFECTS: &[StartRecordEffect] = &[
+    StartRecordEffect::StopAndFinalize,
+    StartRecordEffect::Launch,
+];
+
+/// Select the bounded lifecycle effects for an adoption result.
+///
+/// The concrete Provider calls remain in `start_record`; this small plan keeps
+/// the restart ordering executable without replacing the production Provider
+/// composition with a test-only mock.
+fn start_record_plan(
+    adoption: &ProviderAdoption,
+    process: &DesiredProcess,
+) -> Result<Option<StartRecordPlan>, ProcessResourceRuntimeError> {
+    match adoption {
+        ProviderAdoption::Adopted(_) => Ok(Some(StartRecordPlan {
+            adopted: true,
+            effects: NO_START_RECORD_EFFECTS,
+        })),
+        ProviderAdoption::ControllerBootstrapMissing => match process {
+            DesiredProcess::Process(_) => Ok(Some(StartRecordPlan {
+                adopted: false,
+                effects: CONTROLLER_BOOTSTRAP_RESTART_EFFECTS,
+            })),
+            DesiredProcess::Ephemeral(_) => Err(ProcessResourceRuntimeError::TemplateUnavailable),
+        },
+        ProviderAdoption::Absent
+        | ProviderAdoption::Stale { .. }
+        | ProviderAdoption::Quarantined(_) => Ok(None),
+    }
+}
+
 fn deletion_adoption(
     result: Result<ProviderAdoption, String>,
 ) -> Result<ProviderAdoption, ProcessResourceRuntimeError> {
@@ -1482,6 +1660,8 @@ fn decode_snapshot(
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
+            controller_provider_uid: None,
+            controller_provider_generation: None,
         };
         if desired.insert(record.key(), record).is_some() {
             return Err(ProcessResourceRuntimeError::InvalidResource);
@@ -1704,8 +1884,7 @@ pub(crate) async fn reconcile_wayland_session_deletion(
             });
             if producer_terminal && !metadata_deletion_requested(endpoint) {
                 changed |=
-                    request_cleanup_delete(client, endpoint, "wayland-child-endpoint-delete")
-                        .await;
+                    request_cleanup_delete(client, endpoint, "wayland-child-endpoint-delete").await;
             } else if producer_terminal && metadata_deletion_requested(endpoint) {
                 changed |=
                     request_cleanup_delete(client, endpoint, "wayland-child-endpoint-drain").await;
@@ -1731,16 +1910,11 @@ pub(crate) async fn reconcile_wayland_session_deletion(
                 .await
                 .map_err(|_| ProcessResourceRuntimeError::Store)?;
             if metadata_has_finalizer(&current, WAYLAND_SESSION_FINALIZER) {
-                changed |= request_cleanup_finalizer(
-                    client,
-                    &current,
-                    WAYLAND_SESSION_FINALIZER,
-                    false,
-                )
-                .await;
-            } else {
                 changed |=
-                    request_cleanup_delete(client, &current, "wayland-session-delete").await;
+                    request_cleanup_finalizer(client, &current, WAYLAND_SESSION_FINALIZER, false)
+                        .await;
+            } else {
+                changed |= request_cleanup_delete(client, &current, "wayland-session-delete").await;
             }
         }
         if !changed {
@@ -1788,7 +1962,11 @@ async fn list_cleanup_children(
     Ok(resources)
 }
 
-fn cleanup_operation(action: &str, resource_ref: &ResourceRef, revision: u64) -> StoreOperationContext {
+fn cleanup_operation(
+    action: &str,
+    resource_ref: &ResourceRef,
+    revision: u64,
+) -> StoreOperationContext {
     let operation_id = cleanup_operation_id(action, resource_ref, revision);
     StoreOperationContext {
         operation_id: operation_id.clone(),
@@ -1878,9 +2056,11 @@ async fn request_cleanup_delete(
     precondition.expected_uid = Some(resource.uid.as_str().to_owned());
     mutation.precondition = protobuf::MessageField::some(precondition);
     let mut request = wire::DeleteRequest::new();
-    request.meta = protobuf::MessageField::some(request_meta(
-        &cleanup_operation_id(action, &resource.resource_ref, resource.revision.get()),
-    ));
+    request.meta = protobuf::MessageField::some(request_meta(&cleanup_operation_id(
+        action,
+        &resource.resource_ref,
+        resource.revision.get(),
+    )));
     request.mutation = protobuf::MessageField::some(mutation);
     client.delete(request).await.error.is_none()
 }
@@ -1912,11 +2092,33 @@ async fn request_cleanup_finalizer(
     } else {
         "wayland-session-finalizer-remove"
     };
-    request.meta = protobuf::MessageField::some(request_meta(
-        &cleanup_operation_id(action, &resource.resource_ref, resource.revision.get()),
-    ));
+    request.meta = protobuf::MessageField::some(request_meta(&cleanup_operation_id(
+        action,
+        &resource.resource_ref,
+        resource.revision.get(),
+    )));
     request.mutation = protobuf::MessageField::some(mutation);
     client.update_finalizers(request).await.error.is_none()
+}
+
+pub(crate) fn controller_provider_refs(resources: &[StoredResource]) -> BTreeSet<ResourceRef> {
+    resources
+        .iter()
+        .filter(|resource| resource.resource_ref.resource_type().as_str() == PROCESS_TYPE)
+        .filter_map(|resource| {
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json).ok()?;
+            let process =
+                serde_json::from_slice::<ProcessSpec>(&envelope.spec().base().to_canonical_bytes())
+                    .ok()?;
+            if process.execution().process_class()
+                != d2b_contracts_resource::v3::process::ProcessClass::Controller
+            {
+                return None;
+            }
+            let owner = envelope.metadata().owner_ref()?.clone();
+            (owner.resource_type().as_str() == "Provider").then_some(owner)
+        })
+        .collect()
 }
 
 /// Run the relist/watch reconciliation loop for one Zone.
@@ -1927,6 +2129,10 @@ pub(crate) async fn run_process_watch(
     registry: Arc<Mutex<Option<ProcessResourceRuntime>>>,
     status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
     wayland_session_ref: Option<ResourceRef>,
+    provider_identity_hook: Option<ProcessProviderIdentityHook>,
+    controller_fence_hook: Option<ProcessWatchHook>,
+    controller_hook: Option<ProcessWatchHook>,
+    process_reconcile_lock: Arc<tokio::sync::Mutex<()>>,
 ) {
     loop {
         match tokio::time::timeout(Duration::from_secs(1), watch.recv()).await {
@@ -1942,35 +2148,52 @@ pub(crate) async fn run_process_watch(
             }
             Err(_) => {}
         }
-        let Ok(snapshot) = list_process_snapshot(&store, &zone).await else {
-            continue;
-        };
-        let runtime = match registry.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => return,
-        };
-        let Some(mut runtime) = runtime else {
-            continue;
-        };
-        let result = runtime.reconcile(snapshot).await;
-        if let Ok(mut guard) = registry.lock() {
-            *guard = Some(runtime);
-        } else {
-            return;
+        if let Some(controller_fence_hook) = controller_fence_hook.as_ref() {
+            if controller_fence_hook().await.is_err() {
+                continue;
+            }
         }
-        if result.is_err() {
-            tracing::warn!(zone = %zone.as_str(), "generic Process reconciliation degraded");
-        }
-        if let (Some(client), Some(session_ref)) =
-            (status_client.as_ref(), wayland_session_ref.as_ref())
-            && let Err(error) =
-                reconcile_wayland_session_deletion(client, &store, &zone, session_ref).await
         {
-            tracing::warn!(
-                zone = %zone.as_str(),
-                error = %error,
-                "WaylandSession deletion drain degraded"
-            );
+            let _guard = process_reconcile_lock.lock().await;
+            let Ok(snapshot) = list_process_snapshot(&store, &zone).await else {
+                continue;
+            };
+            let runtime = match registry.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(_) => return,
+            };
+            let Some(mut runtime) = runtime else {
+                continue;
+            };
+            if let Some(provider_identity_hook) = provider_identity_hook.as_ref() {
+                match provider_identity_hook(controller_provider_refs(&snapshot)).await {
+                    Ok(identities) => runtime.set_controller_provider_identities(identities),
+                    Err(()) => runtime.set_controller_provider_identities(BTreeMap::new()),
+                }
+            }
+            let result = runtime.reconcile(snapshot).await;
+            if let Ok(mut guard) = registry.lock() {
+                *guard = Some(runtime);
+            } else {
+                return;
+            }
+            if result.is_err() {
+                tracing::warn!(zone = %zone.as_str(), "generic Process reconciliation degraded");
+            }
+            if let (Some(client), Some(session_ref)) =
+                (status_client.as_ref(), wayland_session_ref.as_ref())
+                && let Err(error) =
+                    reconcile_wayland_session_deletion(client, &store, &zone, session_ref).await
+            {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    error = %error,
+                    "WaylandSession deletion drain degraded"
+                );
+            }
+        }
+        if let Some(controller_hook) = controller_hook.as_ref() {
+            let _ = controller_hook().await;
         }
     }
 }
@@ -1979,8 +2202,7 @@ pub(crate) async fn run_process_watch(
 mod tests {
     use d2b_process_conformance::{
         AdoptionCandidate, AdoptionCondition, ObservedIdentity, ProcessIdentityDigest,
-        ProcessPhaseClass, ProcessStatusReport, WaitReapOwner,
-        testing::fixtures,
+        ProcessPhaseClass, ProcessStatusReport, WaitReapOwner, testing::fixtures,
     };
 
     use super::*;
@@ -2014,6 +2236,68 @@ mod tests {
             deletion_adoption(Err("provider-ticket:other".to_owned())),
             Err(ProcessResourceRuntimeError::ProviderEffect)
         ));
+    }
+
+    fn adopted_report() -> ProcessStatusReport {
+        ProcessStatusReport {
+            provider: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                "system-minijail",
+            )
+            .expect("provider token"),
+            identity: ProcessIdentityDigest::from_bytes([0x51; 32]),
+            wait_reap_owner: WaitReapOwner::Local,
+            execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
+            domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
+            user_ref: None,
+            digests: fixtures::compiled_digests(),
+            phase: ProcessPhaseClass::Ready,
+            last_exit: None,
+            adoption: AdoptionCondition::Adopted,
+        }
+    }
+
+    #[test]
+    fn missing_controller_bootstrap_stops_before_fresh_launch() {
+        let controller = serde_json::from_str::<ProcessSpec>(
+            r#"{"executionRef":"Host/host-system","processClass":"controller","template":"controller-main"}"#,
+        )
+        .expect("static controller process");
+        assert_eq!(
+            controller.execution().process_class(),
+            d2b_contracts_resource::v3::process::ProcessClass::Controller
+        );
+        assert_eq!(
+            controller.execution().template().as_str(),
+            "controller-main"
+        );
+        let adoption = ProviderAdoption::ControllerBootstrapMissing;
+        let plan = start_record_plan(&adoption, &DesiredProcess::Process(controller))
+            .expect("controller restart plan")
+            .expect("controller restart action");
+        assert!(!plan.adopted);
+
+        let mut effects = Vec::new();
+        for effect in plan.effects {
+            effects.push(match effect {
+                StartRecordEffect::StopAndFinalize => "stop-and-finalize",
+                StartRecordEffect::Launch => "launch",
+            });
+        }
+        assert_eq!(effects, ["stop-and-finalize", "launch"]);
+    }
+
+    #[test]
+    fn ordinary_process_adoption_remains_adopted_without_a_second_launch() {
+        let worker = serde_json::from_str::<ProcessSpec>(
+            r#"{"executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#,
+        )
+        .expect("ordinary process");
+        let adoption = ProviderAdoption::Adopted(adopted_report());
+        let plan = start_record_plan(&adoption, &DesiredProcess::Process(worker))
+            .expect("ordinary adoption plan")
+            .expect("ordinary adoption result");
+        assert!(plan.adopted);
+        assert!(plan.effects.is_empty());
     }
 
     #[test]
@@ -2085,6 +2369,8 @@ mod tests {
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
+            controller_provider_uid: None,
+            controller_provider_generation: None,
         };
         let canonical = status_payload(
             &record,
@@ -2147,10 +2433,9 @@ mod tests {
 
     #[test]
     fn guest_target_selector_is_limited_to_the_wayland_session_owner() {
-        let session_ref = ResourceRef::parse(
-            "display-wayland.d2bus.org.WaylandSession/display-wayland",
-        )
-        .expect("session ref");
+        let session_ref =
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+                .expect("session ref");
         let guest_ref = ResourceRef::parse("Guest/work").expect("guest ref");
         let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider ref");
         let process = serde_json::from_str::<ProcessSpec>(
@@ -2177,6 +2462,8 @@ mod tests {
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
+            controller_provider_uid: None,
+            controller_provider_generation: None,
         };
 
         assert_eq!(

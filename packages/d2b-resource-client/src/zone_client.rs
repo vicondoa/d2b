@@ -20,11 +20,11 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceName, ResourceRef, ResourceTypeName,
 };
 use d2b_core_controller::controller_assignment::{
-    AssignmentError, AssignmentVerb, ResourceClientLease, ScopedResourceFilter,
+    AssignmentError, ResourceClientLease, ScopedResourceFilter,
 };
 pub use d2b_core_controller::controller_assignment::{
-    AssignmentIdentity, OwnerChildScope, ScopedResourceMutation, ScopedResourceQuery,
-    ScopedResourceScope,
+    AssignmentIdentity, AssignmentVerb, OwnerChildScope, ScopedResourceMutation,
+    ScopedResourceQuery, ScopedResourceScope,
 };
 
 use crate::{

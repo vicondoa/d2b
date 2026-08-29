@@ -215,6 +215,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
                 network_tap_context: None,
             }),
             self.caller_role.clone(),

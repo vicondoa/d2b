@@ -34,6 +34,7 @@ pub mod sandbox_compiler;
 pub mod user_ns;
 
 use std::collections::BTreeSet;
+use std::os::fd::OwnedFd;
 
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
@@ -230,8 +231,19 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         &self,
         ticket: &LaunchTicket,
     ) -> Result<ProcessStatusReport, ProcessConformanceError> {
+        self.launch_with_inherited_fds(ticket, Vec::new()).await
+    }
+
+    async fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> Result<ProcessStatusReport, ProcessConformanceError> {
         self.validate(ticket)?;
-        let launched = self.port.launch(ticket).await?;
+        let launched = self
+            .port
+            .launch_with_inherited_fds(ticket, inherited_fds)
+            .await?;
         // d2b owns wait and reap for every minijail-launched process.
         if launched.wait_reap_owner != WaitReapOwner::Local {
             return Err(ProcessConformanceError::WaitOwnerMismatch);

@@ -16,7 +16,7 @@ use d2b_bus::{BusIngress, ZoneRegistrar};
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_zone_session::v3::{
-    component_session::{AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass},
+    component_session::{EndpointPolicy, EndpointRole},
     resource_bundle::ResourceBundle,
     role::RoleSpec,
     role_binding::RoleBindingSpec,
@@ -346,6 +346,25 @@ pub fn runtime_policy(
     )
 }
 
+/// Compile the runtime policy while adding exact committed Provider subjects
+/// for external controller sessions.
+pub fn runtime_policy_with_subjects(
+    zone: &ZoneId,
+    snapshot: &PolicySnapshot,
+    current_revision: ZoneRevision,
+    bundle_resource_types: &[ResourceTypeName],
+    additional_subjects: impl IntoIterator<Item = BoundSubject>,
+) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
+    compile_committed_policy_with_subjects(
+        zone,
+        *snapshot,
+        current_revision,
+        bundle_resource_types,
+        &[],
+        additional_subjects,
+    )
+}
+
 /// Compile the complete native policy from committed Role and RoleBinding
 /// resources, retaining only the fixed internal system-core grant.
 pub fn compile_committed_policy(
@@ -354,6 +373,25 @@ pub fn compile_committed_policy(
     current_revision: ZoneRevision,
     bundle_resource_types: &[ResourceTypeName],
     resources: &[StoredResource],
+) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
+    compile_committed_policy_with_subjects(
+        zone,
+        snapshot,
+        current_revision,
+        bundle_resource_types,
+        resources,
+        std::iter::empty(),
+    )
+}
+
+/// Compile committed policy resources and add exact controller subjects.
+pub fn compile_committed_policy_with_subjects(
+    zone: &ZoneId,
+    snapshot: PolicySnapshot,
+    current_revision: ZoneRevision,
+    bundle_resource_types: &[ResourceTypeName],
+    resources: &[StoredResource],
+    additional_subjects: impl IntoIterator<Item = BoundSubject>,
 ) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
     if snapshot.policy_revision == 0
         || snapshot.api_catalog_revision == 0
@@ -459,7 +497,7 @@ pub fn compile_committed_policy(
     let binding = CompiledRoleBinding::new(
         role_ref.clone(),
         system_core_subjects,
-        binding_scope,
+        binding_scope.clone(),
         RelayGrantAuthority::None,
     )
     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
@@ -565,6 +603,41 @@ pub fn compile_committed_policy(
             _ => {}
         }
     }
+    let additional_subjects = additional_subjects.into_iter().collect::<BTreeSet<_>>();
+    if !additional_subjects.is_empty() {
+        let provider_role_ref = ResourceRef::parse("Role/provider-controller-runtime")
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        let controller_verbs = [ResourceVerb::Get, ResourceVerb::List, ResourceVerb::Watch];
+        let controller_rules = resource_types
+            .chunks(16)
+            .map(|chunk| {
+                PolicyRule::new(
+                    &catalog,
+                    chunk.iter().cloned(),
+                    controller_verbs,
+                    session_verbs,
+                    [],
+                    [],
+                    [zone.clone()],
+                    [],
+                )
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        roles.push(
+            CompiledRole::new(provider_role_ref.clone(), controller_rules)
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        );
+        bindings.push(
+            CompiledRoleBinding::new(
+                provider_role_ref,
+                additional_subjects,
+                binding_scope,
+                RelayGrantAuthority::None,
+            )
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        );
+    }
     let policy = PolicySet::new(
         &catalog,
         snapshot.policy_revision,
@@ -612,31 +685,10 @@ fn resource_is_current(resource: &StoredResource, envelope: &ResourceEnvelope) -
 }
 
 pub fn system_core_endpoint_policy() -> EndpointPolicy {
-    EndpointPolicy {
-        purpose: EndpointPurpose::ResourceService,
-        purpose_class: PurposeClass::Local,
-        initiator_role: EndpointRole::ZoneController,
-        responder_role: EndpointRole::Component,
-        service: ServicePackage::ResourceV3,
-        schema_fingerprint: [0x11; 32],
-        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
-        limits: LimitProfile::local_default(),
-        transport_binding: ComponentTransportBinding {
-            transport: TransportClass::InheritedSocketpair,
-            locality: Locality::HostLocal,
-            channel_binding: [0x22; 32],
-            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
-        },
-        reconnect_generation: 1,
-        attachment_policy: AttachmentPolicy {
-            kind: d2b_contracts_zone_session::v3::component_session::AttachmentPolicyKind::PacketAtomic,
-            max_per_packet: 1,
-            max_per_request: 1,
-            max_per_operation: 1,
-            max_per_session: 1,
-            credentials_allowed: false,
-        },
-    }
+    d2b_session_unix::inherited_resource_v3_endpoint_policy(
+        EndpointRole::ZoneController,
+        EndpointRole::Component,
+    )
 }
 
 pub fn unix_transport(
@@ -689,6 +741,9 @@ pub async fn register_system_core_session(
     let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd)
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
     let verified_peer = VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    registrar
+        .install_system_core_subject(&verified_peer)
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
     let initiator = unix_transport(initiator_socket, &policy)?;
     let responder = unix_transport(responder_socket, &policy)?;
@@ -4131,6 +4186,38 @@ mod tests {
         let mut slot = Some(running);
         assert!(!watch_needs_restart(&mut slot));
         slot.take().expect("running watch").abort();
+    }
+
+    #[tokio::test]
+    async fn explicit_system_core_subject_preserves_component_registration() {
+        let catalog = ApiCatalog::standard();
+        let native = NativeAuthorizer::new(catalog, None).unwrap();
+        let state = AuthorizationState {
+            snapshot: PolicySnapshot {
+                policy_revision: 1,
+                api_catalog_revision: 1,
+                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                controller_generation: None,
+            },
+            zone_policy_revision: ZoneRevision::new(1),
+            bootstrap_phase: BootstrapPhase::Disabled,
+            now_tick: 1,
+        };
+        let authorizer = d2b_bus::BusAuthorizer::new(native, state).unwrap();
+        let (_bus, registrar) = d2b_bus::ZoneBus::new(
+            ZoneId::parse("dev").unwrap(),
+            authorizer,
+            d2b_bus::BusConfig::default(),
+        )
+        .unwrap();
+        let (initiator_fd, _responder_fd) = prearmed_seqpacket_pair().unwrap();
+        let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
+        let verified_peer =
+            VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).unwrap();
+        registrar.install_system_core_subject(&verified_peer).unwrap();
+        registrar
+            .component_session_acceptor(system_core_endpoint_policy(), verified_peer)
+            .unwrap();
     }
 
     #[test]

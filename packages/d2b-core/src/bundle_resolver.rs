@@ -3874,8 +3874,11 @@ fn build_runner_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedR
 }
 
 fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
+    // Provider controller intents are committed Provider metadata, not
+    // processes.json runner entries.
     match role {
         ProcessRole::HostReconcile
+        | ProcessRole::ProviderController
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => None,
@@ -3954,7 +3957,8 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         // WaylandProxy must always carry the d2b-wayland-proxy binary
         // and closed argv from processes.json. No legacy fallback.
         ProcessRole::WaylandProxy => return None,
-        ProcessRole::HostReconcile
+        ProcessRole::ProviderController
+        | ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => return None,
@@ -4804,6 +4808,27 @@ mod tests {
         };
 
         assert!(score_writable_path(&qemu, true) > score_writable_path(&host, true));
+    }
+
+    #[test]
+    fn provider_controller_is_not_resolved_from_process_dag() {
+        let node = ProcessNode {
+            execution_ref: Some("Host/host-system".to_owned()),
+            execution_domain: Some(ProcessExecutionDomain::System),
+            user_ref: None,
+            id: NodeId("cloud-hypervisor-controller".to_owned()),
+            role: ProcessRole::ProviderController,
+            unit: None,
+            binary_path: Some("/bin/controller".to_owned()),
+            argv: vec!["controller".to_owned()],
+            env: Vec::new(),
+            profile: role_profile(1200, 1200, &[], "d2b.slice/controller"),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+        };
+
+        assert!(ResolvedRunnerIntent::from_process_node("host-system", &node).is_none());
     }
 
     fn build_personal_dev_bundle(root: &Path) -> BundleResolver {

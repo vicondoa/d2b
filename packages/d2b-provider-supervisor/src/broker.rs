@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::IoSliceMut;
-use std::os::fd::{AsFd, OwnedFd};
+use std::io::{IoSlice, IoSliceMut};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -24,12 +24,13 @@ use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
-    ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
+    ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
+    ProcessStopClass, WaitReapOwner,
 };
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::net::{
-    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SocketFlags, SocketType,
-    recvmsg, send, socket_with,
+    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
+    SendAncillaryMessage, SendFlags, SocketFlags, SocketType, recvmsg, send, sendmsg, socket_with,
 };
 use sha2::{Digest, Sha256};
 use socket2::Socket;
@@ -368,6 +369,11 @@ impl BundleBackedLaunchResolver {
         if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
             return Err(ProcessEffectError::IdentityChanged);
         }
+        if ticket.inherited_fd_table().count() == 1
+            && role != RunnerRole::ProviderController
+        {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
         if intent.execution_ref != expected_execution_ref {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -458,6 +464,7 @@ impl BundleBackedLaunchResolver {
 /// Map the open Process role vocabulary to the broker's closed runner role.
 pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
     match role {
+        ProcessRole::ProviderController => Some(RunnerRole::ProviderController),
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
         ProcessRole::QemuMediaRunner => Some(RunnerRole::QemuMedia),
         ProcessRole::Virtiofsd => Some(RunnerRole::Virtiofsd),
@@ -563,16 +570,25 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
     }
 
     fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
+        self.request_with_fds(request, &[])
+    }
+
+    fn request_with_fds(
+        &self,
+        request: BrokerRequest,
+        inherited_fds: &[OwnedFd],
+    ) -> Result<BrokerFrame, ProcessEffectError> {
         if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
             || !request.allowed_by_profile(self.profile)
         {
             return Err(ProcessEffectError::LaunchFailed);
         }
-        broker_round_trip(
+        broker_round_trip_with_fds(
             &self.socket_path,
             self.io_timeout,
             request,
             self.caller_role.clone(),
+            inherited_fds,
         )
     }
 
@@ -602,6 +618,21 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
             .remove(identity)
             .ok_or(ProcessEffectError::IdentityChanged)
     }
+
+    pub(crate) fn matches_peer_process(
+        &self,
+        handle: &BrokerPidfdHandle,
+        peer_pid: i32,
+    ) -> Result<bool, ProcessEffectError> {
+        if peer_pid <= 0 || handle.observed.pid != peer_pid {
+            return Ok(false);
+        }
+        if read_pidfd_process_id(&handle.pidfd)? != Some(peer_pid) {
+            return Ok(false);
+        }
+        Ok(read_proc_start_time(peer_pid)? == Some(handle.observed.start_time_ticks))
+    }
+
 }
 
 impl<R: BrokerLaunchResolver> std::fmt::Debug for BrokerProcessBackend<R> {
@@ -617,8 +648,20 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         &self,
         request: ProcessRequest,
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
+        let request =
+            ProcessLaunchRequest::empty(request).map_err(|_| ProcessEffectError::LaunchFailed)?;
+        self.launch_with_inherited_fds(request)
+    }
+
+    fn launch_with_inherited_fds(
+        &self,
+        request: ProcessLaunchRequest,
+    ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
+        let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
-        let frame = self.request(BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+        let inherited_fd_count =
+            u16::try_from(inherited_fds.len()).map_err(|_| ProcessEffectError::LaunchFailed)?;
+        let frame = self.request_with_fds(BrokerRequest::SpawnRunner(SpawnRunnerRequest {
             execution_ref: Some(intent.execution_ref.clone()),
             execution_domain: Some(intent.domain),
             user_ref: intent.user_ref.clone(),
@@ -638,8 +681,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
+            inherited_fd_count,
             network_tap_context: None,
-        }))?;
+        }), &inherited_fds)?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
             return Err(response_error(&frame.response, BrokerOperation::Other));
         };
@@ -1102,6 +1146,36 @@ mod tests {
     }
 }
 
+fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectError> {
+    let contents =
+        match fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(ProcessEffectError::ObserveFailed),
+        };
+    let mut observed = None;
+    for line in contents.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name != "Pid" {
+            continue;
+        }
+        if observed
+            .replace(
+                value
+                    .trim()
+                    .parse::<i32>()
+                    .map_err(|_| ProcessEffectError::ObserveFailed)?,
+            )
+            .is_some()
+        {
+            return Err(ProcessEffectError::ObserveFailed);
+        }
+    }
+    Ok(observed)
+}
+
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,
@@ -1130,6 +1204,16 @@ pub(crate) fn broker_round_trip(
     io_timeout: Duration,
     request: BrokerRequest,
     caller_role: BrokerCallerRole,
+) -> Result<BrokerFrame, ProcessEffectError> {
+    broker_round_trip_with_fds(socket_path, io_timeout, request, caller_role, &[])
+}
+
+pub(crate) fn broker_round_trip_with_fds(
+    socket_path: &Path,
+    io_timeout: Duration,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    inherited_fds: &[OwnedFd],
 ) -> Result<BrokerFrame, ProcessEffectError> {
     let fd = socket_with(
         AddressFamily::UNIX,
@@ -1167,15 +1251,29 @@ pub(crate) fn broker_round_trip(
     };
     let frame =
         d2b_contracts::encode_frame(&envelope).map_err(|_| ProcessEffectError::LaunchFailed)?;
-    let written = send(&socket, &frame, rustix::net::SendFlags::empty())
-        .map_err(|_| ProcessEffectError::LaunchFailed)?;
+    let written = if inherited_fds.is_empty() {
+        send(&socket, &frame, SendFlags::empty()).map_err(|_| ProcessEffectError::LaunchFailed)?
+    } else {
+        let descriptors = inherited_fds
+            .iter()
+            .map(std::os::fd::AsFd::as_fd)
+            .collect::<Vec<_>>();
+        let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
+        let mut control = SendAncillaryBuffer::new(&mut control_bytes);
+        if !control.push(SendAncillaryMessage::ScmRights(&descriptors)) {
+            return Err(ProcessEffectError::LaunchFailed);
+        }
+        let iov = [IoSlice::new(&frame)];
+        sendmsg(&socket, &iov, &mut control, SendFlags::empty())
+            .map_err(|_| ProcessEffectError::LaunchFailed)?
+    };
     if written != frame.len() {
         return Err(ProcessEffectError::LaunchFailed);
     }
 
     let mut payload = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
     let mut iov = [IoSliceMut::new(&mut payload)];
-    let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(8))];
+    let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
     let mut control = RecvAncillaryBuffer::new(&mut control_bytes);
     let message = recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC)
         .map_err(|_| ProcessEffectError::LaunchFailed)?;

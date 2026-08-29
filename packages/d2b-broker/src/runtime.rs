@@ -2319,8 +2319,34 @@ fn dispatch_request(
 fn request_accepts_fd(request: &BrokerRequest) -> bool {
     matches!(
         request,
-        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_)
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) | BrokerRequest::SpawnRunner(_)
     )
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_spawn_runner_request_fds(
+    role: RunnerRole,
+    inherited_fd_count: u16,
+    attached_fd_count: usize,
+) -> Result<(), BrokerError> {
+    const MAX_REQUEST_INHERITED_FDS: u16 = 256;
+    if inherited_fd_count > MAX_REQUEST_INHERITED_FDS {
+        return Err(BrokerError::Protocol(
+            "SpawnRunner inherited fd count exceeds the bounded maximum".to_owned(),
+        ));
+    }
+    match role {
+        RunnerRole::ProviderController if inherited_fd_count == 1 && attached_fd_count == 1 => {
+            Ok(())
+        }
+        RunnerRole::ProviderController => Err(BrokerError::Protocol(
+            "ProviderController requires exactly one inherited fd".to_owned(),
+        )),
+        _ if inherited_fd_count == 0 && attached_fd_count == 0 => Ok(()),
+        _ => Err(BrokerError::Protocol(
+            "runner inherited fd count/attachment mismatch".to_owned(),
+        )),
+    }
 }
 
 /// Real-wire dispatch. Matches the opaque-ID
@@ -3658,6 +3684,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::SpawnRunner(req) => {
+            validate_spawn_runner_request_fds(req.role, req.inherited_fd_count, request_fds.len())?;
             let resolver = require_resolver(resolver)?;
             let intent = resolver
                 .find_runner_intent(req.bundle_runner_intent_ref.as_str())
@@ -3901,6 +3928,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 &plan_input,
                 resolver,
                 &req,
+                std::mem::take(&mut request_fds),
                 audit_log,
             ) {
                 Ok(outcome) => outcome,
@@ -7601,6 +7629,7 @@ trait DispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError>;
 
@@ -8087,6 +8116,7 @@ impl DispatchBackend for LiveDispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+        request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
         // Reserve the runner_id BEFORE spawning the child: refuse a
@@ -8102,9 +8132,15 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_uid,
             self.daemon_gid,
         )?;
+        if !request_fds.is_empty() && !preopened.child_fds.is_empty() {
+            return Err(BrokerError::Protocol(
+                "request inherited fds cannot combine with broker-preopened fds".to_owned(),
+            ));
+        }
         let mut outcome = crate::live_handlers::live_spawn_runner(
             plan_input,
             preopened.child_fds,
+            request_fds,
             req.activation_input.as_ref(),
         )
         .map_err(|err| {
@@ -9938,6 +9974,7 @@ fn runner_role_for_process_role(
     use d2b_core::processes::ProcessRole;
 
     match role {
+        ProcessRole::ProviderController => Some(RunnerRole::ProviderController),
         ProcessRole::SwtpmPreStartFlush => Some(RunnerRole::SwtpmFlush),
         ProcessRole::Swtpm => Some(RunnerRole::Swtpm),
         ProcessRole::Virtiofsd => Some(RunnerRole::Virtiofsd),
@@ -14274,8 +14311,10 @@ mod tests {
             _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
             _resolver: &BundleResolver,
             _req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
+            request_fds: Vec<OwnedFd>,
             _audit_log: &crate::audit::AuditLog,
         ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
+            drop(request_fds);
             self.remember_runner(runner_id)?;
             Ok(crate::live_handlers::SpawnRunnerResult {
                 pidfd: dummy_fd(),
@@ -15201,6 +15240,7 @@ mod tests {
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
@@ -15686,6 +15726,7 @@ mod tests {
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
@@ -16395,6 +16436,7 @@ mod tests {
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 // Use the existing corp-vm runner intent but assert
@@ -16537,6 +16579,7 @@ mod tests {
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("otel-host-bridge"),
                 role: RunnerRole::OtelHostBridge,

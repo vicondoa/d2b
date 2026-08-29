@@ -36,9 +36,7 @@ use crate::ops::spawn_runner::{
 use crate::ops::store_sync::generation_id_for_intent;
 use crate::ops::store_view_posture::plant_live_marker_with_matrix_posture;
 use d2b_contracts_broker::broker_wire::{ActivationMode, ActivationPhase};
-use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES,
-};
+use d2b_contracts_resource::v3::{ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES};
 use d2b_core::bundle_resolver::{HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent};
 use d2b_core::minijail_profile::CgroupPlacement;
 use d2b_host::hardlink_farm;
@@ -2000,9 +1998,7 @@ pub(crate) fn policy_ref_device_classes(
         "w1-host-reconcile"
         | "w1-store-virtiofs-preflight"
         | "w1-component-session-health"
-        | "w1-activation-nixos-runner" => {
-            Some(&[])
-        }
+        | "w1-activation-nixos-runner" => Some(&[]),
         // swtpm is a software TPM emulator; no hardware device ioctls,
         // but it uses terminal/file ioctls during init → permissive BPF.
         "w1-swtpm" => Some(&[]),
@@ -3268,6 +3264,7 @@ fn refresh_component_session_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), Liv
 pub fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
     mut pre_opened_device_fds: Vec<std::os::fd::OwnedFd>,
+    request_fds: Vec<std::os::fd::OwnedFd>,
     activation_input: Option<&ActivationRunnerInput>,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
@@ -3336,6 +3333,12 @@ pub fn live_spawn_runner(
         })?;
         pre_opened_device_fds.push(render_fd);
     }
+    if !request_fds.is_empty() && !pre_opened_device_fds.is_empty() {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "request inherited fds cannot combine with broker-preopened fds".to_owned(),
+        });
+    }
+    pre_opened_device_fds.extend(request_fds);
     crate::ops::gpu::validate_spawn_plan(&plan, pre_opened_device_fds.len()).map_err(|error| {
         LiveHandlerError::SpawnFailed {
             detail: error.to_string(),
@@ -4828,7 +4831,7 @@ mod tests {
             user_namespace: None,
             umask: None,
         };
-        let err = live_spawn_runner(&plan, Vec::new(), None).unwrap_err();
+        let err = live_spawn_runner(&plan, Vec::new(), Vec::new(), None).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
     }
 
@@ -5318,8 +5321,8 @@ mod tests {
             umask: None,
         };
 
-        let outcome =
-            live_spawn_runner(&plan, Vec::new(), None).expect("spawn privileged test child");
+        let outcome = live_spawn_runner(&plan, Vec::new(), Vec::new(), None)
+            .expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)
             .expect("wait for test child");
         assert!(matches!(

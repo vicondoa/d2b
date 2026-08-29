@@ -47,11 +47,15 @@ pub use binding_children::{
     materialize_child_create_payload, observed_child_from_resource, semantic_child_digest,
 };
 pub use controller_assignment::{
-    AssignmentEpoch, AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest,
-    AssignmentTarget, AssignmentTransportError, AssignmentVerb, ControllerAssignmentRegistry,
-    ControllerRoleContract, MAX_SCOPED_COMMIT_TRANSPORT_BYTES, OwnerChildScope,
-    ResourceClientLease, ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation,
-    ScopedResourceQuery, ScopedResourceScope,
+    AssignmentEpoch, AssignmentError, AssignmentGrantError, AssignmentIdentity, AssignmentPhase,
+    AssignmentRequest, AssignmentScope, AssignmentTarget, AssignmentTransportError, AssignmentVerb,
+    CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID,
+    ControllerAssignmentExpectation, ControllerAssignmentGrant, ControllerAssignmentGrantStore,
+    ControllerAssignmentRegistry, ControllerRoleContract, ControllerSessionBinding,
+    GrantDisposition, MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES, MAX_ASSIGNMENT_GRANT_SCOPES,
+    MAX_ASSIGNMENT_GRANT_VERBS, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES,
+    MAX_SCOPED_COMMIT_TRANSPORT_BYTES, OwnerChildScope, ResourceClientLease, ScopedCommitTransport,
+    ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery, ScopedResourceScope,
 };
 pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,

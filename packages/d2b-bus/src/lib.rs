@@ -47,8 +47,8 @@ pub use registry::{
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
-    CancellationOutcome, CancellationReceipt, CommittedInteractionSubjectInstall,
-    CommittedInteractionSubjectIssuer,
+    CancellationOutcome, CancellationReceipt, CommittedControllerProcessSubjectInput,
+    CommittedInteractionSubjectInstall, CommittedInteractionSubjectIssuer,
     ComponentRequestReceiver, ComponentSessionAdmission, DeliveredInvocation, DeliveredStream,
     LocalOperationLease, ManualClock, NoopBusObserver, ResourceCall, ResourceFilter, ResourceQuery,
     ZoneBus, ZoneRegistrar,

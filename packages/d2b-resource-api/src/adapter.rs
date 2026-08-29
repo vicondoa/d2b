@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn scoped_commit_frame_preserves_assignment_evidence_on_existing_rpc() {
         let transport = ScopedCommitTransport::decode(
-            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateStatus"},{"target":"Process/work","verb":"UpdateFinalizers"}]}"#,
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateStatus"},{"target":"Process/work","verb":"UpdateFinalizers"}]}"#,
         )
         .unwrap();
         let request = d2b_contracts_resource::resource_proto::CommitBatchRequest::new();
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn scoped_commit_frame_preserves_owner_child_scope() {
         let transport = ScopedCommitTransport::decode(
-            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateSpec","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateSpec","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
         )
         .unwrap();
         let scope = transport.mutations()[0].scope().owner_child().unwrap();

@@ -1,11 +1,10 @@
 //! The neutral Process Provider trait and its conformance profile.
 
 use std::collections::BTreeSet;
+use std::os::fd::OwnedFd;
 use std::{future::Future, future::ready};
 
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{IdentityBinding, WaitReapOwner};
@@ -98,6 +97,25 @@ pub trait ProcessProvider: Send + Sync {
         &self,
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send;
+
+    /// Launch with owned descriptors for a Provider-specific child bootstrap.
+    ///
+    /// Providers that do not own a descriptor-bearing launch path reject a
+    /// non-empty vector by default, preserving the ordinary launch contract.
+    fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send {
+        async move {
+            if inherited_fds.is_empty() {
+                self.launch(ticket).await
+            } else {
+                drop(inherited_fds);
+                Err(ProcessConformanceError::InvalidTicket)
+            }
+        }
+    }
 
     /// Re-establish ownership of an already running process after a
     /// controller restart, verifying identity before any pidfd is opened.

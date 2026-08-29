@@ -5451,6 +5451,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
             tracing_span_id: self.tracing_span_id.clone(),
+            inherited_fd_count: 0,
             network_tap_context: None,
         });
         match dispatch_broker_request_with_fds_timeout(
@@ -8100,6 +8101,9 @@ fn dispatch_wave6_resource_reconcile(
             let effect = match adoption {
                 process_provider_runtime::ProviderAdoption::Adopted(_) => {
                     "cloud-hypervisor-adopted"
+                }
+                process_provider_runtime::ProviderAdoption::ControllerBootstrapMissing => {
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
                 process_provider_runtime::ProviderAdoption::Stale { .. } => {
                     tracing::warn!(
@@ -17768,6 +17772,7 @@ impl VmStartRunner<'_> {
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
                 tracing_span_id: None,
+                inherited_fd_count: 0,
                 network_tap_context: self.network_tap_context.clone(),
             }),
             self.caller_role.clone(),
@@ -18970,7 +18975,11 @@ fn load_vm_stop_role_index(state: &ServerState, vm: &str) -> HashMap<String, Run
 }
 
 fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
-    if role_id == VM_RUNNER_ROLE_ID {
+    if role_id == RunnerRole::ProviderController.as_str()
+        || role_id.contains("provider-controller")
+    {
+        Some(RunnerRole::ProviderController)
+    } else if role_id == VM_RUNNER_ROLE_ID {
         Some(RunnerRole::CloudHypervisor)
     } else if role_id == RunnerRole::QemuMedia.as_str() || role_id.contains("qemu-media") {
         Some(RunnerRole::QemuMedia)
@@ -19011,6 +19020,7 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
 
 fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
     match role {
+        Some(RunnerRole::ProviderController) => 0,
         Some(RunnerRole::CloudHypervisor) => 0,
         Some(RunnerRole::QemuMedia) => 0,
         Some(RunnerRole::Gpu) => 1,

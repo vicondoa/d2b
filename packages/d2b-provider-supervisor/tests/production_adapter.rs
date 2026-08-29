@@ -515,9 +515,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         BrokerRequest, BrokerRequestEnvelope, BrokerResponse, RunnerRole, SpawnRunnerResponse,
     };
     use rustix::net::{
-        AddressFamily, RecvAncillaryBuffer, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage,
-        SendFlags, SocketAddrUnix, SocketFlags, SocketType, accept, bind_unix, listen, recvmsg,
-        sendmsg, socket_with,
+        AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
+        SendAncillaryMessage, SendFlags, SocketAddrUnix, SocketFlags, SocketType, accept,
+        bind_unix, listen, recvmsg, sendmsg, socket_with,
     };
 
     let directory = tempfile::tempdir().unwrap();
@@ -541,7 +541,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let connection = accept(&listener).unwrap();
         let mut payload = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
         let mut iov = [IoSliceMut::new(&mut payload)];
-        let mut ancillary_bytes = [];
+        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
         let received = recvmsg(
             &connection,
@@ -550,6 +550,13 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             RecvFlags::CMSG_CLOEXEC,
         )
         .unwrap();
+        let mut request_fd_count = 0;
+        for message in ancillary.drain() {
+            if let RecvAncillaryMessage::ScmRights(fds) = message {
+                request_fd_count += fds.len();
+            }
+        }
+        assert_eq!(request_fd_count, 1);
         let request: BrokerRequestEnvelope =
             d2b_contracts::decode_frame("BrokerRequestEnvelope", &payload[..received.bytes])
                 .unwrap();
@@ -557,7 +564,8 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             BrokerRequest::SpawnRunner(request) => {
                 assert_eq!(request.vm_id, server_vm);
                 assert_eq!(request.role_id, server_role);
-                assert_eq!(request.role, RunnerRole::Virtiofsd);
+                assert_eq!(request.role, RunnerRole::ProviderController);
+                assert_eq!(request.inherited_fd_count, 1);
             }
             _ => panic!("expected SpawnRunner"),
         }
@@ -570,7 +578,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let response = BrokerResponse::SpawnRunner(SpawnRunnerResponse {
             vm_id: server_vm,
             role_id: server_role,
-            role: RunnerRole::Virtiofsd,
+            role: RunnerRole::ProviderController,
             pid: pid.as_raw_nonzero().get(),
             start_time_ticks,
             pidfd_index: 0,
@@ -606,7 +614,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,
         role_id,
-        role: RunnerRole::Virtiofsd,
+        role: RunnerRole::ProviderController,
         bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),
         provider_identity: [0x11; 32],
         template_identity: [0x22; 32],
@@ -633,8 +641,11 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         .selected_provider(MINIJAIL)
         .expected_identity(minijail_bindings())
         .build()
+        .unwrap()
+        .with_inherited_fd_count(1)
         .unwrap();
-    let report = block_on(provider.launch(&ticket)).unwrap();
+    let inherited_fd: std::os::fd::OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+    let report = block_on(provider.launch_with_inherited_fds(&ticket, vec![inherited_fd])).unwrap();
     assert_eq!(report.wait_reap_owner, WaitReapOwner::Local);
     drop(provider);
     server.join().unwrap();
@@ -806,15 +817,10 @@ impl ProcessEffectBackend for ParallelLaunchBackend {
 }
 
 fn parallel_ticket(index: usize) -> d2b_process::LaunchTicket {
+    use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
     use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
-    use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-};
+        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+    };
     use d2b_process::{LaunchTicket, OperationBinding};
 
     let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{index:04x}"))

@@ -3004,6 +3004,8 @@ pub struct DeregisterRunnerPidfdResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerRole {
+    /// External Provider controller with one inherited bootstrap descriptor.
+    ProviderController,
     /// Cloud Hypervisor headless / hybrid VM. The runtime Provider owns argv
     /// planning; the broker consumes the bundle-authoritative launch shape.
     CloudHypervisor,
@@ -3069,6 +3071,7 @@ pub struct SandboxLaunchPlan {
 impl RunnerRole {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ProviderController => "provider-controller",
             Self::CloudHypervisor => "cloud-hypervisor",
             Self::QemuMedia => "qemu-media",
             Self::ActivationNixos => "activation-nixos-runner",
@@ -3166,6 +3169,12 @@ pub struct SpawnRunnerRequest {
     /// carried in the existing typed fields, never inside this identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload_identity: Option<WorkloadIdentity>,
+    /// Number of request-side inherited descriptors attached with SCM_RIGHTS.
+    ///
+    /// Provider controller launches carry exactly one bootstrap descriptor;
+    /// every other runner launch carries zero.
+    #[serde(default)]
+    pub inherited_fd_count: u16,
     /// Complete admitted Network context required when this runner opens a
     /// VMM TAP through `CreateTapFd`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4486,6 +4495,7 @@ mod tests {
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
+            inherited_fd_count: 0,
             network_tap_context: None,
         })
     }

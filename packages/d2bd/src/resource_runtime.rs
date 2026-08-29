@@ -35,13 +35,13 @@ use crate::semantic_binding_resource_runtime::{
     semantic_binding_watch_request,
 };
 use crate::process_resource_runtime::{
-    ProcessResourceRuntime, ProcessResourceRuntimeError, list_process_snapshot,
-    process_watch_request, run_process_watch,
+    ProcessResourceRuntime, ProcessResourceRuntimeError, controller_provider_refs,
+    list_process_snapshot, process_watch_request, run_process_watch,
 };
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{
-    BusAuthorizer, BusConfig, BusIngress, CommittedInteractionSubjectInstall,
-    CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
+    BusAuthorizer, BusConfig, BusIngress, CommittedControllerProcessSubjectInput,
+    CommittedInteractionSubjectInstall, CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
 };
 #[cfg(test)]
 use d2b_contracts_broker::broker_wire::OpenZoneStoreResponse;
@@ -49,11 +49,12 @@ use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
 #[cfg(test)]
-use d2b_contracts_resource::v3::{ConfigurationGeneration, ControllerGeneration};
+use d2b_contracts_resource::v3::ConfigurationGeneration;
+use d2b_contracts_resource::v3::identity::{BindingDigest, EvidenceClass, ReconnectGeneration};
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, NixosGenerationSpec, ResourceBundleGenerationId, ResourceEnvelope,
-    ResourceGeneration, ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
-    ZoneId, ZoneRevision,
+    CanonicalJsonValue, ControllerGeneration, NixosGenerationSpec, PlacementTargetKind,
+    ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration, ResourceName, ResourcePhase,
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_resource::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
@@ -66,7 +67,10 @@ use d2b_core_controller::authority::{
 };
 use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
 use d2b_core_controller::controller_assignment::{
-    AssignmentError, AssignmentIdentity, AssignmentRequest, ResourceClientLease,
+    AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest, AssignmentTarget,
+    CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID,
+    ControllerAssignmentGrant, ControllerRoleContract, ControllerSessionBinding,
+    ResourceClientLease,
 };
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::main::{
@@ -98,14 +102,22 @@ use d2b_resource_api::{
     service::UnavailableUpgradeDispatcher,
 };
 use d2b_resource_store::{
-    PolicySnapshot, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
-    StoredResource,
+    PolicySnapshot, StoreErrorKind, StoreGetRequest, StoreListRequest, StoreListResult,
+    StoreOperationContext, StoreProjection, StoredResource,
 };
 use d2b_resource_store_redb::{
     AuthorityOperationState, BrokerEvidenceIndex, LogicalBackup, RedbResourceStore,
     StoreRuntimeMetadata, write_provisioning_marker,
 };
-use d2b_session::SessionServerError;
+use d2b_session::{
+    ComponentSessionDriver, HandshakeCredentials, SessionDriverHandle, SessionEngine,
+    SessionServerError, StreamId, TransportEvidence,
+};
+use d2b_session_unix::{
+    AncillaryCapacity, CONTROLLER_BOOTSTRAP_TIMEOUT, PeerCredentials, SeqpacketSocket,
+    VerifiedUnixPeer, controller_bootstrap_attachment_policy, controller_credit_scopes,
+    controller_resource_endpoint_policy,
+};
 use d2bd_runtime::authority_persistence::RedbAuthorityPersistence;
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
@@ -121,9 +133,9 @@ use d2bd_runtime::resource_runtime_support::{
     initial_policy_snapshot, map_startup_error,
     materialize_zone_resource_bundle, new_assignment_registry, public_list_request,
     public_operation_id, public_request_meta, refreshed_policy_subject_fingerprints,
-    register_system_core_session, runtime_authorizer, runtime_policy, store_identity,
-    store_identity_for_authority, validate_zone_resource_bundle, validate_zone_self_resource,
-    watch_needs_restart, zone_runtime_metadata,
+    register_system_core_session, runtime_authorizer, runtime_policy, runtime_policy_with_subjects,
+    store_identity, store_identity_for_authority, unix_transport, validate_zone_resource_bundle,
+    validate_zone_self_resource, watch_needs_restart, zone_runtime_metadata,
 };
 #[cfg(test)]
 use d2bd_runtime::resource_runtime_support::compatibility_error_envelope;
@@ -626,6 +638,46 @@ fn generation_publication_payload_matches(
                 .as_ref()
 }
 
+struct ControllerSession {
+    context: crate::process_provider_runtime::ControllerBootstrapContext,
+    binding: ControllerSessionBinding,
+    ingress: BusIngress,
+    driver: SessionDriverHandle,
+    service_task: tokio::task::JoinHandle<Result<(), SessionServerError>>,
+    assignments: BTreeMap<ResourceUid, ResourceClientLease>,
+    assignment_stream_open: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControllerAssignmentRefreshError {
+    Retryable,
+    Failed(ResourceRuntimeError),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ControllerAssignmentRefreshAction<'a> {
+    Retryable {
+        context: &'a crate::process_provider_runtime::ControllerBootstrapContext,
+    },
+    Failed {
+        context: &'a crate::process_provider_runtime::ControllerBootstrapContext,
+        error: ResourceRuntimeError,
+    },
+}
+
+#[derive(Clone)]
+struct ControllerSessionCoordinator {
+    zone: ZoneId,
+    bundle_resource_types: Vec<ResourceTypeName>,
+    store: Arc<RedbResourceStore>,
+    authorizer: Arc<NativeAuthorizer>,
+    authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
+    registrar: Arc<Mutex<Option<ZoneRegistrar>>>,
+    assignments: AssignmentRegistry,
+    controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
+    controller_session_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
 /// A production Resource API and core-controller runtime for one Zone.
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
@@ -637,14 +689,14 @@ pub struct ZoneResourceRuntime {
     backend: Arc<RedbBackend>,
     api: Arc<ResourceService<RedbBackend>>,
     authorizer: Arc<NativeAuthorizer>,
-    authorization_state: Mutex<Option<AuthorizationState>>,
+    authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
     policy_refresh: Mutex<()>,
     bundle_resource_types: Vec<ResourceTypeName>,
     policy_subject_fingerprints:
         Mutex<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>>,
     policy_loaded: Mutex<bool>,
     bus: Option<ZoneBus>,
-    registrar: Mutex<Option<ZoneRegistrar>>,
+    registrar: Arc<Mutex<Option<ZoneRegistrar>>>,
     ingress: Mutex<Option<BusIngress>>,
     service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
     process_status_client:
@@ -665,6 +717,10 @@ pub struct ZoneResourceRuntime {
     semantic_binding_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     process_runtime: Arc<Mutex<Option<ProcessResourceRuntime>>>,
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
+    controller_session_reconcile_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    controller_session_lock: Arc<tokio::sync::Mutex<()>>,
+    controller_reconcile_lock: Arc<tokio::sync::Mutex<()>>,
     activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
     activation_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
@@ -1374,21 +1430,21 @@ impl ZoneResourceRuntime {
         Ok(Self {
             zone,
             authority_identity,
-                bootstrap_provisioned_store: bootstrap_provisioned_store
-                    && disposition == ZoneStoreDisposition::Provisioned,
-                store_id: expected_store_id,
+            bootstrap_provisioned_store: bootstrap_provisioned_store
+                && disposition == ZoneStoreDisposition::Provisioned,
+            store_id: expected_store_id,
             store,
             store_metadata,
             backend,
             api,
             authorizer,
-            authorization_state: Mutex::new(authorization_state),
+            authorization_state: Arc::new(Mutex::new(authorization_state)),
             policy_refresh: Mutex::new(()),
             bundle_resource_types,
             policy_subject_fingerprints: Mutex::new(BTreeMap::new()),
             policy_loaded: Mutex::new(false),
             bus,
-            registrar: Mutex::new(registrar),
+            registrar: Arc::new(Mutex::new(registrar)),
             ingress: Mutex::new(ingress),
             service_task: Mutex::new(service_task),
             process_status_client: Mutex::new(process_status_client),
@@ -1415,6 +1471,10 @@ impl ZoneResourceRuntime {
             semantic_binding_watch_task: Mutex::new(None),
             process_runtime: Arc::new(Mutex::new(None)),
             process_watch_task: Mutex::new(None),
+            controller_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            controller_session_reconcile_task: Arc::new(Mutex::new(None)),
+            controller_session_lock: Arc::new(tokio::sync::Mutex::new(())),
+            controller_reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
             activation_runtime: Arc::new(Mutex::new(None)),
             activation_watch_task: Mutex::new(None),
             interaction_provider_configuration,
@@ -1829,26 +1889,69 @@ impl ZoneResourceRuntime {
     /// Controller deployment supplies only the committed resource, signed
     /// role, installed generations, and authenticated session generation.
     /// The registry remains the single owner of assignment epochs and target
-    /// conflicts; callers never receive a store handle.
+    /// conflicts; callers never receive a store handle. The session must
+    /// already be present in the active controller-session table.
     pub fn admit_controller_assignment(
         &self,
         request: AssignmentRequest<'_>,
     ) -> Result<ResourceClientLease, AssignmentError> {
+        let binding = request.session_binding()?;
+        let active = self
+            .controller_sessions
+            .lock()
+            .map(|sessions| {
+                sessions
+                    .get(binding.session_owner())
+                    .is_some_and(|session| {
+                        controller_session_matches(
+                            &session.binding,
+                            &binding,
+                            session.service_task.is_finished(),
+                        )
+                    })
+            })
+            .unwrap_or(false);
+        if !active {
+            return Err(AssignmentError::SessionRevoked);
+        }
         self.assignments
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .admit(request)
     }
 
-    /// Revoke assignments bound to a disconnected ComponentSession generation.
-    pub fn revoke_controller_assignments(
-        &self,
-        generation: d2b_contracts_resource::v3::identity::ReconnectGeneration,
-    ) {
+    /// Revoke assignments bound to one exact controller session.
+    pub fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
+        if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
+            return;
+        }
         self.assignments
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .revoke_session(generation);
+            .revoke_session_for(binding);
+        let revocation_batch = match self.controller_sessions.lock() {
+            Ok(sessions) => sessions
+                .get(binding.session_owner())
+                .filter(|session| &session.binding == binding)
+                .map(|session| {
+                    let frames = session
+                        .assignments
+                        .values()
+                        .filter_map(|lease| {
+                            ControllerAssignmentGrant::encode_revocation(
+                                lease.provider_ref(),
+                                lease.identity(),
+                            )
+                            .ok()
+                        })
+                        .collect();
+                    (session.driver.clone(), frames)
+                }),
+            Err(_) => None,
+        };
+        if let Some((driver, frames)) = revocation_batch {
+            self.schedule_assignment_revocations(driver, frames);
+        }
     }
 
     /// Mark one assignment as draining before a target or generation handoff.
@@ -1856,10 +1959,83 @@ impl ZoneResourceRuntime {
         &self,
         identity: &AssignmentIdentity,
     ) -> Result<(), AssignmentError> {
-        self.assignments
+        let result = self
+            .assignments
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .begin_drain(identity)
+            .begin_drain(identity);
+        if result.is_ok() {
+            self.schedule_controller_assignment_revocation(identity);
+        }
+        result
+    }
+
+    /// Release a drained assignment after Core has verified its child index.
+    pub fn release_controller_assignment(
+        &self,
+        identity: &AssignmentIdentity,
+    ) -> Result<(), AssignmentError> {
+        let revocation = self.controller_assignment_revocation(identity);
+        let result = self
+            .assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .release(identity);
+        if result.is_ok()
+            && let Some((driver, bytes)) = revocation
+        {
+            self.schedule_assignment_revocations(driver, vec![bytes]);
+        }
+        result
+    }
+
+    fn controller_assignment_revocation(
+        &self,
+        identity: &AssignmentIdentity,
+    ) -> Option<(SessionDriverHandle, Vec<u8>)> {
+        let sessions = self.controller_sessions.lock().ok()?;
+        sessions.values().find_map(|session| {
+            let lease = session
+                .assignments
+                .values()
+                .find(|lease| lease.identity() == identity)?;
+            let bytes =
+                ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), identity)
+                    .ok()?;
+            Some((session.driver.clone(), bytes))
+        })
+    }
+
+    fn schedule_controller_assignment_revocation(&self, identity: &AssignmentIdentity) {
+        let Some((driver, bytes)) = self.controller_assignment_revocation(identity) else {
+            return;
+        };
+        self.schedule_assignment_revocations(driver, vec![bytes]);
+    }
+
+    fn schedule_assignment_revocations(&self, driver: SessionDriverHandle, frames: Vec<Vec<u8>>) {
+        if frames.is_empty() {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let stream = match StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID) {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+        handle.spawn(async move {
+            for frame in frames {
+                if let Err(error) = driver.send_named_stream(stream, frame).await {
+                    tracing::warn!(
+                        error = %error,
+                        "controller assignment revocation delivery failed",
+                    );
+                    let _ = driver.reset_named_stream(stream).await;
+                    break;
+                }
+            }
+        });
     }
 
     /// Return the policy revision committed in the opened resource store.
@@ -2509,10 +2685,7 @@ impl ZoneResourceRuntime {
     pub(crate) async fn committed_wayland_session_for_vm(
         &self,
         vm: &str,
-    ) -> Result<
-        Option<(ResourceRef, ResourceUid, WaylandSessionSpec)>,
-        ResourceRuntimeError,
-    > {
+    ) -> Result<Option<(ResourceRef, ResourceUid, WaylandSessionSpec)>, ResourceRuntimeError> {
         if !self.readiness.resource_api_ready {
             return Err(ResourceRuntimeError::PlaneUnavailable);
         }
@@ -2873,6 +3046,1278 @@ impl ZoneResourceRuntime {
         Ok(())
     }
 
+    fn controller_session_coordinator(&self) -> ControllerSessionCoordinator {
+        ControllerSessionCoordinator {
+            zone: self.zone.clone(),
+            bundle_resource_types: self.bundle_resource_types.clone(),
+            store: Arc::clone(&self.store),
+            authorizer: Arc::clone(&self.authorizer),
+            authorization_state: self.authorization_state.clone(),
+            registrar: Arc::clone(&self.registrar),
+            assignments: Arc::clone(&self.assignments),
+            controller_sessions: Arc::clone(&self.controller_sessions),
+            controller_session_lock: Arc::clone(&self.controller_session_lock),
+        }
+    }
+
+    fn controller_session_hook(
+        &self,
+        providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+    ) -> crate::process_resource_runtime::ProcessWatchHook {
+        let coordinator = self.controller_session_coordinator();
+        Arc::new(move || {
+            let coordinator = coordinator.clone();
+            let providers = Arc::clone(&providers);
+            Box::pin(async move {
+                match coordinator
+                    .reconcile_controller_sessions(providers, true)
+                    .await
+                {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "external Provider controller session reconciliation degraded",
+                        );
+                        Err(())
+                    }
+                }
+            })
+        })
+    }
+
+    fn controller_session_fence_hook(
+        &self,
+        providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+    ) -> crate::process_resource_runtime::ProcessWatchHook {
+        let coordinator = self.controller_session_coordinator();
+        Arc::new(move || {
+            let coordinator = coordinator.clone();
+            let providers = Arc::clone(&providers);
+            Box::pin(async move {
+                if let Err(error) = coordinator
+                    .reconcile_controller_sessions(Arc::clone(&providers), false)
+                    .await
+                {
+                    tracing::warn!(
+                        error = %error,
+                        "external Provider controller session fencing degraded",
+                    );
+                    return Err(());
+                }
+                let Ok(snapshot) = crate::process_resource_runtime::list_process_snapshot(
+                    &coordinator.store,
+                    &coordinator.zone,
+                )
+                .await
+                else {
+                    return Err(());
+                };
+                if let Err(error) = coordinator
+                    .fence_process_snapshot(&providers, &snapshot)
+                    .await
+                {
+                    tracing::warn!(
+                        error = %error,
+                        "external Provider controller process fencing degraded",
+                    );
+                    return Err(());
+                }
+                Ok(())
+            })
+        })
+    }
+}
+
+fn schedule_controller_session_reconcile(
+    task_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    coordinator: ControllerSessionCoordinator,
+    providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+) -> Result<(), ResourceRuntimeError> {
+    let mut slot = task_slot
+        .lock()
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    if slot.as_ref().is_some_and(|task| !task.is_finished()) {
+        return Ok(());
+    }
+    *slot = Some(tokio::spawn(async move {
+        if let Err(error) = coordinator
+            .reconcile_controller_sessions(providers, true)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                "external Provider controller session reconciliation degraded",
+            );
+        }
+    }));
+    Ok(())
+}
+
+async fn reject_controller_resource_requests(
+    driver: SessionDriverHandle,
+) -> Result<(), SessionServerError> {
+    match driver.receive_ttrpc().await {
+        Ok(_) => {
+            let _ = driver
+                .close(
+                    d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                    d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                )
+                .await;
+            Err(SessionServerError::Service)
+        }
+        Err(_) => Err(SessionServerError::Session),
+    }
+}
+
+impl ControllerSessionCoordinator {
+    fn revoke_controller_assignments(&self, binding: &ControllerSessionBinding) {
+        if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(binding.provider_ref()) {
+            self.assignments
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .revoke_session_for(binding);
+        }
+    }
+
+    async fn fence(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+    ) -> Result<(), ResourceRuntimeError> {
+        let bootstrap_refs = providers.controller_bootstrap_refs(&self.zone);
+        let bootstrap_ref_set = bootstrap_refs.iter().cloned().collect::<BTreeSet<_>>();
+        let stale_sessions = self
+            .controller_sessions
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .iter()
+            .filter(|(process_ref, session)| {
+                controller_session_needs_fence(
+                    bootstrap_ref_set.contains(*process_ref),
+                    session.service_task.is_finished(),
+                )
+            })
+            .map(|(process_ref, session)| (process_ref.clone(), session.context.clone()))
+            .collect::<Vec<_>>();
+        for (process_ref, context) in stale_sessions {
+            providers.fail_controller_bootstrap(&context);
+            self.remove_controller_session(&process_ref, Some(&context))
+                .await?;
+        }
+
+        let active_sessions = self
+            .controller_sessions
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for context in providers
+            .controller_bootstrap_establishing_contexts(&self.zone)
+            .into_iter()
+            .filter(|context| !active_sessions.contains(context.process_ref()))
+        {
+            providers.fail_controller_bootstrap(&context);
+        }
+
+        let contexts = providers.controller_bootstrap_contexts(&self.zone);
+        if contexts.is_empty() {
+            return Ok(());
+        }
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let current_revision = store_metadata.current_revision;
+        let current_controller_generation = store_metadata.policy_snapshot.controller_generation;
+        let provider_refs = contexts
+            .iter()
+            .map(|context| context.provider_owner_ref().clone())
+            .collect::<BTreeSet<_>>();
+        for provider_ref in provider_refs {
+            match load_committed_controller_provider_identities(
+                &self.zone,
+                &self.store,
+                current_revision,
+                BTreeSet::from([provider_ref.clone()]),
+            )
+            .await
+            {
+                Ok(identities) => {
+                    for context in contexts.iter().filter(|context| {
+                        context.provider_owner_ref() == &provider_ref
+                            && identities.get(&provider_ref).is_none_or(
+                                |(provider_uid, provider_generation)| {
+                                    provider_uid != context.provider_uid()
+                                        || *provider_generation != context.provider_generation()
+                                },
+                            )
+                    }) {
+                        providers.fail_controller_bootstrap(context);
+                        self.remove_controller_session(context.process_ref(), Some(context))
+                            .await?;
+                    }
+                }
+                Err(error) => {
+                    for context in contexts
+                        .iter()
+                        .filter(|context| context.provider_owner_ref() == &provider_ref)
+                    {
+                        providers.fail_controller_bootstrap(context);
+                        self.remove_controller_session(context.process_ref(), Some(context))
+                            .await?;
+                    }
+                    tracing::warn!(
+                        error = %error,
+                        "external Provider controller identity projection failed",
+                    );
+                }
+            }
+        }
+        let contexts = providers.controller_bootstrap_contexts(&self.zone);
+        for context in contexts {
+            if controller_generation_is_stale(
+                current_controller_generation,
+                context.controller_generation(),
+            ) {
+                providers.fail_controller_bootstrap(&context);
+                self.remove_controller_session(context.process_ref(), Some(&context))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn fence_process_snapshot(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+        snapshot: &[StoredResource],
+    ) -> Result<(), ResourceRuntimeError> {
+        let sessions = {
+            let sessions = self
+                .controller_sessions
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            sessions
+                .iter()
+                .map(|(process_ref, session)| (process_ref.clone(), session.context.clone()))
+                .collect::<Vec<_>>()
+        };
+        let stale_sessions = controller_session_snapshot_fences(sessions, snapshot);
+        for (process_ref, context) in stale_sessions {
+            providers.fail_controller_bootstrap(&context);
+            self.remove_controller_session(&process_ref, Some(&context))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn reconcile_controller_sessions(
+        &self,
+        providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+        establish: bool,
+    ) -> Result<(), ResourceRuntimeError> {
+        let Ok(_session_guard) = self.controller_session_lock.try_lock() else {
+            return Ok(());
+        };
+        self.fence(&providers).await?;
+        if !establish {
+            self.refresh_controller_policy(&providers).await?;
+            self.reconcile_controller_assignments(&providers).await?;
+            return Ok(());
+        }
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let bootstrap_contexts = providers.controller_bootstrap_contexts(&self.zone);
+        let provider_refs = bootstrap_contexts
+            .iter()
+            .map(|context| context.provider_owner_ref().clone())
+            .collect::<BTreeSet<_>>();
+        let mut provider_identities = BTreeMap::new();
+        for provider_ref in provider_refs {
+            match load_committed_controller_provider_identities(
+                &self.zone,
+                &self.store,
+                store_metadata.current_revision,
+                BTreeSet::from([provider_ref.clone()]),
+            )
+            .await
+            {
+                Ok(identities) => {
+                    let mismatched = bootstrap_contexts
+                        .iter()
+                        .filter(|context| {
+                            context.provider_owner_ref() == &provider_ref
+                                && identities.get(&provider_ref).is_none_or(
+                                    |(provider_uid, provider_generation)| {
+                                        provider_uid != context.provider_uid()
+                                            || *provider_generation != context.provider_generation()
+                                    },
+                                )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    for context in mismatched {
+                        providers.fail_controller_bootstrap(&context);
+                        self.remove_controller_session(context.process_ref(), Some(&context))
+                            .await?;
+                    }
+                    provider_identities.extend(identities);
+                }
+                Err(error) => {
+                    for context in bootstrap_contexts
+                        .iter()
+                        .filter(|context| context.provider_owner_ref() == &provider_ref)
+                    {
+                        providers.fail_controller_bootstrap(context);
+                        self.remove_controller_session(context.process_ref(), Some(context))
+                            .await?;
+                    }
+                    tracing::warn!(
+                        error = %error,
+                        "external Provider controller identity projection failed",
+                    );
+                }
+            }
+        }
+        let surviving_contexts = providers.controller_bootstrap_contexts(&self.zone);
+        let provider_subjects = surviving_contexts
+            .iter()
+            .filter_map(|context| {
+                provider_identities
+                    .get(context.provider_owner_ref())
+                    .map(|(provider_uid, _)| d2b_resource_api::authz::BoundSubject {
+                        subject_ref: context.provider_owner_ref().clone(),
+                        subject_uid: provider_uid.clone(),
+                    })
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let (policy, _) = match runtime_policy_with_subjects(
+            &self.zone,
+            &store_metadata.policy_snapshot,
+            store_metadata.current_revision,
+            &self.bundle_resource_types,
+            provider_subjects,
+        ) {
+            Ok(policy) => policy,
+            Err(error) => {
+                for context in surviving_contexts {
+                    providers.fail_controller_bootstrap(&context);
+                    self.remove_controller_session(context.process_ref(), Some(&context))
+                        .await?;
+                }
+                tracing::warn!(
+                    error = %error,
+                    "external Provider controller policy projection failed",
+                );
+                return Ok(());
+            }
+        };
+        let state = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        if self.authorizer.replace_policy(policy, &state).is_err() {
+            for context in surviving_contexts {
+                providers.fail_controller_bootstrap(&context);
+                self.remove_controller_session(context.process_ref(), Some(&context))
+                    .await?;
+            }
+            return Ok(());
+        }
+
+        let bootstrap_refs = providers.controller_bootstrap_refs(&self.zone);
+        for process_ref in bootstrap_refs {
+            let existing = self
+                .controller_sessions
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+                .get(&process_ref)
+                .map(|session| (session.context.clone(), session.service_task.is_finished()));
+            if let Some((context, finished)) = existing {
+                if finished {
+                    providers.fail_controller_bootstrap(&context);
+                    self.remove_controller_session(&process_ref, Some(&context))
+                        .await?;
+                    continue;
+                }
+                if providers.has_controller_bootstrap(&process_ref, &context) {
+                    continue;
+                }
+                self.remove_controller_session(&process_ref, Some(&context))
+                    .await?;
+            }
+
+            let Some(endpoint) = providers.begin_controller_bootstrap(&self.zone, &process_ref)
+            else {
+                continue;
+            };
+            let context = endpoint.context().clone();
+            let mut registrar = match self.registrar.lock() {
+                Ok(mut registrar) => match registrar.take() {
+                    Some(registrar) => registrar,
+                    None => {
+                        providers.fail_controller_bootstrap(&context);
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    providers.fail_controller_bootstrap(&context);
+                    return Err(ResourceRuntimeError::AuthenticationUnavailable);
+                }
+            };
+            let setup = self
+                .establish_controller_session(&providers, endpoint, &mut registrar)
+                .await;
+            let mut registrar = Some(registrar);
+            let restored = match self.registrar.lock() {
+                Ok(mut slot) => {
+                    *slot = registrar.take();
+                    true
+                }
+                Err(_) => false,
+            };
+            let mut setup = Some(setup);
+            if !restored {
+                if let Some(Ok((ingress, driver, service_task, _session_generation))) = setup.take()
+                {
+                    let _ = driver
+                        .close(
+                            d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                            d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                        )
+                        .await;
+                    service_task.abort();
+                    let _ = service_task.await;
+                    drop(ingress);
+                }
+                providers.fail_controller_bootstrap(&context);
+                return Err(ResourceRuntimeError::AuthenticationUnavailable);
+            }
+            match setup.expect("controller setup result present") {
+                Ok((ingress, driver, service_task, session_generation)) => {
+                    let current = self
+                        .controller_context_is_current(&providers, &context)
+                        .await
+                        .unwrap_or(false);
+                    if !current || !providers.activate_controller_bootstrap(&context) {
+                        let _ = driver
+                            .close(
+                                d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                                d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                            )
+                            .await;
+                        service_task.abort();
+                        let _ = service_task.await;
+                        providers.fail_controller_bootstrap(&context);
+                        self.revoke_controller_ingress(ingress).await?;
+                        continue;
+                    }
+                    let context_for_cleanup = context.clone();
+                    let mut session = Some(ControllerSession {
+                        context: context.clone(),
+                        binding: controller_session_binding(&context, session_generation)?,
+                        ingress,
+                        driver: driver.clone(),
+                        service_task,
+                        assignments: BTreeMap::new(),
+                        assignment_stream_open: false,
+                    });
+                    let inserted = match self.controller_sessions.lock() {
+                        Ok(mut sessions) => {
+                            if sessions.contains_key(&process_ref) {
+                                false
+                            } else {
+                                sessions.insert(
+                                    process_ref.clone(),
+                                    session.take().expect("controller session present"),
+                                );
+                                true
+                            }
+                        }
+                        Err(_) => false,
+                    };
+                    if !inserted {
+                        providers.fail_controller_bootstrap(&context_for_cleanup);
+                        if let Some(session) = session {
+                            let _ = session
+                                .driver
+                                .close(
+                                    d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                                    d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                                )
+                                .await;
+                            session.service_task.abort();
+                            let _ = session.service_task.await;
+                            self.revoke_controller_ingress(session.ingress).await?;
+                        }
+                        continue;
+                    }
+                }
+                Err(error) => {
+                    providers.fail_controller_bootstrap(&context);
+                    tracing::warn!(
+                        error = %error,
+                        "external Provider controller ResourceV3 session setup failed",
+                    );
+                }
+            }
+        }
+        self.reconcile_controller_assignments(&providers).await?;
+        self.refresh_controller_policy(&providers).await?;
+        Ok(())
+    }
+
+    async fn reconcile_controller_assignments(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+    ) -> Result<(), ResourceRuntimeError> {
+        let sessions = self
+            .controller_sessions
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .iter()
+            .map(|(_, session)| (session.context.clone(), session.binding.clone()))
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        for (context, binding) in sessions {
+            if let Err(error) = self
+                .reconcile_controller_assignments_for_session(&context, &binding)
+                .await
+            {
+                if let Err(error) = self
+                    .handle_controller_assignment_refresh_error(providers, &context, error)
+                    .await
+                {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn controller_context_is_current(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+        context: &crate::process_provider_runtime::ControllerBootstrapContext,
+    ) -> Result<bool, ResourceRuntimeError> {
+        if !providers.has_controller_bootstrap(context.process_ref(), context) {
+            return Ok(false);
+        }
+        let metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        if controller_generation_is_stale(
+            metadata.policy_snapshot.controller_generation,
+            context.controller_generation(),
+        ) {
+            return Ok(false);
+        }
+        let identities = load_committed_controller_provider_identities(
+            &self.zone,
+            &self.store,
+            metadata.current_revision,
+            BTreeSet::from([context.provider_owner_ref().clone()]),
+        )
+        .await?;
+        let Some((provider_uid, provider_generation)) =
+            identities.get(context.provider_owner_ref())
+        else {
+            return Ok(false);
+        };
+        if provider_uid != context.provider_uid()
+            || *provider_generation != context.provider_generation()
+        {
+            return Ok(false);
+        }
+        let snapshot =
+            crate::process_resource_runtime::list_process_snapshot(&self.store, &self.zone)
+                .await
+                .map_err(map_process_runtime_error)?;
+        Ok(snapshot
+            .iter()
+            .find(|resource| resource.resource_ref == *context.process_ref())
+            .is_some_and(|resource| controller_resource_matches(context, resource)))
+    }
+
+    async fn handle_controller_assignment_refresh_error(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+        context: &crate::process_provider_runtime::ControllerBootstrapContext,
+        error: ControllerAssignmentRefreshError,
+    ) -> Result<(), ResourceRuntimeError> {
+        match controller_assignment_refresh_action(context, error) {
+            ControllerAssignmentRefreshAction::Retryable { .. } => {
+                tracing::warn!("external Provider controller assignment reconciliation will retry");
+                Ok(())
+            }
+            ControllerAssignmentRefreshAction::Failed { context, error } => {
+                providers.fail_controller_bootstrap(context);
+                self.remove_controller_session(context.process_ref(), Some(context))
+                    .await?;
+                Err(error)
+            }
+        }
+    }
+
+    async fn reconcile_controller_assignments_for_session(
+        &self,
+        context: &crate::process_provider_runtime::ControllerBootstrapContext,
+        binding: &ControllerSessionBinding,
+    ) -> Result<(), ControllerAssignmentRefreshError> {
+        if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
+            return Ok(());
+        }
+        let manifest =
+            d2b_provider_runtime_cloud_hypervisor::provider_manifest().map_err(|_| {
+                ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthenticationUnavailable,
+                )
+            })?;
+        let role_ref =
+            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF)
+                .map_err(|_| {
+                    ControllerAssignmentRefreshError::Failed(
+                        ResourceRuntimeError::AuthenticationUnavailable,
+                    )
+                })?;
+        let role = ControllerRoleContract::from_signed_manifest(
+            context.provider_owner_ref().clone(),
+            role_ref,
+            &manifest,
+        )
+        .map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        let expected_target = AssignmentTarget::Execution {
+            kind: PlacementTargetKind::Host,
+            reference: context.execution_ref().clone(),
+        };
+        if binding.target() != &expected_target {
+            return Err(ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            ));
+        }
+        let resources = self
+            .list_assignment_resources(&role, context.provider_owner_ref())
+            .await?;
+        let driver = self.ensure_controller_assignment_stream(binding).await?;
+        let mut resources_by_uid = BTreeMap::new();
+        for (index, resource) in resources.iter().enumerate() {
+            if resources_by_uid
+                .insert(resource.metadata().uid().clone(), index)
+                .is_some()
+            {
+                return Err(ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthorizationUnavailable,
+                ));
+            }
+        }
+        let (retained, stale) = {
+            let sessions = self.controller_sessions.lock().map_err(|_| {
+                ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthenticationUnavailable,
+                )
+            })?;
+            let Some(session) = sessions.get(binding.session_owner()).filter(|session| {
+                &session.binding == binding && !session.service_task.is_finished()
+            }) else {
+                return Err(ControllerAssignmentRefreshError::Retryable);
+            };
+            let mut retained = BTreeSet::new();
+            let mut stale = Vec::new();
+            for (resource_uid, lease) in &session.assignments {
+                if resources_by_uid
+                    .get(resource_uid)
+                    .and_then(|index| resources.get(*index))
+                    .is_some_and(|resource| {
+                        lease.phase() == AssignmentPhase::Assigned
+                            && assignment_resource_matches(
+                                lease.resource_ref(),
+                                lease.identity().resource_uid(),
+                                lease.resource_generation(),
+                                lease.identity().resource_revision(),
+                                resource,
+                            )
+                    })
+                {
+                    retained.insert(resource_uid.clone());
+                } else {
+                    stale.push((
+                        resource_uid.clone(),
+                        lease.identity().clone(),
+                        lease.provider_ref().clone(),
+                    ));
+                }
+            }
+            (retained, stale)
+        };
+
+        for (resource_uid, identity, provider_ref) in stale {
+            self.revoke_recorded_assignment(binding, &resource_uid, &identity, &provider_ref)
+                .await?;
+        }
+
+        let mut degraded = false;
+        let stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        for resource in &resources {
+            if retained.contains(resource.metadata().uid()) {
+                continue;
+            }
+            if !self.controller_session_is_live(binding) {
+                return Err(ControllerAssignmentRefreshError::Retryable);
+            }
+            let request = AssignmentRequest::new(
+                resource,
+                &role,
+                context.provider_generation(),
+                context.controller_generation(),
+                binding.session_generation(),
+                true,
+            )
+            .with_expected_target(binding.target().clone())
+            .with_session_owner(binding.session_owner().clone());
+            let lease = match admit_assignment_or_skip(&self.assignments, request) {
+                Ok(Some(lease)) => lease,
+                Ok(None) => continue,
+                Err(_) => {
+                    degraded = true;
+                    continue;
+                }
+            };
+            let encoded = match lease.assignment_grant().encode() {
+                Ok(encoded) => encoded,
+                Err(_) => {
+                    self.revoke_unrecorded_assignment(&lease, false).await;
+                    degraded = true;
+                    continue;
+                }
+            };
+            match send_controller_assignment_frame(&driver, stream, encoded, || {
+                self.revoke_unrecorded_assignment_local(&lease);
+            })
+            .await
+            {
+                Ok(()) => {}
+                Err(ControllerAssignmentRefreshError::Retryable) => {
+                    self.mark_controller_assignment_stream_closed(binding)?;
+                    return Err(ControllerAssignmentRefreshError::Retryable);
+                }
+                Err(error) => return Err(error),
+            }
+            if !self.controller_session_is_live(binding) {
+                self.revoke_unrecorded_assignment(&lease, true).await;
+                return Err(ControllerAssignmentRefreshError::Retryable);
+            }
+            if let Err(lease) = self.record_controller_assignment(binding, context, lease) {
+                self.revoke_unrecorded_assignment(&lease, true).await;
+                degraded = true;
+            }
+        }
+        if degraded {
+            Err(ControllerAssignmentRefreshError::Retryable)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn ensure_controller_assignment_stream(
+        &self,
+        binding: &ControllerSessionBinding,
+    ) -> Result<SessionDriverHandle, ControllerAssignmentRefreshError> {
+        let (driver, stream_open) = {
+            let sessions = self.controller_sessions.lock().map_err(|_| {
+                ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthenticationUnavailable,
+                )
+            })?;
+            let Some(session) = sessions.get(binding.session_owner()).filter(|session| {
+                &session.binding == binding && !session.service_task.is_finished()
+            }) else {
+                return Err(ControllerAssignmentRefreshError::Retryable);
+            };
+            (session.driver.clone(), session.assignment_stream_open)
+        };
+        if stream_open {
+            return Ok(driver);
+        }
+        let stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        driver
+            .open_named_stream(
+                stream,
+                CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
+                CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
+            )
+            .await
+            .map_err(|_| {
+                ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthenticationUnavailable,
+                )
+            })?;
+        let mut sessions = self.controller_sessions.lock().map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        let Some(session) = sessions
+            .get_mut(binding.session_owner())
+            .filter(|session| &session.binding == binding && !session.service_task.is_finished())
+        else {
+            return Err(ControllerAssignmentRefreshError::Retryable);
+        };
+        session.assignment_stream_open = true;
+        Ok(driver)
+    }
+
+    fn mark_controller_assignment_stream_closed(
+        &self,
+        binding: &ControllerSessionBinding,
+    ) -> Result<(), ControllerAssignmentRefreshError> {
+        let mut sessions = self.controller_sessions.lock().map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        let Some(session) = sessions
+            .get_mut(binding.session_owner())
+            .filter(|session| &session.binding == binding)
+        else {
+            return Err(ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            ));
+        };
+        session.assignment_stream_open = false;
+        Ok(())
+    }
+
+    fn controller_session_is_live(&self, binding: &ControllerSessionBinding) -> bool {
+        self.controller_sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| {
+                sessions.get(binding.session_owner()).map(|session| {
+                    controller_session_matches(
+                        &session.binding,
+                        binding,
+                        session.service_task.is_finished(),
+                    )
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn record_controller_assignment(
+        &self,
+        binding: &ControllerSessionBinding,
+        context: &crate::process_provider_runtime::ControllerBootstrapContext,
+        lease: ResourceClientLease,
+    ) -> Result<(), ResourceClientLease> {
+        let mut sessions = match self.controller_sessions.lock() {
+            Ok(sessions) => sessions,
+            Err(_) => return Err(lease),
+        };
+        let Some(session) = sessions.get_mut(binding.session_owner()).filter(|session| {
+            &session.context == context
+                && controller_session_matches(
+                    &session.binding,
+                    binding,
+                    session.service_task.is_finished(),
+                )
+        }) else {
+            return Err(lease);
+        };
+        let resource_uid = lease.identity().resource_uid().clone();
+        if session.assignments.contains_key(&resource_uid) {
+            return Err(lease);
+        }
+        session.assignments.insert(resource_uid, lease);
+        Ok(())
+    }
+
+    fn revoke_unrecorded_assignment_local(&self, lease: &ResourceClientLease) {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke_assignment(lease.identity());
+    }
+
+    async fn revoke_unrecorded_assignment(&self, lease: &ResourceClientLease, notify: bool) {
+        self.revoke_unrecorded_assignment_local(lease);
+        if notify
+            && let Ok(bytes) =
+                ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), lease.identity())
+            && let Ok(stream) = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID)
+            && let Some(driver) = self.controller_sessions.lock().ok().and_then(|sessions| {
+                sessions
+                    .get(lease.identity().session_owner())
+                    .map(|session| session.driver.clone())
+            })
+        {
+            if driver.send_named_stream(stream, bytes).await.is_err() {
+                if driver.reset_named_stream(stream).await.is_ok() {
+                    let _ = self.mark_controller_assignment_stream_closed(
+                        lease.identity().session_binding(),
+                    );
+                }
+            }
+        }
+    }
+
+    async fn revoke_recorded_assignment(
+        &self,
+        binding: &ControllerSessionBinding,
+        resource_uid: &ResourceUid,
+        identity: &AssignmentIdentity,
+        provider_ref: &ResourceRef,
+    ) -> Result<(), ControllerAssignmentRefreshError> {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke_assignment(identity);
+        let (driver, bytes) = self
+            .controller_sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| {
+                let session = sessions
+                    .get(binding.session_owner())
+                    .filter(|session| &session.binding == binding)?;
+                let lease = session.assignments.get(resource_uid)?;
+                if lease.identity() != identity {
+                    return None;
+                }
+                let bytes =
+                    ControllerAssignmentGrant::encode_revocation(provider_ref, identity).ok()?;
+                Some((session.driver.clone(), bytes))
+            })
+            .ok_or(ControllerAssignmentRefreshError::Retryable)?;
+        let stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthenticationUnavailable,
+            )
+        })?;
+        if driver.send_named_stream(stream, bytes).await.is_err() {
+            reset_controller_assignment_stream(&driver, stream).await?;
+            self.mark_controller_assignment_stream_closed(binding)?;
+            return Err(ControllerAssignmentRefreshError::Retryable);
+        }
+        if let Ok(mut sessions) = self.controller_sessions.lock()
+            && let Some(session) = sessions
+                .get_mut(binding.session_owner())
+                .filter(|session| &session.binding == binding)
+            && session
+                .assignments
+                .get(resource_uid)
+                .is_some_and(|lease| lease.identity() == identity)
+        {
+            session.assignments.remove(resource_uid);
+        }
+        Ok(())
+    }
+
+    async fn list_assignment_resources(
+        &self,
+        role: &ControllerRoleContract,
+        provider_ref: &ResourceRef,
+    ) -> Result<Vec<ResourceEnvelope>, ControllerAssignmentRefreshError> {
+        let mut cursor = None;
+        let mut snapshot_revision = None;
+        let mut resources = Vec::new();
+        let mut resource_uids = BTreeSet::new();
+        loop {
+            let page = self
+                .store
+                .list(StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "controller-assignment-list".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "controller-assignment-list".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: role.resource_types().iter().cloned().collect(),
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 128,
+                    cursor,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .map_err(|error| {
+                    if matches!(
+                        error.kind(),
+                        StoreErrorKind::RevisionExpired
+                            | StoreErrorKind::Backpressure
+                            | StoreErrorKind::Timeout
+                            | StoreErrorKind::Cancelled
+                            | StoreErrorKind::ResourcePlaneUnavailable
+                            | StoreErrorKind::StoreBackpressure
+                    ) {
+                        ControllerAssignmentRefreshError::Retryable
+                    } else {
+                        ControllerAssignmentRefreshError::Failed(
+                            ResourceRuntimeError::StoreReadFailed,
+                        )
+                    }
+                })?;
+            let page_resources =
+                validate_assignment_list_page(&page, &self.zone, provider_ref, snapshot_revision)?;
+            snapshot_revision.get_or_insert(page.snapshot_revision);
+            if resources.len().saturating_add(page_resources.len())
+                > d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS
+            {
+                return Err(ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthorizationUnavailable,
+                ));
+            }
+            for envelope in page_resources {
+                if !resource_uids.insert(envelope.metadata().uid().clone()) {
+                    return Err(ControllerAssignmentRefreshError::Failed(
+                        ResourceRuntimeError::AuthorizationUnavailable,
+                    ));
+                }
+                resources.push(envelope);
+            }
+            cursor = page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(resources)
+    }
+
+    async fn remove_controller_session(
+        &self,
+        process_ref: &ResourceRef,
+        expected: Option<&crate::process_provider_runtime::ControllerBootstrapContext>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let session = {
+            let mut sessions = self
+                .controller_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let matches = sessions.get(process_ref).is_some_and(|session| {
+                expected.is_none_or(|expected| &session.context == expected)
+            });
+            matches.then(|| sessions.remove(process_ref)).flatten()
+        };
+        if let Some(session) = session {
+            self.revoke_controller_assignments(&session.binding);
+            send_controller_assignment_revocations(&session.driver, &session.assignments).await;
+            let _ = session
+                .driver
+                .close(
+                    d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                    d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                )
+                .await;
+            session.service_task.abort();
+            let _ = session.service_task.await;
+            self.revoke_controller_ingress(session.ingress).await?;
+        }
+        Ok(())
+    }
+
+    async fn revoke_controller_ingress(
+        &self,
+        mut ingress: BusIngress,
+    ) -> Result<(), ResourceRuntimeError> {
+        let mut registrar = self
+            .registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let result = registrar.revoke_in_place(&mut ingress).await;
+        let restored = self
+            .registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
+            .map(|mut slot| {
+                *slot = Some(registrar);
+            })
+            .is_ok();
+        if !restored {
+            drop(ingress);
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        result.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
+    }
+
+    async fn establish_controller_session(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+        endpoint: crate::process_provider_runtime::ControllerBootstrapEndpoint,
+        registrar: &mut ZoneRegistrar,
+    ) -> Result<
+        (
+            BusIngress,
+            SessionDriverHandle,
+            tokio::task::JoinHandle<Result<(), SessionServerError>>,
+            ReconnectGeneration,
+        ),
+        ResourceRuntimeError,
+    > {
+        let (daemon_endpoint, context) = endpoint.into_parts();
+        let daemon_socket = SeqpacketSocket::from_parent_prearmed(daemon_endpoint)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let (resource_socket, credentials) = receive_controller_bootstrap(&daemon_socket).await?;
+        let peer_pid = credentials.pid().as_raw_nonzero().get();
+        if !providers
+            .controller_peer_matches(&context, peer_pid)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let verified_peer = VerifiedUnixPeer::verify_inherited_seqpacket(&resource_socket)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        if verified_peer.credentials() != credentials {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let provider_resource = committed_resource(
+            &self.zone,
+            &self.store,
+            store_metadata.current_revision,
+            context.provider_owner_ref(),
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let (_, provider_uid, provider_generation, _, _) = committed_provider_spec(
+            &self.zone,
+            store_metadata.current_revision,
+            &provider_resource,
+            context.provider_owner_ref(),
+        )
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        if &provider_uid != context.provider_uid()
+            || provider_generation != context.provider_generation()
+        {
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        registrar
+            .install_committed_controller_process_subject(
+                &verified_peer,
+                CommittedControllerProcessSubjectInput {
+                    provider_ref: context.provider_owner_ref().clone(),
+                    provider_uid,
+                    process_ref: context.process_ref().clone(),
+                    zone_ref,
+                    execution_ref: context.execution_ref().clone(),
+                    provider_generation,
+                    controller_generation: context.controller_generation(),
+                },
+            )
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+
+        let policy = controller_resource_endpoint_policy();
+        let acceptor = registrar
+            .component_session_acceptor(policy.clone(), verified_peer)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let transport = unix_transport(resource_socket, &policy)?;
+        let responder = SessionEngine::establish_responder(
+            transport,
+            policy,
+            HandshakeCredentials::Nn,
+            std::time::Instant::now(),
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let candidate = acceptor
+            .admit(
+                responder,
+                TransportEvidence::new(
+                    EvidenceClass::UnixPeer,
+                    BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
+                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+                ),
+                1,
+            )
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let session_generation = candidate.route_binding().reconnect_generation();
+        let (ingress, driver) = registrar
+            .register_component_service_session(candidate)
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        let service_task = tokio::spawn(reject_controller_resource_requests(driver.clone()));
+        tokio::task::yield_now().await;
+        if service_task.is_finished() {
+            service_task.abort();
+            let _ = service_task.await;
+            let _ = registrar.revoke(ingress).await;
+            return Err(ResourceRuntimeError::AuthenticationUnavailable);
+        }
+        Ok((ingress, driver, service_task, session_generation))
+    }
+
+    async fn refresh_controller_policy(
+        &self,
+        providers: &crate::process_provider_runtime::ProductionProcessProviders,
+    ) -> Result<(), ResourceRuntimeError> {
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let contexts = providers.controller_bootstrap_contexts(&self.zone);
+        let provider_subjects = contexts
+            .iter()
+            .map(|context| d2b_resource_api::authz::BoundSubject {
+                subject_ref: context.provider_owner_ref().clone(),
+                subject_uid: context.provider_uid().clone(),
+            })
+            .collect::<BTreeSet<_>>();
+        let (policy, _) = runtime_policy_with_subjects(
+            &self.zone,
+            &store_metadata.policy_snapshot,
+            store_metadata.current_revision,
+            &self.bundle_resource_types,
+            provider_subjects,
+        )
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        let state = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        self.authorizer
+            .replace_policy(policy, &state)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+    }
+}
+
+impl ZoneResourceRuntime {
     /// Relist and reconcile generic Process and EphemeralProcess resources
     /// owned by this Zone. Their lifecycle effects remain inside the fixed
     /// daemon-composed process Provider supervisors.
@@ -2887,41 +4332,71 @@ impl ZoneResourceRuntime {
             .provider_runtime
             .process_providers()
             .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?;
-        let snapshot = list_process_snapshot(&self.store, &self.zone)
-            .await
-            .map_err(map_process_runtime_error)?;
-        let runtime = match self.process_runtime.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
-        };
-        let mut runtime =
-            runtime.unwrap_or_else(|| ProcessResourceRuntime::new(self.zone.clone(), providers));
-        if let Some(controller_generation) =
-            self.store_metadata.policy_snapshot.controller_generation
+        let coordinator = self.controller_session_coordinator();
+        coordinator
+            .reconcile_controller_sessions(Arc::clone(&providers), false)
+            .await?;
         {
-            runtime.set_controller_generation(controller_generation);
-        }
-        runtime.set_lifecycle_identity(
-            self.store_metadata.zone_uid.clone(),
-            self.store_metadata.policy_snapshot.policy_revision,
-        );
-        if let Some(identity) = &self.interaction_identity {
-            runtime.set_target_scope(
-                Some(identity.wayland_session_ref().clone()),
-                Some(identity.subject_ref().clone()),
+            let _guard = self.controller_reconcile_lock.lock().await;
+            let snapshot = list_process_snapshot(&self.store, &self.zone)
+                .await
+                .map_err(map_process_runtime_error)?;
+            coordinator
+                .fence_process_snapshot(&providers, &snapshot)
+                .await?;
+            let store_metadata = self
+                .store
+                .runtime_metadata()
+                .await
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            let controller_provider_identities =
+                load_committed_controller_provider_identities(
+                    &self.zone,
+                    &self.store,
+                    store_metadata.current_revision,
+                    controller_provider_refs(&snapshot),
+                )
+                .await
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            let runtime = match self.process_runtime.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+            };
+            let mut runtime = runtime.unwrap_or_else(|| {
+                ProcessResourceRuntime::new(self.zone.clone(), Arc::clone(&providers))
+            });
+            if let Some(controller_generation) = store_metadata.policy_snapshot.controller_generation
+            {
+                runtime.set_controller_generation(controller_generation);
+            }
+            runtime.set_controller_provider_identities(controller_provider_identities);
+            runtime.set_lifecycle_identity(
+                self.store_metadata.zone_uid.clone(),
+                self.store_metadata.policy_snapshot.policy_revision,
             );
-        } else {
-            runtime.set_target_scope(None, None);
+            if let Some(identity) = &self.interaction_identity {
+                runtime.set_target_scope(
+                    Some(identity.wayland_session_ref().clone()),
+                    Some(identity.subject_ref().clone()),
+                );
+            } else {
+                runtime.set_target_scope(None, None);
+            }
+            if let Some(status_client) = self.process_resource_client() {
+                runtime.set_status_client(status_client);
+            }
+            let result = runtime.reconcile(snapshot).await;
+            match self.process_runtime.lock() {
+                Ok(mut guard) => *guard = Some(runtime),
+                Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
+            }
+            result.map_err(map_process_runtime_error)?;
         }
-        if let Some(status_client) = self.process_resource_client() {
-            runtime.set_status_client(status_client);
-        }
-        let result = runtime.reconcile(snapshot).await;
-        match self.process_runtime.lock() {
-            Ok(mut guard) => *guard = Some(runtime),
-            Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
-        }
-        result.map_err(map_process_runtime_error)?;
+        schedule_controller_session_reconcile(
+            Arc::clone(&self.controller_session_reconcile_task),
+            coordinator.clone(),
+            Arc::clone(&providers),
+        )?;
         if let (Some(client), Some(identity)) = (
             self.process_resource_client(),
             self.interaction_identity.as_ref(),
@@ -2951,6 +4426,48 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.process_runtime);
+            let provider_identity_hook = {
+                let store = Arc::clone(&self.store);
+                let zone = self.zone.clone();
+                Some(
+                    Arc::new(move |provider_refs| {
+                        let store = Arc::clone(&store);
+                        let zone = zone.clone();
+                        Box::pin(async move {
+                            let current_revision = store
+                                .runtime_metadata()
+                                .await
+                                .map_err(|_| ())?
+                                .current_revision;
+                            load_committed_controller_provider_identities(
+                                &zone,
+                                &store,
+                                current_revision,
+                                provider_refs,
+                            )
+                            .await
+                            .map_err(|_| ())
+                        })
+                            as std::pin::Pin<
+                                Box<
+                                    dyn std::future::Future<
+                                            Output = Result<
+                                                BTreeMap<
+                                                    ResourceRef,
+                                                    (ResourceUid, ResourceGeneration),
+                                                >,
+                                                (),
+                                            >,
+                                        > + Send,
+                                >,
+                            >
+                    })
+                        as crate::process_resource_runtime::ProcessProviderIdentityHook,
+                )
+            };
+            let controller_fence_hook =
+                Some(self.controller_session_fence_hook(Arc::clone(&providers)));
+            let controller_hook = Some(self.controller_session_hook(Arc::clone(&providers)));
             let task = tokio::spawn(run_process_watch(
                 watch,
                 store,
@@ -2960,6 +4477,10 @@ impl ZoneResourceRuntime {
                 self.interaction_identity
                     .as_ref()
                     .map(|identity| identity.wayland_session_ref().clone()),
+                provider_identity_hook,
+                controller_fence_hook,
+                controller_hook,
+                Arc::clone(&self.controller_reconcile_lock),
             ));
             let mut watch_task = self
                 .process_watch_task
@@ -2987,12 +4508,10 @@ impl ZoneResourceRuntime {
         let snapshot = list_activation_snapshot(&self.store, &self.zone)
             .await
             .map_err(map_activation_runtime_error)?;
-        let process_snapshot = crate::process_resource_runtime::list_process_snapshot(
-            &self.store,
-            &self.zone,
-        )
-        .await
-        .map_err(map_process_runtime_error)?;
+        let process_snapshot =
+            crate::process_resource_runtime::list_process_snapshot(&self.store, &self.zone)
+                .await
+                .map_err(map_process_runtime_error)?;
         let runtime = match self.activation_runtime.lock() {
             Ok(mut guard) => guard.take(),
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
@@ -3006,8 +4525,7 @@ impl ZoneResourceRuntime {
         let guest_targets = guest_activation_targets(&snapshot);
         let mut process_snapshot = process_snapshot;
         for guest in guest_targets {
-            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await
-            else {
+            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await else {
                 continue;
             };
             match list_guest_process_snapshot(&session, &self.zone, &guest).await {
@@ -3388,8 +4906,7 @@ impl ZoneResourceRuntime {
                 encode_public_update_finalizers_response(response)
             }
             "Delete" => {
-                let request_wire =
-                    public_delete_request(self, request, &operation_id).await?;
+                let request_wire = public_delete_request(self, request, &operation_id).await?;
                 let response = client.delete(request_wire).await;
                 encode_public_delete_response(response)
             }
@@ -3794,8 +5311,11 @@ impl ZoneResourceRuntime {
             semantic_binding_watch_task,
             process_watch_task,
             process_runtime,
+            controller_sessions,
+            controller_session_reconcile_task,
             activation_watch_task,
             activation_runtime,
+            assignments,
             ..
         } = self;
         if let Some(task) = service_task
@@ -3828,6 +5348,45 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         drop(process_runtime);
+        let controller_session_task = controller_session_reconcile_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
+        if let Some(task) = controller_session_task {
+            task.abort();
+            let _ = task.await;
+        }
+        let sessions = Arc::try_unwrap(controller_sessions)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        for (_, session) in sessions {
+            if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(
+                session.binding.provider_ref(),
+            ) {
+                assignments
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .revoke_session_for(&session.binding);
+            }
+            send_controller_assignment_revocations(&session.driver, &session.assignments).await;
+            let _ = session
+                .driver
+                .close(
+                    d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
+                    d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
+                )
+                .await;
+            session.service_task.abort();
+            let _ = session.service_task.await;
+            let mut ingress = session.ingress;
+            let mut registrar = registrar
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            if let Some(registrar) = registrar.as_mut() {
+                let _ = registrar.revoke_in_place(&mut ingress).await;
+            }
+        }
         if let Some(task) = activation_watch_task
             .into_inner()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
@@ -3843,7 +5402,8 @@ impl ZoneResourceRuntime {
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
         );
         drop(
-            registrar
+            Arc::try_unwrap(registrar)
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
                 .into_inner()
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
         );
@@ -4408,6 +5968,52 @@ async fn committed_resource_uid(
     Ok(resource.uid)
 }
 
+async fn receive_controller_bootstrap(
+    daemon_socket: &SeqpacketSocket,
+) -> Result<(SeqpacketSocket, PeerCredentials), ResourceRuntimeError> {
+    let policy = controller_bootstrap_attachment_policy();
+    let capacity = AncillaryCapacity::from_policy(policy)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let scopes =
+        controller_credit_scopes().map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let burst = tokio::time::timeout(
+        CONTROLLER_BOOTSTRAP_TIMEOUT,
+        daemon_socket.recv_burst(
+            d2b_contracts_zone_session::v3::component_session::LimitProfile::local_default(),
+            capacity,
+            &scopes,
+            2,
+        ),
+    )
+    .await
+    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    if burst.packets.len() != 1 {
+        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+    }
+    let packet = burst
+        .packets
+        .into_iter()
+        .next()
+        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+    if packet.payload() != d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER {
+        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+    }
+    let (resource_fd, credentials) = packet
+        .into_single_file_and_credentials()
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let resource_socket = SeqpacketSocket::from_parent_prearmed(resource_fd)
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    if resource_socket
+        .acceptor_peer_credentials()
+        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        != credentials
+    {
+        return Err(ResourceRuntimeError::AuthenticationUnavailable);
+    }
+    Ok((resource_socket, credentials))
+}
+
 async fn committed_resource(
     zone: &ZoneId,
     store: &RedbResourceStore,
@@ -4469,6 +6075,274 @@ async fn committed_resource(
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
     Ok(resource)
+}
+
+async fn load_committed_controller_provider_identities(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    current_revision: ZoneRevision,
+    provider_refs: BTreeSet<ResourceRef>,
+) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
+    let mut identities = BTreeMap::new();
+    for provider_ref in provider_refs {
+        let resource = committed_resource(zone, store, current_revision, &provider_ref).await?;
+        let (_, uid, generation, _, _) =
+            committed_provider_spec(zone, current_revision, &resource, &provider_ref)?;
+        identities.insert(provider_ref, (uid, generation));
+    }
+    Ok(identities)
+}
+
+fn controller_session_needs_fence(bootstrap_present: bool, service_task_finished: bool) -> bool {
+    !bootstrap_present || service_task_finished
+}
+
+fn controller_assignment_refresh_action<'a>(
+    context: &'a crate::process_provider_runtime::ControllerBootstrapContext,
+    error: ControllerAssignmentRefreshError,
+) -> ControllerAssignmentRefreshAction<'a> {
+    match error {
+        ControllerAssignmentRefreshError::Retryable => {
+            ControllerAssignmentRefreshAction::Retryable { context }
+        }
+        ControllerAssignmentRefreshError::Failed(error) => {
+            ControllerAssignmentRefreshAction::Failed { context, error }
+        }
+    }
+}
+
+async fn reset_controller_assignment_stream(
+    driver: &SessionDriverHandle,
+    stream: StreamId,
+) -> Result<(), ControllerAssignmentRefreshError> {
+    driver.reset_named_stream(stream).await.map_err(|_| {
+        ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthenticationUnavailable)
+    })
+}
+
+async fn send_controller_assignment_frame(
+    driver: &SessionDriverHandle,
+    stream: StreamId,
+    encoded: Vec<u8>,
+    on_send_failure: impl FnOnce() + Send,
+) -> Result<(), ControllerAssignmentRefreshError> {
+    if driver.send_named_stream(stream, encoded).await.is_ok() {
+        return Ok(());
+    }
+    on_send_failure();
+    reset_controller_assignment_stream(driver, stream).await?;
+    Err(ControllerAssignmentRefreshError::Retryable)
+}
+
+fn controller_generation_is_stale(
+    current_generation: Option<ControllerGeneration>,
+    context_generation: ControllerGeneration,
+) -> bool {
+    current_generation != Some(context_generation)
+}
+
+fn assignment_error_is_off_target(error: AssignmentError) -> bool {
+    matches!(
+        error,
+        AssignmentError::InvalidRole
+            | AssignmentError::ResourceTypeUnowned
+            | AssignmentError::TargetMismatch
+            | AssignmentError::TargetKindUnsupported
+    )
+}
+
+fn controller_session_matches(
+    active: &ControllerSessionBinding,
+    requested: &ControllerSessionBinding,
+    service_task_finished: bool,
+) -> bool {
+    !service_task_finished && active == requested
+}
+
+fn assignment_resource_matches(
+    resource_ref: &ResourceRef,
+    resource_uid: &ResourceUid,
+    resource_generation: ResourceGeneration,
+    resource_revision: ZoneRevision,
+    resource: &ResourceEnvelope,
+) -> bool {
+    resource_ref
+        == &ResourceRef::new(
+            resource.resource_type().clone(),
+            resource.metadata().name().clone(),
+        )
+        && resource_uid == resource.metadata().uid()
+        && resource_generation == resource.metadata().generation()
+        && resource_revision == resource.metadata().revision()
+}
+
+fn validate_assignment_list_page(
+    page: &StoreListResult,
+    zone: &ZoneId,
+    provider_ref: &ResourceRef,
+    expected_snapshot: Option<ZoneRevision>,
+) -> Result<Vec<ResourceEnvelope>, ControllerAssignmentRefreshError> {
+    if expected_snapshot.is_some_and(|snapshot| snapshot != page.snapshot_revision) {
+        return Err(ControllerAssignmentRefreshError::Retryable);
+    }
+    let mut resources = Vec::new();
+    for stored in &page.resources {
+        if &stored.zone != zone
+            || stored.revision.get() == 0
+            || stored.revision > page.snapshot_revision
+        {
+            return Err(ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthorizationUnavailable,
+            ));
+        }
+        let envelope = ResourceEnvelope::from_json(&stored.canonical_json).map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
+        })?;
+        if envelope.resource_type() != stored.resource_ref.resource_type()
+            || envelope.metadata().name() != stored.resource_ref.name()
+            || envelope.metadata().zone() != zone
+            || envelope.metadata().uid() != &stored.uid
+            || envelope.metadata().generation() != stored.generation
+            || envelope.metadata().revision() != stored.revision
+            || envelope.digest().map_err(|_| {
+                ControllerAssignmentRefreshError::Failed(
+                    ResourceRuntimeError::AuthorizationUnavailable,
+                )
+            })? != stored.payload_digest
+        {
+            return Err(ControllerAssignmentRefreshError::Failed(
+                ResourceRuntimeError::AuthorizationUnavailable,
+            ));
+        }
+        if envelope.spec().provider_ref() == Some(provider_ref) {
+            resources.push(envelope);
+        }
+    }
+    Ok(resources)
+}
+
+fn admit_assignment_or_skip(
+    assignments: &AssignmentRegistry,
+    request: AssignmentRequest<'_>,
+) -> Result<Option<ResourceClientLease>, ResourceRuntimeError> {
+    let mut registry = assignments
+        .lock()
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    match registry.admit(request) {
+        Ok(lease) => Ok(Some(lease)),
+        Err(error) if assignment_error_is_off_target(error) => Ok(None),
+        Err(_) => Err(ResourceRuntimeError::AuthorizationUnavailable),
+    }
+}
+
+async fn send_controller_assignment_revocations(
+    driver: &SessionDriverHandle,
+    assignments: &BTreeMap<ResourceUid, ResourceClientLease>,
+) {
+    let Ok(stream) = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID) else {
+        return;
+    };
+    for lease in assignments.values() {
+        let Ok(bytes) =
+            ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), lease.identity())
+        else {
+            continue;
+        };
+        if driver.send_named_stream(stream, bytes).await.is_err() {
+            let _ = driver.reset_named_stream(stream).await;
+            break;
+        }
+    }
+}
+
+fn controller_session_binding(
+    context: &crate::process_provider_runtime::ControllerBootstrapContext,
+    session_generation: ReconnectGeneration,
+) -> Result<ControllerSessionBinding, ResourceRuntimeError> {
+    let target_kind = match context.execution_ref().resource_type().as_str() {
+        "Host" => PlacementTargetKind::Host,
+        "Guest" => PlacementTargetKind::Guest,
+        _ => return Err(ResourceRuntimeError::AuthenticationUnavailable),
+    };
+    let controller_role =
+        if d2b_provider_runtime_cloud_hypervisor::is_provider_ref(context.provider_owner_ref()) {
+            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF)
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        } else {
+            context.process_ref().clone()
+        };
+    ControllerSessionBinding::new(
+        context.process_ref().clone(),
+        context.provider_owner_ref().clone(),
+        controller_role,
+        AssignmentTarget::Execution {
+            kind: target_kind,
+            reference: context.execution_ref().clone(),
+        },
+        context.provider_generation(),
+        context.controller_generation(),
+        session_generation,
+    )
+    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
+}
+
+pub(crate) fn controller_session_snapshot_fences(
+    sessions: impl IntoIterator<
+        Item = (
+            ResourceRef,
+            crate::process_provider_runtime::ControllerBootstrapContext,
+        ),
+    >,
+    snapshot: &[StoredResource],
+) -> Vec<(
+    ResourceRef,
+    crate::process_provider_runtime::ControllerBootstrapContext,
+)> {
+    sessions
+        .into_iter()
+        .filter(|(_, context)| {
+            !snapshot
+                .iter()
+                .find(|resource| resource.resource_ref == *context.process_ref())
+                .is_some_and(|resource| controller_resource_matches(context, resource))
+        })
+        .collect()
+}
+
+fn controller_resource_matches(
+    context: &crate::process_provider_runtime::ControllerBootstrapContext,
+    resource: &StoredResource,
+) -> bool {
+    if resource.zone != *context.zone()
+        || resource.resource_ref != *context.process_ref()
+        || resource.uid != *context.process_uid()
+        || resource.generation != context.generation()
+        || resource.revision.get() == 0
+    {
+        return false;
+    }
+    let Ok(envelope) = ResourceEnvelope::from_json(&resource.canonical_json) else {
+        return false;
+    };
+    if envelope.resource_type().as_str() != "Process"
+        || envelope.metadata().zone() != &resource.zone
+        || envelope.metadata().uid() != &resource.uid
+        || envelope.metadata().generation() != resource.generation
+        || envelope.metadata().revision() != resource.revision
+        || envelope.digest().ok().as_deref() != Some(resource.payload_digest.as_str())
+        || envelope.metadata().owner_ref() != Some(context.provider_owner_ref())
+        || envelope.spec().provider_ref() != Some(context.process_provider_ref())
+    {
+        return false;
+    }
+    let Ok(process) = serde_json::from_slice::<d2b_contracts_resource::v3::process::ProcessSpec>(
+        &envelope.spec().base().to_canonical_bytes(),
+    ) else {
+        return false;
+    };
+    process.execution().process_class()
+        == d2b_contracts_resource::v3::process::ProcessClass::Controller
+        && process.execution().execution_ref() == context.execution_ref()
 }
 
 fn committed_provider_spec(
@@ -4846,6 +6720,7 @@ fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRunt
         | ProcessResourceRuntimeError::TemplateUnavailable
         | ProcessResourceRuntimeError::IdentityAmbiguous
         | ProcessResourceRuntimeError::ProviderEffect
+        | ProcessResourceRuntimeError::ProviderIdentityUnavailable
         | ProcessResourceRuntimeError::InvalidResource => {
             ResourceRuntimeError::CapabilityUnavailable
         }
@@ -4887,9 +6762,7 @@ pub(crate) async fn list_guest_process_snapshot(
     request.resource_types = vec!["Process".to_owned(), "EphemeralProcess".to_owned()];
     request.page_size = 256;
     let mut projection = wire::Projection::new();
-    projection.kind = protobuf::EnumOrUnknown::new(
-        wire::ProjectionKind::PROJECTION_KIND_FULL,
-    );
+    projection.kind = protobuf::EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
     request.projection = protobuf::MessageField::some(projection);
 
     let client = session.resource_service_client();
@@ -5068,7 +6941,12 @@ fn public_update_status_request_from_current(
     let status = request
         .get("status")
         .cloned()
-        .or_else(|| request.get("resource").and_then(|value| value.get("status")).cloned())
+        .or_else(|| {
+            request
+                .get("resource")
+                .and_then(|value| value.get("status"))
+                .cloned()
+        })
         .ok_or(ResourceRuntimeError::RequestInvalid)?;
     let payload = replace_public_field(&current, "status", status)?;
     let current_uid = public_uid(&current)?;
@@ -5165,8 +7043,9 @@ async fn public_delete_request(
         }
         None => {
             let mut precondition = wire::Precondition::new();
-            precondition.kind =
-                protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+            );
             precondition.expected_revision = Some(1);
             precondition
         }
@@ -5390,10 +7269,7 @@ fn apply_public_mutation_options(
     Ok(())
 }
 
-fn public_string_array(
-    request: &Value,
-    field: &str,
-) -> Result<Vec<String>, ResourceRuntimeError> {
+fn public_string_array(request: &Value, field: &str) -> Result<Vec<String>, ResourceRuntimeError> {
     let Some(value) = request.get(field) else {
         return Ok(Vec::new());
     };
@@ -5470,19 +7346,14 @@ async fn public_create_payload(
             }
         }
     });
-    if value
-        .get("spec")
-        .and_then(Value::as_object)
-        .is_none()
-    {
+    if value.get("spec").and_then(Value::as_object).is_none() {
         return Err(ResourceRuntimeError::RequestInvalid);
     }
     let bytes = serde_json::to_vec(&value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     let canonical = CanonicalJsonValue::parse(&bytes)
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?
         .to_canonical_bytes();
-    ResourceEnvelope::from_json(&canonical)
-        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    ResourceEnvelope::from_json(&canonical).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     Ok(canonical)
 }
 
@@ -5501,8 +7372,7 @@ fn replace_public_field(
     let canonical = CanonicalJsonValue::parse(&bytes)
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?
         .to_canonical_bytes();
-    ResourceEnvelope::from_json(&canonical)
-        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    ResourceEnvelope::from_json(&canonical).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     Ok(canonical)
 }
 
@@ -5514,12 +7384,18 @@ fn encode_public_create_response(
         response.resource.as_ref(),
         None,
         response.revision,
-        Some(response.disposition.enum_value().unwrap_or(
-            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
-        )),
-        Some(response.status_persistence.enum_value().unwrap_or(
-            wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED,
-        )),
+        Some(
+            response
+                .disposition
+                .enum_value()
+                .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
+        ),
+        Some(
+            response
+                .status_persistence
+                .enum_value()
+                .unwrap_or(wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED),
+        ),
         response.last_persisted_status_revision,
         response.reconcile_projection.as_ref(),
     )
@@ -5533,12 +7409,18 @@ fn encode_public_update_spec_response(
         response.resource.as_ref(),
         None,
         response.revision,
-        Some(response.disposition.enum_value().unwrap_or(
-            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
-        )),
-        Some(response.status_persistence.enum_value().unwrap_or(
-            wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED,
-        )),
+        Some(
+            response
+                .disposition
+                .enum_value()
+                .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
+        ),
+        Some(
+            response
+                .status_persistence
+                .enum_value()
+                .unwrap_or(wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED),
+        ),
         response.last_persisted_status_revision,
         response.reconcile_projection.as_ref(),
     )
@@ -5582,9 +7464,12 @@ fn encode_public_delete_response(
         None,
         response.resource.as_ref(),
         response.revision,
-        Some(response.disposition.enum_value().unwrap_or(
-            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
-        )),
+        Some(
+            response
+                .disposition
+                .enum_value()
+                .unwrap_or(wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED),
+        ),
         None,
         None,
         None,
@@ -5602,7 +7487,9 @@ fn encode_public_mutation_response(
     reconcile_projection: Option<&wire::ResourceEnvelopeBytes>,
 ) -> Result<Value, ResourceRuntimeError> {
     if let Some(error) = error {
-        return Ok(d2bd_runtime::resource_runtime_support::public_api_error(error));
+        return Ok(d2bd_runtime::resource_runtime_support::public_api_error(
+            error,
+        ));
     }
     let mut body = serde_json::Map::new();
     if let Some(resource) = resource {
@@ -5615,9 +7502,9 @@ fn encode_public_mutation_response(
         );
     }
     body.insert("revision".to_owned(), Value::from(revision));
-    if let Some(disposition) = disposition.filter(|value| {
-        *value != wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED
-    }) {
+    if let Some(disposition) = disposition
+        .filter(|value| *value != wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED)
+    {
         body.insert(
             "disposition".to_owned(),
             Value::String(
@@ -5635,9 +7522,9 @@ fn encode_public_mutation_response(
             ),
         );
     }
-    if let Some(status_persistence) = status_persistence.filter(|value| {
-        *value != wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED
-    }) {
+    if let Some(status_persistence) = status_persistence
+        .filter(|value| *value != wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED)
+    {
         body.insert(
             "statusPersistence".to_owned(),
             Value::String(
@@ -5651,7 +7538,10 @@ fn encode_public_mutation_response(
         );
     }
     if let Some(revision) = last_persisted_status_revision {
-        body.insert("lastPersistedStatusRevision".to_owned(), Value::from(revision));
+        body.insert(
+            "lastPersistedStatusRevision".to_owned(),
+            Value::from(revision),
+        );
     }
     if let Some(projection) = reconcile_projection {
         body.insert(
@@ -6247,7 +8137,7 @@ impl ResourcePlane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs::OpenOptions, os::fd::AsRawFd, sync::Arc};
+    use std::{collections::VecDeque, fs::OpenOptions, os::fd::AsRawFd, sync::Arc};
 
     use d2b_contracts_resource::v3::{
         CanonicalJsonObject, Timestamp,
@@ -6258,6 +8148,10 @@ mod tests {
     };
     use d2b_resource_store::mutation_seal::mutation_seal_pair;
     use d2b_resource_store_redb::write_provisioning_marker;
+    use d2b_session_unix::{
+        CreditPool, CreditScopeSet, OutboundPacket, prearmed_seqpacket_pair,
+    };
+    use d2b_contracts_zone_session::v3::component_session::LimitProfile;
 
     fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
         Arc::new(AuditSink::open(directory.join(name)).unwrap())
@@ -6884,6 +8778,156 @@ mod tests {
                 &invalid_guest_source,
             ),
             Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
+        ));
+    }
+
+    #[test]
+    fn controller_provider_identity_projection_uses_authoritative_uid_generation_and_revision() {
+        let zone = ZoneId::parse("work").unwrap();
+        let expected_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap();
+        let resource = committed_provider_resource(
+            "runtime-cloud-hypervisor",
+            "runtime-cloud-hypervisor",
+            json!({}),
+        );
+        let (_, uid, generation, revision, digest) =
+            committed_provider_spec(&zone, ZoneRevision::new(1), &resource, &expected_ref)
+                .expect("committed Provider identity");
+        assert_eq!(uid, resource.uid);
+        assert_eq!(generation, resource.generation);
+        assert_eq!(revision, resource.revision);
+        assert_eq!(digest, resource.payload_digest);
+
+        let mut future = resource.clone();
+        future.revision = ZoneRevision::new(2);
+        assert!(matches!(
+            committed_provider_spec(&zone, ZoneRevision::new(1), &future, &expected_ref),
+            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
+        ));
+    }
+
+    #[test]
+    fn controller_session_admission_requires_the_exact_owner_binding() {
+        let target = AssignmentTarget::Execution {
+            kind: PlacementTargetKind::Host,
+            reference: ResourceRef::parse("Host/host-system").unwrap(),
+        };
+        let first = ControllerSessionBinding::new(
+            ResourceRef::parse("Process/controller-first").unwrap(),
+            ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
+            target.clone(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+        )
+        .unwrap();
+        let second = ControllerSessionBinding::new(
+            ResourceRef::parse("Process/controller-second").unwrap(),
+            ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+            ResourceRef::parse(d2b_provider_runtime_cloud_hypervisor::CONTROLLER_ROLE_REF).unwrap(),
+            target,
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+        )
+        .unwrap();
+
+        assert!(controller_session_matches(&first, &first, false));
+        assert!(!controller_session_matches(&first, &second, false));
+        assert!(!controller_session_matches(&first, &first, true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn controller_bootstrap_receiver_accepts_one_authenticated_endpoint() {
+        let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+        let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+        let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+        let (resource_fd, _resource_peer) = prearmed_seqpacket_pair().unwrap();
+        let policy = controller_bootstrap_attachment_policy();
+        let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+        let scopes = CreditScopeSet::new(
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+        );
+        let packet = OutboundPacket::with_current_credentials(
+            d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+            vec![Arc::new(resource_fd)],
+            LimitProfile::local_default(),
+            capacity,
+            &scopes,
+        )
+        .unwrap();
+        let mut queue = VecDeque::from([packet]);
+        assert_eq!(
+            sender
+                .send_burst(&mut queue, capacity, 2)
+                .await
+                .unwrap()
+                .sent
+                .len(),
+            1
+        );
+        let (resource_socket, credentials) = receive_controller_bootstrap(&receiver)
+            .await
+            .expect("authenticated bootstrap endpoint");
+        assert_eq!(
+            resource_socket.acceptor_peer_credentials().unwrap(),
+            credentials
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn controller_bootstrap_receiver_rejects_extra_packets() {
+        let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+        let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+        let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+        let policy = controller_bootstrap_attachment_policy();
+        let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+        let scopes = CreditScopeSet::new(
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+            CreditPool::new(8).unwrap(),
+        );
+        let (resource_a, _resource_a_peer) = prearmed_seqpacket_pair().unwrap();
+        let (resource_b, _resource_b_peer) = prearmed_seqpacket_pair().unwrap();
+        let mut queue = VecDeque::from([
+            OutboundPacket::with_current_credentials(
+                d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+                vec![Arc::new(resource_a)],
+                LimitProfile::local_default(),
+                capacity,
+                &scopes,
+            )
+            .unwrap(),
+            OutboundPacket::with_current_credentials(
+                d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+                vec![Arc::new(resource_b)],
+                LimitProfile::local_default(),
+                capacity,
+                &scopes,
+            )
+            .unwrap(),
+        ]);
+        assert_eq!(
+            sender
+                .send_burst(&mut queue, capacity, 2)
+                .await
+                .unwrap()
+                .sent
+                .len(),
+            2
+        );
+        assert!(matches!(
+            receive_controller_bootstrap(&receiver).await,
+            Err(ResourceRuntimeError::AuthenticationUnavailable)
         ));
     }
 
