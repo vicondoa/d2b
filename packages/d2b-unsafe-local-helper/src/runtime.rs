@@ -1,6 +1,11 @@
 use crate::environment::EnvironmentError;
 use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
+use d2b_contracts::{
+    ids::OperationId,
+    workload::WorkloadProviderKind,
+    workload_identity::{WorkloadIdentity, WorkloadTarget},
+};
 use d2b_contracts_control::public_wire::ShellName;
 use d2b_contracts_control::unsafe_local_wire::{
     HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
@@ -8,8 +13,6 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
     MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor,
 };
-use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::{WorkloadProviderKind, ids::OperationId};
 use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
 };
@@ -765,7 +768,7 @@ struct GraphicalSupervisorSpec {
     runtime_directory: PathBuf,
     display: String,
     upstream_display: String,
-    target: d2b_core::workload_identity::WorkloadTarget,
+    target: WorkloadTarget,
     realm_accent_color: RealmAccentColor,
     uid: u32,
     first_client_timeout_ms: u64,
@@ -776,7 +779,7 @@ impl GraphicalSupervisorSpec {
         proxy_binary: PathBuf,
         runtime_directory: PathBuf,
         upstream_display: String,
-        target: d2b_core::workload_identity::WorkloadTarget,
+        target: WorkloadTarget,
         realm_accent_color: RealmAccentColor,
         uid: u32,
     ) -> Result<Self, RuntimeError> {
@@ -1463,10 +1466,11 @@ pub(crate) fn persist_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{
+        configured_argv::ConfiguredArgv, token::ProtocolToken,
+        workload_identity::WorkloadTarget,
+    };
     use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
-    use d2b_core::configured_argv::ConfiguredArgv;
-    use d2b_core::workload_identity::WorkloadTarget;
-    use d2b_realm_core::token::ProtocolToken;
     use nix::unistd::Uid;
     use std::sync::{Arc, Barrier};
 

@@ -14,6 +14,7 @@ use crate::supervisor_protocol::{
     SupervisorResponse, SupervisorResult, read_frame, write_frame,
 };
 use crate::systemd::{ScopeInspection, UserScopeManager};
+use d2b_contracts::{ids::OperationId, workload_identity::WorkloadIdentity};
 use d2b_contracts_control::public_wire::{
     ShellCloseCause, ShellDetachResult, ShellKillResult, ShellListEntry, ShellListResult,
     ShellName, ShellSessionState,
@@ -24,8 +25,6 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperShellRequest, HelperShellResponse, HelperSupervisorId, HelperTerminalReady,
     HelperTerminalTransport, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
 };
-use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::ids::OperationId;
 use nix::libc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
