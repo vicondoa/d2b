@@ -105,7 +105,6 @@ let
     "activation-nixos"
     "observability-otel"
     "shell-terminal"
-    "runtime-cloud-hypervisor"
     "runtime-qemu-media"
     "runtime-azure-container-apps"
     "runtime-azure-virtual-machine"
@@ -125,7 +124,6 @@ let
     "activation-nixos" = "providerProjectionActivationNixos";
     "observability-otel" = "providerProjectionObservabilityOtel";
     "shell-terminal" = "providerProjectionShellTerminal";
-    "runtime-cloud-hypervisor" = "providerProjectionRuntimeCloudHypervisor";
     "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
     "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
     "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";

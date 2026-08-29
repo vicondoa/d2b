@@ -38,6 +38,17 @@ let
       })
     ids;
 
+  guestSetupDescriptors =
+    let
+      compiler = cfg._resourceCompiler or { };
+      projection = compiler.providerProjectionRuntimeCloudHypervisor or { };
+      privateArtifact = projection.privateArtifact or { };
+    in privateArtifact.guestSetupDescriptors or [ ];
+  descriptorForbiddenRows =
+    let
+      resourceBundle = import ./resources-bundle.nix { inherit lib; };
+    in lib.concatMap resourceBundle.forbiddenRows guestSetupDescriptors;
+
   # Keep the legacy internal projection available to the zone-resources
   # emitter while the installed document uses the v3 artifact rows above.
   # The compatibility view intentionally contains no new authority; it is
@@ -66,25 +77,29 @@ let
   compatibilityData = {
     schemaVersion = 3;
     entries = compatibilityEntries;
+    inherit guestSetupDescriptors;
   };
 
   catalogPath = pkgs.runCommand "d2b-artifact-catalog.json"
     {
       buildRowsJson = builtins.toJSON buildRows;
+      guestSetupDescriptorsJson = builtins.toJSON guestSetupDescriptors;
       nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
-      passAsFile = [ "buildRowsJson" ];
+      passAsFile = [ "buildRowsJson" "guestSetupDescriptorsJson" ];
     } ''
       set -euo pipefail
-      python3 - "$buildRowsJsonPath" "$out" <<'PY'
+      python3 - "$buildRowsJsonPath" "$guestSetupDescriptorsJsonPath" "$out" <<'PY'
       import hashlib
       import json
       import pathlib
       import subprocess
       import sys
 
-      rows_path, output_path = sys.argv[1:]
+      rows_path, descriptors_path, output_path = sys.argv[1:]
       with open(rows_path, encoding="utf-8") as handle:
           rows = json.load(handle)
+      with open(descriptors_path, encoding="utf-8") as handle:
+          guest_setup_descriptors = json.load(handle)
 
       def digest_path(path):
           digest = hashlib.sha256()
@@ -184,7 +199,11 @@ let
               "storePath": row["storePath"],
               "type": row["type"],
           })
-      preimage = {"entries": entries, "schemaVersion": 3}
+      preimage = {
+          "entries": entries,
+          "guestSetupDescriptors": guest_setup_descriptors,
+          "schemaVersion": 3,
+      }
       encoded = json.dumps(
           preimage,
           ensure_ascii=False,
@@ -226,8 +245,23 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = descriptorForbiddenRows == [ ];
+        message = "runtime-cloud-hypervisor Guest setup descriptors must remain semantic-only.";
+      }
+    ];
     d2b._artifactCatalogV3 = {
-      inherit ids artifactRows preimage preimageJson catalogDigest catalogData catalogJson;
+      inherit
+        ids
+        artifactRows
+        preimage
+        preimageJson
+        catalogDigest
+        catalogData
+        catalogJson
+        guestSetupDescriptors
+        ;
       path = catalogPath;
       publicEntries = map (entry: builtins.removeAttrs entry [ "storePath" ]) artifactRows;
     };

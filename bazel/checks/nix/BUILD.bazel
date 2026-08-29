@@ -372,6 +372,10 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-runtime-cloud-hypervisor:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix",
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources-zones-processes.nix",
         ],
         "package": "packages/d2b-provider-runtime-cloud-hypervisor",
         "raw_cases": True,

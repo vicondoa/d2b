@@ -27,6 +27,12 @@ let
   artifactCatalogPreimage = {
     schemaVersion = 3;
     entries = providerCatalogEntries;
+    guestSetupDescriptors =
+      let
+        compiler = cfg._resourceCompiler or { };
+        projection = compiler.providerProjectionRuntimeCloudHypervisor or { };
+        privateArtifact = projection.privateArtifact or { };
+      in privateArtifact.guestSetupDescriptors or [ ];
   };
   artifactCatalogPreimageJson = builtins.toJSON artifactCatalogPreimage;
   canonicalArtifactCatalog =
@@ -37,6 +43,8 @@ let
     canonicalArtifactCatalog.path or (artifactRenderer.mkArtifactCatalog {
       entriesJson = builtins.toJSON providerCatalogEntries;
       preimageJson = canonicalArtifactCatalogPreimageJson;
+      guestSetupDescriptorsJson =
+        builtins.toJSON artifactCatalogPreimage.guestSetupDescriptors;
     });
   schemaValidation = cfg._resourceCompiler.schemaValidation or { };
   schemaValidationPath = schemaValidation.buildValidation or null;
@@ -68,7 +76,6 @@ let
     "activation-nixos"
     "observability-otel"
     "shell-terminal"
-    "runtime-cloud-hypervisor"
     "runtime-qemu-media"
     "runtime-azure-container-apps"
     "runtime-azure-virtual-machine"
@@ -88,7 +95,6 @@ let
     "activation-nixos" = "providerProjectionActivationNixos";
     "observability-otel" = "providerProjectionObservabilityOtel";
     "shell-terminal" = "providerProjectionShellTerminal";
-    "runtime-cloud-hypervisor" = "providerProjectionRuntimeCloudHypervisor";
     "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
     "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
     "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";
