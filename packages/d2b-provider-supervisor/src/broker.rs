@@ -350,13 +350,22 @@ impl BundleBackedLaunchResolver {
             ticket.template().as_str(),
             None,
         );
+        let generic_intent = self.bundle.find_runner_intent_for_process_in_vm(
+            Some(vm_name),
+            &expected_execution_ref,
+            expected_execution_domain,
+            expected_user_ref.as_deref(),
+            ticket.template().as_str(),
+        );
         let (intent, legacy_identity) = match ticket.component().as_str() {
             "vm-process" => (
                 legacy_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
                 true,
             ),
             "process-controller" => (
-                static_controller_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,
+                static_controller_intent
+                    .or(generic_intent)
+                    .ok_or(ProcessEffectError::UnsupportedProvider)?,
                 false,
             ),
             _ => return Err(ProcessEffectError::UnsupportedProvider),
