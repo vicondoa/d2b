@@ -2385,6 +2385,8 @@ fn replayed_operation_failure(operation: &OperationRecord) -> StoreError {
             Some("resource-already-exists") => StoreErrorKind::ResourceAlreadyExists,
             Some("resource-conflict")
             | Some("operation-id-reused")
+            | Some("assignment-owner-missing")
+            | Some("owner-child-binding-mismatch")
             | Some("same-batch-create-followup-unsupported")
             | Some("same-batch-delete-recreate-unsupported") => {
                 StoreErrorKind::ResourceConflict
@@ -7199,6 +7201,7 @@ mod tests {
             owner_generation,
             target.clone(),
         ));
+        let foreign_replay = foreign.clone();
         let rejected = apply_group(
             &database,
             vec![verified("failure-foreign-owner", foreign, owner_uid.clone())],
@@ -7207,6 +7210,19 @@ mod tests {
         assert_eq!(
             rejected.results[0].as_ref().unwrap_err().reason_code(),
             "assignment-owner-missing"
+        );
+        let replayed = apply_group(
+            &database,
+            vec![verified(
+                "failure-foreign-owner",
+                foreign_replay,
+                owner_uid.clone(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            replayed.results[0].as_ref().unwrap_err().kind(),
+            StoreErrorKind::ResourceConflict
         );
 
         let mut stale_revision = create_mutation_with_body(
@@ -7323,6 +7339,7 @@ mod tests {
             target.clone(),
         ));
         let ownerless_uid = ownerless_update.expected_uid.clone().unwrap();
+        let ownerless_replay = ownerless_update.clone();
         let rejected = apply_group(
             &database,
             vec![verified(
@@ -7335,6 +7352,19 @@ mod tests {
         assert_eq!(
             rejected.results[0].as_ref().unwrap_err().reason_code(),
             "owner-child-binding-mismatch"
+        );
+        let replayed = apply_group(
+            &database,
+            vec![verified(
+                "failure-ownerless-update",
+                ownerless_replay,
+                ownerless_uid,
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            replayed.results[0].as_ref().unwrap_err().kind(),
+            StoreErrorKind::ResourceConflict
         );
 
         let sibling_ref = ResourceRef::parse("Guest/sibling").unwrap();
