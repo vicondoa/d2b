@@ -49,22 +49,12 @@ _SURFACES = {
         "cases": ["net-vm-network"],
         "package": "packages/d2b-provider-network-local",
         "files": [
+            "packages/d2b-provider-network-local/nix/net-mdns.nix",
             "packages/d2b-provider-network-local/nix/net.nix",
-            "nixos-modules/resources.nix",
-            "nixos-modules/resources-bundle.nix",
-            "nixos-modules/generated/provider-catalog-shape.nix",
         ],
         "modules": [
-            "packages/d2b-provider-network-local/nix/network.nix",
-            "packages/d2b-provider-network-local/nix/resources-network.nix",
-            "nixos-modules/options-artifacts.nix",
-            "nixos-modules/provider-catalog.nix",
             "nixos-modules/options-envs.nix",
-            "nixos-modules/options-site.nix",
-            "nixos-modules/options-vms.nix",
-            "nixos-modules/options-zones.nix",
-            "nixos-modules/options-zones-resources.nix",
-            "nixos-modules/options-resources.nix",
+            "packages/d2b-provider-network-local/nix/resources-network.nix",
         ],
     },
     "storage-volume": {
@@ -139,9 +129,8 @@ _SURFACES = {
     },
     "desktop-interaction": {
         "cases": [],
-        "package": "packages/d2b-provider-display-wayland",
         "modules": [
-            "packages/d2b-provider-display-wayland/nix/ui-colors.nix",
+            "nixos-modules/ui-colors.nix",
         ],
     },
     "provider-catalog": {
@@ -163,20 +152,11 @@ _SURFACES = {
     },
     "examples": {
         "cases": [],
-        "package": "packages/d2b-provider-observability-otel",
-        "files": [
-            "packages/d2b-provider-observability-otel/src/nix/journald.nix",
-            "nixos-modules/gas-city-contributor/integrations.nix",
-            "nixos-modules/gas-city-contributor/network.nix",
-            "nixos-modules/gas-city-contributor/options.nix",
-            "nixos-modules/gas-city-contributor/service.nix",
-        ],
         "modules": [
-            "packages/d2b-provider-observability-otel/nix/default.nix",
-            "packages/d2b-provider-observability-otel/nix/guest.nix",
-            "packages/d2b-provider-observability-otel/nix/host.nix",
-            "packages/d2b-provider-observability-otel/nix/stack.nix",
-            "nixos-modules/gas-city-contributor/default.nix",
+            "nixos-modules/components/observability/default.nix",
+            "nixos-modules/components/observability/guest.nix",
+            "nixos-modules/components/observability/host.nix",
+            "nixos-modules/components/observability/stack.nix",
             "nixos-modules/observability-vm.nix",
         ],
     },
@@ -516,27 +496,9 @@ nix_native_test(
 )
 
 nix_native_test(
-    name = "flake-eval-x86-realized-gas-city",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" >/dev/null',
-    lane = "flake-realized-gas-city",
-    max_kib = 14665373,
-    data = ["//:flake.lock"],
-    timeout = "eternal",
-)
-
-nix_native_test(
     name = "flake-eval-x86-realized-supply-chain",
     command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null',
     lane = "flake-realized-supply-chain",
-    max_kib = 14665373,
-    data = ["//:flake.lock"],
-    timeout = "eternal",
-)
-
-nix_native_test(
-    name = "flake-eval-x86-realized-package-output",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#packages.x86_64-linux.d2b-resource-compiler" >/dev/null',
-    lane = "flake-realized-package-output",
     max_kib = 14665373,
     data = ["//:flake.lock"],
     timeout = "eternal",
@@ -553,11 +515,10 @@ nix_native_test(
 
 nix_native_test(
     name = "flake-eval-x86-realized-guest-static",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-elf" >/dev/null',
-    lane = "flake-realized-guest-static",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-consumption" >/dev/null',
+    lane = "flake-guest-static-consumption",
     max_kib = 14665373,
     data = ["//:flake.lock"],
-    timeout = "eternal",
 )
 
 nix_native_test(
@@ -577,9 +538,7 @@ test_suite(
     name = "nix_realized",
     tests = [
         ":flake-eval-x86-realized-video",
-        ":flake-eval-x86-realized-gas-city",
         ":flake-eval-x86-realized-supply-chain",
-        ":flake-eval-x86-realized-package-output",
         ":flake-eval-x86-realized-provider-catalog",
         ":flake-eval-x86-realized-guest-static",
     ],

@@ -58,9 +58,7 @@ workflow tooling are intentionally absent.
 - [0049 - Store-owned mutation seal](0049-store-owned-mutation-seal.md)
 - [0050 - Provider derivation artifact layout](0050-provider-derivation-artifact-layout.md)
 - [0051 - Security key semantic backing set](0051-security-key-semantic-backing-set.md)
-- [0053 - Gas City contributor infrastructure](0053-gascity-contributor-infrastructure.md)
 - [0054 - Single product Cargo workspace](0054-single-product-cargo-workspace.md)
-- [0056 - Gas City contributor environment](0056-gas-city-contributor-environment.md)
 
 ## Supporting records
 

@@ -109,31 +109,26 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 #   make heavy-flake-check  full flake realization.
 # ===========================================================================
 
+## Public Bazel aliases invoke `bazel test` directly. Default profile is
+## BuildBuddy `remote`. PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
+D2B_BAZEL_PROFILE ?= remote
+D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
+BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
+D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) --test_tag_filters="$(D2B_BAZEL_TEST_TAG_FILTERS)" --test_env=D2B_REPO_ROOT="$(CURDIR)" --test_env=D2B_BAZEL_BIN="$(BAZEL_BIN)" --test_env=D2B_PROJECT_SHELL=d2b --test_env=D2B_SHELLCHECK_BIN="$(D2B_SHELLCHECK_BIN)" --test_env=PATH="$(PATH)" --test_output=errors
+export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
+
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
 check-ci:
-	$(BAZEL_RUN) //bazel/checks:check
+	$(D2B_BAZEL_TEST) //bazel/checks:check
 	$(MAKE) test-integration
 
 ## check-fast - compatibility alias for check; check-tier0 is the fast subset.
-
-## bazel-check - complete Bazel graph. Locally this defaults to the
-## BuildBuddy profile; the facade falls back to local execution when the
-## credential is unavailable. CI sets D2B_BAZEL_PROFILE=local.
-D2B_BAZEL_PROFILE ?= remote
-D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
-
-BAZEL_RUN = \
-	env \
-	D2B_BAZEL_JOB="$@" \
-	D2B_BAZEL_TEST_TAG_FILTERS="$(D2B_BAZEL_TEST_TAG_FILTERS)" \
-	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" --
-export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
 
 check-tier0: D2B_BAZEL_TEST_TAG_FILTERS := -gpu,-kvm
 test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
 
 $(D2B_MAKE_BAZEL_TARGETS):
-	$(BAZEL_RUN) //bazel/checks:$@
+	$(D2B_BAZEL_TEST) //bazel/checks:$@
 
 # ===========================================================================
 # Sub-targets. Each target is a thin alias over one public Bazel suite.
@@ -292,12 +287,11 @@ test-host-integration:
 
 ## perf - run the advisory performance budget suite.
 perf:
-	$(BAZEL_RUN) //bazel/checks:test-performance-budgets
+	$(D2B_BAZEL_TEST) //bazel/checks:test-performance-budgets
 
-BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
 ## heavy-check - the complete Layer-1 check.
 heavy-check:
-	$(BAZEL_RUN) //bazel/checks:check
+	$(D2B_BAZEL_TEST) //bazel/checks:check
 
 ## heavy-flake-check - the building `nix flake check`; `make test-flake` is the
 ## cheap --no-build sibling.

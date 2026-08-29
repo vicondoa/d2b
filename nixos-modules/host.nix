@@ -212,7 +212,7 @@ in
           ++ lib.optional vm'.audio.enable ../packages/d2b-provider-audio-pipewire/nix/guest.nix
           ++ lib.optional vm'.audit.enable ./components/audit.nix
           ++ lib.optional (vm'.graphics.enable && vm'.graphics.videoSidecar) ../packages/d2b-provider-device-gpu/nix/video-guest.nix
-          ++ lib.optional vm'.observability.enable ../packages/d2b-provider-observability-otel/nix/guest.nix
+          ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
           ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
           ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
           ++ [ vm'.config ]

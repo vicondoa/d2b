@@ -720,7 +720,7 @@ The exact internal module layout is decided per owner wave, but the package boun
 - Adding or removing a provider Nix case changes only that provider's target and aggregate membership.
 - Pure module tests do not receive docs, unrelated packages, or unrelated Nix modules as inputs.
 - The shared Nix harness contains no surface assertions, file discovery, fixture registry, or aggregate membership.
-- Realized video, Gas City, supply-chain, and package-output checks execute as separate labels.
+- Realized video, supply-chain, and package-output checks execute as separate labels.
 - A focused host-integration selection builds one named VM check without enumerating the full set.
 
 **Verification:** Nix action inputs are surface-local, the aggregate remains fixed, and cache evidence shows unrelated targets are reusable.

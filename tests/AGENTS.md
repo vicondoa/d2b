@@ -148,12 +148,10 @@ caching, and aggregation. Make targets and fixed CI jobs are thin aliases over
 one facade suite per public target and must not grow local fan-out, discovery,
 sharding, or rollup logic.
 
-`tests/tools/bazel-check` is the retained execution facade. It selects the
-local, developer-remote, or protected trusted-seed profile, reads credentials
-only through Bazel's credential-helper protocol, withholds credentials from
-untrusted jobs, redacts logs and BEP output, and permits one identical local
-retry only for typed pre-dispatch infrastructure failures. Post-dispatch,
-analysis, policy, build, and test failures fail closed.
+Public Make aliases run `bazel test --config=$(D2B_BAZEL_PROFILE)` directly.
+Do not wrap `make check` or `make test-*` through `tests/tools/bazel-check`.
+That script remains the BuildBuddy credential helper only. Default profile is
+`remote`; PR gates set `D2B_BAZEL_PROFILE=local`.
 
 Bazel is the only supported contributor build and test interface. Cargo
 manifests and the root `Cargo.lock` own Rust package and dependency facts;
@@ -192,8 +190,9 @@ reports a guarded skip.
 
 Nix-unit surfaces are fixed Bazel labels with explicit source closures.
 Each action copies only its declared runfiles into an isolated source root and
-evaluates the surface directly through the shared minimal runner flake. The
-repository flake outputs and ambient `D2B_REPO_ROOT` do not participate.
+evaluates the surface directly with the shared Bazel-provided nixpkgs pin. The
+repository flake outputs, per-test Git input fetching, and ambient
+`D2B_REPO_ROOT` do not participate.
 The shared evaluator fails closed when a surface evaluates zero cases. Do not
 add a test census, successor pin, secondary inventory, or validator.
 

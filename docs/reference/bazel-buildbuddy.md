@@ -94,9 +94,10 @@ container, VM, live-host, hardware, fixture, and performance lanes remain
 explicit local lanes. Rust target and exec actions override the worker
 toolchain's deprecated gold default with GNU ld.bfd.
 
-GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
-`D2B_BAZEL_UNTRUSTED=1`; they receive no BuildBuddy credential. The fixed job
-set is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
+GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` so `make` runs
+`bazel test --config=local` directly with no `tests/tools/bazel-check`
+wrapper. They receive no BuildBuddy credential. The fixed job set is
+committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
 aligned with the public Make aliases.
 
 ## Developer invocation metadata
@@ -141,7 +142,7 @@ Store the developer API key as one line in the protected file named by
 ~/.config/d2b/buildbuddy-api-key
 ```
 
-`tests/tools/bazel-check` is Bazel's credential helper and execution facade.
+`tests/tools/bazel-check` is Bazel's credential helper. Make does not wrap public test aliases through it.
 It reads the key only for Bazel's credential-helper request and writes it
 only as the helper response. Never add `--remote_header`, `--bes_header`, an
 API key, or a bearer value to `.bazelrc`, command arguments, action
