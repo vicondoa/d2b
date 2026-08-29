@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::{
     ArtifactId, CanonicalJsonError, CanonicalJsonValue, ResourceGeneration, ResourceRef,
     SchemaFingerprint, SchemaVersion,
     execution_policy::BoundedToken,
-    resource_schema::{canonical_digest, canonical_json_bytes},
+    resource_schema::{canonical_json_bytes, framed_canonical_digest},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -540,7 +540,10 @@ impl GuestSetupDescriptor {
             bootstrap_handoff: &self.bootstrap_handoff,
         };
         let bytes = canonical_json_bytes(&unsigned)?;
-        Ok(canonical_digest(GUEST_SETUP_DESCRIPTOR_DOMAIN_TAG, &bytes))
+        Ok(framed_canonical_digest(
+            GUEST_SETUP_DESCRIPTOR_DOMAIN_TAG,
+            &bytes,
+        ))
     }
 }
 
