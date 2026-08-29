@@ -176,6 +176,8 @@ pub fn semantic_child_digest(
 /// convergence.
 pub fn observed_child_from_resource(
     target: HintTarget,
+    owner: &HintTarget,
+    owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
     revision: ZoneRevision,
     canonical_resource: &[u8],
     deletion_requested: bool,
@@ -244,16 +246,21 @@ pub fn observed_child_from_resource(
         .ok()
         .and_then(|generation| d2b_contracts_resource::v3::ResourceGeneration::new(generation).ok())
         .ok_or(BindingChildMaterializationError::MalformedResource)?;
-    let mut observed = ObservedChild::with_deletion_state(
+    let observed = ObservedChild::with_owner_and_dependencies(
         target,
+        owner,
+        owner_generation,
         revision,
         digest,
         deletion_requested,
         deletion_ready,
+        std::iter::empty(),
     )
-    .map_err(BindingChildMaterializationError::OwnerReconcile)?;
-    observed = observed.with_owner_ref(owner_ref);
-    observed = observed.with_generation(generation);
+    .map_err(BindingChildMaterializationError::OwnerReconcile)?
+    .with_generation(generation);
+    if observed.owner_ref() != Some(&owner_ref) {
+        return Err(BindingChildMaterializationError::OwnerMismatch);
+    }
     Ok(observed)
 }
 

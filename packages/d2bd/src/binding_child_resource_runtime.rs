@@ -163,6 +163,8 @@ pub(crate) async fn reconcile_binding_children(
                         child.resource_ref.clone(),
                         child.uid.clone(),
                     ),
+                    &owner_target,
+                    owner.resource.generation,
                     child.revision,
                     &child.canonical_json,
                     deletion_requested(child),
@@ -814,6 +816,14 @@ mod tests {
     #[test]
     fn relist_deletion_ready_requires_deletion_request() {
         let child_ref = target("Process", "child");
+        let owner = HintTarget::new(
+            ZoneId::parse("dev").unwrap(),
+            ResourceRef::parse("Binding/owner").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse(
+                "223e4567-e89b-42d3-a456-426614174000",
+            )
+            .unwrap(),
+        );
         let observe = |resource: &StoredResource| {
             observed_child_from_resource(
                 HintTarget::new(
@@ -821,6 +831,8 @@ mod tests {
                     resource.resource_ref.clone(),
                     resource.uid.clone(),
                 ),
+                &owner,
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
                 resource.revision,
                 &resource.canonical_json,
                 deletion_requested(resource),
@@ -828,18 +840,18 @@ mod tests {
             )
         };
 
-        let live = stored_resource(&child_ref, None, "Ready");
+        let live = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         let observed = observe(&live).expect("live child relists");
         assert!(!observed.deletion_requested());
         assert!(!observed.deletion_ready());
 
-        let mut requested = stored_resource(&child_ref, None, "Ready");
+        let mut requested = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         set_deletion_state(&mut requested, true, &[]);
         let observed = observe(&requested).expect("requested child relists");
         assert!(observed.deletion_requested());
         assert!(observed.deletion_ready());
 
-        let mut finalizing = stored_resource(&child_ref, None, "Ready");
+        let mut finalizing = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         set_deletion_state(&mut finalizing, true, &["child-finalizer"]);
         let observed = observe(&finalizing).expect("finalizing child relists");
         assert!(observed.deletion_requested());

@@ -599,6 +599,7 @@ impl OwnerReconcilePlan {
 #[derive(Clone, PartialEq, Eq)]
 pub struct OwnerChildBatch {
     owner: HintTarget,
+    owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
     children: Vec<DesiredChild>,
     refs: Vec<ResourceRef>,
 }
@@ -607,6 +608,7 @@ impl OwnerChildBatch {
     /// Construct a deterministic batch from UID-free desired children.
     pub fn new(
         owner: HintTarget,
+        owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         children: impl IntoIterator<Item = DesiredChild>,
     ) -> Result<Self, OwnerReconcileError> {
         let mut children = children.into_iter().collect::<Vec<_>>();
@@ -632,6 +634,7 @@ impl OwnerChildBatch {
             .collect::<Vec<_>>();
         Ok(Self {
             owner,
+            owner_generation,
             children,
             refs,
         })
@@ -640,6 +643,13 @@ impl OwnerChildBatch {
     /// Borrow the exact owner incarnation for this batch.
     pub const fn owner(&self) -> &HintTarget {
         &self.owner
+    }
+
+    /// Return owner generation captured for uncertain-response fencing.
+    pub const fn owner_generation(
+        &self,
+    ) -> d2b_contracts_resource::v3::ResourceGeneration {
+        self.owner_generation
     }
 
     /// Borrow children in deterministic dependency-first order.
@@ -807,7 +817,12 @@ impl OwnerBatchResult {
                 let expected = batch.refs().iter().collect::<BTreeSet<_>>();
                 let mut seen = BTreeSet::new();
                 for child in relisted {
-                    validate_observed_owner(batch.owner(), child, true, None)?;
+                    validate_observed_owner(
+                        batch.owner(),
+                        child,
+                        true,
+                        Some(batch.owner_generation()),
+                    )?;
                     if !expected.contains(child.target().resource_ref()) {
                         return Err(OwnerReconcileError::BatchUnexpected);
                     }
@@ -1125,7 +1140,16 @@ impl OwnerIndex {
         let create_batch = if create_children.is_empty() {
             None
         } else {
-            Some(OwnerChildBatch::new(owner.clone(), create_children)?)
+            let owner_generation = self
+                .owner_generations
+                .get(owner)
+                .copied()
+                .ok_or(OwnerReconcileError::OwnerIdentityMissing)?;
+            Some(OwnerChildBatch::new(
+                owner.clone(),
+                owner_generation,
+                create_children,
+            )?)
         };
         Ok(OwnerReconcilePlan {
             owner: owner.clone(),
@@ -1279,7 +1303,11 @@ fn validate_observed_owner(
     if child.target.resource_ref() == owner.resource_ref() {
         return Err(OwnerReconcileError::InvalidChild);
     }
-    if require_owner_identity && child.owner_ref.is_none() {
+    if require_owner_identity
+        && (child.owner_ref.is_none()
+            || child.owner_uid.is_none()
+            || child.owner_generation.is_none())
+    {
         return Err(OwnerReconcileError::OwnerIdentityMissing);
     }
     if child
