@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, Instant, timeout_at};
 
+use d2b_contracts_resource::v3::ResourceRef;
+
 use crate::{
     AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
     AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaCredentialPurpose,
@@ -18,7 +20,6 @@ use crate::{
     AcaResourceBinding, AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle,
     AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery,
 };
-use d2b_contracts::ResourceRef;
 
 /// Provider lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

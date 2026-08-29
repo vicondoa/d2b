@@ -2,9 +2,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts::{
-    CredentialLeaseHandle, ResourceRef, ResourceUid,
-};
+use d2b_contracts_provider::v3::credential::CredentialLeaseHandle;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_provider_runtime_azure_container_apps::{
     AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
     AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
