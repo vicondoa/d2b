@@ -539,6 +539,15 @@ nix_native_test(
 )
 
 nix_native_test(
+    name = "flake-eval-x86-realized-provider-catalog",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.provider-catalog-determinism" >/dev/null',
+    lane = "flake-realized-provider-catalog",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
     name = "flake-eval-x86-realized-guest-static",
     command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-elf" >/dev/null',
     lane = "flake-realized-guest-static",
@@ -567,6 +576,7 @@ test_suite(
         ":flake-eval-x86-realized-gas-city",
         ":flake-eval-x86-realized-supply-chain",
         ":flake-eval-x86-realized-package-output",
+        ":flake-eval-x86-realized-provider-catalog",
         ":flake-eval-x86-realized-guest-static",
     ],
 )

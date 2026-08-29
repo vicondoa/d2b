@@ -1424,9 +1424,19 @@
               capture_output=True,
               text=True,
           ).stdout.strip()
-          assert entries["provider-digest"] == "sha256:" + provider_hash
-          assert entries["system-digest"] == contract["systemExpected"]
-          assert entries["system-digest"] != "sha256:" + subprocess.run(
+          expected_provider = "sha256:" + provider_hash
+          if entries["provider-digest"] != expected_provider:
+              raise SystemExit(
+                  f"provider packageDigest {entries['provider-digest']} "
+                  f"does not match NAR digest {expected_provider}"
+              )
+          if entries["system-digest"] != contract["systemExpected"]:
+              raise SystemExit(
+                  f"system packageDigest {entries['system-digest']} "
+                  f"does not match path-and-content digest "
+                  f"{contract['systemExpected']}"
+              )
+          system_nar = "sha256:" + subprocess.run(
               [
                   "nix",
                   "--extra-experimental-features",
@@ -1442,6 +1452,10 @@
               capture_output=True,
               text=True,
           ).stdout.strip()
+          if entries["system-digest"] == system_nar:
+              raise SystemExit(
+                  "system packageDigest unexpectedly used the Provider NAR mode"
+              )
           PY
         '';
 

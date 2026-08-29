@@ -85,7 +85,11 @@ let
   names = [ "provider-audio" "provider-storage" "provider-wayland" ];
 
   digestProvider = pkgs.writeText "artifact-provider-digest" "provider-digest";
-  digestSystem = pkgs.writeText "artifact-system-digest" "system-digest";
+  digestSystem = pkgs.runCommand "artifact-system-digest" { } ''
+    mkdir -p "$out/bin" "$out/etc"
+    printf 'boot\n' > "$out/bin/boot"
+    printf 'NAME=d2b-test\n' > "$out/etc/os-release"
+  '';
 
   evaluate = modules: (nixosSystem {
     inherit system;
@@ -181,6 +185,6 @@ else
       providerPath = toString digestProvider;
       systemPath = toString digestSystem;
       systemExpected =
-        "sha256:${builtins.hashFile "sha256" digestSystem}";
+        "sha256:2073c4caf2fffb61dd80ff06ff1e6f45927e492c7b57b29fbc85624b3b09fac2";
     };
   }
