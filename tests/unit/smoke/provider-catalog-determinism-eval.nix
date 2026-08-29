@@ -84,7 +84,13 @@ let
 
   names = [ "provider-audio" "provider-storage" "provider-wayland" ];
 
-  digestProvider = pkgs.writeText "artifact-provider-digest" "provider-digest";
+  digestProvider = pkgs.runCommand "artifact-provider-digest" { } ''
+    mkdir -p "$out/bin" "$out/share/d2b/provider"
+    printf 'provider\n' > "$out/bin/provider"
+    chmod +x "$out/bin/provider"
+    printf '{"name":"provider-digest"}\n' \
+      > "$out/share/d2b/provider/manifest.json"
+  '';
   digestSystem = pkgs.runCommand "artifact-system-digest" { } ''
     mkdir -p "$out/bin" "$out/etc"
     printf 'boot\n' > "$out/bin/boot"
