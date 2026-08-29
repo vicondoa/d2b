@@ -23,9 +23,8 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperShellDetachResponse, HelperShellKillResponse, HelperShellListResponse, HelperShellPolicy,
     HelperShellRequest, HelperShellResponse, HelperSupervisorId, HelperTerminalReady,
     HelperTerminalTransport, OperationId, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
-    UnsafeLocalHelperToDaemon,
+    UnsafeLocalHelperToDaemon, ZoneResourceIdentity,
 };
-use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
 use nix::libc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -229,7 +228,7 @@ fn dispatch_started<M: UserScopeManager>(
 struct AttachOperation {
     request_id: u64,
     operation_id: OperationId,
-    workload: UnsafeLocalWorkloadIdentity,
+    workload: ZoneResourceIdentity,
     policy: HelperShellPolicy,
     name: Option<ShellName>,
     force: bool,
@@ -256,7 +255,7 @@ fn list<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: UnsafeLocalWorkloadIdentity,
+    workload: ZoneResourceIdentity,
     policy: HelperShellPolicy,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
@@ -501,7 +500,7 @@ fn detach<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: UnsafeLocalWorkloadIdentity,
+    workload: ZoneResourceIdentity,
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
@@ -559,7 +558,7 @@ fn kill<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: UnsafeLocalWorkloadIdentity,
+    workload: ZoneResourceIdentity,
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
@@ -946,7 +945,7 @@ fn remove_shell_scope<M: UserScopeManager>(
 
 fn persisted_shell<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
-    workload: &UnsafeLocalWorkloadIdentity,
+    workload: &ZoneResourceIdentity,
     name: &ShellName,
 ) -> Result<PersistedScope, RuntimeError> {
     let ledger = runtime.ledger.lock().map_err(|_| RuntimeError::Internal)?;
@@ -961,7 +960,7 @@ fn persisted_shell<M: UserScopeManager>(
 
 fn find_shell<'a>(
     scopes: &'a [PersistedScope],
-    workload: &UnsafeLocalWorkloadIdentity,
+    workload: &ZoneResourceIdentity,
     name: &ShellName,
 ) -> Option<&'a PersistedScope> {
     scopes.iter().find(|scope| {
@@ -975,7 +974,7 @@ fn find_shell<'a>(
 
 fn has_stale_shell(
     scopes: &[PersistedScope],
-    workload: &UnsafeLocalWorkloadIdentity,
+    workload: &ZoneResourceIdentity,
     name: &ShellName,
 ) -> bool {
     scopes.iter().any(|scope| {
@@ -987,7 +986,7 @@ fn has_stale_shell(
     })
 }
 
-fn has_stale_workload(scopes: &[PersistedScope], workload: &UnsafeLocalWorkloadIdentity) -> bool {
+fn has_stale_workload(scopes: &[PersistedScope], workload: &ZoneResourceIdentity) -> bool {
     scopes.iter().any(|scope| {
         scope.persistent_shell.is_some()
             && same_resource_slot(&scope.workload, workload)
@@ -995,18 +994,15 @@ fn has_stale_workload(scopes: &[PersistedScope], workload: &UnsafeLocalWorkloadI
     })
 }
 
-fn same_resource_slot(
-    left: &UnsafeLocalWorkloadIdentity,
-    right: &UnsafeLocalWorkloadIdentity,
-) -> bool {
+fn same_resource_slot(left: &ZoneResourceIdentity, right: &ZoneResourceIdentity) -> bool {
     left.zone() == right.zone() && left.resource_ref() == right.resource_ref()
 }
 
-fn shell_name_key(workload: &UnsafeLocalWorkloadIdentity, name: &ShellName) -> String {
+fn shell_name_key(workload: &ZoneResourceIdentity, name: &ShellName) -> String {
     format!("{}\u{1f}{}", workload_identity_key(workload), name.as_str())
 }
 
-fn same_workload(left: &UnsafeLocalWorkloadIdentity, right: &UnsafeLocalWorkloadIdentity) -> bool {
+fn same_workload(left: &ZoneResourceIdentity, right: &ZoneResourceIdentity) -> bool {
     left == right
 }
 
@@ -1057,11 +1053,11 @@ fn shell_fingerprint(request: &HelperShellRequest) -> Result<[u8; 32], RuntimeEr
     #[serde(rename_all = "camelCase")]
     enum Fingerprint<'a> {
         List {
-            workload: &'a UnsafeLocalWorkloadIdentity,
+            workload: &'a ZoneResourceIdentity,
             policy: &'a HelperShellPolicy,
         },
         Attach {
-            workload: &'a UnsafeLocalWorkloadIdentity,
+            workload: &'a ZoneResourceIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a Option<ShellName>,
             force: bool,
@@ -1069,12 +1065,12 @@ fn shell_fingerprint(request: &HelperShellRequest) -> Result<[u8; 32], RuntimeEr
             cols: u32,
         },
         Detach {
-            workload: &'a UnsafeLocalWorkloadIdentity,
+            workload: &'a ZoneResourceIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a ShellName,
         },
         Kill {
-            workload: &'a UnsafeLocalWorkloadIdentity,
+            workload: &'a ZoneResourceIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a ShellName,
         },
@@ -1184,7 +1180,7 @@ mod tests {
         zone_uid: &str,
         resource_uid: &str,
         generation: u64,
-    ) -> UnsafeLocalWorkloadIdentity {
+    ) -> ZoneResourceIdentity {
         serde_json::from_value(serde_json::json!({
             "zone": zone,
             "zoneUid": zone_uid,
@@ -1196,7 +1192,7 @@ mod tests {
         .unwrap()
     }
 
-    fn workload() -> UnsafeLocalWorkloadIdentity {
+    fn workload() -> ZoneResourceIdentity {
         workload_for(
             "work",
             "123e4567-e89b-42d3-a456-426614174000",

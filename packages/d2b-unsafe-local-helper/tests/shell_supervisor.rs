@@ -3,12 +3,11 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperScopeKind, HelperScopeState, HelperShellPolicy, HelperShellRequest,
     HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalReadOutput,
     HelperTerminalRequest, HelperTerminalResize, HelperTerminalResponse, HelperTerminalWriteStdin,
-    OperationId, UnsafeLocalHelperToDaemon, decode_unsafe_local_terminal_frame,
-    encode_unsafe_local_terminal_frame,
+    OperationId, UnsafeLocalHelperToDaemon, ZoneResourceIdentity,
+    decode_unsafe_local_terminal_frame, encode_unsafe_local_terminal_frame,
 };
 use d2b_contracts_control::{public_wire::ShellName, terminal_wire::TerminalSize};
 use d2b_core::base64_codec;
-use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
 use d2b_unsafe_local_helper::environment::ManagerEnvironment;
 use d2b_unsafe_local_helper::runtime::ScopeRuntime;
 use d2b_unsafe_local_helper::systemd::{
@@ -524,7 +523,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     );
 }
 
-fn workload() -> UnsafeLocalWorkloadIdentity {
+fn workload() -> ZoneResourceIdentity {
     serde_json::from_value(json!({
         "zone": "host",
         "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
@@ -545,7 +544,7 @@ fn shell_policy() -> HelperShellPolicy {
 
 fn attach_request(
     operation_id: &str,
-    workload: UnsafeLocalWorkloadIdentity,
+    workload: ZoneResourceIdentity,
     force: bool,
 ) -> HelperShellRequest {
     HelperShellRequest::Attach {

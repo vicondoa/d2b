@@ -11,9 +11,8 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperScopeSnapshot, HelperScopeState, HelperShellRequest, HelperShellResponse, HelperSnapshot,
     HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
     MAX_HELPER_SNAPSHOT_SCOPES, OperationId, RealmAccentColor, WorkloadTarget,
-    validate_unsafe_local_resource_identity,
+    ZoneResourceIdentity, validate_unsafe_local_resource_identity,
 };
-use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
 use nix::libc;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::sys::wait::{WaitStatus, waitpid};
@@ -101,7 +100,7 @@ pub(crate) struct PersistedScope {
     pub(crate) operation_id: OperationId,
     #[serde(default)]
     pub(crate) fingerprint: Option<[u8; 32]>,
-    pub(crate) workload: UnsafeLocalWorkloadIdentity,
+    pub(crate) workload: ZoneResourceIdentity,
     pub(crate) unit_name: String,
     pub(crate) invocation_id: String,
     pub(crate) control_group: String,
@@ -1444,7 +1443,7 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     Ok(ledger)
 }
 
-pub(crate) fn workload_identity_key(identity: &UnsafeLocalWorkloadIdentity) -> String {
+pub(crate) fn workload_identity_key(identity: &ZoneResourceIdentity) -> String {
     format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         identity.zone().as_str(),
@@ -1490,10 +1489,9 @@ pub(crate) fn persist_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_control::unsafe_local_wire::ProtocolToken;
-    use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
-    use d2b_core::configured_argv::ConfiguredArgv;
-    use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
+    use d2b_contracts_control::unsafe_local_wire::{
+        ConfiguredArgv, HelperLaunchRequest, ProtocolToken, ScopeIdentity, ZoneResourceIdentity,
+    };
     use nix::unistd::Uid;
     use std::sync::{Arc, Barrier};
 
@@ -1569,7 +1567,7 @@ mod tests {
         }
     }
 
-    fn workload() -> UnsafeLocalWorkloadIdentity {
+    fn workload() -> ZoneResourceIdentity {
         serde_json::from_value(serde_json::json!({
             "zone": "host",
             "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
