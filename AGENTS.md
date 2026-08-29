@@ -74,9 +74,10 @@ documentation.
   lifecycle or framework machinery.
 - Caveman is for transient communication only; it does not govern persisted
   prose.
-- Advanced planning, orchestration, and independent review prefer
-  `gpt-5.6-sol` with xhigh reasoning and long context (`long_context`).
-- Implementation prefers `gpt-5.6-luna` with xhigh reasoning.
+- Planning, orchestration, and implementation use `gpt-5.6-luna` with max
+  reasoning and long context (`long_context`).
+- Independent review uses `grok-4.6` with high reasoning and long context
+  (`long_context`) and does not run tests.
 - If a preferred profile is unavailable, use the strongest native
   role-equivalent model; record that substitution only in the transient handoff.
   Do not put model, tool, or agent attribution in shipped artifacts.
