@@ -523,6 +523,7 @@ pub async fn adopt_deployed_controller(
                 .map_err(ProviderCompositionError::ControllerDeployment)?;
             Ok(ProviderAdoption::Quarantined(report))
         }
+        ProviderAdoption::Stale { candidate } => Ok(ProviderAdoption::Stale { candidate }),
         ProviderAdoption::Absent => Ok(ProviderAdoption::Absent),
     }
 }

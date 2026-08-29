@@ -257,6 +257,9 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         let Some(candidate) = self.port.observe(ticket).await? else {
             return Ok(AdoptionOutcome::Absent);
         };
+        if adoption::is_stale_candidate(ticket, &candidate, &self.profile) {
+            return Ok(AdoptionOutcome::Stale { candidate });
+        }
         let identity_ok = candidate.wait_reap_owner == WaitReapOwner::Local
             && candidate
                 .validate(self.profile.required_identity_bindings())
@@ -301,5 +304,18 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             return Err(ProcessConformanceError::IdentityUnverified);
         }
         self.port.stop(identity, class).await
+    }
+
+    async fn stop_stale(
+        &self,
+        candidate: &AdoptionCandidate,
+    ) -> Result<(), ProcessConformanceError> {
+        if candidate.identity.is_zero() {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        self.port.open_pidfd(candidate).await?;
+        self.port
+            .stop(&candidate.identity, StopClass::Terminate)
+            .await
     }
 }

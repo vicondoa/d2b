@@ -104,8 +104,6 @@ impl BrokerObservedProcess {
     fn validate(&self) -> Result<(), ProcessEffectError> {
         if self.pid <= 0
             || self.start_time_ticks == 0
-            || !self.cgroup_verified
-            || !self.executable_verified
             || self.intent.provider_identity == [0; 32]
             || self.intent.template_identity == [0; 32]
             || self.intent.generation == 0
@@ -115,6 +113,14 @@ impl BrokerObservedProcess {
                 .as_ref()
                 .is_some_and(|binding| !binding.is_valid())
         {
+            return Err(ProcessEffectError::IdentityChanged);
+        }
+        Ok(())
+    }
+
+    fn validate_launch(&self) -> Result<(), ProcessEffectError> {
+        self.validate()?;
+        if !self.cgroup_verified || !self.executable_verified {
             return Err(ProcessEffectError::IdentityChanged);
         }
         Ok(())
@@ -145,16 +151,21 @@ impl BrokerObservedProcess {
     }
 
     fn observation(&self) -> BackendObservation {
+        let mut verified = vec![
+            IdentityBinding::Pid,
+            IdentityBinding::ProcessStartTime,
+            IdentityBinding::Template,
+            IdentityBinding::Generation,
+        ];
+        if self.cgroup_verified {
+            verified.push(IdentityBinding::Cgroup);
+        }
+        if self.executable_verified {
+            verified.push(IdentityBinding::Executable);
+        }
         BackendObservation::new(
             self.digest(),
-            ObservedIdentity::from_verified([
-                IdentityBinding::Pid,
-                IdentityBinding::ProcessStartTime,
-                IdentityBinding::Cgroup,
-                IdentityBinding::Executable,
-                IdentityBinding::Template,
-                IdentityBinding::Generation,
-            ]),
+            ObservedIdentity::from_verified(verified),
             WaitReapOwner::Local,
         )
     }
@@ -660,7 +671,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             cgroup_verified: true,
             executable_verified: true,
         };
-        observed.validate()?;
+        observed.validate_launch()?;
         self.resolver.record_launched(&request, &observed);
         let observation = observed.observation();
         Ok(BackendLaunch::new(
@@ -678,7 +689,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         };
         observed.validate()?;
         let observation = observed.observation();
-        self.record(observed)?;
+        if observed.cgroup_verified {
+            self.record(observed)?;
+        }
         Ok(Some(observation))
     }
 
@@ -893,6 +906,26 @@ mod tests {
         }
     }
 
+    struct ObservingResolver {
+        observed: BrokerObservedProcess,
+    }
+
+    impl BrokerLaunchResolver for ObservingResolver {
+        fn resolve(
+            &self,
+            _request: &ProcessRequest,
+        ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
+            Ok(self.observed.intent.clone())
+        }
+
+        fn observe(
+            &self,
+            _request: &ProcessRequest,
+        ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
+            Ok(Some(self.observed.clone()))
+        }
+    }
+
     fn observed(seed: u16) -> BrokerObservedProcess {
         BrokerObservedProcess {
             intent: BrokerLaunchIntent {
@@ -972,6 +1005,37 @@ mod tests {
             backend.observations.lock().unwrap().len(),
             MAX_PENDING_OBSERVATIONS - 1
         );
+    }
+
+    #[test]
+    fn executable_mismatch_remains_observable_as_incomplete_identity() {
+        let mut process = observed(1);
+        process.executable_verified = false;
+        let backend = BrokerProcessBackend::with_socket(
+            ObservingResolver {
+                observed: process.clone(),
+            },
+            "/unused",
+            Duration::from_millis(1),
+        );
+        let request = ProcessRequest::new(
+            d2b_process_conformance::testing::fixtures::ticket_builder()
+                .build()
+                .expect("conformant ticket"),
+        );
+        let observation = backend
+            .observe(request)
+            .expect("mismatch observation")
+            .expect("candidate remains present");
+        assert!(!observation
+            .observed()
+            .verified()
+            .contains(&IdentityBinding::Executable));
+        assert!(observation
+            .observed()
+            .verified()
+            .contains(&IdentityBinding::Cgroup));
+        assert!(backend.take_observation(&observation.identity()).is_ok());
     }
 
     #[test]

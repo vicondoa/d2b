@@ -176,7 +176,7 @@ fn systemd_good() -> SystemdProcessProvider<ProviderSupervisor<DeterministicBack
 }
 
 struct ScriptedBackend {
-    port: ScriptedEffectPort,
+    port: Arc<ScriptedEffectPort>,
 }
 
 impl ProcessEffectBackend for ScriptedBackend {
@@ -255,13 +255,17 @@ fn effect_error(error: ProcessConformanceError) -> ProcessEffectError {
 fn scripted_minijail(
     port: ScriptedEffectPort,
 ) -> MinijailProcessProvider<ProviderSupervisor<ScriptedBackend>> {
-    MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend { port }))
+    MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::new(port),
+    }))
 }
 
 fn scripted_systemd(
     port: ScriptedEffectPort,
 ) -> SystemdProcessProvider<ProviderSupervisor<ScriptedBackend>> {
-    SystemdProcessProvider::new(ProviderSupervisor::new(ScriptedBackend { port }))
+    SystemdProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::new(port),
+    }))
 }
 
 #[test]
@@ -279,6 +283,42 @@ fn shared_conformance_runs_through_the_production_adapter() {
     suite::assert_status_is_redacted(&systemd_good(), SYSTEMD);
     suite::assert_incomplete_launch_identity_fails_closed(scripted_systemd, SYSTEMD);
     suite::assert_adoption_verifies_identity_before_opening_a_pidfd(scripted_systemd, SYSTEMD);
+}
+
+#[test]
+fn stale_minijail_candidate_is_stopped_exactly_before_replacement_launch() {
+    let stale = minijail_bindings()
+        .into_iter()
+        .filter(|binding| *binding != IdentityBinding::Executable)
+        .collect::<Vec<_>>();
+    let port = Arc::new(
+        ScriptedEffectPort::launching(minijail_bindings(), WaitReapOwner::Local)
+            .with_candidate(stale, WaitReapOwner::Local),
+    );
+    let provider = MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::clone(&port),
+    }));
+    let ticket = fixtures::ticket_builder()
+        .selected_provider(MINIJAIL)
+        .expected_identity(minijail_bindings())
+        .build()
+        .unwrap();
+
+    let candidate = match block_on(provider.adopt(&ticket)).unwrap() {
+        AdoptionOutcome::Stale { candidate } => candidate,
+        other => panic!("expected stale candidate, observed {other:?}"),
+    };
+    block_on(provider.stop_stale(&candidate)).unwrap();
+    block_on(provider.launch(&ticket)).unwrap();
+    assert_eq!(
+        port.calls(),
+        vec![
+            d2b_process_conformance::testing::PortCall::Observe,
+            d2b_process_conformance::testing::PortCall::OpenPidfd,
+            d2b_process_conformance::testing::PortCall::Stop(StopClass::Terminate),
+            d2b_process_conformance::testing::PortCall::Launch,
+        ]
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@ use d2b_contracts_resource::v3::{
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
     process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
-use d2b_process_conformance::GuestExecutionBinding;
+use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding};
 use d2b_resource_api::watch::ResourceWatch;
 use d2b_resource_api::{
     RedbBackend, ResourceApiClient, ResourceStoreBackend,
@@ -415,11 +415,12 @@ impl ProcessResourceRuntime {
                                     .adopt_resource(self.context(&record), spec)
                                     .await,
                             )?;
-                            match adoption {
-                                ProviderAdoption::Quarantined(_) => {
-                                    return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
-                                }
-                                ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => {}
+                            if let Some(candidate) = stale_candidate_for_deletion(adoption)? {
+                                let provider_ref = self.context(&record).provider_ref.clone();
+                                self.providers
+                                    .stop_stale_resource(&provider_ref, &candidate)
+                                    .await
+                                    .map_err(map_provider_error)?;
                             }
                         }
                         DesiredProcess::Ephemeral(spec) => {
@@ -428,11 +429,12 @@ impl ProcessResourceRuntime {
                                     .adopt_ephemeral_resource(self.context(&record), spec)
                                     .await,
                             )?;
-                            match adoption {
-                                ProviderAdoption::Quarantined(_) => {
-                                    return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
-                                }
-                                ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => {}
+                            if let Some(candidate) = stale_candidate_for_deletion(adoption)? {
+                                let provider_ref = self.context(&record).provider_ref.clone();
+                                self.providers
+                                    .stop_stale_resource(&provider_ref, &candidate)
+                                    .await
+                                    .map_err(map_provider_error)?;
                             }
                         }
                     }
@@ -661,30 +663,47 @@ impl ProcessResourceRuntime {
         match adoption {
             ProviderAdoption::Adopted(_) => Ok(true),
             ProviderAdoption::Quarantined(_) => Err(ProcessResourceRuntimeError::IdentityAmbiguous),
+            ProviderAdoption::Stale { candidate } => {
+                let provider_ref = self.context(record).provider_ref.clone();
+                self.providers
+                    .stop_stale_resource(&provider_ref, &candidate)
+                    .await
+                    .map_err(map_provider_error)?;
+                self.launch_record(record).await?;
+                Ok(false)
+            }
             ProviderAdoption::Absent => {
-                match &record.process {
-                    DesiredProcess::Process(spec) => self
-                        .providers
-                        .launch_resource(
-                            self.context(record),
-                            spec,
-                            launch_timeout(&record.process),
-                        )
-                        .await
-                        .map_err(map_provider_error)?,
-                    DesiredProcess::Ephemeral(spec) => self
-                        .providers
-                        .launch_ephemeral_resource(
-                            self.context(record),
-                            spec,
-                            launch_timeout(&record.process),
-                        )
-                        .await
-                        .map_err(map_provider_error)?,
-                };
+                self.launch_record(record).await?;
                 Ok(false)
             }
         }
+    }
+
+    async fn launch_record(
+        &self,
+        record: &DesiredRecord,
+    ) -> Result<(), ProcessResourceRuntimeError> {
+        match &record.process {
+            DesiredProcess::Process(spec) => self
+                .providers
+                .launch_resource(
+                    self.context(record),
+                    spec,
+                    launch_timeout(&record.process),
+                )
+                .await
+                .map_err(map_provider_error)?,
+            DesiredProcess::Ephemeral(spec) => self
+                .providers
+                .launch_ephemeral_resource(
+                    self.context(record),
+                    spec,
+                    launch_timeout(&record.process),
+                )
+                .await
+                .map_err(map_provider_error)?,
+        };
+        Ok(())
     }
 
     async fn handle_start_failure(
@@ -1028,6 +1047,16 @@ fn start_failure_message(error: ProcessResourceRuntimeError) -> &'static str {
         ProcessResourceRuntimeError::InvalidResource => "the process resource is invalid",
         ProcessResourceRuntimeError::ProviderEffect => "the Provider failed to start the process",
         ProcessResourceRuntimeError::Store => "the durable resource store failed",
+    }
+}
+
+fn stale_candidate_for_deletion(
+    adoption: ProviderAdoption,
+) -> Result<Option<AdoptionCandidate>, ProcessResourceRuntimeError> {
+    match adoption {
+        ProviderAdoption::Quarantined(_) => Err(ProcessResourceRuntimeError::IdentityAmbiguous),
+        ProviderAdoption::Stale { candidate } => Ok(Some(candidate)),
+        ProviderAdoption::Adopted(_) | ProviderAdoption::Absent => Ok(None),
     }
 }
 
@@ -1948,6 +1977,12 @@ pub(crate) async fn run_process_watch(
 
 #[cfg(test)]
 mod tests {
+    use d2b_process_conformance::{
+        AdoptionCandidate, AdoptionCondition, ObservedIdentity, ProcessIdentityDigest,
+        ProcessPhaseClass, ProcessStatusReport, WaitReapOwner,
+        testing::fixtures,
+    };
+
     use super::*;
 
     #[test]
@@ -1979,6 +2014,49 @@ mod tests {
             deletion_adoption(Err("provider-ticket:other".to_owned())),
             Err(ProcessResourceRuntimeError::ProviderEffect)
         ));
+    }
+
+    #[test]
+    fn stale_deletion_selects_exact_candidate_but_ambiguity_blocks() {
+        let candidate = AdoptionCandidate {
+            identity: ProcessIdentityDigest::from_bytes([0x42; 32]),
+            observed: ObservedIdentity::from_verified([
+                d2b_process_conformance::IdentityBinding::Pid,
+                d2b_process_conformance::IdentityBinding::ProcessStartTime,
+                d2b_process_conformance::IdentityBinding::Cgroup,
+                d2b_process_conformance::IdentityBinding::Template,
+                d2b_process_conformance::IdentityBinding::Generation,
+            ]),
+            wait_reap_owner: WaitReapOwner::Local,
+        };
+        let report = ProcessStatusReport {
+            provider: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                "system-minijail",
+            )
+            .expect("provider token"),
+            identity: candidate.identity,
+            wait_reap_owner: WaitReapOwner::Local,
+            execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
+            domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
+            user_ref: None,
+            digests: fixtures::compiled_digests(),
+            phase: ProcessPhaseClass::Unknown,
+            last_exit: None,
+            adoption: AdoptionCondition::Quarantined,
+        };
+        assert_eq!(
+            stale_candidate_for_deletion(ProviderAdoption::Stale {
+                candidate: candidate.clone(),
+            })
+            .expect("stale candidate")
+            .expect("exact stale candidate")
+            .identity,
+            candidate.identity
+        );
+        assert_eq!(
+            stale_candidate_for_deletion(ProviderAdoption::Quarantined(report)),
+            Err(ProcessResourceRuntimeError::IdentityAmbiguous)
+        );
     }
 
     #[test]

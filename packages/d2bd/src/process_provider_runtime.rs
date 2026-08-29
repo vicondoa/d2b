@@ -25,10 +25,10 @@ use d2b_core::{
     processes::{ProcessNode, ProcessRole},
 };
 use d2b_process_conformance::{
-    AdoptionOutcome, CompiledDigests, ConfigurationDigest, IdentityBinding, LaunchTicket,
-    GuestExecutionBinding, OperationBinding, ProcessConformanceError, ProcessIdentityDigest,
-    ProcessLaunchEffectPort, ProcessProvider, ProcessStatusReport, ReadinessExpectation,
-    SandboxCompiler, StopClass, execution_commitment,
+    AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest, IdentityBinding,
+    LaunchTicket, GuestExecutionBinding, OperationBinding, ProcessConformanceError,
+    ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessProvider, ProcessStatusReport,
+    ReadinessExpectation, SandboxCompiler, StopClass, execution_commitment,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
@@ -211,6 +211,11 @@ pub enum ProviderAdoption {
     Absent,
     /// The exact process was adopted.
     Adopted(ProcessStatusReport),
+    /// A uniquely identified stale process is available for exact replacement.
+    Stale {
+        /// Opaque effect-owner evidence for the exact stale process.
+        candidate: AdoptionCandidate,
+    },
     /// A candidate was present but identity was ambiguous and quarantined.
     Quarantined(ProcessStatusReport),
 }
@@ -708,6 +713,10 @@ impl ProductionProcessProviders {
                 )?;
                 Ok(ProviderAdoption::Adopted(report))
             }
+            AdoptionOutcome::Stale { candidate } => {
+                self.forget_resource(resource.process_ref());
+                Ok(ProviderAdoption::Stale { candidate })
+            }
             AdoptionOutcome::Quarantined(report) => {
                 self.forget_resource(resource.process_ref());
                 Ok(ProviderAdoption::Quarantined(report))
@@ -964,6 +973,10 @@ impl ProductionProcessProviders {
                 )?;
                 Ok(ProviderAdoption::Adopted(report))
             }
+            AdoptionOutcome::Stale { candidate } => {
+                self.forget_resource(context.resource_ref);
+                Ok(ProviderAdoption::Stale { candidate })
+            }
             AdoptionOutcome::Quarantined(report) => {
                 self.forget_resource(context.resource_ref);
                 Ok(ProviderAdoption::Quarantined(report))
@@ -1146,6 +1159,10 @@ impl ProductionProcessProviders {
                 self.remember(vm, node, report.identity)?;
                 Ok(ProviderAdoption::Adopted(report))
             }
+            AdoptionOutcome::Stale { candidate } => {
+                self.forget(vm, node);
+                Ok(ProviderAdoption::Stale { candidate })
+            }
             AdoptionOutcome::Quarantined(report) => {
                 self.forget(vm, node);
                 Ok(ProviderAdoption::Quarantined(report))
@@ -1213,6 +1230,9 @@ impl ProductionProcessProviders {
                     return Ok(());
                 }
                 ProviderAdoption::Adopted(_) => {}
+                ProviderAdoption::Stale { .. } => {
+                    return Err("provider-process-stale".to_owned());
+                }
                 ProviderAdoption::Quarantined(_) => {
                     return Err("provider-process-quarantined".to_owned());
                 }
@@ -1351,6 +1371,13 @@ impl ProductionProcessProviders {
                     self.forget(vm, node);
                 }
                 ProviderAdoption::Adopted(_) => {}
+                ProviderAdoption::Stale { .. } => {
+                    tracing::warn!(
+                        vm = %vm,
+                        role = %Self::tracked_role_id(node),
+                        "Provider startup adoption found a stale process"
+                    );
+                }
                 ProviderAdoption::Quarantined(_) => {
                     tracing::warn!(
                         vm = %vm,
@@ -1444,6 +1471,25 @@ impl ProductionProcessProviders {
             ManagedProvider::Systemd => self
                 .systemd
                 .stop(identity, class)
+                .await
+                .map_err(provider_error),
+        }
+    }
+
+    pub(crate) async fn stop_stale_resource(
+        &self,
+        provider_ref: &ResourceRef,
+        candidate: &AdoptionCandidate,
+    ) -> Result<(), String> {
+        match managed_provider_from_ref(provider_ref)? {
+            ManagedProvider::Minijail => self
+                .minijail
+                .stop_stale(candidate)
+                .await
+                .map_err(provider_error),
+            ManagedProvider::Systemd => self
+                .systemd
+                .stop_stale(candidate)
                 .await
                 .map_err(provider_error),
         }

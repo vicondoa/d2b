@@ -77,6 +77,12 @@ pub enum AdoptionOutcome {
     Absent,
     /// A running process was adopted after full identity verification.
     Adopted(ProcessStatusReport),
+    /// One uniquely identified stale process is available for exact
+    /// replacement through the effect port.
+    Stale {
+        /// The private effect-port evidence for the exact stale process.
+        candidate: crate::port::AdoptionCandidate,
+    },
     /// Identity was ambiguous. The process is quarantined and reported as
     /// `Unknown`; it is never broadly killed or reused.
     Quarantined(ProcessStatusReport),
@@ -109,6 +115,18 @@ pub trait ProcessProvider: Send + Sync {
         &self,
         _identity: &crate::identity::ProcessIdentityDigest,
         _class: StopClass,
+    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
+        ready(Err(ProcessConformanceError::StopUnavailable))
+    }
+
+    /// Stop and reap one uniquely identified stale process before replacement.
+    ///
+    /// Providers must keep this path narrow: the candidate's exact identity
+    /// evidence is supplied by the effect adapter, and ambiguity is never
+    /// converted into a stop request.
+    fn stop_stale(
+        &self,
+        _candidate: &crate::port::AdoptionCandidate,
     ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
         ready(Err(ProcessConformanceError::StopUnavailable))
     }

@@ -8101,6 +8101,13 @@ fn dispatch_wave6_resource_reconcile(
                 process_provider_runtime::ProviderAdoption::Adopted(_) => {
                     "cloud-hypervisor-adopted"
                 }
+                process_provider_runtime::ProviderAdoption::Stale { .. } => {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        "Guest Provider Cloud Hypervisor adoption found a stale process"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
                 process_provider_runtime::ProviderAdoption::Quarantined(_) => {
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }

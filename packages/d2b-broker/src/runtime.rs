@@ -6950,17 +6950,16 @@ fn observe_registered_runner(
         } else {
             let Some(start_time_ticks) = read_proc_start_time_ticks(observed_registration.pid)?
             else {
-                metadata_registry.remove(&runner_id);
+                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                drop(metadata_registry);
+                drop(pidfd_registry);
                 return Ok(Some(
-                    d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
-                        vm_id: request.vm_id.clone(),
-                        role_id: request.role_id.clone(),
-                        present: false,
-                        pid: 0,
-                        start_time_ticks: 0,
-                        cgroup_verified: false,
-                        executable_verified: false,
-                    },
+                    reap_registered_runner_after_observation(
+                        request,
+                        &runner_id,
+                        &observed_registration,
+                        pidfd,
+                    ),
                 ));
             };
             if start_time_ticks != observed_registration.start_time_ticks {
@@ -6972,19 +6971,45 @@ fn observe_registered_runner(
                 observed_registration.pid,
                 &observed_registration.cgroup_subtree,
             );
-            let executable_path = read_runner_executable(observed_registration.pid);
-            let executable_verified = match executable_path {
-                Ok(ref path) => executable_paths_match(path, &observed_registration.binary_path),
-                Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                    // A registered pidfd and the broker-owned cgroup are the
-                    // executable provenance established by this broker. Linux
-                    // resets dumpability when a runner changes uid, so Yama
-                    // blocks the redundant /proc/<pid>/exe read without
-                    // CAP_SYS_PTRACE.
-                    pidfd_registered && cgroup_verified
-                }
-                Err(_) => false,
+            let executable_observation = observe_runner_executable(
+                read_runner_executable(observed_registration.pid),
+                &observed_registration.binary_path,
+            )?;
+            if executable_observation == RunnerExecutableObservation::Vanished {
+                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                drop(metadata_registry);
+                drop(pidfd_registry);
+                return Ok(Some(
+                    reap_registered_runner_after_observation(
+                        request,
+                        &runner_id,
+                        &observed_registration,
+                        pidfd,
+                    ),
+                ));
+            }
+            let Some(current_start_time_ticks) =
+                read_proc_start_time_ticks(observed_registration.pid)?
+            else {
+                let pidfd = duplicate_runner_pidfd(&pidfd_registry, &runner_id);
+                drop(metadata_registry);
+                drop(pidfd_registry);
+                return Ok(Some(
+                    reap_registered_runner_after_observation(
+                        request,
+                        &runner_id,
+                        &observed_registration,
+                        pidfd,
+                    ),
+                ));
             };
+            if current_start_time_ticks != start_time_ticks {
+                return Err(BrokerError::LiveHandler(
+                    "runner process identity changed".to_owned(),
+                ));
+            }
+            let executable_verified =
+                executable_observation.is_verified_for_registered(pidfd_registered, cgroup_verified);
             if rebound {
                 if let Some(stored) = metadata_registry.get_mut(&runner_id) {
                     stored.guest_execution = observed_registration.guest_execution.clone();
@@ -7015,7 +7040,7 @@ fn discover_runner_candidate(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<d2b_contracts_broker::broker_wire::ObserveRunnerResponse, BrokerError> {
-    let mut candidate = None;
+    let mut candidates = Vec::new();
     let entries =
         fs::read_dir("/proc").map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
     for entry in entries {
@@ -7024,35 +7049,35 @@ fn discover_runner_candidate(
         let Some(pid) = name.to_str().and_then(|value| value.parse::<i32>().ok()) else {
             continue;
         };
-        if pid <= 0 || !proc_cgroup_matches(pid, &intent.cgroup_placement.subtree) {
-            continue;
-        }
-        let executable = read_runner_executable(pid).ok();
-        if !executable
-            .as_deref()
-            .is_some_and(|path| executable_paths_match(path, &intent.binary_path))
-        {
+        let cgroup_verified =
+            pid > 0 && proc_cgroup_matches(pid, &intent.cgroup_placement.subtree);
+        if !cgroup_verified {
             continue;
         }
         let Some(start_time_ticks) = read_proc_start_time_ticks(pid)? else {
             continue;
         };
-        if candidate.replace((pid, start_time_ticks)).is_some() {
-            return Err(BrokerError::LiveHandler(
-                "runner adoption candidate ambiguous".to_owned(),
-            ));
+        if start_time_ticks == 0 {
+            continue;
         }
+        let executable_observation =
+            observe_runner_executable(read_runner_executable(pid), &intent.binary_path)?;
+        if executable_observation == RunnerExecutableObservation::Vanished {
+            continue;
+        }
+        let Some(current_start_time_ticks) = read_proc_start_time_ticks(pid)? else {
+            continue;
+        };
+        if current_start_time_ticks != start_time_ticks {
+            continue;
+        }
+        let executable_verified = executable_observation.is_verified_for_discovery();
+        candidates.push((pid, start_time_ticks, executable_verified));
     }
-    let Some((pid, start_time_ticks)) = candidate else {
-        return Ok(d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
-            vm_id: request.vm_id.clone(),
-            role_id: request.role_id.clone(),
-            present: false,
-            pid: 0,
-            start_time_ticks: 0,
-            cgroup_verified: false,
-            executable_verified: false,
-        });
+    let Some((pid, start_time_ticks, executable_verified)) =
+        select_runner_candidate(candidates)?
+    else {
+        return Ok(absent_runner_response(request));
     };
     Ok(d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
         vm_id: request.vm_id.clone(),
@@ -7061,27 +7086,76 @@ fn discover_runner_candidate(
         pid,
         start_time_ticks,
         cgroup_verified: true,
-        executable_verified: true,
+        executable_verified,
     })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
-    let Some((actual, expected)) = fs::canonicalize(actual)
-        .ok()
-        .zip(fs::canonicalize(expected).ok())
-    else {
-        return false;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunnerExecutableObservation {
+    Matching,
+    Mismatch,
+    PermissionDenied,
+    Vanished,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+impl RunnerExecutableObservation {
+    fn is_verified(self, broker_owned_provenance: bool) -> bool {
+        match self {
+            Self::Matching => true,
+            Self::PermissionDenied => broker_owned_provenance,
+            Self::Mismatch | Self::Vanished => false,
+        }
+    }
+
+    fn is_verified_for_discovery(self) -> bool {
+        self.is_verified(false)
+    }
+
+    fn is_verified_for_registered(self, pidfd_registered: bool, cgroup_verified: bool) -> bool {
+        self.is_verified(pidfd_registered && cgroup_verified)
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn observe_runner_executable(
+    executable: io::Result<PathBuf>,
+    expected: &Path,
+) -> Result<RunnerExecutableObservation, BrokerError> {
+    match executable {
+        Ok(path) => Ok(classify_executable_path(&path, expected)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(RunnerExecutableObservation::Vanished)
+        }
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Ok(RunnerExecutableObservation::PermissionDenied)
+        }
+        Err(error) => Err(BrokerError::LiveHandler(error.to_string())),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn classify_executable_path(actual: &Path, expected: &Path) -> RunnerExecutableObservation {
+    let actual = match fs::canonicalize(actual) {
+        Ok(actual) => actual,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return RunnerExecutableObservation::PermissionDenied;
+        }
+        Err(_) => return RunnerExecutableObservation::Mismatch,
+    };
+    let Some(expected) = fs::canonicalize(expected).ok() else {
+        return RunnerExecutableObservation::Mismatch;
     };
     if actual == expected {
-        return true;
+        return RunnerExecutableObservation::Matching;
     }
 
     let Ok(script) = fs::read_to_string(&expected) else {
-        return false;
+        return RunnerExecutableObservation::Mismatch;
     };
     if !script.starts_with("#!") {
-        return false;
+        return RunnerExecutableObservation::Mismatch;
     }
     let mut target = None;
     for line in script.lines().map(str::trim) {
@@ -7089,7 +7163,7 @@ fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
             continue;
         };
         let Some((relative, _)) = exec.split_once('"') else {
-            return false;
+            return RunnerExecutableObservation::Mismatch;
         };
         let relative_path = Path::new(relative);
         if relative.is_empty()
@@ -7098,18 +7172,109 @@ fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
                 .components()
                 .any(|component| !matches!(component, std::path::Component::Normal(_)))
         {
-            return false;
+            return RunnerExecutableObservation::Mismatch;
         }
         let Some(parent) = expected.parent() else {
-            return false;
+            return RunnerExecutableObservation::Mismatch;
         };
         if target.replace(parent.join(relative_path)).is_some() {
-            return false;
+            return RunnerExecutableObservation::Mismatch;
         }
     }
-    target
+    if target
         .and_then(|target| fs::canonicalize(target).ok())
         .is_some_and(|target| target == actual)
+    {
+        RunnerExecutableObservation::Matching
+    } else {
+        RunnerExecutableObservation::Mismatch
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
+    classify_executable_path(actual, expected) == RunnerExecutableObservation::Matching
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn duplicate_runner_pidfd(
+    registry: &HashMap<String, OwnedFd>,
+    runner_id: &str,
+) -> Option<OwnedFd> {
+    let pidfd = registry.get(runner_id)?;
+    match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
+        Ok(pidfd) => Some(pidfd),
+        Err(error) => {
+            warn!(runner_id = %runner_id, error = %error, "duplicate runner pidfd failed");
+            None
+        }
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn present_unverified_runner_response(
+    request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
+    registration: &RunnerRegistration,
+) -> d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+    d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: true,
+        pid: registration.pid,
+        start_time_ticks: registration.start_time_ticks,
+        cgroup_verified: false,
+        executable_verified: false,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reap_registered_runner_after_observation(
+    request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
+    runner_id: &str,
+    registration: &RunnerRegistration,
+    pidfd: Option<OwnedFd>,
+) -> d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+    let Some(pidfd) = pidfd else {
+        return present_unverified_runner_response(request, registration);
+    };
+    match targeted_reap_runner(runner_id, pidfd.as_fd()) {
+        TargetedReapOutcome::Reaped | TargetedReapOutcome::AlreadyReaped => {
+            absent_runner_response(request)
+        }
+        TargetedReapOutcome::StillAlive | TargetedReapOutcome::Failed => {
+            present_unverified_runner_response(request, registration)
+        }
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn absent_runner_response(
+    request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
+) -> d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+    d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+        vm_id: request.vm_id.clone(),
+        role_id: request.role_id.clone(),
+        present: false,
+        pid: 0,
+        start_time_ticks: 0,
+        cgroup_verified: false,
+        executable_verified: false,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn select_runner_candidate(
+    candidates: impl IntoIterator<Item = (i32, u64, bool)>,
+) -> Result<Option<(i32, u64, bool)>, BrokerError> {
+    let mut candidate = None;
+    for next in candidates {
+        if candidate.replace(next).is_some() {
+            return Err(BrokerError::LiveHandler(
+                "runner adoption candidate ambiguous".to_owned(),
+            ));
+        }
+    }
+    Ok(candidate)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7233,6 +7398,21 @@ fn remove_runner_registration(runner_id: &str) {
     if let Ok(mut registry) = runner_pidfd_registry().lock() {
         registry.remove(runner_id);
     }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_runner_registries(runner_id: &str) -> bool {
+    // Keep this order aligned with observation and deregistration so reap
+    // cleanup cannot deadlock with a concurrent registry update.
+    let Ok(mut pidfd_registry) = runner_pidfd_registry().lock() else {
+        return false;
+    };
+    let Ok(mut metadata_registry) = runner_metadata_registry().lock() else {
+        return false;
+    };
+    pidfd_registry.remove(runner_id);
+    metadata_registry.remove(runner_id);
+    true
 }
 
 /// Refuse to start a SECOND live runner for an already-registered
@@ -12260,10 +12440,7 @@ fn reap_all_pidfds(audit_log: &AuditLog) {
                     runner_id = %runner_id,
                     "reap_all_pidfds: ECHILD (already reaped); removing stale registry entry"
                 );
-                if let Ok(mut reg) = runner_pidfd_registry().lock() {
-                    reg.remove(&runner_id);
-                }
-                remove_runner_metadata(&runner_id);
+                let _ = remove_runner_registries(&runner_id);
             }
             Err(err) => {
                 tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: waitid failed");
@@ -12312,7 +12489,19 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 /// reaped it (also a clean terminal state); `StillAlive` leaves the
 /// child for the SIGCHLD loop.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetedReapOutcome {
+    Reaped,
+    AlreadyReaped,
+    StillAlive,
+    Failed,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn targeted_reap_runner(
+    runner_id: &str,
+    pidfd: std::os::fd::BorrowedFd<'_>,
+) -> TargetedReapOutcome {
     use d2b_contracts_broker::broker_wire::{
         ChildExitKind, ChildExitStatus, ChildReapedNotification,
     };
@@ -12332,7 +12521,11 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
                 },
                 reaped_at_ms: reaped_at_ms_now(),
             };
-            deliver_targeted_reap(runner_id, notif);
+            if deliver_targeted_reap(runner_id, notif) {
+                TargetedReapOutcome::Reaped
+            } else {
+                TargetedReapOutcome::Failed
+            }
         }
         Ok(WaitStatus::Signaled(pid, sig, _)) => {
             let sig_num = sig as libc::c_int;
@@ -12350,20 +12543,27 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
                 },
                 reaped_at_ms: reaped_at_ms_now(),
             };
-            deliver_targeted_reap(runner_id, notif);
+            if deliver_targeted_reap(runner_id, notif) {
+                TargetedReapOutcome::Reaped
+            } else {
+                TargetedReapOutcome::Failed
+            }
         }
         Ok(WaitStatus::StillAlive) | Ok(_) => {
             // Still running: the SIGCHLD loop will reap it on exit.
+            TargetedReapOutcome::StillAlive
         }
         Err(Errno::ECHILD) => {
             // Already reaped by the SIGCHLD loop; drop any stale entry.
-            if let Ok(mut reg) = runner_pidfd_registry().lock() {
-                reg.remove(runner_id);
+            if remove_runner_registries(runner_id) {
+                TargetedReapOutcome::AlreadyReaped
+            } else {
+                TargetedReapOutcome::Failed
             }
-            remove_runner_metadata(runner_id);
         }
         Err(err) => {
             tracing::warn!(runner_id = %runner_id, error = %err, "targeted_reap_runner: waitid failed");
+            TargetedReapOutcome::Failed
         }
     }
 }
@@ -12376,21 +12576,19 @@ fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
 fn deliver_targeted_reap(
     runner_id: &str,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
-) {
+) -> bool {
     match broker_audit_log_handle().get() {
         Some(audit_log) => remove_and_notify(runner_id, notif, audit_log.as_ref()),
         None => {
             // No audit handle (e.g. a unit test that didn't start the
             // reaper): still reap + notify so the child can't zombie.
-            if let Ok(mut reg) = runner_pidfd_registry().lock() {
-                reg.remove(runner_id);
-            }
-            remove_runner_metadata(runner_id);
+            let removed = remove_runner_registries(runner_id);
             push_child_reap_notification(notif);
             tracing::info!(
                 runner_id = %runner_id,
                 "broker: child reaped via targeted post-spawn reap (no audit handle)"
             );
+            removed
         }
     }
 }
@@ -12400,16 +12598,20 @@ fn remove_and_notify(
     runner_id: &str,
     notif: d2b_contracts_broker::broker_wire::ChildReapedNotification,
     audit_log: &AuditLog,
-) {
-    if let Ok(mut reg) = runner_pidfd_registry().lock() {
-        reg.remove(runner_id);
+) -> bool {
+    let removed = remove_runner_registries(runner_id);
+    if !removed {
+        tracing::warn!(
+            runner_id = %runner_id,
+            "reap: failed to clear runner registration"
+        );
     }
-    remove_runner_metadata(runner_id);
     if let Err(err) = audit_log.write_child_reaped(&notif) {
         tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
     }
     push_child_reap_notification(notif);
     tracing::info!(runner_id = %runner_id, "broker: child reaped via SIGCHLD handler");
+    removed
 }
 
 /// Kill and synchronously reap a child when a post-spawn commit step fails.
@@ -13780,6 +13982,19 @@ mod tests {
             &root.path().join("other"),
             &wrapper
         ));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn executable_observation_keeps_permission_denied_distinct_from_a_mismatch() {
+        let observed = observe_runner_executable(
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+            Path::new("/nix/store/provider-controller/bin/controller"),
+        )
+        .expect("permission-denied observation");
+        assert_eq!(observed, RunnerExecutableObservation::PermissionDenied);
+        assert!(!observed.is_verified_for_discovery());
+        assert!(observed.is_verified_for_registered(true, true));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -18327,6 +18542,9 @@ mod tests {
             if let Ok(mut registry) = runner_pidfd_registry().lock() {
                 registry.clear();
             }
+            if let Ok(mut registry) = runner_metadata_registry().lock() {
+                registry.clear();
+            }
         }
 
         fn start_test_reaper(test_name: &str) -> tokio::runtime::Runtime {
@@ -18357,6 +18575,151 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(25));
             }
             None
+        }
+
+        fn observe_request() -> d2b_contracts_broker::broker_wire::ObserveRunnerRequest {
+            d2b_contracts_broker::broker_wire::ObserveRunnerRequest {
+                vm_id: d2b_contracts::types::VmId::new("reap-vm"),
+                role_id: d2b_contracts::types::RoleId::new("ch-runner"),
+                role: d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor,
+                bundle_runner_intent_ref: d2b_contracts::types::BundleOpId::new(
+                    "runner:reap-vm:role:cloud-hypervisor",
+                ),
+                resource_ref: None,
+                resource_uid: None,
+                guest_execution: None,
+                tracing_span_id: None,
+            }
+        }
+
+        fn test_runner_registration(pid: i32, start_time_ticks: u64) -> RunnerRegistration {
+            RunnerRegistration {
+                vm_id: "reap-vm".to_owned(),
+                role_id: "ch-runner".to_owned(),
+                resource_ref: None,
+                resource_uid: None,
+                role: d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor,
+                bundle_runner_intent_ref: "runner:reap-vm:role:cloud-hypervisor".to_owned(),
+                pid,
+                start_time_ticks,
+                binary_path: PathBuf::from(
+                    "/nix/store/current-provider-controller/bin/controller",
+                ),
+                cgroup_subtree: "d2b.slice/reap-vm/ch-runner".to_owned(),
+                guest_execution: None,
+            }
+        }
+
+        #[test]
+        fn registered_observation_keeps_live_runner_registered_until_reaped() {
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = "reap-vm:ch-runner";
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let start_time_ticks = read_proc_start_time_ticks(pid)
+                .expect("read start time")
+                .expect("live child");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.to_owned(), pidfd.try_clone().expect("clone pidfd"));
+            runner_metadata_registry()
+                .lock()
+                .expect("metadata lock")
+                .insert(
+                    runner_id.to_owned(),
+                    test_runner_registration(pid, start_time_ticks),
+                );
+
+            let registration = test_runner_registration(pid, start_time_ticks);
+            let response = reap_registered_runner_after_observation(
+                &observe_request(),
+                runner_id,
+                &registration,
+                Some(pidfd),
+            );
+            assert!(response.present);
+            assert!(!response.cgroup_verified);
+            assert!(!response.executable_verified);
+            assert!(
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .contains_key(runner_id),
+                "StillAlive must preserve the exact pidfd registration"
+            );
+            assert!(
+                runner_metadata_registry()
+                    .lock()
+                    .expect("metadata lock")
+                    .contains_key(runner_id),
+                "StillAlive must preserve runner metadata"
+            );
+
+            kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill child");
+            let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
+            std::mem::forget(child);
+        }
+
+        #[test]
+        fn registered_observation_reports_absent_only_after_exact_reap() {
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("true").spawn().expect("spawn true child");
+            let pid = child.id() as i32;
+            let runner_id = "reap-vm:ch-runner";
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            runner_pidfd_registry()
+                .lock()
+                .expect("registry lock")
+                .insert(runner_id.to_owned(), pidfd.try_clone().expect("clone pidfd"));
+            runner_metadata_registry()
+                .lock()
+                .expect("metadata lock")
+                .insert(runner_id.to_owned(), test_runner_registration(pid, 1));
+            std::mem::forget(child);
+
+            let registration = test_runner_registration(pid, 1);
+            let request = observe_request();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut response = present_unverified_runner_response(&request, &registration);
+            while response.present && Instant::now() < deadline {
+                let retained_pidfd = runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .get(runner_id)
+                    .and_then(|pidfd| dup(pidfd.as_raw_fd()).ok().map(owned_fd_from_raw));
+                response = reap_registered_runner_after_observation(
+                    &request,
+                    runner_id,
+                    &registration,
+                    retained_pidfd,
+                );
+                if response.present {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+
+            assert!(!response.present, "reap must precede an absent response");
+            assert!(
+                !runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .contains_key(runner_id),
+                "reaped runner must be removed from pidfd registry"
+            );
+            assert!(
+                !runner_metadata_registry()
+                    .lock()
+                    .expect("metadata lock")
+                    .contains_key(runner_id),
+                "reaped runner must be removed from metadata registry"
+            );
         }
 
         #[test]
@@ -18504,8 +18867,9 @@ mod tests {
             // it observes the exit (deterministic, no background loop).
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut reaped = None;
+            let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {
-                targeted_reap_runner(&runner_id, pidfd.as_fd());
+                outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
                 if let Some(n) = child_reap_buffer()
                     .lock()
                     .expect("child_reap_buffer lock")
@@ -18520,6 +18884,7 @@ mod tests {
             }
 
             let notif = reaped.expect("targeted reap should reap the exited child");
+            assert_eq!(outcome, TargetedReapOutcome::Reaped);
             assert_eq!(notif.exit_status.kind, ChildExitKind::Exited);
             assert_eq!(notif.exit_status.code, Some(0));
             // Registry entry must be gone so the SIGCHLD loop won't
@@ -18552,7 +18917,8 @@ mod tests {
                 .expect("registry lock")
                 .insert(runner_id.clone(), registry_dup);
 
-            targeted_reap_runner(&runner_id, pidfd.as_fd());
+            let outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
+            assert_eq!(outcome, TargetedReapOutcome::StillAlive);
 
             assert!(
                 child_reap_buffer()
@@ -18598,8 +18964,9 @@ mod tests {
 
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut reaped = None;
+            let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {
-                targeted_reap_runner(&runner_id, pidfd.as_fd());
+                outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
                 if let Some(n) = child_reap_buffer()
                     .lock()
                     .expect("child_reap_buffer lock")
@@ -18614,6 +18981,7 @@ mod tests {
             }
 
             let notif = reaped.expect("targeted reap should observe the signaled child");
+            assert_eq!(outcome, TargetedReapOutcome::Reaped);
             assert_eq!(notif.exit_status.kind, ChildExitKind::Killed);
             assert_eq!(notif.exit_status.signal, Some(libc::SIGKILL));
         }
@@ -18634,12 +19002,17 @@ mod tests {
                 .lock()
                 .expect("registry lock")
                 .insert(runner_id.clone(), registry_dup);
+            runner_metadata_registry()
+                .lock()
+                .expect("metadata lock")
+                .insert(runner_id.clone(), test_runner_registration(pid, 1));
 
             // Reap the child out-of-band so the pidfd waitid yields ECHILD.
             let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
             std::mem::forget(child);
 
-            targeted_reap_runner(&runner_id, pidfd.as_fd());
+            let outcome = targeted_reap_runner(&runner_id, pidfd.as_fd());
+            assert_eq!(outcome, TargetedReapOutcome::AlreadyReaped);
 
             assert!(
                 !runner_pidfd_registry()
@@ -18647,6 +19020,13 @@ mod tests {
                     .expect("registry lock")
                     .contains_key(&runner_id),
                 "ECHILD must clear the stale registry entry"
+            );
+            assert!(
+                !runner_metadata_registry()
+                    .lock()
+                    .expect("metadata lock")
+                    .contains_key(&runner_id),
+                "ECHILD must clear stale runner metadata"
             );
         }
 

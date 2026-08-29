@@ -211,6 +211,7 @@ where
             assert_eq!(report.adoption, AdoptionCondition::Adopted);
             assert_eq!(report.phase, ProcessPhaseClass::Running);
         }
+        AdoptionOutcome::Stale { .. } => panic!("incomplete fixture is not a stale executable"),
         other => panic!("expected adoption, observed {other:?}"),
     }
 
@@ -224,6 +225,7 @@ where
             assert_eq!(report.adoption, AdoptionCondition::Quarantined);
             assert_eq!(report.phase, ProcessPhaseClass::Unknown);
         }
+        AdoptionOutcome::Stale { .. } => panic!("partial identity is not a stale executable"),
         other => panic!("expected quarantine, observed {other:?}"),
     }
 }
