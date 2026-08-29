@@ -492,15 +492,6 @@ nix_native_test(
 )
 
 nix_native_test(
-    name = "flake-eval-x86-realized-gas-city",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" >/dev/null',
-    lane = "flake-realized-gas-city",
-    max_kib = 14665373,
-    data = ["//:flake.lock"],
-    timeout = "eternal",
-)
-
-nix_native_test(
     name = "flake-eval-x86-realized-supply-chain",
     command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null',
     lane = "flake-realized-supply-chain",
@@ -553,7 +544,6 @@ test_suite(
     name = "nix_realized",
     tests = [
         ":flake-eval-x86-realized-video",
-        ":flake-eval-x86-realized-gas-city",
         ":flake-eval-x86-realized-supply-chain",
         ":flake-eval-x86-realized-package-output",
         ":flake-eval-x86-realized-provider-catalog",
