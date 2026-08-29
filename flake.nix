@@ -1392,9 +1392,57 @@
             inherit system pkgs;
             flake = self;
           };
-        in pkgs.runCommand "d2b-provider-catalog-determinism" { } ''
+        in pkgs.runCommand "d2b-provider-catalog-determinism" {
+          nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
+        } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/provider-catalog-determinism.json"
+          python3 - "$out/provider-catalog-determinism.json" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              contract = json.load(handle)["digestContract"]
+          entries = {
+              entry["artifactId"]: entry["packageDigest"]
+              for entry in contract["entries"]
+          }
+          provider_hash = subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  contract["providerPath"],
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          assert entries["provider-digest"] == "sha256:" + provider_hash
+          assert entries["system-digest"] == contract["systemExpected"]
+          assert entries["system-digest"] != "sha256:" + subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  contract["systemPath"],
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          PY
         '';
 
         guest-static-consumption = let

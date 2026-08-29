@@ -84,10 +84,35 @@ let
 
   names = [ "provider-audio" "provider-storage" "provider-wayland" ];
 
+  digestProvider = pkgs.writeText "artifact-provider-digest" "provider-digest";
+  digestSystem = pkgs.writeText "artifact-system-digest" "system-digest";
+
   evaluate = modules: (nixosSystem {
     inherit system;
     modules = [ flake.nixosModules.default base ] ++ modules;
   }).config.d2b._providerCatalog.json;
+
+  digestCatalog = (nixosSystem {
+    inherit system;
+    modules = [
+      flake.nixosModules.default
+      base
+      {
+        d2b.artifacts = {
+          provider-digest = {
+            package = digestProvider;
+            type = "provider";
+            catalog = entryFor "provider-digest";
+          };
+          system-digest = {
+            package = digestSystem;
+            type = "nixos-system";
+            catalog = null;
+          };
+        };
+      }
+    ];
+  }).config.d2b._artifactCatalogV3.catalogData;
 
   # Evaluation A: one module, attribute-set literal, one authoring order.
   catalogA = evaluate [
@@ -151,4 +176,11 @@ else
     negativeControlDiffers = true;
     catalogBytes = builtins.stringLength catalogA;
     artifactIds = names;
+    digestContract = {
+      entries = digestCatalog.entries;
+      providerPath = toString digestProvider;
+      systemPath = toString digestSystem;
+      systemExpected =
+        "sha256:${builtins.hashFile "sha256" digestSystem}";
+    };
   }
