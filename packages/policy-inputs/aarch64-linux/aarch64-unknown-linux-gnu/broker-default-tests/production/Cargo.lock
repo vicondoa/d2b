@@ -534,7 +534,6 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-core",
  "d2b-host",
- "d2b-realm-core",
  "hmac",
  "nix 0.29.0",
  "rustix 0.38.44",
