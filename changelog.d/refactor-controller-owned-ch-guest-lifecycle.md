@@ -7,3 +7,4 @@
 
 - Revoked stale controller assignments on disconnect or replacement and retried stale lease revocations during refresh.
 - Reused Bazel's pinned nixpkgs input across isolated Nix unit surfaces instead of resolving the Git input during every test.
+- Kept routine flake checks eval-only for package exposure and verified exact Guest static package selection through lightweight evidence.
