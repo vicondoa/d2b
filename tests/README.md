@@ -72,8 +72,8 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
-suite graph through one public facade label. `tests/tools/bazel-check
---profile local` uses the same facade for focused reruns. Bazel owns Layer-1
+suite graph through one public facade label. Public Make aliases run
+`bazel test --config=$(D2B_BAZEL_PROFILE)` directly. Bazel owns Layer-1
 scheduling; Make and CI are thin aliases over one suite label per public
 target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
@@ -105,8 +105,7 @@ utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
 required. An unrelated Nix shell is not accepted as the d2b shell. Optional
 direnv integration is supported for interactive use but is not required.
 CI installs Nix and calls the same public Make aliases with
-`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
-`nix develop` wrapper.
+`D2B_BAZEL_PROFILE=local`, without a `tests/tools/bazel-check` wrapper.
 
 `make test-policy` does not schedule
 `tests/tools/guest-workspace-drift.py`. The retained

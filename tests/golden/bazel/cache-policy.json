@@ -61,8 +61,7 @@
     "experimentalFeatures": [],
     "localCommandOptions": [
       "--repo_contents_cache="
-    ],
-    "gasCityProxy": "separate"
+    ]
   },
   "trustedInjection": {
     "protectedRef": "refs/heads/v3",

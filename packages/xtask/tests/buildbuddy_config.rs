@@ -84,7 +84,9 @@ fn write_fake_bazel(path: &Path, handles_build: bool) {
     if handles_build {
         contents.push_str("if [ \"${1:-}\" = build ]; then exit 0; fi\n");
     }
-    contents.push_str("printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n");
+    contents.push_str(
+        "if [ -n \"$bep\" ]; then printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"; fi\n",
+    );
     write_executable(path, &contents);
 }
 
@@ -1483,14 +1485,17 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
             && line.contains("|/bin/bash|1|")
             && line.contains("-j2")
             && line.contains("--test_tag_filters=dispatcher-filter")
+            && line.contains("test --config=local")
     }));
     assert_eq!(
         bazel_output
             .lines()
-            .filter_map(|line| line.split('|').nth(5))
+            .filter_map(|line| line
+                .split_whitespace()
+                .find(|arg| arg.starts_with("//bazel/checks:")))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["test-lint", "test-policy"]),
-        "parallel Make goals must use distinct Bazel evidence identities"
+        BTreeSet::from(["//bazel/checks:test-lint", "//bazel/checks:test-policy"]),
+        "parallel Make goals must invoke distinct public facade suites"
     );
 
     let direct_output = Command::new("make")
@@ -1710,7 +1715,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         .find("bazel = pkgs.mkShellNoCC")
         .expect("focused Bazel shell definition");
     let bazel_end = flake[bazel_start..]
-        .find("gas-city = pkgs.mkShell")
+        .find("\n      });\n\n      packages = forAllSystems")
         .map(|offset| bazel_start + offset)
         .expect("focused Bazel shell boundary");
     let bazel_shell = &flake[bazel_start..bazel_end];
@@ -1870,20 +1875,26 @@ fn bazel_facade_owns_public_make_composition() {
         );
     }
     assert!(
-        makefile.contains("$(BAZEL_RUN) //bazel/checks:$@"),
-        "Make must dispatch every public Bazel target through its matching facade suite"
+        makefile.contains("$(D2B_BAZEL_TEST) //bazel/checks:$@")
+            && makefile.contains("$(BAZEL_BIN) test")
+            && makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\""),
+        "Make must dispatch every public Bazel target through a direct bazel test of its facade suite"
     );
-    let generic_recipe = "$(BAZEL_RUN) //bazel/checks:$@";
+    assert!(
+        !makefile.contains("tests/tools/bazel-check") && !makefile.contains("$(BAZEL_RUN)"),
+        "Make must not wrap public Bazel aliases with tests/tools/bazel-check"
+    );
+    let generic_recipe = "$(D2B_BAZEL_TEST) //bazel/checks:$@";
     let make_without_generic_recipe = makefile.replace(generic_recipe, "");
     assert!(
-        !make_without_generic_recipe.contains("$(BAZEL_RUN) //")
+        !make_without_generic_recipe.contains("$(D2B_BAZEL_TEST) //")
             || make_without_generic_recipe
                 .lines()
-                .filter_map(|line| line.split_once("$(BAZEL_RUN) //"))
+                .filter_map(|line| line.split_once("//bazel/checks:"))
                 .all(|(_, label)| {
                     label
-                        .strip_prefix("bazel/checks:")
-                        .and_then(|target| target.split_whitespace().next())
+                        .split_whitespace()
+                        .next()
                         .is_some_and(|target| public_targets.iter().any(|name| name == target))
                 }),
         "Make must dispatch direct composite Bazel work only through public facade suites"
@@ -1961,7 +1972,7 @@ fn bazel_facade_owns_public_make_composition() {
         make_target_blocks(&makefile)
             .get("perf")
             .is_some_and(|block| {
-                block.contains("$(BAZEL_RUN) //bazel/checks:test-performance-budgets")
+                block.contains("//bazel/checks:test-performance-budgets")
             }),
         "perf must invoke the public performance suite directly"
     );
@@ -2027,7 +2038,8 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
         }
         let invokes_bazel = executable_lines.contains("tests/tools/bazel-check")
             || executable_lines.contains("$(BAZEL_RUN)")
-            || executable_lines.contains("$(BAZEL_BIN)");
+            || executable_lines.contains("$(BAZEL_BIN)")
+            || executable_lines.contains("$(D2B_BAZEL_TEST)");
         if invokes_bazel {
             assert!(
                 owners.contains_key(target),

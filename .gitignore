@@ -115,12 +115,14 @@ target/broker-fakebackends/
 .worktrees/
 __pycache__/
 
-# Optional Gas City contributor runtime in a repository-local checkout.
-# Host deployments keep the real state below /var/lib and /run.
+# Runtime metadata for standalone d2b-gascity orchestration. Host distribution
+# and installation belong to gascity.nix; d2b never migrates or sweeps host
+# state below /var/lib/gascity* or /run/gascity*.
 .gc/
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt files (added by bd init). Live Gas City issue state belongs
+# to the standalone city and a dedicated rig clone, not this product tree.
 .dolt/
 *.db
+.beads/
 .beads-credential-key
-.beads/proxieddb/
