@@ -7345,7 +7345,7 @@ mod tests {
             vec![verified(
                 "failure-ownerless-update",
                 ownerless_update,
-                ownerless_uid,
+                ownerless_uid.clone(),
             )],
         )
         .unwrap();
