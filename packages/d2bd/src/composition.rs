@@ -16815,6 +16815,24 @@ async fn open_resource_plane(
                     })
             });
         runtime.set_guest_setup_descriptors(descriptors);
+        let descriptor_catalog_keys = materialization_bundle
+            .resources
+            .iter()
+            .filter(|resource| resource.resource_type().as_str() == "Guest")
+            .filter_map(|resource| {
+                resolver
+                    .guest_setup_descriptor_catalog_key(
+                        zone.as_str(),
+                        resource.metadata().name().as_str(),
+                    )
+                    .map(|key| {
+                        (
+                            resource.metadata().name().as_str().to_owned(),
+                            key.to_owned(),
+                        )
+                    })
+            });
+        runtime.set_guest_setup_descriptor_catalog_keys(descriptor_catalog_keys);
         prepared_runtimes.push((zone, runtime, materialization_bundle));
     }
 

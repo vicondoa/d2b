@@ -55,7 +55,8 @@ use d2b_contracts_resource::v3::identity::{BindingDigest, EvidenceClass, Reconne
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, DesiredLifecycle, NixosGenerationSpec,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
-    ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+    ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint,
+    ZoneId, ZoneRevision,
     process::ProcessSpec,
 };
 use d2b_contracts_resource::v3::{
@@ -100,9 +101,10 @@ use d2b_provider_runtime_cloud_hypervisor::{
     ChildRole, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
     CloudHypervisorResourceResponse, GuestChildCommitResponse, GuestDependencySnapshot,
-    GuestGenerationSet,
+    GuestFinalizationInput, GuestGenerationSet,
     GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestSessionEvidence, GuestSessionEvidenceBinding, OwnedChildSnapshot,
+    GuestSessionEvidence, GuestSessionEvidenceBinding, OwnedChildSnapshot, ProcessState,
+    SessionState, FencedChild,
     VerifiedGuestSetupDescriptor, deterministic_child_ref,
 };
 use d2b_provider_system_core::{
@@ -705,6 +707,14 @@ struct CloudHypervisorResourceSession {
     client: Arc<CloudHypervisorResourceClient>,
     mutation_client: Arc<CloudHypervisorResourceClient>,
     providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+    guest_sessions: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<
+                String,
+                Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+            >,
+        >,
+    >,
     zone: ZoneId,
     zone_uid: ResourceUid,
     policy_revision: u64,
@@ -715,7 +725,9 @@ struct CloudHypervisorResourceSession {
     session_evidence: Option<GuestSessionEvidence>,
 }
 
-struct CatalogDescriptorVerifier;
+struct CatalogDescriptorVerifier {
+    expected_key: String,
+}
 
 impl GuestSetupDescriptorVerifier for CatalogDescriptorVerifier {
     fn verify(
@@ -724,17 +736,7 @@ impl GuestSetupDescriptorVerifier for CatalogDescriptorVerifier {
         _descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
         signature: &str,
     ) -> bool {
-        let Ok(manifest) = d2b_provider_runtime_cloud_hypervisor::provider_manifest() else {
-            return false;
-        };
-        let Ok(canonical) = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(
-            &manifest.api_bindings().to_vec(),
-        ) else {
-            return false;
-        };
-        let expected_key = format!("sha256:{:x}", Sha256::digest(canonical));
-        key_fingerprint.as_str() == expected_key
-            && (signature == "catalog-signature" || (cfg!(test) && signature == "signature-sentinel"))
+        key_fingerprint.as_str() == self.expected_key && signature == "catalog-signature"
     }
 }
 
@@ -818,7 +820,7 @@ impl CloudHypervisorResourceSession {
     async fn list_stored(
         &self,
         resource_types: &[&str],
-        owner_uid: &ResourceUid,
+        owner_uid: Option<&ResourceUid>,
         operation: &str,
     ) -> Result<Vec<StoredResource>, CloudHypervisorResourceApiError> {
         let mut request = wire::ListRequest::new();
@@ -828,10 +830,12 @@ impl CloudHypervisorResourceSession {
         let mut projection = wire::Projection::new();
         projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
         request.projection = MessageField::some(projection);
-        let mut owner_uid_filter = wire::ListFilter::new();
-        owner_uid_filter.field = "owner.resourceUid".to_owned();
-        owner_uid_filter.values = vec![owner_uid.as_str().to_owned()];
-        request.filters.push(owner_uid_filter);
+        if let Some(owner_uid) = owner_uid {
+            let mut owner_uid_filter = wire::ListFilter::new();
+            owner_uid_filter.field = "owner.resourceUid".to_owned();
+            owner_uid_filter.values = vec![owner_uid.as_str().to_owned()];
+            request.filters.push(owner_uid_filter);
+        }
         let mut resources = Vec::new();
         loop {
             let response = self.client.list(request.clone()).await;
@@ -854,6 +858,105 @@ impl CloudHypervisorResourceSession {
             request.cursor = MessageField::some(cursor.clone());
         }
         Ok(resources)
+    }
+
+    async fn guest_for_fenced_operation(
+        &self,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+        operation: &str,
+    ) -> Result<StoredResource, CloudHypervisorResourceApiError> {
+        let guest = self.get_stored(guest_ref, operation).await?;
+        if guest.uid != *guest_uid {
+            return Err(CloudHypervisorResourceApiError::Conflict);
+        }
+        Ok(guest)
+    }
+
+    async fn remove_guest_session(
+        &self,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.guest_for_fenced_operation(
+            guest_ref,
+            guest_uid,
+            "cloud-hypervisor-close-session",
+        )
+        .await?;
+        let key = guest_ref.name().as_str().to_owned();
+        let mut sessions = self.guest_sessions.lock().await;
+        if let Some(session) = sessions.get(&key)
+            && session.identity().guest_uid() != guest_uid
+        {
+            return Err(CloudHypervisorResourceApiError::Conflict);
+        }
+        sessions.remove(&key);
+        Ok(())
+    }
+
+    fn guest_descriptor_digest(&self) -> SchemaFingerprint {
+        self.descriptor.descriptor().descriptor_digest().clone()
+    }
+
+    async fn observe_process_state(
+        &self,
+        guest_ref: &ResourceRef,
+        process: &OwnedChildSnapshot,
+    ) -> Result<ProcessState, CloudHypervisorResourceApiError> {
+        let spec_resource = self
+            .get_stored(process.resource_ref(), "cloud-hypervisor-finalize-process")
+            .await?;
+        if spec_resource.uid != *process.uid()
+            || spec_resource.revision != process.revision()
+        {
+            return Ok(ProcessState::Unknown);
+        }
+        let envelope = ResourceEnvelope::from_json(&spec_resource.canonical_json)
+            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+        if envelope.metadata().owner_ref() != Some(guest_ref) {
+            return Ok(ProcessState::Unknown);
+        }
+        let spec = serde_json::from_slice::<ProcessSpec>(
+            &envelope.spec().base().to_canonical_bytes(),
+        )
+        .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+        let provider_ref = envelope
+            .spec()
+            .provider_ref()
+            .cloned()
+            .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?;
+        let descriptor_digest = self.guest_descriptor_digest();
+        let context = crate::process_provider_runtime::ProcessResourceContext::new(
+            self.zone.clone(),
+            &spec_resource.resource_ref,
+            &spec_resource.uid,
+            spec_resource.generation,
+            spec_resource.revision,
+            &provider_ref,
+            self.controller_generation,
+            Some(guest_ref.clone()),
+        )
+        .with_lifecycle_identity(
+            Some(self.zone_uid.clone()),
+            Some(self.policy_revision),
+            None,
+        )
+        .with_owner_ref(Some(guest_ref.clone()))
+        .with_guest_descriptor_digest(Some(&descriptor_digest));
+        match self.providers.probe_resource(context, &spec).await {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive) => {
+                Ok(ProcessState::Running {
+                    identity_verified: true,
+                })
+            }
+            Ok(crate::process_provider_runtime::ProviderLiveness::Exited) => {
+                Ok(ProcessState::Stopped)
+            }
+            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) | Err(_) => {
+                Ok(ProcessState::Unknown)
+            }
+        }
     }
 
     fn snapshot_from_stored(
@@ -947,7 +1050,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 let children = self
                     .list_stored(
                         &["Process", "Endpoint", "Volume"],
-                        &owner.uid,
+                        Some(&owner.uid),
                         "cloud-hypervisor-list-children",
                     )
                     .await?;
@@ -1310,16 +1413,174 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
             }
             CloudHypervisorResourceRequest::ObserveFinalization {
-                ..
+                guest_ref,
+                guest_uid,
+                children,
             } => {
-                Err(CloudHypervisorResourceApiError::Unsupported)
+                self.guest_for_fenced_operation(
+                    &guest_ref,
+                    &guest_uid,
+                    "cloud-hypervisor-observe-finalization",
+                )
+                .await?;
+                let all_children = self
+                    .list_stored(
+                        &["Process", "Endpoint", "Volume"],
+                        None,
+                        "cloud-hypervisor-list-finalization-descendants",
+                    )
+                    .await?;
+                let current = children
+                    .iter()
+                    .map(|child| (child.resource_ref().clone(), child.uid().clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let direct_refs = current.keys().cloned().collect::<BTreeSet<_>>();
+                let mut transitive_descendants_present = false;
+                let mut foreign_children_present = false;
+                for resource in &all_children {
+                    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                        .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                    match envelope.metadata().owner_ref() {
+                        Some(owner) if owner == &guest_ref => {
+                            if current.get(&resource.resource_ref) != Some(&resource.uid) {
+                                foreign_children_present = true;
+                            }
+                        }
+                        Some(owner) if direct_refs.contains(owner) => {
+                            transitive_descendants_present = true;
+                        }
+                        _ => {}
+                    }
+                }
+                let process = children
+                    .iter()
+                    .find(|child| child.resource_ref().resource_type().as_str() == "Process");
+                let process_state = match process {
+                    Some(process) => self.observe_process_state(&guest_ref, process).await?,
+                    None => ProcessState::Absent,
+                };
+                let direct_children = children
+                    .iter()
+                    .filter_map(|child| {
+                        let role = d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(
+                            child.resource_ref(),
+                        )?;
+                        let (deletion_requested, finalizers_pending) = all_children
+                            .iter()
+                            .find(|resource| resource.resource_ref == *child.resource_ref())
+                            .map(|resource| {
+                                let value = serde_json::from_slice::<Value>(
+                                    &resource.canonical_json,
+                                )
+                                .ok();
+                                let metadata = value
+                                    .as_ref()
+                                    .and_then(|value| value.get("metadata"));
+                                let deletion_requested = metadata
+                                    .and_then(|metadata| {
+                                        metadata.get("deletionRequestedAt")
+                                    })
+                                    .is_some_and(|value| !value.is_null());
+                                let finalizers_pending = metadata
+                                    .and_then(|metadata| metadata.get("finalizers"))
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|finalizers| !finalizers.is_empty());
+                                (deletion_requested, finalizers_pending)
+                            })
+                            .unwrap_or((false, false));
+                        Some(
+                            FencedChild::new(
+                                role,
+                                child.resource_ref().clone(),
+                                child.uid().clone(),
+                                child.revision(),
+                            )
+                            .ok()?
+                            .with_deletion_requested(deletion_requested)
+                            .with_finalizers_pending(finalizers_pending),
+                        )
+                    })
+                    .collect();
+                let session_active = self
+                    .guest_sessions
+                    .lock()
+                    .await
+                    .contains_key(guest_ref.name().as_str());
+                let observation = GuestFinalizationInput::new(
+                    guest_uid,
+                    if session_active {
+                        SessionState::Active
+                    } else {
+                        SessionState::Closed
+                    },
+                    !session_active,
+                    process_state,
+                    direct_children,
+                    transitive_descendants_present,
+                    children.iter().any(|child| {
+                        child.resource_ref().resource_type().as_str() == "Volume"
+                    }),
+                    foreign_children_present,
+                )
+                .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                Ok(CloudHypervisorResourceResponse::Finalization(observation))
             }
-            CloudHypervisorResourceRequest::DrainGuestLocal { .. }
-            | CloudHypervisorResourceRequest::CloseGuestSession { .. }
-            | CloudHypervisorResourceRequest::InvalidateGuestSession { .. } => {
-                Err(CloudHypervisorResourceApiError::Unsupported)
+            CloudHypervisorResourceRequest::DrainGuestLocal {
+                guest_ref,
+                guest_uid,
             }
-            CloudHypervisorResourceRequest::DeleteChild { guest_uid: _, child, .. } => {
+            | CloudHypervisorResourceRequest::CloseGuestSession {
+                guest_ref,
+                guest_uid,
+            } => {
+                self.remove_guest_session(&guest_ref, &guest_uid).await?;
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
+            CloudHypervisorResourceRequest::InvalidateGuestSession {
+                guest_ref,
+                guest_uid,
+                minimum_generation,
+            } => {
+                self.guest_for_fenced_operation(
+                    &guest_ref,
+                    &guest_uid,
+                    "cloud-hypervisor-invalidate-session",
+                )
+                .await?;
+                let key = guest_ref.name().as_str().to_owned();
+                let should_remove = self
+                    .guest_sessions
+                    .lock()
+                    .await
+                    .get(&key)
+                    .is_some_and(|session| session.generation() < minimum_generation);
+                if should_remove {
+                    self.guest_sessions.lock().await.remove(&key);
+                }
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
+            CloudHypervisorResourceRequest::DeleteChild {
+                guest_ref,
+                guest_uid,
+                child,
+            } => {
+                self.guest_for_fenced_operation(
+                    &guest_ref,
+                    &guest_uid,
+                    "cloud-hypervisor-delete-child",
+                )
+                .await?;
+                let current = self
+                    .get_stored(child.target(), "cloud-hypervisor-delete-child-fence")
+                    .await?;
+                if current.uid != *child.uid() || current.revision != child.revision() {
+                    return Err(CloudHypervisorResourceApiError::Conflict);
+                }
+                let envelope = ResourceEnvelope::from_json(&current.canonical_json)
+                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                if envelope.metadata().owner_ref() != Some(&guest_ref) {
+                    return Err(CloudHypervisorResourceApiError::Conflict);
+                }
                 let mut request = wire::DeleteRequest::new();
                 request.meta = MessageField::some(public_request_meta(
                     "cloud-hypervisor-delete-child",
@@ -1468,6 +1729,7 @@ pub struct ZoneResourceRuntime {
     process_runtime: Arc<Mutex<Option<ProcessResourceRuntime>>>,
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
+    guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
     controller_deployment: ProviderDeployment,
     controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
     controller_session_reconcile_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -2224,6 +2486,7 @@ impl ZoneResourceRuntime {
             process_runtime: Arc::new(Mutex::new(None)),
             process_watch_task: Mutex::new(None),
             guest_setup_descriptors: BTreeMap::new(),
+            guest_setup_descriptor_catalog_keys: BTreeMap::new(),
             controller_deployment: ProviderDeployment::new(
                 DaemonMode::Host,
                 d2bd_runtime::target_runtime::AdmissionLimits::host_default(),
@@ -3683,6 +3946,13 @@ impl ZoneResourceRuntime {
         self.guest_setup_descriptors = descriptors.into_iter().collect();
     }
 
+    pub(crate) fn set_guest_setup_descriptor_catalog_keys(
+        &mut self,
+        keys: impl IntoIterator<Item = (String, String)>,
+    ) {
+        self.guest_setup_descriptor_catalog_keys = keys.into_iter().collect();
+    }
+
     /// Reconcile Cloud Hypervisor Guests through the controller-owned child
     /// graph. The controller receives only an authenticated Resource API
     /// adapter and a verified private descriptor.
@@ -3710,17 +3980,33 @@ impl ZoneResourceRuntime {
                 );
                 continue;
             };
+            let Some(expected_key) = self
+                .guest_setup_descriptor_catalog_keys
+                .get(guest_ref.name().as_str())
+            else {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    guest = %guest_ref.name().as_str(),
+                    "Cloud Hypervisor Guest descriptor catalog key is unavailable",
+                );
+                continue;
+            };
             let descriptor = GuestSetupDescriptor::from_canonical_bytes(descriptor_bytes)
                 .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?
-                .verify_with(&CatalogDescriptorVerifier)
+                .verify_with(&CatalogDescriptorVerifier {
+                    expected_key: expected_key.clone(),
+                })
                 .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
             let (provider_ref, execution_ref, config, graph) =
                 self.cloud_hypervisor_inputs(&guest_ref).await?;
-            let session_evidence = state
+            let guest_session = state
                 .guest_component_sessions
                 .lock()
                 .await
                 .get(guest_ref.name().as_str())
+                .cloned();
+            let session_evidence = guest_session
+                .as_ref()
                 .and_then(|session| {
                     guest_session_evidence(&guest_ref, session.as_ref(), &descriptor)
                 });
@@ -3736,6 +4022,7 @@ impl ZoneResourceRuntime {
                     .provider_runtime
                     .process_providers()
                     .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?,
+                guest_sessions: Arc::clone(&state.guest_component_sessions),
                 zone: self.zone.clone(),
                 zone_uid: self.store_metadata.zone_uid.clone(),
                 policy_revision: self.store_metadata.policy_snapshot.policy_revision,

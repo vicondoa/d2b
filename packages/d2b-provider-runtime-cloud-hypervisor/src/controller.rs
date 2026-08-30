@@ -1636,6 +1636,7 @@ pub struct CloudHypervisorController<A> {
     retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
     observed_process_status: Option<ProcessAdoptionStatus>,
+    operator_stop_requested: bool,
 }
 
 impl<A> CloudHypervisorController<A>
@@ -1667,6 +1668,7 @@ where
             retired_child_uids: BTreeSet::new(),
             upgrade_progress: BTreeMap::new(),
             observed_process_status: None,
+            operator_stop_requested: false,
         })
     }
 
@@ -1897,9 +1899,18 @@ where
             .child_batch()
             .child_ref(ChildRole::VmmProcess)
             .and_then(|target| children.get(target));
+        if existing_process
+            .is_some_and(|process| process.desired_lifecycle() == Some(DesiredLifecycle::Running))
+        {
+            self.operator_stop_requested = false;
+        } else if dependency_readiness == DependencyReadiness::Ready
+            && guest.prior_ready_status()
+        {
+            self.operator_stop_requested = true;
+        }
         let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
-        } else if guest.prior_ready_status()
+        } else if self.operator_stop_requested
             && existing_process
                 .is_some_and(|process| {
                     process.desired_lifecycle() == Some(DesiredLifecycle::Stopped)
@@ -1909,6 +1920,11 @@ where
         } else {
             DesiredLifecycle::Running
         };
+        let preserve_operator_stop = self.operator_stop_requested
+            && dependency_readiness == DependencyReadiness::Ready
+            && existing_process.is_some_and(|process| {
+                process.desired_lifecycle() == Some(DesiredLifecycle::Stopped)
+            });
         if let Err(error) = self
             .repair_children(
                 child_plan.child_batch(),
@@ -1930,7 +1946,9 @@ where
                     &lifecycle_conditions,
                     force_degraded,
                 );
-                self.api.update_status(&guest, status.clone()).await?;
+                if !preserve_operator_stop {
+                    self.api.update_status(&guest, status.clone()).await?;
+                }
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
             return Err(error);
@@ -1945,7 +1963,9 @@ where
             &lifecycle_conditions,
             force_degraded,
         );
-        self.api.update_status(&guest, status.clone()).await?;
+        if !preserve_operator_stop {
+            self.api.update_status(&guest, status.clone()).await?;
+        }
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
     }
 
