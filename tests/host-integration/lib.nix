@@ -239,6 +239,130 @@ let
       };
     };
 
+  mkAcceptanceProviderArtifact = pkgs:
+    let
+      signer = pkgs.python3.withPackages
+        (pythonPackages: [ pythonPackages.cryptography ]);
+      manifest = ../../tests/fixtures/provider-acceptance/provider-manifest.json;
+      schema = ../../tests/fixtures/provider-acceptance/config-schema.json;
+      package = pkgs.runCommand "d2b-u20-acceptance-provider" {
+        nativeBuildInputs = [ pkgs.coreutils signer ];
+      } ''
+        ${signer}/bin/python3 - "${manifest}" "$out" <<'PY'
+        import hashlib
+        import json
+        import pathlib
+        import sys
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        manifest_path, output_path = sys.argv[1:]
+        manifest = json.loads(pathlib.Path(manifest_path).read_text())
+        binary = pathlib.Path("${pkgs.coreutils}/bin/coreutils").read_bytes()
+        raw_digest = "sha256:" + hashlib.sha256(binary).hexdigest()
+        executable_map = json.dumps(
+            {"acceptance-controller": raw_digest},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        first = hashlib.sha256(
+            b"d2b:v3:provider-executable-set\0" + executable_map
+        ).digest()
+        executable_digest = "sha256:" + hashlib.sha256(first).hexdigest()
+        manifest["trust"]["publisher"] = "d2b-u20-acceptance"
+        manifest["digests"]["executable"] = executable_digest
+        for component in manifest.get("components", []):
+            for capability in component.get("targetCapabilities", []):
+                capability["artifactDigest"] = raw_digest
+        manifest_bytes = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        seed = hashlib.sha256(
+            b"d2b-u20-acceptance-provider-signing-key-v1"
+            + raw_digest.encode()
+        ).digest()
+        private_key = Ed25519PrivateKey.from_private_bytes(seed)
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        output = pathlib.Path(output_path)
+        binary_output = output / "bin/acceptance-controller"
+        binary_output.parent.mkdir(parents=True)
+        binary_output.write_bytes(binary)
+        binary_output.chmod(0o755)
+        metadata = output / "share/d2b/provider"
+        metadata.mkdir(parents=True)
+        (metadata / "provider-manifest.json").write_bytes(manifest_bytes)
+        (metadata / "provider-manifest.json.sig").write_bytes(
+            private_key.sign(manifest_bytes)
+        )
+        (metadata / "config-schema.json").write_bytes(
+            pathlib.Path("${schema}").read_bytes()
+        )
+        (output / "publisher-public-key.pem").write_bytes(public_key)
+        (output / "executable-set-digest").write_text(executable_digest)
+        (output / "manifest-digest").write_text(
+            "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        )
+        PY
+      '';
+      packageDigestPath = pkgs.runCommand
+        "d2b-u20-acceptance-provider-nar-digest" {
+          nativeBuildInputs = [ pkgs.nix ];
+        } ''
+          printf 'sha256:%s' \
+            "$(${pkgs.nix}/bin/nix --extra-experimental-features nix-command \
+              hash path --type sha256 --base16 "${package}")" > "$out"
+        '';
+      baseManifest = builtins.fromJSON (builtins.readFile manifest);
+    in {
+      inherit package;
+      type = "provider";
+      catalog = {
+        providerName = "acceptance-provider";
+        packageName = "d2b-u20-acceptance-provider";
+        version = "0.0.0";
+        systems = [ pkgs.stdenv.hostPlatform.system ];
+        platform = pkgs.stdenv.hostPlatform.system;
+        apiCompatibility = "d2b.zone.v3";
+        serviceCompatibility = "d2bd.resource";
+        signature = { signatureId = "default"; };
+        rootEpoch = baseManifest.trust.rootEpoch;
+        revocationStatus = baseManifest.trust.revocation;
+        denyStatus = "clear";
+        provenanceEvidence = baseManifest.trust.provenance;
+        sbomEvidence = baseManifest.trust.sbom;
+        licenseEvidence = baseManifest.trust.license;
+        vulnerabilityEvidence = baseManifest.trust.vulnerability;
+        conformanceAttestation = baseManifest.trust.conformance;
+        supportChannel = baseManifest.trust.supportChannel;
+        supportContact = "d2b-acceptance@localhost";
+        publisher = "d2b-u20-acceptance";
+        packageDigest = lib.removeSuffix "\n"
+          (builtins.readFile packageDigestPath);
+        executableDigest = lib.removeSuffix "\n"
+          (builtins.readFile "${package}/executable-set-digest");
+        manifestDigest = lib.removeSuffix "\n"
+          (builtins.readFile "${package}/manifest-digest");
+        componentDigest = "sha256:${builtins.hashString
+          "sha256" (builtins.toJSON baseManifest.components)}";
+        descriptorDigest = "sha256:${builtins.hashString
+          "sha256" (builtins.toJSON baseManifest.apiBindings)}";
+        configDigest = baseManifest.digests.config;
+      };
+      trustedPublisher = {
+        publisherRef = "d2b-u20-acceptance";
+        signingKey = builtins.readFile "${package}/publisher-public-key.pem";
+      };
+    };
+
   mkVolumeProviderArtifact = pkgs:
     let
       manifest = ../../tests/fixtures/provider-volume-acceptance/provider-manifest.json;
@@ -368,5 +492,5 @@ in
 
   # Re-exported so tests can assert against the shared declaration.
   inherit baseD2bConfig mkGuestSystem mkRuntimeCloudHypervisorArtifact
-    mkVolumeProviderArtifact;
+    mkAcceptanceProviderArtifact mkVolumeProviderArtifact;
 }

@@ -6,76 +6,13 @@ let
     inherit self;
     inherit lib;
   };
-  acceptancePublisherKey = ''
-    -----BEGIN PUBLIC KEY-----
-    MCowBQYDK2VwAyEAu3/qwmKeWeFP7U5Z71uQOw/Zm5lBk4ZDbPVA2O7QlHg=
-    -----END PUBLIC KEY-----
-  '';
-  providerPackage = pkgs.runCommand "d2b-acceptance-provider" {
-    nativeBuildInputs = [ pkgs.coreutils ];
-  } ''
-    install -Dm644 ${../../tests/fixtures/provider-acceptance/provider-manifest.json} \
-      "$out/share/d2b/provider/provider-manifest.json"
-    install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
-      "$out/share/d2b/provider/config-schema.json"
-    install -d -m755 "$out/share/d2b/provider"
-    install -Dm755 ${pkgs.coreutils}/bin/coreutils \
-      "$out/bin/acceptance-controller"
-    base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
-      >"$out/share/d2b/provider/provider-manifest.json.sig"
-  '';
-  providerCatalog = {
-    providerName = "acceptance-provider";
-    packageName = "d2b-acceptance-provider";
-    version = "0.0.0";
-    systems = [ "x86_64-linux" ];
-    platform = "x86_64-linux";
-    apiCompatibility = "d2b.zone.v3";
-    serviceCompatibility = "d2bd.resource";
-    signature = "default";
-    rootEpoch = 1;
-    revocationStatus = "clear";
-    denyStatus = "clear";
-    provenanceEvidence = "accepted";
-    sbomEvidence = "accepted";
-    licenseEvidence = "accepted";
-    vulnerabilityEvidence = "accepted";
-    conformanceAttestation = "accepted";
-    supportChannel = "stable";
-    supportContact = "d2b-acceptance@localhost";
-    publisher = "d2b-acceptance";
-    packageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-    executableDigest = "sha256:f84125779653dba770042fd2af2bd01299b05ae892c039c497e6b5ce45029d9c";
-    manifestDigest = "sha256:3c772c723cc2d508502132e10c325a2194c7683025d0c1e8ea9e125d163a10c3";
-    componentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    descriptorDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    configDigest = "sha256:ccb5a9d66e068ea8f4e205788589675a48e9e3754a840d8ac10120d14238e914";
+  providerArtifact = d2bLib.mkAcceptanceProviderArtifact pkgs;
+  acceptancePublisherKey = providerArtifact.trustedPublisher.signingKey;
+  artifacts = {
+    acceptance-provider = {
+      inherit (providerArtifact) package type catalog;
+    };
   };
-  providerArtifact = {
-    package = providerPackage;
-    type = "provider";
-    catalog = providerCatalog;
-  };
-  acceptanceArtifactCatalogDigest =
-    "sha256:${lib.concatStringsSep "" (lib.replicate 64 "a")}";
-  acceptanceArtifactCatalog = pkgs.writeText "d2b-acceptance-artifact-catalog.json"
-    (builtins.toJSON {
-      schemaVersion = 3;
-      catalogDigest = acceptanceArtifactCatalogDigest;
-      entries = map
-        (artifactId: {
-          inherit artifactId;
-          type = "provider";
-          storePath = "${providerPackage}";
-          packageDigest = providerCatalog.packageDigest;
-          closureDigest = acceptanceArtifactCatalogDigest;
-          closureSize = 0;
-        })
-        [ "acceptance-provider" ];
-    });
-  artifacts = lib.listToAttrs (map
-    (artifactId: lib.nameValuePair artifactId providerArtifact)
-    [ "acceptance-provider" ]);
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-unsafe-local-helper";
@@ -90,21 +27,9 @@ pkgs.testers.runNixOSTest {
       d2b.site.adminUsers = [ "alice" ];
       systemd.services.d2bd.environment.D2B_SKIP_KERNEL_MODULE_CHECK = "1";
       d2b.artifacts = artifacts;
-      d2b._artifactCatalogV3 = lib.mkForce {
-        catalogDigest = acceptanceArtifactCatalogDigest;
-        path = acceptanceArtifactCatalog;
-      };
-      d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
-        data = { schemaVersion = 3; catalogDigest = acceptanceArtifactCatalogDigest; entries = [ ]; };
-        jsonText = builtins.readFile acceptanceArtifactCatalog;
-        path = lib.mkForce acceptanceArtifactCatalog;
-        installFileName = "artifact-catalog.json";
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
       d2b.zones = {
         local-root = {
-          trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
           resources = {
           alice = {
             type = "User";
@@ -252,7 +177,7 @@ pkgs.testers.runNixOSTest {
         };
         other = {
           parentZone = "local-root";
-          trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
           resources = {
             host-system = {
               type = "Host";
@@ -284,7 +209,7 @@ pkgs.testers.runNixOSTest {
         };
         work = {
           parentZone = "local-root";
-          trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
           resources.host-system = {
             type = "Host";
             spec = {
