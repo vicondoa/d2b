@@ -7,10 +7,15 @@ let
     inherit lib;
   };
   providerArtifact = d2bLib.mkAcceptanceProviderArtifact pkgs;
+  volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
   acceptancePublisherKey = providerArtifact.trustedPublisher.signingKey;
+  volumePublisherKey = volumeProviderArtifact.trustedPublisher.signingKey;
   artifacts = {
     acceptance-provider = {
       inherit (providerArtifact) package type catalog;
+    };
+    volume-acceptance-provider = {
+      inherit (volumeProviderArtifact) package type catalog;
     };
   };
 in
@@ -30,6 +35,7 @@ pkgs.testers.runNixOSTest {
       d2b.zones = {
         local-root = {
           trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-volume-acceptance.signingKey = volumePublisherKey;
           resources = {
           alice = {
             type = "User";
@@ -162,14 +168,14 @@ pkgs.testers.runNixOSTest {
           volume-local = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
+              artifactId = "volume-acceptance-provider";
               config = { };
             };
           };
           volume-virtiofs = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
+              artifactId = "volume-acceptance-provider";
               config = { };
             };
           };
@@ -178,6 +184,7 @@ pkgs.testers.runNixOSTest {
         other = {
           parentZone = "local-root";
           trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-volume-acceptance.signingKey = volumePublisherKey;
           resources = {
             host-system = {
               type = "Host";
@@ -194,14 +201,14 @@ pkgs.testers.runNixOSTest {
             volume-local = {
               type = "Provider";
               spec = {
-                artifactId = "acceptance-provider";
+                artifactId = "volume-acceptance-provider";
                 config = { };
               };
             };
             volume-virtiofs = {
               type = "Provider";
               spec = {
-                artifactId = "acceptance-provider";
+                artifactId = "volume-acceptance-provider";
                 config = { };
               };
             };
@@ -210,6 +217,7 @@ pkgs.testers.runNixOSTest {
         work = {
           parentZone = "local-root";
           trustedPublishers.d2b-u20-acceptance.signingKey = acceptancePublisherKey;
+          trustedPublishers.d2b-volume-acceptance.signingKey = volumePublisherKey;
           resources.host-system = {
             type = "Host";
             spec = {

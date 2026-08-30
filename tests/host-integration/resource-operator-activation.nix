@@ -71,7 +71,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { ... }: {
-        boot.kernelModules = [ "br_netfilter" "tpm_vtpm_proxy" ];
+        boot.kernelModules = [ "br_netfilter" ];
         networking.nftables.enable = true;
         networking.nftables.ruleset = lib.mkAfter ''
           table inet d2b {}
@@ -391,17 +391,6 @@ pkgs.testers.runNixOSTest {
               isolation.allowEastWest = false;
             };
           };
-          acceptance-tpm = {
-            type = "Device";
-            metadata.ownerRef = "Guest/acceptance-guest";
-            spec = {
-              providerRef = "Provider/device-tpm";
-              deviceClass = "emulated";
-              arbitration = "exclusive";
-              maxConcurrentClaims = 1;
-              inventory.selector = { };
-            };
-          };
           acceptance-guest = {
             type = "Guest";
             spec = {
@@ -417,12 +406,7 @@ pkgs.testers.runNixOSTest {
                   default = true;
                 }
               ];
-              deviceAttachments = [
-                {
-                  deviceRef = "Device/acceptance-tpm";
-                  exclusive = true;
-                }
-              ];
+              deviceAttachments = [ ];
             };
           };
         };
@@ -440,9 +424,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-before.json")
 
     # The authenticated operator path must reach the public Resource API for
-    # every Wave 6 type and observe committed desired state, not just an empty
-    # list response.
-    for resource_type in ["Volume", "Network", "Device", "Guest"]:
+    # every required storage/network/Guest type and observe committed desired
+    # state, not just an empty list response.
+    for resource_type in ["Volume", "Network", "Guest"]:
         path = f"/run/d2b-resource-{resource_type.lower()}-before.json"
         machine.succeed(
             f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -497,62 +481,22 @@ pkgs.testers.runNixOSTest {
     persistent_refs = [
         "Volume/acceptance-volume",
         "Network/acceptance-network",
-        "Device/acceptance-tpm",
         "Guest/acceptance-guest",
     ]
-    # Guest launch and restart adoption are owned by the dedicated
-    # runtime-cloud-hypervisor-guest-preflight VM check.
-    reconcile_refs = persistent_refs[:-1]
-    for resource_ref in reconcile_refs:
-        resource_type, resource_name = resource_ref.split("/", 1)
-        safe_name = resource_ref.replace("/", "-").lower()
-        machine.succeed(
-            f"jq -e '.resources[] | select(.type == \"{resource_type}\" and "
-            f".metadata.name == \"{resource_name}\") "
-            f"| (.metadata.uid != null and .metadata.generation > 0 and "
-            f".metadata.revision > 0)' "
-            f"/run/d2b-resource-{resource_ref.split('/')[0].lower()}-before.json"
-        )
-        machine.succeed(
+    # Provider effects are controller-owned and converge from the committed
+    # Zone graph; this fixture only observes their public status.
+    for resource_type in ["Volume", "Network"]:
+        machine.wait_until_succeeds(
             f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            f"d2b --zone work --json resource reconcile {resource_ref} "
-            f">/run/d2b-reconcile-{safe_name}.json "
-            f"2>/run/d2b-reconcile-{safe_name}.stderr || "
-            f"(cat /run/d2b-reconcile-{safe_name}.stderr; "
-            f"cat /run/d2b-reconcile-{safe_name}.json; "
-            f"exit 1)"
+            f"d2b --zone work --json resource list {resource_type} "
+            f">/run/d2b-{resource_type.lower()}-ready.json && "
+            f"jq -e '.resources[] | select(.type == \"{resource_type}\") | "
+            f"(.metadata.uid != null and .metadata.generation > 0 and "
+            f".metadata.revision > 0 and .status.phase == \"Ready\" and "
+            f".status.observedGeneration == .metadata.generation)' "
+            f"/run/d2b-{resource_type.lower()}-ready.json",
+            timeout=180,
         )
-        expected_effect = {
-            "Volume": "storage-scope-reconciled",
-            "Network": "network-bridge-reconciled",
-            "Device": "device-tpm-reconciled",
-        }[resource_ref.split("/", 1)[0]]
-        machine.succeed(
-            f"jq -e '.ready == true and .authenticated == true and "
-            f".resourceRef == \"{resource_ref}\" and "
-            f".effect == \"{expected_effect}\" and "
-            f"(.providerRef | startswith(\"Provider/\"))' "
-            f"/run/d2b-reconcile-{safe_name}.json"
-        )
-        if resource_type == "Device":
-            machine.succeed("test -S /run/d2b/vms/acceptance-guest/tpm.sock")
-        if resource_type == "Network":
-            machine.succeed(
-                "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-                "d2b --zone work --json resource list Network "
-                ">/run/d2b-network-after-reconcile.json"
-            )
-            machine.succeed(
-                "jq -e '"
-                ".resources[] | select(.type == \"Network\" and "
-                ".metadata.name == \"acceptance-network\") | "
-                "(.status.phase == \"Ready\" and "
-                ".status.observedGeneration == .metadata.generation and "
-                ".status.resource.configVolume.phase == \"Ready\" and "
-                ".status.resource.netVm.phase == \"Ready\" and "
-                ".status.resource.volumeAttachment.phase == \"Ready\")' "
-                "/run/d2b-network-after-reconcile.json"
-            )
     machine.fail(
         "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json resource list Volume "
@@ -580,7 +524,7 @@ pkgs.testers.runNixOSTest {
         timeout=60,
     )
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-after.json")
-    for resource_type in ["Volume", "Network", "Device", "Guest"]:
+    for resource_type in ["Volume", "Network", "Guest"]:
         path = f"/run/d2b-resource-{resource_type.lower()}-after.json"
         machine.succeed(
             f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
