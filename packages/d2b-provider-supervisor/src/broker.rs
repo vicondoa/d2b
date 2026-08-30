@@ -15,7 +15,7 @@ use d2b_contracts_broker::broker_wire::{
     GuestExecutionBinding as BrokerGuestExecutionBinding, OpenPidfdRequest, RunnerRole,
     RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
 };
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_contracts_resource::v3::{
     ActivationRunnerInput,
     execution_policy::ExecutionDomain,
@@ -27,6 +27,7 @@ use d2b_process::{
     ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
     ProcessStopClass, WaitReapOwner,
 };
+use d2b_process_conformance::runtime_scope_commitment;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
@@ -42,6 +43,16 @@ const MAX_PENDING_OBSERVATIONS: usize = 1024;
 pub struct BrokerLaunchIntent {
     /// Broker VM scope.
     pub vm_id: VmId,
+    /// Immutable Zone identity for a typed Process resource.
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference.
+    pub provider_ref: ResourceRef,
+    /// Private host-runtime scope commitment.
+    pub runtime_scope: Option<[u8; 32]>,
+    /// Whether this request is the generic Resource-backed Process path.
+    pub typed_identity: bool,
     /// Canonical Host or Guest execution target.
     pub execution_ref: ResourceRef,
     /// Canonical execution domain.
@@ -80,6 +91,50 @@ impl std::fmt::Debug for BrokerLaunchIntent {
     }
 }
 
+impl BrokerLaunchIntent {
+    fn wire_resource_ref(&self) -> Option<ResourceRef> {
+        self.typed_identity.then(|| self.resource_ref.clone())
+    }
+
+    fn wire_resource_uid(&self) -> Option<ResourceUid> {
+        self.typed_identity.then(|| self.resource_uid.clone())
+    }
+
+    fn wire_zone_uid(&self) -> Option<ResourceUid> {
+        self.typed_identity
+            .then(|| self.zone_uid.clone())
+            .flatten()
+    }
+
+    fn wire_owner_ref(&self) -> Option<ResourceRef> {
+        self.typed_identity
+            .then(|| self.owner_ref.clone())
+            .flatten()
+    }
+
+    fn wire_provider_ref(&self) -> Option<ResourceRef> {
+        self.typed_identity.then(|| self.provider_ref.clone())
+    }
+
+    fn wire_provider_identity(&self) -> Option<[u8; 32]> {
+        self.typed_identity.then_some(self.provider_identity)
+    }
+
+    fn wire_template_identity(&self) -> Option<[u8; 32]> {
+        self.typed_identity.then_some(self.template_identity)
+    }
+
+    fn wire_generation(&self) -> Option<u64> {
+        self.typed_identity.then_some(self.generation)
+    }
+
+    fn wire_runtime_scope(&self) -> Option<[u8; 32]> {
+        self.typed_identity
+            .then(|| self.runtime_scope)
+            .flatten()
+    }
+}
+
 /// Candidate discovered independently of the adapter's in-memory handle table.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BrokerObservedProcess {
@@ -103,11 +158,28 @@ impl std::fmt::Debug for BrokerObservedProcess {
 
 impl BrokerObservedProcess {
     fn validate(&self) -> Result<(), ProcessEffectError> {
+        let mut provider_digest = Sha256::new();
+        provider_digest.update(b"d2b-process-provider-v1");
+        provider_digest.update(self.intent.provider_ref.name().as_str().as_bytes());
+        let provider_identity: [u8; 32] = provider_digest.finalize().into();
         if self.pid <= 0
             || self.start_time_ticks == 0
             || self.intent.provider_identity == [0; 32]
             || self.intent.template_identity == [0; 32]
             || self.intent.generation == 0
+            || self.intent.zone_uid.is_some() != self.intent.runtime_scope.is_some()
+            || self
+                .intent
+                .runtime_scope
+                .is_some_and(|scope| scope == [0; 32])
+            || (self.intent.typed_identity
+                && (self.intent.zone_uid.is_none() || self.intent.runtime_scope.is_none()))
+            || self.intent.provider_ref.resource_type().as_str() != "Provider"
+            || !matches!(
+                self.intent.provider_ref.name().as_str(),
+                "system-minijail" | "system-systemd"
+            )
+            || (self.intent.typed_identity && self.intent.provider_identity != provider_identity)
             || self
                 .intent
                 .guest_execution
@@ -132,12 +204,30 @@ impl BrokerObservedProcess {
         digest.update(b"d2b-broker-process-identity-v1");
         digest.update(self.intent.vm_id.as_str().as_bytes());
         digest.update([0]);
+        if let Some(zone_uid) = &self.intent.zone_uid {
+            digest.update(zone_uid.as_str().as_bytes());
+        }
+        digest.update([0]);
+        if let Some(owner_ref) = &self.intent.owner_ref {
+            digest.update(owner_ref.to_canonical_string().as_bytes());
+        }
+        digest.update([0]);
+        digest.update(self.intent.provider_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(self.intent.resource_ref.to_canonical_string().as_bytes());
+        digest.update([0]);
+        digest.update(self.intent.resource_uid.as_str().as_bytes());
+        digest.update([0]);
         digest.update(self.intent.role_id.as_str().as_bytes());
         digest.update([0]);
         digest.update(self.intent.role.as_str().as_bytes());
         digest.update(self.intent.provider_identity);
         digest.update(self.intent.template_identity);
         digest.update(self.intent.generation.to_le_bytes());
+        if let Some(runtime_scope) = self.intent.runtime_scope {
+            digest.update(runtime_scope);
+        }
+        digest.update([0]);
         if let Some(binding) = &self.intent.guest_execution {
             digest.update(binding.target_uid.as_str().as_bytes());
             digest.update(binding.boot_identity_digest);
@@ -284,8 +374,15 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
                 role_id: intent.role_id.clone(),
                 role: intent.role,
                 bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-                resource_ref: Some(intent.resource_ref.clone()),
-                resource_uid: Some(intent.resource_uid.clone()),
+                resource_ref: intent.wire_resource_ref(),
+                resource_uid: intent.wire_resource_uid(),
+                zone_uid: intent.wire_zone_uid(),
+                owner_ref: intent.wire_owner_ref(),
+                provider_ref: intent.wire_provider_ref(),
+                provider_identity: intent.wire_provider_identity(),
+                template_identity: intent.wire_template_identity(),
+                generation: intent.wire_generation(),
+                runtime_scope: intent.wire_runtime_scope(),
                 guest_execution: intent.guest_execution.clone(),
                 tracing_span_id: None,
             }),
@@ -379,6 +476,29 @@ impl BundleBackedLaunchResolver {
         if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
             return Err(ProcessEffectError::IdentityChanged);
         }
+        let typed_identity = !legacy_identity && !ticket.has_controller_launch_binding();
+        if typed_identity {
+            let Some(zone_uid) = ticket.zone_uid() else {
+                return Err(ProcessEffectError::IdentityChanged);
+            };
+            let Some(runtime_scope) = ticket.runtime_scope() else {
+                return Err(ProcessEffectError::IdentityChanged);
+            };
+            let expected_scope = runtime_scope_commitment(
+                zone_uid,
+                ticket
+                    .guest_execution_binding()
+                    .map(|binding| binding.target_uid()),
+                ticket.process_ref(),
+                ticket.process_uid(),
+                intent.role_id.as_str(),
+                ticket.resource_generation().get(),
+            )
+            .as_bytes();
+            if runtime_scope.as_bytes() != expected_scope {
+                return Err(ProcessEffectError::IdentityChanged);
+            }
+        }
         let inherited_fd_count = ticket.inherited_fd_table().count();
         if (role == RunnerRole::ProviderController) != (inherited_fd_count == 1) {
             return Err(ProcessEffectError::IdentityChanged);
@@ -424,6 +544,11 @@ impl BundleBackedLaunchResolver {
         });
         Ok(BrokerLaunchIntent {
             vm_id: VmId::new(vm_name),
+            zone_uid: ticket.zone_uid().cloned(),
+            owner_ref: ticket.owner_ref().cloned(),
+            provider_ref: ticket.provider_ref().clone(),
+            runtime_scope: ticket.runtime_scope().map(|scope| scope.as_bytes()),
+            typed_identity,
             execution_ref: ticket.execution_ref().clone(),
             domain: ticket.domain(),
             user_ref: ticket.user_ref().cloned(),
@@ -676,12 +801,16 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
             role_id: intent.role_id.clone(),
-            resource_ref: Some(intent.resource_ref.clone()),
-            resource_uid: Some(intent.resource_uid.clone()),
+            zone_uid: intent.wire_zone_uid(),
+            owner_ref: intent.wire_owner_ref(),
+            provider_ref: intent.wire_provider_ref(),
+            resource_ref: intent.wire_resource_ref(),
+            resource_uid: intent.wire_resource_uid(),
             bundle_content_identity: Some(intent.bundle_content_identity.clone()),
-            provider_identity: Some(intent.provider_identity),
-            template_identity: Some(intent.template_identity),
-            generation: Some(intent.generation),
+            provider_identity: intent.wire_provider_identity(),
+            template_identity: intent.wire_template_identity(),
+            generation: intent.wire_generation(),
+            runtime_scope: intent.wire_runtime_scope(),
             guest_execution: intent.guest_execution.clone(),
             sandbox_plan: intent.sandbox_plan.clone(),
             activation_input: intent.activation_input.clone(),
@@ -699,14 +828,19 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         if response.vm_id != intent.vm_id
             || response.role_id != intent.role_id
             || response.role != intent.role
+            || response.resource_ref != intent.wire_resource_ref()
+            || response.resource_uid != intent.wire_resource_uid()
+            || response.zone_uid != intent.wire_zone_uid()
+            || response.owner_ref != intent.wire_owner_ref()
+            || response.runtime_scope != intent.wire_runtime_scope()
             || response.pid <= 0
             || response.start_time_ticks == 0
             || response.execution_ref.as_ref() != Some(&intent.execution_ref)
             || response.execution_domain != Some(intent.domain)
             || response.user_ref.as_ref() != intent.user_ref.as_ref()
-            || response.provider_identity != Some(intent.provider_identity)
-            || response.template_identity != Some(intent.template_identity)
-            || response.generation != Some(intent.generation)
+            || response.provider_identity != intent.wire_provider_identity()
+            || response.template_identity != intent.wire_template_identity()
+            || response.generation != intent.wire_generation()
             || response.guest_execution != intent.guest_execution
             || response.bundle_content_identity.as_deref()
                 != Some(intent.bundle_content_identity.as_str())
@@ -767,8 +901,16 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let frame = self.request(BrokerRequest::OpenPidfd(OpenPidfdRequest {
             vm_id: observed.intent.vm_id.clone(),
             role_id: observed.intent.role_id.clone(),
-            resource_ref: Some(observed.intent.resource_ref.clone()),
-            resource_uid: Some(observed.intent.resource_uid.clone()),
+            bundle_runner_intent_ref: Some(observed.intent.bundle_runner_intent_ref.clone()),
+            resource_ref: observed.intent.wire_resource_ref(),
+            resource_uid: observed.intent.wire_resource_uid(),
+            zone_uid: observed.intent.wire_zone_uid(),
+            owner_ref: observed.intent.wire_owner_ref(),
+            provider_ref: observed.intent.wire_provider_ref(),
+            provider_identity: observed.intent.wire_provider_identity(),
+            template_identity: observed.intent.wire_template_identity(),
+            generation: observed.intent.wire_generation(),
+            runtime_scope: observed.intent.wire_runtime_scope(),
             guest_execution: observed.intent.guest_execution.clone(),
             pid: observed.pid,
             expected_start_time_ticks: observed.start_time_ticks,
@@ -806,8 +948,15 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let frame = self.request(BrokerRequest::SignalRunner(SignalRunnerRequest {
             vm_id: handle.observed.intent.vm_id.clone(),
             role_id: handle.observed.intent.role_id.clone(),
-            resource_ref: Some(handle.observed.intent.resource_ref.clone()),
-            resource_uid: Some(handle.observed.intent.resource_uid.clone()),
+            resource_ref: handle.observed.intent.wire_resource_ref(),
+            resource_uid: handle.observed.intent.wire_resource_uid(),
+            zone_uid: handle.observed.intent.wire_zone_uid(),
+            owner_ref: handle.observed.intent.wire_owner_ref(),
+            provider_ref: handle.observed.intent.wire_provider_ref(),
+            provider_identity: handle.observed.intent.wire_provider_identity(),
+            template_identity: handle.observed.intent.wire_template_identity(),
+            generation: handle.observed.intent.wire_generation(),
+            runtime_scope: handle.observed.intent.wire_runtime_scope(),
             guest_execution: handle.observed.intent.guest_execution.clone(),
             signal,
             pid: Some(handle.observed.pid),
@@ -832,8 +981,15 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                     role_id: handle.observed.intent.role_id.clone(),
                     pid: Some(handle.observed.pid),
                     expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                    resource_ref: Some(handle.observed.intent.resource_ref.clone()),
-                    resource_uid: Some(handle.observed.intent.resource_uid.clone()),
+                    resource_ref: handle.observed.intent.wire_resource_ref(),
+                    resource_uid: handle.observed.intent.wire_resource_uid(),
+                    zone_uid: handle.observed.intent.wire_zone_uid(),
+                    owner_ref: handle.observed.intent.wire_owner_ref(),
+                    provider_ref: handle.observed.intent.wire_provider_ref(),
+                    provider_identity: handle.observed.intent.wire_provider_identity(),
+                    template_identity: handle.observed.intent.wire_template_identity(),
+                    generation: handle.observed.intent.wire_generation(),
+                    runtime_scope: handle.observed.intent.wire_runtime_scope(),
                     guest_execution: handle.observed.intent.guest_execution.clone(),
                     tracing_span_id: None,
                 },
@@ -856,8 +1012,15 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 role_id: handle.observed.intent.role_id.clone(),
                 pid: Some(handle.observed.pid),
                 expected_start_time_ticks: Some(handle.observed.start_time_ticks),
-                resource_ref: Some(handle.observed.intent.resource_ref.clone()),
-                resource_uid: Some(handle.observed.intent.resource_uid.clone()),
+                resource_ref: handle.observed.intent.wire_resource_ref(),
+                resource_uid: handle.observed.intent.wire_resource_uid(),
+                zone_uid: handle.observed.intent.wire_zone_uid(),
+                owner_ref: handle.observed.intent.wire_owner_ref(),
+                provider_ref: handle.observed.intent.wire_provider_ref(),
+                provider_identity: handle.observed.intent.wire_provider_identity(),
+                template_identity: handle.observed.intent.wire_template_identity(),
+                generation: handle.observed.intent.wire_generation(),
+                runtime_scope: handle.observed.intent.wire_runtime_scope(),
                 guest_execution: handle.observed.intent.guest_execution.clone(),
                 tracing_span_id: None,
             },
@@ -980,16 +1143,25 @@ mod tests {
     }
 
     fn observed(seed: u16) -> BrokerObservedProcess {
+        let mut provider_digest = Sha256::new();
+        provider_digest.update(b"d2b-process-provider-v1");
+        provider_digest.update(b"system-minijail");
+        let provider_identity: [u8; 32] = provider_digest.finalize().into();
         BrokerObservedProcess {
             intent: BrokerLaunchIntent {
                 vm_id: VmId::new("corp-vm"),
+                zone_uid: None,
+                owner_ref: None,
+                runtime_scope: None,
+                typed_identity: false,
+                provider_ref: ResourceRef::parse("Provider/system-minijail").unwrap(),
                 execution_ref: ResourceRef::parse("Host/local").unwrap(),
                 domain: ExecutionDomain::System,
                 user_ref: None,
                 role_id: RoleId::new("worker"),
                 role: RunnerRole::Virtiofsd,
                 bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),
-                provider_identity: [1; 32],
+                provider_identity,
                 template_identity: [2; 32],
                 generation: 1,
                 resource_ref: ResourceRef::parse("Process/worker").unwrap(),
@@ -1152,6 +1324,18 @@ mod tests {
             format!("{:?}", process.intent),
             "BrokerLaunchIntent(<redacted>)"
         );
+    }
+
+    #[test]
+    fn broker_process_identity_digest_binds_resource_incarnation() {
+        let first = observed(41);
+        let mut recreated = first.clone();
+        recreated.intent.resource_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse(
+                "00000000-0000-4000-8000-000000000002",
+            )
+            .unwrap();
+        assert_ne!(first.digest(), recreated.digest());
     }
 }
 

@@ -45,6 +45,7 @@ pub fn validate_candidate(
         IdentityBinding::Generation,
     ]);
     if ticket.selected_provider().as_str() != PROVIDER_NAME
+        || ticket.provider_ref().to_canonical_string() != "Provider/system-minijail"
         || candidate.wait_reap_owner != WaitReapOwner::Local
         || candidate.validate(&required).is_err()
     {

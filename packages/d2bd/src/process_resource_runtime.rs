@@ -440,7 +440,12 @@ impl ProcessResourceRuntime {
                 self.next_restart_at.remove(&key);
             }
 
-            if !was_present && !replace && !self.providers.has_active_resource(&key) {
+            if !was_present
+                && !replace
+                && !self
+                    .providers
+                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+            {
                 match status_phase(&record.resource) {
                     Some(ResourcePhase::Succeeded) => {
                         self.terminal.insert(key.clone());
@@ -463,7 +468,10 @@ impl ProcessResourceRuntime {
             }
 
             if record.deletion_requested() {
-                if !self.providers.has_active_resource(&key) {
+                if !self
+                    .providers
+                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                {
                     match &record.process {
                         DesiredProcess::Process(spec) => {
                             let adoption = deletion_adoption(
@@ -495,7 +503,10 @@ impl ProcessResourceRuntime {
                         }
                     }
                 }
-                if self.providers.has_active_resource(&key) {
+                if self
+                    .providers
+                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                {
                     self.stop_record(&record).await?;
                 }
                 self.providers
@@ -520,7 +531,9 @@ impl ProcessResourceRuntime {
             }
 
             if let DesiredProcess::Ephemeral(spec) = &record.process
-                && self.providers.has_active_resource(&key)
+                && self
+                    .providers
+                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
                 && self.started_at.get(&key).is_some_and(|started| {
                     started.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
                 })
@@ -547,7 +560,10 @@ impl ProcessResourceRuntime {
             }
 
             if !record.is_running() {
-                if self.providers.has_active_resource(&key) {
+                if self
+                    .providers
+                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                {
                     self.stop_record(&record).await?;
                     self.providers
                         .finalize_resource(self.context(&record))
@@ -967,7 +983,11 @@ impl ProcessResourceRuntime {
     async fn stop_record(&self, record: &DesiredRecord) -> Result<(), ProcessResourceRuntimeError> {
         if !self
             .providers
-            .has_active_resource(&record.resource.resource_ref)
+            .has_active_resource_in_zone(
+                &self.zone,
+                self.zone_uid.as_ref(),
+                &record.resource.resource_ref,
+            )
         {
             return Ok(());
         }

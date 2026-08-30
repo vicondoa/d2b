@@ -2133,6 +2133,9 @@ pub struct OpenPidfdRequest {
     /// Per-VM role identifier (matches the daemon-side
     /// `PidfdKey::role_id`).
     pub role_id: RoleId,
+    /// Exact trusted runner intent for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_runner_intent_ref: Option<BundleOpId>,
     /// PID the snapshot recorded.
     pub pid: i32,
     /// Field-22 start-time ticks from `/proc/<pid>/stat` at the
@@ -2146,6 +2149,27 @@ pub struct OpenPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2198,6 +2222,27 @@ pub struct ObserveRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2936,6 +2981,27 @@ pub struct SignalRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2975,6 +3041,27 @@ pub struct DeregisterRunnerPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process cleanup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -3102,9 +3189,9 @@ pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[RunnerRole::ActivationNixo
 pub struct SpawnRunnerRequest {
     /// VM scope the runner belongs to.
     pub vm_id: VmId,
-    /// Per-VM role this runner fills. Must be unique across the VM's
-    /// active runners - the daemon's pidfd table is keyed on
-    /// `(vm_id, role_id)` and a duplicate registration fails closed.
+    /// Per-VM role this runner fills. Legacy runners are unique on
+    /// `(vm_id, role_id)`; typed Process runners are additionally fenced by
+    /// their private runtime scope and resource incarnation.
     pub role_id: RoleId,
     /// Optional generic Process identity binding. These fields are part of
     /// the registry key and prevent distinct Process resources from
@@ -3113,6 +3200,15 @@ pub struct SpawnRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of the Process resource, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
     /// Content identity of the daemon's trusted bundle snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_content_identity: Option<String>,
@@ -3123,6 +3219,9 @@ pub struct SpawnRunnerRequest {
     pub template_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Typed stdin input admitted only for the activation-nixos runner role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_input: Option<ActivationRunnerInput>,
@@ -3235,6 +3334,17 @@ pub struct SpawnRunnerResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub role: RunnerRole,
+    /// Exact generic Process identity echoed after broker validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Resolved execution binding and content identities echoed by the
     /// broker after validating the request against its trusted bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4480,10 +4590,14 @@ mod tests {
             role_id: RoleId::new(role.as_str()),
             resource_ref: None,
             resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            provider_ref: None,
             bundle_content_identity: None,
             provider_identity: None,
             template_identity: None,
             generation: None,
+            runtime_scope: None,
             activation_input: None,
             sandbox_plan: None,
             role,
@@ -4759,6 +4873,11 @@ mod tests {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch"),
             role: RunnerRole::CloudHypervisor,
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            runtime_scope: None,
             pid: 4242,
             start_time_ticks: 987_654_321,
             pidfd_index: 0,

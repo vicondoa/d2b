@@ -5005,11 +5005,31 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "generation": {
+          "description": "Desired Process generation for the private runtime scope.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "guestExecution": {
           "description": "Exact Guest target/session binding for target-local Process cleanup.",
           "anyOf": [
             {
               "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerRef": {
+          "description": "Exact semantic owner of a typed Process resource, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
             },
             {
               "type": "null"
@@ -5023,6 +5043,31 @@
             "null"
           ],
           "format": "int32"
+        },
+        "providerIdentity": {
+          "description": "Provider identity commitment for typed Process cleanup.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "providerRef": {
+          "description": "Selected Process Provider reference for typed Process cleanup.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resourceRef": {
           "anyOf": [
@@ -5047,6 +5092,34 @@
         "roleId": {
           "type": "string"
         },
+        "runtimeScope": {
+          "description": "Broker-independent commitment to the private runtime scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "templateIdentity": {
+          "description": "Template identity commitment for typed Process cleanup.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
@@ -5056,6 +5129,17 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "description": "Immutable Zone identity for typed Process cleanup.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -8412,11 +8496,56 @@
         "bundleRunnerIntentRef": {
           "type": "string"
         },
+        "generation": {
+          "description": "Desired Process generation for the private runtime scope.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "guestExecution": {
           "description": "Exact Guest target/session binding for target-local Process adoption.",
           "anyOf": [
             {
               "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerRef": {
+          "description": "Exact semantic owner of a typed Process resource, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerIdentity": {
+          "description": "Provider identity commitment for typed Process observation.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "providerRef": {
+          "description": "Selected Process Provider reference for typed Process observation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
             },
             {
               "type": "null"
@@ -8450,6 +8579,34 @@
         "roleId": {
           "type": "string"
         },
+        "runtimeScope": {
+          "description": "Broker-independent commitment to the private runtime scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "templateIdentity": {
+          "description": "Template identity commitment for typed Process observation.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
@@ -8459,6 +8616,17 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "description": "Immutable Zone identity for typed Process observation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -8708,9 +8876,25 @@
         "vmId"
       ],
       "properties": {
+        "bundleRunnerIntentRef": {
+          "description": "Exact trusted runner intent for typed Process adoption.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expectedStartTimeTicks": {
           "description": "Field-22 start-time ticks from `/proc/<pid>/stat` at the time the snapshot was written. The broker re-reads field 22 AFTER `pidfd_open` and compares; mismatch means the pid was reused.",
           "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "generation": {
+          "description": "Desired Process generation for the private runtime scope.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0.0
         },
@@ -8725,10 +8909,46 @@
             }
           ]
         },
+        "ownerRef": {
+          "description": "Exact semantic owner of a typed Process resource, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pid": {
           "description": "PID the snapshot recorded.",
           "type": "integer",
           "format": "int32"
+        },
+        "providerIdentity": {
+          "description": "Provider identity commitment for typed Process adoption.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "providerRef": {
+          "description": "Selected Process Provider reference for typed Process adoption.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resourceRef": {
           "description": "Optional generic Process identity binding. Legacy VM runner callers omit these fields and retain the historical VM/role key.",
@@ -8755,6 +8975,34 @@
           "description": "Per-VM role identifier (matches the daemon-side `PidfdKey::role_id`).",
           "type": "string"
         },
+        "runtimeScope": {
+          "description": "Broker-independent commitment to the private runtime scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "templateIdentity": {
+          "description": "Template identity commitment for typed Process adoption.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
@@ -8765,6 +9013,17 @@
         "vmId": {
           "description": "Per-VM scope the snapshot belongs to.",
           "type": "string"
+        },
+        "zoneUid": {
+          "description": "Immutable Zone identity for typed Process adoption.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -12378,11 +12637,31 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "generation": {
+          "description": "Desired Process generation for the private runtime scope.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "guestExecution": {
           "description": "Exact Guest target/session binding for target-local Process control.",
           "anyOf": [
             {
               "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerRef": {
+          "description": "Exact semantic owner of a typed Process resource, when present.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
             },
             {
               "type": "null"
@@ -12395,6 +12674,31 @@
             "null"
           ],
           "format": "int32"
+        },
+        "providerIdentity": {
+          "description": "Provider identity commitment for typed Process cleanup.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "providerRef": {
+          "description": "Selected Process Provider reference for typed Process control.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resourceRef": {
           "description": "Optional generic Process identity binding.",
@@ -12420,8 +12724,36 @@
         "roleId": {
           "type": "string"
         },
+        "runtimeScope": {
+          "description": "Broker-independent commitment to the private runtime scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
         "signal": {
           "$ref": "#/definitions/RunnerSignal"
+        },
+        "templateIdentity": {
+          "description": "Template identity commitment for typed Process cleanup.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         },
         "tracingSpanId": {
           "default": null,
@@ -12432,6 +12764,17 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "description": "Immutable Zone identity for typed Process control.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -12618,6 +12961,17 @@
             }
           ]
         },
+        "ownerRef": {
+          "description": "Exact semantic owner of the Process resource, when one exists.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "providerIdentity": {
           "description": "Provider/template identity expected by the daemon.",
           "type": [
@@ -12631,6 +12985,17 @@
           },
           "maxItems": 32,
           "minItems": 32
+        },
+        "providerRef": {
+          "description": "Selected Process Provider reference for typed Process launch.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resourceRef": {
           "description": "Optional generic Process identity binding. These fields are part of the registry key and prevent distinct Process resources from colliding on the legacy VM/role tuple.",
@@ -12662,7 +13027,7 @@
           ]
         },
         "roleId": {
-          "description": "Per-VM role this runner fills. Must be unique across the VM's active runners - the daemon's pidfd table is keyed on `(vm_id, role_id)` and a duplicate registration fails closed.",
+          "description": "Per-VM role this runner fills. Legacy runners are unique on `(vm_id, role_id)`; typed Process runners are additionally fenced by their private runtime scope and resource incarnation.",
           "type": "string"
         },
         "runtimeAllocations": {
@@ -12672,6 +13037,20 @@
           "items": {
             "$ref": "#/definitions/RunnerAllocation"
           }
+        },
+        "runtimeScope": {
+          "description": "Broker-independent commitment to the private runtime scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         },
         "sandboxPlan": {
           "anyOf": [
@@ -12724,6 +13103,17 @@
           "anyOf": [
             {
               "$ref": "#/definitions/WorkloadIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zoneUid": {
+          "description": "Immutable Zone identity for typed Process launch.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
             },
             {
               "type": "null"
@@ -12799,6 +13189,16 @@
             }
           ]
         },
+        "ownerRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pid": {
           "description": "Child PID. The daemon validates this against the pidfd it received and against `/proc/<pid>/stat` field 22 (`start_time`).",
           "type": "integer",
@@ -12823,11 +13223,45 @@
           "maxItems": 32,
           "minItems": 32
         },
+        "resourceRef": {
+          "description": "Exact generic Process identity echoed after broker validation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "$ref": "#/definitions/RunnerRole"
         },
         "roleId": {
           "type": "string"
+        },
+        "runtimeScope": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         },
         "startTimeTicks": {
           "description": "Field-22 `start_time` value the broker captured immediately after `clone()`. Pinned to the pidfd so any restart reconciliation rejects a stale (pid, start_time) tuple.",
@@ -12860,6 +13294,16 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

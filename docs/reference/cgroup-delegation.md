@@ -241,9 +241,13 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`
 - `ApplySysctl { bundle_sysctl_intent_ref, key, destroy }`
 - `UpdateHostsFile { bundle_hosts_intent_ref, destroy }`
-- `OpenPidfd { pid, expected_start_time_ticks }`
+- `OpenPidfd { exact runner identity }` - process IDs and start-time values
+  stay broker-local and are omitted from audit.
 - `SignalRunner { vm_id, role_id, signal }`
-- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, runtime_allocations }`
+- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, resource
+  identity, private runtime scope }` - typed Process runners use a
+  Zone/resource-incarnation-derived cgroup leaf; paths, argv, environment,
+  credentials, allocations, and cgroup paths are omitted from audit.
 - `RunHostInstall { bundle_installer_intent_ref, enable, start, no_start }`
 - `RunMigrate { bundle_migrate_intent_ref }`
 - `RunActivation { bundle_activation_intent_ref, mode, vm }`

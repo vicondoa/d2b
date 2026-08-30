@@ -59,6 +59,37 @@ pub fn execution_commitment(
     ConfigurationDigest::from_bytes(digest.finalize().into())
 }
 
+/// Compute the private host-runtime scope for one Process incarnation.
+///
+/// The scope is deliberately separate from the Zone-local [`ResourceRef`].
+/// It binds the immutable Zone and optional Guest identities to the exact
+/// Process incarnation and trusted role so host cgroups and runtime objects
+/// cannot collide when names are reused across Zones or generations.
+pub fn runtime_scope_commitment(
+    zone_uid: &ResourceUid,
+    guest_uid: Option<&ResourceUid>,
+    process_ref: &ResourceRef,
+    process_uid: &ResourceUid,
+    role: &str,
+    generation: u64,
+) -> ConfigurationDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-process-runtime-scope-v1");
+    let process_ref = process_ref.to_canonical_string();
+    for value in [
+        zone_uid.as_str(),
+        guest_uid.map(ResourceUid::as_str).unwrap_or(""),
+        process_ref.as_str(),
+        process_uid.as_str(),
+        role,
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    digest.update(generation.to_le_bytes());
+    ConfigurationDigest::from_bytes(digest.finalize().into())
+}
+
 /// The compiled configuration digests bound into one ticket.
 ///
 /// Every member is a digest of a plan the Provider never sees. The
@@ -345,6 +376,9 @@ impl InheritedFdTable {
 pub struct LaunchTicket {
     process_ref: ResourceRef,
     process_uid: ResourceUid,
+    zone_uid: Option<ResourceUid>,
+    owner_ref: Option<ResourceRef>,
+    runtime_scope: Option<ConfigurationDigest>,
     resource_revision: Option<ZoneRevision>,
     resource_generation: ResourceGeneration,
     controller_generation: ControllerGeneration,
@@ -426,6 +460,9 @@ impl LaunchTicket {
         Ok(Self {
             process_ref,
             process_uid,
+            zone_uid: None,
+            owner_ref: None,
+            runtime_scope: None,
             resource_revision: None,
             resource_generation,
             controller_generation,
@@ -462,6 +499,49 @@ impl LaunchTicket {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         self.execution_commitment = Some(commitment);
+        Ok(self)
+    }
+
+    /// Bind the private Zone and Process runtime identity.
+    ///
+    /// The scope is an effect-owner commitment, not a public ResourceRef.
+    /// It must be supplied together with the immutable Zone UID so the broker
+    /// can independently derive and verify host-global runtime placement.
+    pub fn with_runtime_identity(
+        mut self,
+        zone_uid: ResourceUid,
+        owner_ref: Option<ResourceRef>,
+        runtime_scope: ConfigurationDigest,
+    ) -> Result<Self, ProcessConformanceError> {
+        if runtime_scope.is_zero()
+            || self.zone_uid.is_some()
+            || self.runtime_scope.is_some()
+            || self
+                .owner_ref
+                .as_ref()
+                .is_some_and(|current| owner_ref.as_ref() != Some(current))
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.zone_uid = Some(zone_uid);
+        self.owner_ref = owner_ref;
+        self.runtime_scope = Some(runtime_scope);
+        Ok(self)
+    }
+
+    /// Bind the exact semantic owner without adding a host-runtime scope.
+    ///
+    /// Static controller launches use this when their target deployment
+    /// supplies the owner proof but the target Zone UID is held by the
+    /// controller deployment layer.
+    pub fn with_owner_ref(
+        mut self,
+        owner_ref: ResourceRef,
+    ) -> Result<Self, ProcessConformanceError> {
+        if self.owner_ref.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.owner_ref = Some(owner_ref);
         Ok(self)
     }
 
@@ -587,6 +667,11 @@ impl LaunchTicket {
         if self
             .resource_revision
             .is_some_and(|revision| revision.get() == 0)
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        if self.zone_uid.is_some() != self.runtime_scope.is_some()
+            || self.runtime_scope.is_some_and(ConfigurationDigest::is_zero)
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
@@ -767,6 +852,21 @@ impl LaunchTicket {
     /// Borrow the resource UID.
     pub const fn process_uid(&self) -> &ResourceUid {
         &self.process_uid
+    }
+
+    /// Borrow the immutable Zone UID bound to this launch.
+    pub const fn zone_uid(&self) -> Option<&ResourceUid> {
+        self.zone_uid.as_ref()
+    }
+
+    /// Borrow the exact semantic owner, when one was committed.
+    pub const fn owner_ref(&self) -> Option<&ResourceRef> {
+        self.owner_ref.as_ref()
+    }
+
+    /// Borrow the private host-runtime scope commitment.
+    pub const fn runtime_scope(&self) -> Option<ConfigurationDigest> {
+        self.runtime_scope
     }
 
     /// Return the committed resource revision, when one was bound.
@@ -1121,6 +1221,69 @@ mod tests {
     }
 
     #[test]
+    fn runtime_scope_commitment_is_incarnation_and_zone_bound() {
+        let zone_a =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("zone uid");
+        let zone_b =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let guest =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("guest uid");
+        let resource =
+            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").expect("resource uid");
+        let other_resource =
+            ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004")
+                .expect("resource uid");
+        let process_ref = ResourceRef::parse("Process/cloud-hypervisor").expect("process ref");
+        let first =
+            runtime_scope_commitment(&zone_a, Some(&guest), &process_ref, &resource, "cloud-hypervisor", 1);
+
+        assert_eq!(
+            first,
+            runtime_scope_commitment(
+                &zone_a,
+                Some(&guest),
+                &process_ref,
+                &resource,
+                "cloud-hypervisor",
+                1,
+            )
+        );
+        assert_ne!(
+            first,
+            runtime_scope_commitment(
+                &zone_b,
+                Some(&guest),
+                &process_ref,
+                &resource,
+                "cloud-hypervisor",
+                1,
+            )
+        );
+        assert_ne!(
+            first,
+            runtime_scope_commitment(
+                &zone_a,
+                Some(&guest),
+                &process_ref,
+                &resource,
+                "cloud-hypervisor",
+                2,
+            )
+        );
+        assert_ne!(
+            first,
+            runtime_scope_commitment(
+                &zone_a,
+                Some(&guest),
+                &process_ref,
+                &other_resource,
+                "cloud-hypervisor",
+                1,
+            )
+        );
+    }
+
+    #[test]
     fn assignment_binding_requires_nonzero_session_epoch_and_client_commitment() {
         let ticket = fixtures::ticket_builder().build().unwrap();
         let session = d2b_contracts_resource::v3::identity::ReconnectGeneration::new(3).unwrap();
@@ -1172,5 +1335,34 @@ mod tests {
             ticket.validate_process_identity(&ProcessIdentityDigest::from_bytes([2; 32])),
             Err(ProcessConformanceError::TerminalEvidenceMismatch)
         );
+    }
+
+    #[test]
+    fn runtime_identity_binding_is_private_and_validated() {
+        let zone_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("zone uid");
+        let owner_ref = ResourceRef::parse("Guest/workload").expect("owner ref");
+        let process_ref = ResourceRef::parse("Process/cloud-hypervisor").expect("process ref");
+        let process_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("process uid");
+        let scope = runtime_scope_commitment(
+            &zone_uid,
+            Some(&process_uid),
+            &process_ref,
+            &process_uid,
+            "cloud-hypervisor",
+            3,
+        );
+        let ticket = fixtures::ticket_builder()
+            .build()
+            .unwrap()
+            .with_runtime_identity(zone_uid.clone(), Some(owner_ref.clone()), scope)
+            .unwrap();
+
+        assert_eq!(ticket.zone_uid(), Some(&zone_uid));
+        assert_eq!(ticket.owner_ref(), Some(&owner_ref));
+        assert_eq!(ticket.runtime_scope(), Some(scope));
+        assert!(ticket.validate().is_ok());
+        assert_eq!(format!("{ticket:?}"), "LaunchTicket(<redacted>)");
     }
 }

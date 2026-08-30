@@ -1756,10 +1756,17 @@ authority-bearing primitives this work introduces.
    the closed-kind `runtime_allocations` set so a future
    regression that re-introduces any of them fails-closed with
    `wire-unknown-field`.
+   Resource-backed Process requests additionally carry the exact Zone,
+   owner, ResourceRef, resource UID, generation, Provider, and template
+   commitments plus an opaque private runtime-scope digest. The broker
+   recomputes that scope before clone and uses it for the private cgroup
+   and pidfd registry identity; a v3 adoption or stop never falls back to
+   a Guest-name-only lookup.
 
 2. **Broker `SpawnRunner` response: SCM_RIGHTS pidfd handoff.**
    The pidfd is delivered OOB on the same broker socket frame; the
-   JSON body carries only `(pid, start_time_ticks, pidfd_index)`.
+   JSON body carries the validated Resource identity echoes alongside
+   `(pid, start_time_ticks, pidfd_index)`.
    Per the pidfd contract, raw-pid kill/wait is forbidden outside
    the reconciliation path; the daemon validates the pidfd
    against `(pid, start_time_ticks)` before it ever uses raw-pid

@@ -130,6 +130,9 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
         if ticket.selected_provider().as_str() != PROVIDER_NAME {
             return Err(ProcessConformanceError::ProviderMismatch);
         }
+        if ticket.provider_ref().to_canonical_string() != "Provider/system-minijail" {
+            return Err(ProcessConformanceError::ProviderMismatch);
+        }
         if !self.profile.supported_domains().contains(&ticket.domain()) {
             return Err(ProcessConformanceError::DomainNotSupported);
         }

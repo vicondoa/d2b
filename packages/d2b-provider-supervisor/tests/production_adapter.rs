@@ -560,15 +560,20 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let request: BrokerRequestEnvelope =
             d2b_contracts::decode_frame("BrokerRequestEnvelope", &payload[..received.bytes])
                 .unwrap();
-        match request.request {
+        let (provider_identity, template_identity, generation) = match request.request {
             BrokerRequest::SpawnRunner(request) => {
                 assert_eq!(request.vm_id, server_vm);
                 assert_eq!(request.role_id, server_role);
                 assert_eq!(request.role, RunnerRole::ProviderController);
                 assert_eq!(request.inherited_fd_count, 1);
+                (
+                    request.provider_identity,
+                    request.template_identity,
+                    request.generation,
+                )
             }
             _ => panic!("expected SpawnRunner"),
-        }
+        };
 
         let pid = i32::try_from(std::process::id()).unwrap();
         let start_time_ticks = read_self_start_time();
@@ -579,6 +584,11 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             vm_id: server_vm,
             role_id: server_role,
             role: RunnerRole::ProviderController,
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            runtime_scope: None,
             pid: pid.as_raw_nonzero().get(),
             start_time_ticks,
             pidfd_index: 0,
@@ -591,9 +601,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             ),
             user_ref: None,
             guest_execution: None,
-            provider_identity: Some([0x11; 32]),
-            template_identity: Some([0x22; 32]),
-            generation: Some(1),
+            provider_identity,
+            template_identity,
+            generation,
             bundle_content_identity: Some("bundle-content-test".to_owned()),
         });
         let frame = d2b_contracts::encode_frame(&response).unwrap();
@@ -610,6 +620,14 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
+        zone_uid: None,
+        owner_ref: None,
+        runtime_scope: None,
+        typed_identity: false,
+        provider_ref: d2b_contracts_resource::v3::ResourceRef::parse(
+            "Provider/system-minijail",
+        )
+        .unwrap(),
         execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
         domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,

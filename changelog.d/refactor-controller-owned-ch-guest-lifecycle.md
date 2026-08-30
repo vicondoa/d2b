@@ -10,3 +10,7 @@
 - Reused Bazel's pinned nixpkgs input across isolated Nix unit surfaces instead of resolving the Git input during every test.
 - Kept routine flake checks eval-only for package exposure and verified exact Guest static package selection through lightweight evidence.
 - Materialized contract fixtures with inert host-tool packages so routine tests no longer rebuild d2bd and broker services through Nix.
+
+### Security
+
+- Fenced broker-backed Process launch, adoption, cgroup placement, pidfd control, and audit data to the exact resource incarnation and private Zone runtime scope.

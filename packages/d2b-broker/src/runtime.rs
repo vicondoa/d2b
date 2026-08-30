@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -2968,10 +2968,24 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
                 req.resource_ref.as_ref(),
                 req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.runtime_scope,
             );
             let resolver = require_resolver(resolver)?;
-            let intent_id =
-                runner_intent_id_for_open_pidfd(req.vm_id.as_str(), req.role_id.as_str());
+            let intent_id = req
+                .bundle_runner_intent_ref
+                .as_ref()
+                .map(|intent| intent.as_str().to_owned())
+                .unwrap_or_else(|| {
+                    runner_intent_id_for_open_pidfd(req.vm_id.as_str(), req.role_id.as_str())
+                });
+            if req.resource_ref.is_some() && req.bundle_runner_intent_ref.is_none() {
+                return Err(BrokerError::SpawnRunnerIntentMismatch {
+                    field: "bundle_runner_intent_ref",
+                    requested: "missing".to_owned(),
+                    resolved: "required-for-typed-process".to_owned(),
+                });
+            }
             let intent = resolver.find_runner_intent(&intent_id).ok_or_else(|| {
                 BrokerError::BundleIntentMissing {
                     kind: "runner",
@@ -2988,6 +3002,54 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 return Err(BrokerError::LiveHandler(
                     "runner adoption intent mismatch".to_owned(),
                 ));
+            }
+            let typed = typed_process_identity(
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.generation,
+                req.runtime_scope,
+                &intent.role_id,
+                req.guest_execution.as_ref(),
+            )?;
+            validate_typed_process_metadata(
+                typed,
+                req.owner_ref.as_ref(),
+                req.provider_ref.as_ref(),
+                req.provider_identity,
+                req.template_identity,
+                req.guest_execution.as_ref(),
+                intent,
+            )?;
+            if typed {
+                let placement = private_cgroup_placement(
+                    &intent.cgroup_placement,
+                    req.vm_id.as_str(),
+                    req.runtime_scope,
+                    true,
+                )?;
+                if !proc_cgroup_matches(req.pid, &placement.subtree) {
+                    return Err(BrokerError::LiveHandler(
+                        "runner pidfd candidate cgroup mismatch".to_owned(),
+                    ));
+                }
+                let broker_owned = runner_pidfd_registry()
+                    .lock()
+                    .ok()
+                    .is_some_and(|registry| registry.contains_key(&runner_id))
+                    && runner_metadata_registry()
+                        .lock()
+                        .ok()
+                        .is_some_and(|registry| registry.contains_key(&runner_id));
+                let executable = observe_runner_executable(
+                    read_runner_executable(req.pid),
+                    &intent.binary_path,
+                )?;
+                if !executable.is_verified_for_registered(broker_owned, true) {
+                    return Err(BrokerError::LiveHandler(
+                        "runner pidfd candidate executable mismatch".to_owned(),
+                    ));
+                }
             }
             let outcome =
                 backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
@@ -3116,6 +3178,24 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     "runner observation intent mismatch".to_owned(),
                 ));
             }
+            let typed = typed_process_identity(
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.generation,
+                req.runtime_scope,
+                &intent.role_id,
+                req.guest_execution.as_ref(),
+            )?;
+            validate_typed_process_metadata(
+                typed,
+                req.owner_ref.as_ref(),
+                req.provider_ref.as_ref(),
+                req.provider_identity,
+                req.template_identity,
+                req.guest_execution.as_ref(),
+                intent,
+            )?;
             let response = observe_registered_runner(&req, intent)?;
             write_success_op_record!(
                 audit_log,
@@ -3552,22 +3632,53 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
                 req.resource_ref.as_ref(),
                 req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.runtime_scope,
             );
-            if let Some(registration) = runner_metadata_registry()
+            let registration = runner_metadata_registry()
                 .lock()
                 .map_err(|_| {
                     BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
                 })?
                 .get(&runner_id)
-                .cloned()
-                && !registration_matches(
-                    &registration,
-                    req.resource_ref.as_ref(),
-                    req.resource_uid.as_ref(),
-                    req.pid,
-                    req.expected_start_time_ticks,
-                    req.guest_execution.as_ref(),
-                )
+                .cloned();
+            let typed_process = req.resource_ref.is_some()
+                || req.resource_uid.is_some()
+                || req.zone_uid.is_some()
+                || req.runtime_scope.is_some();
+            if !typed_control_identity_complete(
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.generation,
+                req.runtime_scope,
+                req.provider_ref.as_ref(),
+                req.provider_identity,
+                req.template_identity,
+            ) {
+                return Err(BrokerError::NoPidfd { runner_id });
+            }
+            if typed_process && registration.is_none() {
+                return Err(BrokerError::NoPidfd { runner_id });
+            }
+            if let Some(registration) = registration
+                && (registration.vm_id != req.vm_id.as_str()
+                    || registration.role_id != req.role_id.as_str()
+                    || !registration_matches(
+                        &registration,
+                        req.resource_ref.as_ref(),
+                        req.resource_uid.as_ref(),
+                        req.pid,
+                        req.expected_start_time_ticks,
+                        req.zone_uid.as_ref(),
+                        req.generation,
+                        req.runtime_scope,
+                        req.owner_ref.as_ref(),
+                        req.provider_ref.as_ref(),
+                        req.provider_identity,
+                        req.template_identity,
+                        req.guest_execution.as_ref(),
+                    ))
             {
                 return Err(BrokerError::NoPidfd { runner_id });
             }
@@ -3625,7 +3736,23 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
                 req.resource_ref.as_ref(),
                 req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.runtime_scope,
             );
+            if !typed_control_identity_complete(
+                req.resource_ref.as_ref(),
+                req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.generation,
+                req.runtime_scope,
+                req.provider_ref.as_ref(),
+                req.provider_identity,
+                req.template_identity,
+            ) {
+                return Err(BrokerError::NoPidfd {
+                    runner_id: runner_id.clone(),
+                });
+            }
             let removed = runner_pidfd_registry()
                 .lock()
                 .map_err(|_| {
@@ -3638,14 +3765,23 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         .ok()
                         .and_then(|registry| registry.get(&runner_id).cloned())
                         .is_some_and(|registration| {
-                            registration_matches(
-                                &registration,
-                                req.resource_ref.as_ref(),
-                                req.resource_uid.as_ref(),
-                                req.pid,
-                                req.expected_start_time_ticks,
-                                req.guest_execution.as_ref(),
-                            )
+                            registration.vm_id == req.vm_id.as_str()
+                                && registration.role_id == req.role_id.as_str()
+                                && registration_matches(
+                                    &registration,
+                                    req.resource_ref.as_ref(),
+                                    req.resource_uid.as_ref(),
+                                    req.pid,
+                                    req.expected_start_time_ticks,
+                                    req.zone_uid.as_ref(),
+                                    req.generation,
+                                    req.runtime_scope,
+                                    req.owner_ref.as_ref(),
+                                    req.provider_ref.as_ref(),
+                                    req.provider_identity,
+                                    req.template_identity,
+                                    req.guest_execution.as_ref(),
+                                )
                         })
                 });
             if removed {
@@ -3818,6 +3954,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 });
             }
             validate_spawn_runner_request_matches_intent(&req, intent)?;
+            let typed_process = req.resource_ref.is_some();
+            let cgroup_placement = private_cgroup_placement(
+                &intent.cgroup_placement,
+                req.vm_id.as_str(),
+                req.runtime_scope,
+                typed_process,
+            )?;
             // Legacy VM DAG launches carry the trusted bundle profile but no
             // generic Process sandbox DTO. When a typed DTO is present, bind
             // it to that same profile; otherwise the trusted intent remains
@@ -3904,7 +4047,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 namespaces: intent.namespaces.clone(),
                 seccomp_policy_ref: intent.seccomp_policy_ref.clone(),
                 mount_policy,
-                cgroup_placement: intent.cgroup_placement.clone(),
+                cgroup_placement,
                 root_carve_out: intent.root_carve_out,
                 skip_binary_exists_check: false,
                 // Thread through the user-namespace spec from the
@@ -3922,6 +4065,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
                 req.resource_ref.as_ref(),
                 req.resource_uid.as_ref(),
+                req.zone_uid.as_ref(),
+                req.runtime_scope,
             );
             let outcome = match backend.spawn_runner(
                 runner_id.as_str(),
@@ -4021,6 +4166,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
                     role: req.role,
+                    resource_ref: req.resource_ref.clone(),
+                    resource_uid: req.resource_uid.clone(),
+                    zone_uid: req.zone_uid.clone(),
+                    owner_ref: req.owner_ref.clone(),
+                    runtime_scope: req.runtime_scope,
                     execution_ref: req.execution_ref.clone(),
                     execution_domain: req.execution_domain,
                     user_ref: req.user_ref.clone(),
@@ -6745,12 +6895,19 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct RunnerRegistration {
     vm_id: String,
     role_id: String,
     resource_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
     resource_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
+    generation: Option<u64>,
+    runtime_scope: Option<[u8; 32]>,
+    owner_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    provider_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    provider_identity: Option<[u8; 32]>,
+    template_identity: Option<[u8; 32]>,
     role: d2b_contracts_broker::broker_wire::RunnerRole,
     bundle_runner_intent_ref: String,
     pid: i32,
@@ -6758,6 +6915,13 @@ struct RunnerRegistration {
     binary_path: PathBuf,
     cgroup_subtree: String,
     guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+impl std::fmt::Debug for RunnerRegistration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RunnerRegistration(<redacted>)")
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6774,6 +6938,12 @@ fn register_runner_metadata(
     pid: i32,
     start_time_ticks: u64,
 ) -> Result<(), BrokerError> {
+    let cgroup_placement = private_cgroup_placement(
+        &intent.cgroup_placement,
+        request.vm_id.as_str(),
+        request.runtime_scope,
+        request.resource_ref.is_some(),
+    )?;
     let mut registry = runner_metadata_registry()
         .lock()
         .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
@@ -6784,12 +6954,19 @@ fn register_runner_metadata(
             role_id: request.role_id.as_str().to_owned(),
             resource_ref: request.resource_ref.clone(),
             resource_uid: request.resource_uid.clone(),
+            zone_uid: request.zone_uid.clone(),
+            generation: request.generation,
+            runtime_scope: request.runtime_scope,
+            owner_ref: request.owner_ref.clone(),
+            provider_ref: request.provider_ref.clone(),
+            provider_identity: request.provider_identity,
+            template_identity: request.template_identity,
             role: request.role,
             bundle_runner_intent_ref: request.bundle_runner_intent_ref.as_str().to_owned(),
             pid,
             start_time_ticks,
             binary_path: intent.binary_path.clone(),
-            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+            cgroup_subtree: cgroup_placement.subtree,
             guest_execution: request.guest_execution.clone(),
         },
     );
@@ -6809,6 +6986,12 @@ fn register_runner_metadata_from_open(
             resolved: format!("{:?}", intent.role),
         }
     })?;
+    let cgroup_placement = private_cgroup_placement(
+        &intent.cgroup_placement,
+        request.vm_id.as_str(),
+        request.runtime_scope,
+        request.resource_ref.is_some(),
+    )?;
     let mut registry = runner_metadata_registry()
         .lock()
         .map_err(|_| BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned()))?;
@@ -6819,12 +7002,19 @@ fn register_runner_metadata_from_open(
             role_id: request.role_id.as_str().to_owned(),
             resource_ref: request.resource_ref.clone(),
             resource_uid: request.resource_uid.clone(),
+            zone_uid: request.zone_uid.clone(),
+            generation: request.generation,
+            runtime_scope: request.runtime_scope,
+            owner_ref: request.owner_ref.clone(),
+            provider_ref: request.provider_ref.clone(),
+            provider_identity: request.provider_identity,
+            template_identity: request.template_identity,
             role,
             bundle_runner_intent_ref: intent.intent_id.clone(),
             pid: request.pid,
             start_time_ticks: request.expected_start_time_ticks,
             binary_path: intent.binary_path.clone(),
-            cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+            cgroup_subtree: cgroup_placement.subtree,
             guest_execution: request.guest_execution.clone(),
         },
     );
@@ -6837,13 +7027,17 @@ fn runner_registry_key(
     role_id: &str,
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    runtime_scope: Option<[u8; 32]>,
 ) -> String {
-    match (resource_ref, resource_uid) {
-        (Some(resource_ref), Some(resource_uid)) => format!(
-            "{vm_id}:{role_id}:{}:{}",
-            resource_ref.to_canonical_string(),
-            resource_uid.as_str()
-        ),
+    match (resource_ref, resource_uid, zone_uid, runtime_scope) {
+        (Some(_), Some(_), Some(_), Some(runtime_scope)) => {
+            let mut rendered = String::with_capacity(64);
+            for byte in runtime_scope {
+                rendered.push_str(&format!("{byte:02x}"));
+            }
+            format!("scope:{rendered}")
+        }
         _ => format!("{vm_id}:{role_id}"),
     }
 }
@@ -6858,20 +7052,58 @@ fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+#[allow(clippy::too_many_arguments)]
 fn registration_matches(
     registration: &RunnerRegistration,
     resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
     pid: Option<i32>,
     start_time_ticks: Option<u64>,
+    zone_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    generation: Option<u64>,
+    runtime_scope: Option<[u8; 32]>,
+    owner_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    provider_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    provider_identity: Option<[u8; 32]>,
+    template_identity: Option<[u8; 32]>,
     guest_execution: Option<
         &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
     >,
 ) -> bool {
+    let strict = resource_ref.is_some();
+    let owner_matches = if strict {
+        registration.owner_ref.as_ref() == owner_ref
+    } else {
+        owner_ref.is_none_or(|owner| registration.owner_ref.as_ref() == Some(owner))
+    };
+    let provider_ref_matches = if strict {
+        registration.provider_ref.as_ref() == provider_ref
+    } else {
+        provider_ref.is_none_or(|provider| registration.provider_ref.as_ref() == Some(provider))
+    };
+    let provider_identity_matches = if strict {
+        registration.provider_identity == provider_identity
+    } else {
+        provider_identity
+            .is_none_or(|identity| registration.provider_identity == Some(identity))
+    };
+    let template_identity_matches = if strict {
+        registration.template_identity == template_identity
+    } else {
+        template_identity
+            .is_none_or(|identity| registration.template_identity == Some(identity))
+    };
     registration.resource_ref.as_ref() == resource_ref
         && registration.resource_uid.as_ref() == resource_uid
         && pid.is_none_or(|pid| registration.pid == pid)
         && start_time_ticks.is_none_or(|ticks| registration.start_time_ticks == ticks)
+        && registration.zone_uid.as_ref() == zone_uid
+        && generation.is_none_or(|generation| registration.generation == Some(generation))
+        && runtime_scope.is_none_or(|scope| registration.runtime_scope == Some(scope))
+        && owner_matches
+        && provider_ref_matches
+        && provider_identity_matches
+        && template_identity_matches
         && registration.guest_execution.as_ref() == guest_execution
 }
 
@@ -6926,11 +7158,19 @@ fn observe_registered_runner(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<d2b_contracts_broker::broker_wire::ObserveRunnerResponse, BrokerError> {
+    let cgroup_placement = private_cgroup_placement(
+        &intent.cgroup_placement,
+        request.vm_id.as_str(),
+        request.runtime_scope,
+        request.resource_ref.is_some(),
+    )?;
     let runner_id = runner_registry_key(
         request.vm_id.as_str(),
         request.role_id.as_str(),
         request.resource_ref.as_ref(),
         request.resource_uid.as_ref(),
+        request.zone_uid.as_ref(),
+        request.runtime_scope,
     );
     let registered = (|| -> Result<
         Option<d2b_contracts_broker::broker_wire::ObserveRunnerResponse>,
@@ -6965,6 +7205,13 @@ fn observe_registered_runner(
                 request.resource_uid.as_ref(),
                 None,
                 None,
+                request.zone_uid.as_ref(),
+                request.generation,
+                request.runtime_scope,
+                request.owner_ref.as_ref(),
+                request.provider_ref.as_ref(),
+                request.provider_identity,
+                request.template_identity,
                 request.guest_execution.as_ref(),
             )
             || observed_registration.bundle_runner_intent_ref
@@ -6972,7 +7219,7 @@ fn observe_registered_runner(
             || observed_registration.pid <= 0
             || observed_registration.start_time_ticks == 0
             || observed_registration.binary_path != intent.binary_path
-            || observed_registration.cgroup_subtree != intent.cgroup_placement.subtree
+            || observed_registration.cgroup_subtree != cgroup_placement.subtree
         {
             Ok(None)
         } else {
@@ -7060,13 +7307,17 @@ fn observe_registered_runner(
             ))
         }
     })()?;
-    registered.map_or_else(|| discover_runner_candidate(request, intent), Ok)
+    registered.map_or_else(
+        || discover_runner_candidate(request, intent, &cgroup_placement.subtree),
+        Ok,
+    )
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn discover_runner_candidate(
     request: &d2b_contracts_broker::broker_wire::ObserveRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+    cgroup_subtree: &str,
 ) -> Result<d2b_contracts_broker::broker_wire::ObserveRunnerResponse, BrokerError> {
     let mut candidates = Vec::new();
     let entries =
@@ -7077,8 +7328,7 @@ fn discover_runner_candidate(
         let Some(pid) = name.to_str().and_then(|value| value.parse::<i32>().ok()) else {
             continue;
         };
-        let cgroup_verified =
-            pid > 0 && proc_cgroup_matches(pid, &intent.cgroup_placement.subtree);
+        let cgroup_verified = pid > 0 && proc_cgroup_matches(pid, cgroup_subtree);
         if !cgroup_verified {
             continue;
         }
@@ -7444,8 +7694,9 @@ fn remove_runner_registries(runner_id: &str) -> bool {
 }
 
 /// Refuse to start a SECOND live runner for an already-registered
-/// `runner_id` (`<vm>:<role>`). Checked BEFORE the child is spawned so a
-/// duplicate is never created: rejecting AFTER the spawn would leak an
+/// `runner_id` (legacy `<vm>:<role>` or typed opaque runtime scope).
+/// Checked BEFORE the child is spawned so a duplicate is never created:
+/// rejecting AFTER the spawn would leak an
 /// orphan child (a non-blocking targeted reap is a no-op for a live
 /// process), and reaping that orphan would also pollute the existing
 /// same-`runner_id` registry entry + push a spurious `ChildReaped` for the
@@ -10176,11 +10427,112 @@ fn validate_sandbox_launch_plan(
             resolved: "bundle-profile".to_owned(),
         });
     }
-    if plan.seccomp_class.as_str().is_empty() || intent.seccomp_policy_ref.is_none() {
+    if plan.seccomp_class.as_str() != "strict" || intent.seccomp_policy_ref.is_none() {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.seccomp_class",
             requested: plan.seccomp_class.as_str().to_owned(),
-            resolved: "broker-profile".to_owned(),
+            resolved: "strict".to_owned(),
+        });
+    }
+    let expected_namespaces = [
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::User,
+            expected_namespaces.user,
+        ),
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::Pid,
+            expected_namespaces.pid,
+        ),
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::Mount,
+            expected_namespaces.mount,
+        ),
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::Ipc,
+            expected_namespaces.ipc,
+        ),
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::Uts,
+            expected_namespaces.uts,
+        ),
+        (
+            d2b_contracts_resource::v3::process::NamespaceClass::Network,
+            expected_namespaces.net,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(class, enabled)| enabled.then_some(class))
+    .collect::<BTreeSet<_>>();
+    let actual_namespaces = plan
+        .namespace_classes
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if actual_namespaces != expected_namespaces
+        || actual_namespaces.len() != plan.namespace_classes.len()
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.namespace_classes",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-profile".to_owned(),
+        });
+    }
+    let expected_capabilities = intent
+        .capabilities
+        .iter()
+        .filter_map(|capability| match capability.as_str() {
+            "CAP_NET_BIND_SERVICE" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind,
+            ),
+            "CAP_NET_RAW" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::NetworkRaw,
+            ),
+            "CAP_NET_ADMIN" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::NetworkAdmin,
+            ),
+            "CAP_SYS_TIME" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::SysTime,
+            ),
+            "CAP_SYS_PTRACE" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::SysPtrace,
+            ),
+            "CAP_SYS_ADMIN" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::SysAdmin,
+            ),
+            "CAP_DAC_OVERRIDE" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::DacOverride,
+            ),
+            "CAP_FOWNER" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::Fowner,
+            ),
+            "CAP_CHOWN" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::Chown,
+            ),
+            "CAP_SETUID" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::Setuid,
+            ),
+            "CAP_SETGID" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::Setgid,
+            ),
+            "CAP_AUDIT_WRITE" => Some(
+                d2b_contracts_resource::v3::process::CapabilityClass::AuditWrite,
+            ),
+            "CAP_KILL" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Kill),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let actual_capabilities = plan
+        .capability_classes
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if actual_capabilities != expected_capabilities
+        || actual_capabilities.len() != plan.capability_classes.len()
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "sandbox_plan.capability_classes",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-profile".to_owned(),
         });
     }
     Ok(())
@@ -10207,6 +10559,316 @@ fn capability_matches(
         d2b_contracts_resource::v3::process::CapabilityClass::Kill => "CAP_KILL",
     };
     capability == expected
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn typed_process_identity(
+    resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    generation: Option<u64>,
+    runtime_scope: Option<[u8; 32]>,
+    intent_role_id: &str,
+    guest_execution: Option<
+        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
+    >,
+) -> Result<bool, BrokerError> {
+    let typed = resource_ref.is_some()
+        || resource_uid.is_some()
+        || zone_uid.is_some()
+        || runtime_scope.is_some();
+    if !typed {
+        return Ok(false);
+    }
+    let (Some(resource_ref), Some(resource_uid), Some(zone_uid), Some(generation), Some(scope)) = (
+        resource_ref,
+        resource_uid,
+        zone_uid,
+        generation,
+        runtime_scope,
+    ) else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "process_identity",
+            requested: "incomplete".to_owned(),
+            resolved: "resource/zone/uid/generation/scope-required".to_owned(),
+        });
+    };
+    if generation == 0 || scope == [0; 32] {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "process_identity",
+            requested: "invalid".to_owned(),
+            resolved: "nonzero-resource/zone/uid/generation/scope".to_owned(),
+        });
+    }
+    if !matches!(
+        resource_ref.resource_type().as_str(),
+        "Process" | "EphemeralProcess"
+    ) {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "resource_ref",
+            requested: resource_ref.to_canonical_string(),
+            resolved: "Process-or-EphemeralProcess".to_owned(),
+        });
+    }
+    let expected = private_runtime_scope(
+        zone_uid,
+        guest_execution.map(|binding| &binding.target_uid),
+        resource_ref,
+        resource_uid,
+        intent_role_id,
+        generation,
+    );
+    if scope != expected {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "runtime_scope",
+            requested: "mismatch".to_owned(),
+            resolved: "zone-resource-generation-role-commitment".to_owned(),
+        });
+    }
+    Ok(true)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn typed_control_identity_complete(
+    resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    zone_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    generation: Option<u64>,
+    runtime_scope: Option<[u8; 32]>,
+    provider_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    provider_identity: Option<[u8; 32]>,
+    template_identity: Option<[u8; 32]>,
+) -> bool {
+    let typed = resource_ref.is_some()
+        || resource_uid.is_some()
+        || zone_uid.is_some()
+        || generation.is_some()
+        || runtime_scope.is_some()
+        || provider_ref.is_some()
+        || provider_identity.is_some()
+        || template_identity.is_some();
+    if !typed {
+        return true;
+    }
+    resource_ref.is_some()
+        && resource_uid.is_some()
+        && zone_uid.is_some()
+        && generation.is_some_and(|generation| generation > 0)
+        && runtime_scope.is_some_and(|scope| scope != [0; 32])
+        && provider_ref.is_some()
+        && provider_identity.is_some_and(|identity| identity != [0; 32])
+        && template_identity.is_some_and(|identity| identity != [0; 32])
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn private_runtime_scope(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    guest_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    resource_ref: &d2b_contracts_resource::v3::ResourceRef,
+    resource_uid: &d2b_contracts_resource::v3::ResourceUid,
+    role_id: &str,
+    generation: u64,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-process-runtime-scope-v1");
+    let resource_ref = resource_ref.to_canonical_string();
+    for value in [
+        zone_uid.as_str(),
+        guest_uid.map(|uid| uid.as_str()).unwrap_or(""),
+        resource_ref.as_str(),
+        resource_uid.as_str(),
+        role_id,
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    digest.update(generation.to_le_bytes());
+    digest.finalize().into()
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_typed_process_metadata(
+    typed: bool,
+    owner_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    provider_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    provider_identity: Option<[u8; 32]>,
+    template_identity: Option<[u8; 32]>,
+    guest_execution: Option<
+        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
+    >,
+    intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), BrokerError> {
+    if !typed {
+        return Ok(());
+    }
+    let execution_is_guest = intent.execution_ref.starts_with("Guest/");
+    if execution_is_guest != guest_execution.is_some()
+        || guest_execution.is_some_and(|binding| !binding.is_valid())
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "guest_execution",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-execution-target".to_owned(),
+        });
+    }
+    let Some(provider_identity) = provider_identity else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "provider_identity",
+            requested: "missing".to_owned(),
+            resolved: "signed-process-provider".to_owned(),
+        });
+    };
+    if provider_identity == [0; 32] {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "provider_identity",
+            requested: "zero".to_owned(),
+            resolved: "signed-process-provider".to_owned(),
+        });
+    }
+    let Some(provider_ref) = provider_ref else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "provider_ref",
+            requested: "missing".to_owned(),
+            resolved: "signed-process-provider".to_owned(),
+        });
+    };
+    if provider_ref.resource_type().as_str() != "Provider"
+        || !matches!(
+            provider_ref.name().as_str(),
+            "system-minijail" | "system-systemd"
+        )
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "provider_ref",
+            requested: "invalid".to_owned(),
+            resolved: "fixed-process-provider".to_owned(),
+        });
+    }
+    let mut provider_digest = Sha256::new();
+    provider_digest.update(b"d2b-process-provider-v1");
+    provider_digest.update(provider_ref.name().as_str().as_bytes());
+    let expected_provider_identity: [u8; 32] = provider_digest.finalize().into();
+    if provider_identity != expected_provider_identity {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "provider_identity",
+            requested: "mismatch".to_owned(),
+            resolved: "signed-process-provider".to_owned(),
+        });
+    }
+    let expected_template = if intent.role == d2b_core::processes::ProcessRole::ProviderController
+    {
+        intent.profile_id.as_str()
+    } else {
+        intent.role_id.as_str()
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-process-template-v1");
+    digest.update(expected_template.as_bytes());
+    let expected_template: [u8; 32] = digest.finalize().into();
+    if template_identity != Some(expected_template) {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "template_identity",
+            requested: "mismatch".to_owned(),
+            resolved: "bundle-process-template".to_owned(),
+        });
+    }
+    if owner_ref.is_some_and(|owner| {
+        !matches!(
+            owner.resource_type().as_str(),
+            "Guest" | "Host" | "Provider"
+        )
+    }) {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "owner_ref",
+            requested: "invalid".to_owned(),
+            resolved: "Guest-or-Host-or-Provider".to_owned(),
+        });
+    }
+    if intent.role == d2b_core::processes::ProcessRole::ProviderController {
+        let expected_owner = intent
+            .owner_ref
+            .as_deref()
+            .map(d2b_contracts_resource::v3::ResourceRef::parse)
+            .transpose()
+            .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+                field: "owner_ref",
+                requested: "invalid".to_owned(),
+                resolved: "bundle-owner".to_owned(),
+            })?;
+        if owner_ref != expected_owner.as_ref() {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "owner_ref",
+                requested: "mismatch".to_owned(),
+                resolved: "bundle-owner".to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runtime_scope_segment(scope: [u8; 32]) -> String {
+    let mut rendered = String::with_capacity(64);
+    for byte in scope {
+        rendered.push_str(&format!("{byte:02x}"));
+    }
+    format!("process-{rendered}")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn private_cgroup_placement(
+    placement: &d2b_core::minijail_profile::CgroupPlacement,
+    vm_name: &str,
+    runtime_scope: Option<[u8; 32]>,
+    typed: bool,
+) -> Result<d2b_core::minijail_profile::CgroupPlacement, BrokerError> {
+    if !typed {
+        return Ok(placement.clone());
+    }
+    let Some(runtime_scope) = runtime_scope else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "cgroup_commitment",
+            requested: "missing".to_owned(),
+            resolved: "runtime-scope-required".to_owned(),
+        });
+    };
+    let components = Path::new(&placement.subtree)
+        .components()
+        .collect::<Vec<_>>();
+    if components.len() < 3
+        || !matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
+        || !matches!(components[1], std::path::Component::Normal(value) if value == vm_name)
+        || components
+            .iter()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "cgroup_commitment",
+            requested: placement.subtree.clone(),
+            resolved: "d2b.slice/vm/role".to_owned(),
+        });
+    }
+    let role_path = components[2..]
+        .iter()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if role_path.is_empty() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "cgroup_commitment",
+            requested: placement.subtree.clone(),
+            resolved: "d2b.slice/vm/role".to_owned(),
+        });
+    }
+    let mut private = placement.clone();
+    private.subtree = format!(
+        "d2b.slice/{}/{role_path}",
+        runtime_scope_segment(runtime_scope)
+    );
+    Ok(private)
 }
 
 fn validate_spawn_runner_request_matches_intent(
@@ -10296,63 +10958,33 @@ fn validate_spawn_runner_request_matches_intent(
             resolved: expected_role.as_str().to_owned(),
         });
     }
-    if req.resource_ref.is_some() {
-        let provider_identity_matches = ["system-minijail", "system-systemd"]
-            .into_iter()
-            .map(|provider| {
-                let mut digest = Sha256::new();
-                digest.update(b"d2b-process-provider-v1");
-                digest.update(provider.as_bytes());
-                let digest: [u8; 32] = digest.finalize().into();
-                digest
-            })
-            .any(|digest| req.provider_identity == Some(digest));
-        if !provider_identity_matches {
+    let typed = typed_process_identity(
+        req.resource_ref.as_ref(),
+        req.resource_uid.as_ref(),
+        req.zone_uid.as_ref(),
+        req.generation,
+        req.runtime_scope,
+        &intent.role_id,
+        req.guest_execution.as_ref(),
+    )?;
+    validate_typed_process_metadata(
+        typed,
+        req.owner_ref.as_ref(),
+        req.provider_ref.as_ref(),
+        req.provider_identity,
+        req.template_identity,
+        req.guest_execution.as_ref(),
+        intent,
+    )?;
+    if typed {
+        if !req.runtime_allocations.is_empty()
+            || req.workload_identity.is_some()
+            || req.network_tap_context.is_some()
+        {
             return Err(BrokerError::SpawnRunnerIntentMismatch {
-                field: "provider_identity",
-                requested: "mismatch".to_owned(),
-                resolved: "signed-process-provider".to_owned(),
-            });
-        }
-        let template_matches = [
-            Some(intent.role_id.as_str()),
-            Some(intent.profile_id.as_str()),
-            match intent.role {
-                d2b_core::processes::ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
-                d2b_core::processes::ProcessRole::Swtpm => Some("swtpm"),
-                d2b_core::processes::ProcessRole::Virtiofsd => Some("virtiofsd"),
-                d2b_core::processes::ProcessRole::Video => Some("video"),
-                d2b_core::processes::ProcessRole::Gpu => Some("gpu"),
-                d2b_core::processes::ProcessRole::GpuRenderNode => Some("gpu-render-node"),
-                d2b_core::processes::ProcessRole::Audio => Some("audio"),
-                d2b_core::processes::ProcessRole::CloudHypervisorRunner => {
-                    Some("cloud-hypervisor")
-                }
-                d2b_core::processes::ProcessRole::QemuMediaRunner => Some("qemu-media"),
-                d2b_core::processes::ProcessRole::ActivationNixosRunner => {
-                    Some("activation-nixos-runner")
-                }
-                d2b_core::processes::ProcessRole::VsockRelay => Some("vsock-relay"),
-                d2b_core::processes::ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
-                d2b_core::processes::ProcessRole::Usbip => Some("usbip"),
-                d2b_core::processes::ProcessRole::WaylandProxy => Some("wayland-proxy"),
-                _ => None,
-            },
-        ]
-        .into_iter()
-        .flatten()
-        .any(|template| {
-            let mut digest = Sha256::new();
-            digest.update(b"d2b-process-template-v1");
-            digest.update(template.as_bytes());
-            let digest: [u8; 32] = digest.finalize().into();
-            req.template_identity == Some(digest)
-        });
-        if !template_matches {
-            return Err(BrokerError::SpawnRunnerIntentMismatch {
-                field: "template_identity",
-                requested: "mismatch".to_owned(),
-                resolved: "signed-process-template".to_owned(),
+                field: "runtime_allocations",
+                requested: "caller-supplied-runtime-state".to_owned(),
+                resolved: "bundle-authoritative-runtime".to_owned(),
             });
         }
     }
@@ -13094,6 +13726,13 @@ mod tests {
             role_id: "guest-process".to_owned(),
             resource_ref: None,
             resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            provider_ref: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            runtime_scope: None,
             role: d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor,
             bundle_runner_intent_ref: "runner:guest-vm:guest-process".to_owned(),
             pid: 1,
@@ -14032,6 +14671,222 @@ mod tests {
         assert_eq!(observed, RunnerExecutableObservation::PermissionDenied);
         assert!(!observed.is_verified_for_discovery());
         assert!(observed.is_verified_for_registered(true, true));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn typed_process_cgroup_scope_is_private_and_collision_safe() {
+        let placement = d2b_core::minijail_profile::CgroupPlacement {
+            subtree: "d2b.slice/corp-vm/cloud-hypervisor".to_owned(),
+            controllers: vec!["cpu".to_owned()],
+            delegated: false,
+        };
+        let first = private_cgroup_placement(&placement, "corp-vm", Some([1; 32]), true)
+            .expect("private cgroup placement");
+        let second = private_cgroup_placement(&placement, "corp-vm", Some([2; 32]), true)
+            .expect("private cgroup placement");
+        assert_ne!(first.subtree, second.subtree);
+        assert!(!first.subtree.contains("corp-vm"));
+        assert!(first.subtree.starts_with("d2b.slice/process-"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn typed_runner_registry_keys_use_opaque_runtime_scope() {
+        let resource_ref =
+            d2b_contracts_resource::v3::ResourceRef::parse("Process/worker").expect("resource ref");
+        let uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("resource uid");
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("zone uid");
+        let first = runner_registry_key(
+            "corp-vm",
+            "worker",
+            Some(&resource_ref),
+            Some(&uid),
+            Some(&zone_uid),
+            Some([1; 32]),
+        );
+        let second = runner_registry_key(
+            "corp-vm",
+            "worker",
+            Some(&resource_ref),
+            Some(&uid),
+            Some(&zone_uid),
+            Some([2; 32]),
+        );
+        assert_ne!(first, second);
+        assert!(first.starts_with("scope:"));
+        assert!(!first.contains("corp-vm"));
+        assert!(!first.contains("Process/worker"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn typed_process_metadata_rejects_substituted_provider_and_template() {
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_role_id("cloud-hypervisor")
+            .with_role(d2b_core::processes::ProcessRole::CloudHypervisorRunner)
+            .with_execution_ref("Host/host-system")
+            .build();
+        let provider_ref =
+            d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-minijail")
+                .expect("provider ref");
+        let mut provider_digest = Sha256::new();
+        provider_digest.update(b"d2b-process-provider-v1");
+        provider_digest.update(b"system-minijail");
+        let provider_identity: [u8; 32] = provider_digest.finalize().into();
+        let mut template_digest = Sha256::new();
+        template_digest.update(b"d2b-process-template-v1");
+        template_digest.update(b"cloud-hypervisor");
+        let template_identity: [u8; 32] = template_digest.finalize().into();
+
+        assert!(
+            validate_typed_process_metadata(
+                true,
+                None,
+                Some(&provider_ref),
+                Some(provider_identity),
+                Some(template_identity),
+                None,
+                &intent,
+            )
+            .is_ok()
+        );
+        assert!(validate_typed_process_metadata(
+            true,
+            None,
+            Some(&provider_ref),
+            Some([9; 32]),
+            Some(template_identity),
+            None,
+            &intent,
+        )
+        .is_err());
+        assert!(validate_typed_process_metadata(
+            true,
+            None,
+            Some(&provider_ref),
+            Some(provider_identity),
+            Some([9; 32]),
+            None,
+            &intent,
+        )
+        .is_err());
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn typed_spawn_allowlist_rejects_identity_and_runtime_substitutions() {
+        use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+        use d2b_contracts_broker::broker_wire::{
+            RunnerAllocation, RunnerAllocationKind, SpawnRunnerRequest,
+        };
+        use d2b_contracts_resource::v3::{
+            ResourceRef, execution_policy::ExecutionDomain,
+        };
+
+        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("runner:corp-vm:cloud-hypervisor")
+            .with_vm_name("corp-vm")
+            .with_role_id("cloud-hypervisor")
+            .with_role(d2b_core::processes::ProcessRole::CloudHypervisorRunner)
+            .with_execution_ref("Host/host-system")
+            .with_cgroup_placement(d2b_core::minijail_profile::CgroupPlacement {
+                subtree: "d2b.slice/corp-vm/cloud-hypervisor".to_owned(),
+                controllers: vec!["cpu".to_owned()],
+                delegated: false,
+            })
+            .build();
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("zone uid");
+        let resource_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("resource uid");
+        let resource_ref =
+            d2b_contracts_resource::v3::ResourceRef::parse("Process/cloud-hypervisor")
+                .expect("resource ref");
+        let runtime_scope = private_runtime_scope(
+            &zone_uid,
+            None,
+            &resource_ref,
+            &resource_uid,
+            &intent.role_id,
+            1,
+        );
+        let mut provider_digest = Sha256::new();
+        provider_digest.update(b"d2b-process-provider-v1");
+        provider_digest.update(b"system-minijail");
+        let provider_identity: [u8; 32] = provider_digest.finalize().into();
+        let mut template_digest = Sha256::new();
+        template_digest.update(b"d2b-process-template-v1");
+        template_digest.update(b"cloud-hypervisor");
+        let template_identity: [u8; 32] = template_digest.finalize().into();
+        let request = || SpawnRunnerRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("ch-runner"),
+            resource_ref: Some(resource_ref.clone()),
+            resource_uid: Some(resource_uid.clone()),
+            zone_uid: Some(zone_uid.clone()),
+            owner_ref: None,
+            provider_ref: Some(
+                d2b_contracts_resource::v3::ResourceRef::parse(
+                    "Provider/system-minijail",
+                )
+                .expect("provider ref"),
+            ),
+            bundle_content_identity: Some("sha256:bundle".to_owned()),
+            provider_identity: Some(provider_identity),
+            template_identity: Some(template_identity),
+            generation: Some(1),
+            runtime_scope: Some(runtime_scope),
+            activation_input: None,
+            sandbox_plan: None,
+            role: RunnerRole::CloudHypervisor,
+            bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
+            execution_ref: Some(ResourceRef::parse("Host/host-system").expect("execution ref")),
+            execution_domain: Some(ExecutionDomain::System),
+            user_ref: None,
+            guest_execution: None,
+            runtime_allocations: Vec::new(),
+            tracing_span_id: None,
+            workload_identity: None,
+            inherited_fd_count: 0,
+            network_tap_context: None,
+        };
+
+        let valid = request();
+        assert!(validate_spawn_runner_request_matches_intent(&valid, &intent).is_ok());
+
+        let mut mutations = Vec::new();
+        let mut provider = valid.clone();
+        provider.provider_identity = Some([9; 32]);
+        mutations.push(provider);
+        let mut template = valid.clone();
+        template.template_identity = Some([9; 32]);
+        mutations.push(template);
+        let mut scope = valid.clone();
+        scope.runtime_scope = Some([9; 32]);
+        mutations.push(scope);
+        let mut generation = valid.clone();
+        generation.generation = Some(2);
+        mutations.push(generation);
+        let mut allocations = valid;
+        allocations.runtime_allocations = vec![RunnerAllocation {
+            kind: RunnerAllocationKind::VsockCid,
+            opaque_ref: "cid:attacker".to_owned(),
+        }];
+        mutations.push(allocations);
+
+        for mutation in mutations {
+            assert!(
+                validate_spawn_runner_request_matches_intent(&mutation, &intent).is_err(),
+                "mutated SpawnRunner request must fail before clone"
+            );
+        }
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -15171,10 +16026,18 @@ mod tests {
             BrokerRequest::OpenPidfd(d2b_contracts_broker::broker_wire::OpenPidfdRequest {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
+                bundle_runner_intent_ref: None,
                 pid: 4242,
                 expected_start_time_ticks: 123456,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
                 guest_execution: None,
                 tracing_span_id: Some(TracingSpanId::new("span-pidfd")),
             }),
@@ -15205,6 +16068,13 @@ mod tests {
                 expected_start_time_ticks: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
                 guest_execution: None,
                 tracing_span_id: Some(TracingSpanId::new("span-signal")),
             }),
@@ -15233,10 +16103,14 @@ mod tests {
                 guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
@@ -15719,10 +16593,14 @@ mod tests {
                 guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
@@ -16429,10 +17307,14 @@ mod tests {
                 guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
@@ -16572,10 +17454,14 @@ mod tests {
                 guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
@@ -16659,6 +17545,13 @@ mod tests {
                 expected_start_time_ticks: None,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
                 guest_execution: None,
                 tracing_span_id: None,
             });
@@ -18630,6 +19523,13 @@ mod tests {
                 ),
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
                 guest_execution: None,
                 tracing_span_id: None,
             }
@@ -18641,6 +19541,13 @@ mod tests {
                 role_id: "ch-runner".to_owned(),
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                generation: None,
+                runtime_scope: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
                 role: d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor,
                 bundle_runner_intent_ref: "runner:reap-vm:role:cloud-hypervisor".to_owned(),
                 pid,

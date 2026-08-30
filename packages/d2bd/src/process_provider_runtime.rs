@@ -30,6 +30,7 @@ use d2b_process_conformance::{
     LaunchTicket, GuestExecutionBinding, OperationBinding, ProcessConformanceError,
     ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessProvider, ProcessStatusReport,
     ReadinessExpectation, SandboxCompiler, StopClass, execution_commitment,
+    runtime_scope_commitment,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
@@ -118,22 +119,44 @@ struct ManagedProcess {
     identity: ProcessIdentityDigest,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ManagedResource {
+    zone: ZoneId,
+    zone_uid: Option<ResourceUid>,
+    resource_ref: ResourceRef,
     provider: ManagedProvider,
+    provider_ref: ResourceRef,
+    owner_ref: Option<ResourceRef>,
+    template: BoundedToken,
     identity: ProcessIdentityDigest,
     uid: ResourceUid,
     generation: ResourceGeneration,
+    resource_revision: ZoneRevision,
     controller_generation: ControllerGeneration,
     execution_ref: ResourceRef,
+    runtime_scope: Option<ConfigurationDigest>,
 }
+
+impl core::fmt::Debug for ManagedResource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ManagedResource(<redacted>)")
+    }
+}
+
+type ManagedResourceKey = (ZoneId, Option<ResourceUid>, ResourceRef);
 
 fn resource_identity_matches(
     managed: &ManagedResource,
     context: &ProcessResourceContext<'_>,
 ) -> bool {
-    managed.uid == *context.resource_uid
+    managed.zone == context.zone
+        && managed.zone_uid.as_ref() == context.zone_uid.as_ref()
+        && managed.resource_ref == *context.resource_ref
+        && managed.provider_ref == *context.provider_ref
+        && managed.owner_ref == context.owner_ref
+        && managed.uid == *context.resource_uid
         && managed.generation == context.resource_generation
+        && managed.resource_revision == context.resource_revision
         && managed.controller_generation == context.controller_generation
 }
 
@@ -255,6 +278,7 @@ const MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS: usize = 256;
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ControllerBootstrapContext {
     zone: ZoneId,
+    zone_uid: Option<ResourceUid>,
     process_ref: ResourceRef,
     process_uid: ResourceUid,
     generation: ResourceGeneration,
@@ -294,6 +318,7 @@ impl ControllerBootstrapContext {
             .ok_or_else(|| "provider-controller-provider-identity-missing".to_owned())?;
         Ok(Self {
             zone: context.zone.clone(),
+            zone_uid: context.zone_uid.clone(),
             process_ref: context.resource_ref.clone(),
             process_uid: context.resource_uid.clone(),
             generation: context.resource_generation,
@@ -444,7 +469,7 @@ pub struct ProductionProcessProviders {
     mode: DaemonMode,
     fixed_effect: FixedEffectAdapter,
     managed: Mutex<BTreeMap<(String, String), ManagedProcess>>,
-    managed_resources: Mutex<BTreeMap<ResourceRef, ManagedResource>>,
+    managed_resources: Mutex<BTreeMap<ManagedResourceKey, ManagedResource>>,
     controller_bootstrap: Mutex<BTreeMap<(ZoneId, ResourceRef), ControllerBootstrapMarker>>,
 }
 
@@ -756,13 +781,20 @@ impl ProductionProcessProviders {
             }
         };
         self.remember_resource(
+            context.zone.clone(),
+            context.zone_uid.clone(),
             context.resource_ref,
             context.resource_uid,
             context.resource_generation,
+            context.resource_revision,
             context.controller_generation,
             provider,
+            context.provider_ref.clone(),
+            context.owner_ref.clone(),
+            ticket.template().clone(),
             report.identity,
             spec.execution().execution_ref(),
+            ticket.runtime_scope(),
         )?;
         if let Some(daemon_endpoint) = daemon_endpoint {
             let controller_context = match ControllerBootstrapContext::from_resource_context(
@@ -857,13 +889,20 @@ impl ProductionProcessProviders {
             }
         };
         self.remember_resource(
+            context.zone.clone(),
+            context.zone_uid.clone(),
             context.resource_ref,
             context.resource_uid,
             context.resource_generation,
+            context.resource_revision,
             context.controller_generation,
             provider,
+            context.provider_ref.clone(),
+            context.owner_ref.clone(),
+            ticket.template().clone(),
             report.identity,
             spec.execution().execution_ref(),
+            ticket.runtime_scope(),
         )?;
         Ok(ProviderLaunch {
             identity: report.identity,
@@ -904,13 +943,20 @@ impl ProductionProcessProviders {
             }
         };
         self.remember_resource(
+            resource.zone().clone(),
+            None,
             resource.process_ref(),
             resource.uid(),
             resource.resource_generation(),
+            resource.resource_revision(),
             resource.controller_generation(),
             provider,
+            resource.process_provider_ref().clone(),
+            Some(resource.provider_ref().clone()),
+            ticket.template().clone(),
             report.identity,
             resource.target(),
+            ticket.runtime_scope(),
         )?;
         Ok(ProviderLaunch {
             identity: report.identity,
@@ -947,22 +993,29 @@ impl ProductionProcessProviders {
             AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
             AdoptionOutcome::Adopted(report) => {
                 self.remember_resource(
+                    resource.zone().clone(),
+                    None,
                     resource.process_ref(),
                     resource.uid(),
                     resource.resource_generation(),
+                    resource.resource_revision(),
                     resource.controller_generation(),
                     provider,
+                    resource.process_provider_ref().clone(),
+                    Some(resource.provider_ref().clone()),
+                    ticket.template().clone(),
                     report.identity,
                     resource.target(),
+                    ticket.runtime_scope(),
                 )?;
                 Ok(ProviderAdoption::Adopted(report))
             }
             AdoptionOutcome::Stale { candidate } => {
-                self.forget_resource(resource.process_ref());
+                self.forget_resource_in_zone(resource.zone(), None, resource.process_ref());
                 Ok(ProviderAdoption::Stale { candidate })
             }
             AdoptionOutcome::Quarantined(report) => {
-                self.forget_resource(resource.process_ref());
+                self.forget_resource_in_zone(resource.zone(), None, resource.process_ref());
                 Ok(ProviderAdoption::Quarantined(report))
             }
         }
@@ -1127,7 +1180,11 @@ impl ProductionProcessProviders {
             .managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
-            .get(context.resource_ref)
+            .get(&(
+                context.zone.clone(),
+                context.zone_uid.clone(),
+                context.resource_ref.clone(),
+            ))
             .cloned()
         else {
             self.forget_controller_bootstrap_for_resource_context(&context);
@@ -1160,11 +1217,11 @@ impl ProductionProcessProviders {
         };
         match result {
             Ok(()) => {
-                self.forget_resource(context.resource_ref);
+                self.forget_resource_for_context(&context, &managed.execution_ref);
                 Ok(())
             }
             Err(error) if error == "pidfd-unavailable" || error == "process-vanished" => {
-                self.forget_resource(context.resource_ref);
+                self.forget_resource_for_context(&context, &managed.execution_ref);
                 Ok(())
             }
             Err(error) => Err(error),
@@ -1175,7 +1232,26 @@ impl ProductionProcessProviders {
     pub fn has_active_resource(&self, resource_ref: &ResourceRef) -> bool {
         self.managed_resources
             .lock()
-            .map(|managed| managed.contains_key(resource_ref))
+            .map(|managed| managed.keys().any(|(_, _, key)| key == resource_ref))
+            .unwrap_or(false)
+    }
+
+    /// Return whether a specific Zone retains a verified resource identity.
+    pub fn has_active_resource_in_zone(
+        &self,
+        zone: &ZoneId,
+        zone_uid: Option<&ResourceUid>,
+        resource_ref: &ResourceRef,
+    ) -> bool {
+        self.managed_resources
+            .lock()
+            .map(|managed| {
+                managed.contains_key(&(
+                    zone.clone(),
+                    zone_uid.cloned(),
+                    resource_ref.clone(),
+                ))
+            })
             .unwrap_or(false)
     }
 
@@ -1206,6 +1282,7 @@ impl ProductionProcessProviders {
             && markers.get(&key).is_some_and(|marker| {
                 let marker_context = marker.context();
                 marker_context.zone == context.zone
+                    && marker_context.zone_uid.as_ref() == context.zone_uid.as_ref()
                     && marker_context.process_ref == *context.resource_ref
                     && marker_context.process_uid == *context.resource_uid
                     && marker_context.generation == context.resource_generation
@@ -1241,6 +1318,7 @@ impl ProductionProcessProviders {
             && markers.get(&key).is_some_and(|marker| {
                 let marker_context = marker.context();
                 marker_context.process_ref == *context.resource_ref
+                    && marker_context.zone_uid.as_ref() == context.zone_uid.as_ref()
                     && marker_context.process_uid == *context.resource_uid
                     && marker_context.generation == context.resource_generation
                     && marker_context.process_provider_ref == *context.provider_ref
@@ -1273,6 +1351,12 @@ impl ProductionProcessProviders {
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?;
         if markers.len() >= MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS && !markers.contains_key(&key) {
             return Err("provider-controller-bootstrap-capacity".to_owned());
+        }
+        if markers
+            .get(&key)
+            .is_some_and(|current| current.context().zone_uid != endpoint.context.zone_uid)
+        {
+            return Err("provider-controller-bootstrap-zone-identity-conflict".to_owned());
         }
         if markers
             .get(&key)
@@ -1431,7 +1515,15 @@ impl ProductionProcessProviders {
             .managed_resources
             .lock()
             .ok()
-            .and_then(|managed| managed.get(context.resource_ref).cloned())
+            .and_then(|managed| {
+                managed
+                    .get(&(
+                        context.zone.clone(),
+                        context.zone_uid.clone(),
+                        context.resource_ref.clone(),
+                    ))
+                    .cloned()
+            })
             .filter(|managed| {
                 resource_identity_matches(managed, context)
                     && managed.execution_ref == *execution_ref
@@ -1443,14 +1535,22 @@ impl ProductionProcessProviders {
             self.forget_controller_bootstrap_for_resource_context(context);
         }
         if let Ok(mut managed) = self.managed_resources.lock()
-            && managed.get(context.resource_ref).is_some_and(|resource| {
-                resource.uid == *context.resource_uid
-                    && resource.generation == context.resource_generation
-                    && resource.controller_generation == context.controller_generation
-                    && resource.execution_ref == *execution_ref
-            })
+            && managed
+                .get(&(
+                    context.zone.clone(),
+                    context.zone_uid.clone(),
+                    context.resource_ref.clone(),
+                ))
+                .is_some_and(|resource| {
+                    resource_identity_matches(resource, context)
+                        && resource.execution_ref == *execution_ref
+                })
         {
-            managed.remove(context.resource_ref);
+            managed.remove(&(
+                context.zone.clone(),
+                context.zone_uid.clone(),
+                context.resource_ref.clone(),
+            ));
         }
     }
 
@@ -1489,13 +1589,20 @@ impl ProductionProcessProviders {
             AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
             AdoptionOutcome::Adopted(report) => {
                 self.remember_resource(
+                    context.zone.clone(),
+                    context.zone_uid.clone(),
                     context.resource_ref,
                     context.resource_uid,
                     context.resource_generation,
+                    context.resource_revision,
                     context.controller_generation,
                     provider,
+                    context.provider_ref.clone(),
+                    context.owner_ref.clone(),
+                    ticket.template().clone(),
                     report.identity,
                     execution.execution_ref(),
+                    ticket.runtime_scope(),
                 )?;
                 if controller_bootstrap {
                     let controller_context = ControllerBootstrapContext::from_resource_context(
@@ -1511,11 +1618,19 @@ impl ProductionProcessProviders {
                 Ok(ProviderAdoption::Adopted(report))
             }
             AdoptionOutcome::Stale { candidate } => {
-                self.forget_resource(context.resource_ref);
+                self.forget_resource_in_zone(
+                    &context.zone,
+                    context.zone_uid.as_ref(),
+                    context.resource_ref,
+                );
                 Ok(ProviderAdoption::Stale { candidate })
             }
             AdoptionOutcome::Quarantined(report) => {
-                self.forget_resource(context.resource_ref);
+                self.forget_resource_in_zone(
+                    &context.zone,
+                    context.zone_uid.as_ref(),
+                    context.resource_ref,
+                );
                 Ok(ProviderAdoption::Quarantined(report))
             }
         }
@@ -1588,14 +1703,35 @@ impl ProductionProcessProviders {
         kill_timeout: Duration,
     ) -> Result<bool, String> {
         validate_resource_execution_target(self.mode, &context, execution)?;
+        let provider = managed_provider_from_ref(context.provider_ref)?;
+        let ticket = resource_ticket(
+            &self.bundle,
+            &context,
+            execution,
+            activation_input,
+            spec_bytes,
+            provider,
+            self.mode,
+            Duration::from_secs(30),
+            readiness,
+        )?;
         let managed = self
             .managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
-            .get(context.resource_ref)
+            .get(&(
+                context.zone.clone(),
+                context.zone_uid.clone(),
+                context.resource_ref.clone(),
+            ))
             .cloned()
             .ok_or_else(|| "provider-process-not-found".to_owned())?;
-        if !resource_identity_matches(&managed, &context) {
+        if !resource_identity_matches(&managed, &context)
+            || managed.provider != provider
+            || managed.template != *ticket.template()
+            || managed.execution_ref != *execution.execution_ref()
+            || managed.runtime_scope != ticket.runtime_scope()
+        {
             return Err("provider-process-identity-changed".to_owned());
         }
         match self
@@ -1966,26 +2102,41 @@ impl ProductionProcessProviders {
 
     fn remember_resource(
         &self,
+        zone: ZoneId,
+        zone_uid: Option<ResourceUid>,
         resource_ref: &ResourceRef,
         uid: &ResourceUid,
         generation: ResourceGeneration,
+        resource_revision: ZoneRevision,
         controller_generation: ControllerGeneration,
         provider: ManagedProvider,
+        provider_ref: ResourceRef,
+        owner_ref: Option<ResourceRef>,
+        template: BoundedToken,
         identity: ProcessIdentityDigest,
         execution_ref: &ResourceRef,
+        runtime_scope: Option<ConfigurationDigest>,
     ) -> Result<(), String> {
         self.managed_resources
             .lock()
             .map_err(|_| "provider-managed-state-poisoned".to_owned())?
             .insert(
-                resource_ref.clone(),
+                (zone.clone(), zone_uid.clone(), resource_ref.clone()),
                 ManagedResource {
+                    zone,
+                    zone_uid,
+                    resource_ref: resource_ref.clone(),
                     provider,
+                    provider_ref,
+                    owner_ref,
+                    template,
                     identity,
                     uid: uid.clone(),
                     generation,
+                    resource_revision,
                     controller_generation,
                     execution_ref: execution_ref.clone(),
+                    runtime_scope,
                 },
             );
         Ok(())
@@ -1997,12 +2148,21 @@ impl ProductionProcessProviders {
         }
     }
 
-    fn forget_resource(&self, resource_ref: &ResourceRef) {
+    fn forget_resource_in_zone(
+        &self,
+        zone: &ZoneId,
+        zone_uid: Option<&ResourceUid>,
+        resource_ref: &ResourceRef,
+    ) {
         if let Ok(mut markers) = self.controller_bootstrap.lock() {
-            markers.retain(|_, marker| marker.context().process_ref() != resource_ref);
+            markers.retain(|(marker_zone, marker_ref), marker| {
+                marker_zone != zone
+                    || marker_ref != resource_ref
+                    || marker.context().zone_uid.as_ref() != zone_uid
+            });
         }
         if let Ok(mut managed) = self.managed_resources.lock() {
-            managed.remove(resource_ref);
+            managed.remove(&(zone.clone(), zone_uid.cloned(), resource_ref.clone()));
         }
     }
 
@@ -2124,7 +2284,7 @@ fn controller_launch_ticket(
     let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
     let operation = OperationBinding::new(operation_uid, deadline_ms)
         .map_err(|_| "provider-ticket:invalid-operation")?;
-    let mut ticket = LaunchTicket::new(
+    let ticket = LaunchTicket::new(
         resource.process_ref().clone(),
         resource.uid().clone(),
         resource.resource_generation(),
@@ -2141,6 +2301,9 @@ fn controller_launch_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let mut ticket = ticket
+        .with_owner_ref(resource.provider_ref().clone())
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
     let sandbox = SandboxCompiler
         .compile_plan(
             resource.process_spec().execution().sandbox(),
@@ -2322,6 +2485,16 @@ fn resource_ticket(
     if static_intent.flatten().is_none() && generic_intent.is_none() {
         return Err("provider-ticket:template-not-found".to_owned());
     }
+    let trusted_intent = static_intent
+        .flatten()
+        .or(generic_intent)
+        .ok_or_else(|| "provider-ticket:template-not-found".to_owned())?;
+    let ticket_template = if exact_static_controller {
+        execution.template().clone()
+    } else {
+        BoundedToken::parse(trusted_intent.role_id.clone())
+            .map_err(|_| "provider-ticket:invalid-template".to_owned())?
+    };
     let provider_name = context.provider_ref.name().as_str();
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| "provider-ticket:invalid-provider")?;
@@ -2358,7 +2531,7 @@ fn resource_ticket(
         context.controller_generation,
         owner_provider.clone(),
         component,
-        execution.template().clone(),
+        ticket_template,
         execution.execution_ref().clone(),
         execution.domain().unwrap_or(ExecutionDomain::System),
         execution.user_ref().cloned(),
@@ -2391,6 +2564,24 @@ fn resource_ticket(
         }
         None => ticket,
     };
+    let zone_uid = context
+        .zone_uid
+        .clone()
+        .ok_or_else(|| "provider-ticket:zone-identity-missing".to_owned())?;
+    let runtime_scope = runtime_scope_commitment(
+        &zone_uid,
+        context
+            .guest_execution
+            .as_ref()
+            .map(GuestExecutionBinding::target_uid),
+        context.resource_ref,
+        context.resource_uid,
+        trusted_intent.role_id.as_str(),
+        context.resource_generation.get(),
+    );
+    let ticket = ticket
+        .with_runtime_identity(zone_uid, context.owner_ref.clone(), runtime_scope)
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
     let ticket = match activation_input {
         Some(input) => ticket
             .with_activation_input(input.clone())
@@ -2854,14 +3045,24 @@ mod tests {
     fn managed_resource_finalization_requires_the_current_resource_identity() {
         let resource_ref = ResourceRef::parse("Process/worker").expect("resource ref");
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
         let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider ref");
         let managed = ManagedResource {
+            zone: ZoneId::parse("work").expect("zone"),
+            zone_uid: Some(zone_uid.clone()),
+            resource_ref: resource_ref.clone(),
             provider: ManagedProvider::Minijail,
+            provider_ref: provider_ref.clone(),
+            owner_ref: None,
+            template: BoundedToken::parse("reaction").expect("template"),
             identity: ProcessIdentityDigest::from_bytes([7; 32]),
             uid: uid.clone(),
             generation: ResourceGeneration::new(4).expect("generation"),
+            resource_revision: ZoneRevision::new(4),
             controller_generation: ControllerGeneration::new(1).expect("controller generation"),
             execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
+            runtime_scope: None,
         };
         let context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
@@ -2872,7 +3073,8 @@ mod tests {
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
-        );
+        )
+        .with_lifecycle_identity(Some(zone_uid.clone()), Some(1), None);
         assert!(resource_identity_matches(&managed, &context));
         let stale_context = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
@@ -2883,7 +3085,8 @@ mod tests {
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
             None,
-        );
+        )
+        .with_lifecycle_identity(Some(zone_uid.clone()), Some(1), None);
         assert!(!resource_identity_matches(&managed, &stale_context));
         let stale_controller = ProcessResourceContext::new(
             ZoneId::parse("work").expect("zone"),
@@ -2894,8 +3097,25 @@ mod tests {
             &provider_ref,
             ControllerGeneration::new(2).expect("controller generation"),
             None,
-        );
+        )
+        .with_lifecycle_identity(Some(zone_uid.clone()), Some(1), None);
         assert!(!resource_identity_matches(&managed, &stale_controller));
+        let different_zone = ProcessResourceContext::new(
+            ZoneId::parse("work").expect("zone"),
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(4).expect("generation"),
+            ZoneRevision::new(4),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_lifecycle_identity(
+            Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid")),
+            Some(1),
+            None,
+        );
+        assert!(!resource_identity_matches(&managed, &different_zone));
     }
 
     #[test]
@@ -3078,7 +3298,12 @@ mod tests {
             ControllerGeneration::new(1).expect("controller generation"),
             None,
         )
-        .with_owner_ref(Some(owner));
+        .with_owner_ref(Some(owner.clone()))
+        .with_lifecycle_identity(
+            Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid")),
+            Some(1),
+            None,
+        );
         let ticket = resource_ticket(
             &resolver,
             &context,
@@ -3094,6 +3319,9 @@ mod tests {
         assert_eq!(ticket.inherited_fd_table().count(), 1);
         assert_eq!(ticket.process_ref(), &process_ref);
         assert_eq!(ticket.template(), &template);
+        assert!(ticket.zone_uid().is_some());
+        assert_eq!(ticket.owner_ref(), Some(&owner));
+        assert!(ticket.runtime_scope().is_some());
         let wrong_owner = ResourceRef::parse("Provider/wrong-owner").expect("wrong owner");
         let wrong_owner_context = context.clone().with_owner_ref(Some(wrong_owner));
         assert_eq!(

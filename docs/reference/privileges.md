@@ -273,15 +273,18 @@ non-bootstrap dispatch surface as typed per-op payloads:
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`
 - `ApplySysctl { bundle_sysctl_intent_ref, key, destroy }`
 - `UpdateHostsFile { bundle_hosts_intent_ref, destroy }`
-- `OpenPidfd { pid, expected_start_time_ticks }`
+- `OpenPidfd { exact runner identity }` - process IDs and start-time values
+  are broker-local and omitted from the audit projection.
 - `OpenZoneStore { zone_store_id, store_identity, disposition, fd_count }`
 - `SignalRunner { vm_id, role_id, signal }`
 - `DeregisterRunnerPidfd { vm_id, role_id }`
-- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, runtime_allocations }` -
-  validates the signed runner intent, target execution binding, and profile before
-  launching the declared Provider Process. ComponentSession endpoints are
-  enrolled from trusted bundle metadata; no token share or fallback
-  transport is part of the operation.
+- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, resource
+  identity, private runtime scope }` - validates the signed runner intent,
+  exact Zone/resource incarnation, target execution binding, and profile
+  before launching the declared Provider Process. ComponentSession endpoints
+  are enrolled from trusted bundle metadata; no token share or fallback
+  transport is part of the operation. Runtime allocations, paths, argv,
+  environment values, credentials, and cgroup paths are omitted from audit.
 - `RunHostInstall { bundle_installer_intent_ref, enable, start, no_start }`
 - `RunMigrate { bundle_migrate_intent_ref }`
 - `RunActivation { bundle_activation_intent_ref, mode, vm }`

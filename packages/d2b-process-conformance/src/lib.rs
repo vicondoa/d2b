@@ -54,5 +54,5 @@ pub use terminal::{
 pub use ticket::{
     CancellationBinding, CompiledDigests, InheritedFdTable, LaunchTicket, MAX_INHERITED_FDS,
     MAX_LAUNCH_DEADLINE_MS, GuestExecutionBinding, OperationBinding, ReadinessExpectation,
-    execution_commitment,
+    execution_commitment, runtime_scope_commitment,
 };
