@@ -263,6 +263,9 @@ pub(crate) enum GuestComponentSessionKey {
         zone: ZoneId,
         guest_ref: ResourceRef,
         guest_uid: ResourceUid,
+        endpoint_uid: ResourceUid,
+        provider_uid: ResourceUid,
+        provider_generation: ResourceGeneration,
     },
     LegacyVm(String),
 }
@@ -272,16 +275,39 @@ impl GuestComponentSessionKey {
         zone: ZoneId,
         guest_ref: ResourceRef,
         guest_uid: ResourceUid,
+        endpoint_uid: ResourceUid,
+        provider_uid: ResourceUid,
+        provider_generation: ResourceGeneration,
     ) -> Self {
         Self::Guest {
             zone,
             guest_ref,
             guest_uid,
+            endpoint_uid,
+            provider_uid,
+            provider_generation,
         }
     }
 
     fn for_legacy_vm(vm: impl Into<String>) -> Self {
         Self::LegacyVm(vm.into())
+    }
+
+    fn is_guest_identity(
+        &self,
+        zone: &ZoneId,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> bool {
+        matches!(
+            self,
+            Self::Guest {
+                zone: current_zone,
+                guest_ref: current_ref,
+                guest_uid: current_uid,
+                ..
+            } if current_zone == zone && current_ref == guest_ref && current_uid == guest_uid
+        )
     }
 
 }
@@ -302,6 +328,7 @@ pub(crate) struct CommittedGuestSessionTarget {
     endpoint_uid: ResourceUid,
     endpoint_resource_generation: ResourceGeneration,
     endpoint_generation: ResourceGeneration,
+    provider_uid: ResourceUid,
     provider_generation: ResourceGeneration,
 }
 
@@ -311,6 +338,9 @@ impl CommittedGuestSessionTarget {
             self.zone.clone(),
             self.guest_ref.clone(),
             self.guest_uid.clone(),
+            self.endpoint_uid.clone(),
+            self.provider_uid.clone(),
+            self.provider_generation,
         )
     }
 
@@ -344,6 +374,10 @@ impl CommittedGuestSessionTarget {
 
     fn provider_generation(&self) -> ResourceGeneration {
         self.provider_generation
+    }
+
+    fn provider_uid(&self) -> &ResourceUid {
+        &self.provider_uid
     }
 }
 
@@ -1245,7 +1279,8 @@ impl ZoneLinkGatewayComposition {
         self.gateway_session
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_some()
+            .as_ref()
+            .is_some_and(|session| session.route_binding().liveness().is_live())
     }
 
     fn gateway_session(
@@ -1278,6 +1313,10 @@ impl ZoneLinkGatewayComposition {
         {
             let _ = self.apply_event(ZoneLinkEvent::SessionDisconnected);
         }
+        self.gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
     }
 
     fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
@@ -1768,19 +1807,37 @@ mod zone_link_gateway_composition_tests {
             ZoneId::parse("child").expect("Zone"),
             guest.clone(),
             uid('1'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
         );
         let second = GuestComponentSessionKey::for_guest(
             ZoneId::parse("other").expect("Zone"),
             guest.clone(),
             uid('1'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
         );
         let replacement = GuestComponentSessionKey::for_guest(
             ZoneId::parse("child").expect("Zone"),
             guest,
             uid('2'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
+        );
+        let endpoint_replacement = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+            uid('1'),
+            uid('4'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
         );
         assert_ne!(first, second);
         assert_ne!(first, replacement);
+        assert_ne!(first, endpoint_replacement);
         assert!(!format!("{first:?}").contains("gateway"));
         assert!(!format!("{first:?}").contains("11111111"));
     }
@@ -1800,6 +1857,26 @@ mod zone_link_gateway_composition_tests {
         );
         assert!(source[start..end].contains("GuestControlEndpoint"));
         assert!(source[start..end].contains("find_guest_vmm_intent"));
+    }
+
+    #[test]
+    fn fencing_gateway_session_clears_cached_guest_target() {
+        let composition = composition();
+        composition.set_gateway_guest(CommittedGuestSessionTarget {
+            zone: ZoneId::parse("gateway").unwrap(),
+            guest_ref: ResourceRef::parse("Guest/gateway").unwrap(),
+            guest_uid: uid('1'),
+            guest_generation: ResourceGeneration::new(1).unwrap(),
+            endpoint_ref: ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+            endpoint_uid: uid('2'),
+            endpoint_resource_generation: ResourceGeneration::new(1).unwrap(),
+            endpoint_generation: ResourceGeneration::new(1).unwrap(),
+            provider_uid: uid('3'),
+            provider_generation: ResourceGeneration::new(1).unwrap(),
+        });
+        assert!(composition.gateway_guest().is_some());
+        composition.fence_gateway_session();
+        assert!(composition.gateway_guest().is_none());
     }
 
     #[test]
@@ -7036,21 +7113,16 @@ fn admit_gateway_zone_request(
     let composition = plane
         .gateway_zone_link(runtime.zone())
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let gateway_guest = block_on_future(gateway_guest_for_provider(
+        runtime,
+        composition.transport_provider_ref(),
+    ))
+    .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if composition.gateway_guest().as_ref() != Some(&gateway_guest) {
+        composition.fence_gateway_session();
+        composition.set_gateway_guest(gateway_guest.clone());
+    }
     if !composition.has_gateway_session() {
-        let gateway_guest = match composition.gateway_guest() {
-            Some(gateway_guest) => gateway_guest,
-            None => block_on_future(gateway_guest_for_provider(
-                runtime,
-                composition.transport_provider_ref(),
-            ))
-            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
-        };
-        if composition.gateway_guest().is_none() {
-            composition.set_gateway_guest(gateway_guest);
-        }
-        let Some(gateway_guest) = composition.gateway_guest() else {
-            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-        };
         let session =
             block_on_future(connect_guest_component_session_for_guest(state, &gateway_guest))
             .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
@@ -7058,6 +7130,7 @@ fn admit_gateway_zone_request(
             .bind_gateway_session(session)
             .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     }
+    let gateway_guest_for_invalidation = gateway_guest.clone();
     let target_zone = composition.child_path().clone();
     let method = request
         .get("method")
@@ -7084,12 +7157,10 @@ fn admit_gateway_zone_request(
         )
     ) {
         composition.fence_gateway_session();
-        if let Some(gateway_guest) = composition.gateway_guest() {
-            block_on_future(invalidate_guest_component_session_for_guest(
-                state,
-                &gateway_guest,
-            ));
-        }
+        block_on_future(invalidate_guest_component_session_for_guest(
+            state,
+            &gateway_guest_for_invalidation,
+        ));
     }
     result
 }
@@ -13354,13 +13425,12 @@ fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
-fn status_generation(value: &Value, fallback: ResourceGeneration) -> ResourceGeneration {
+fn status_generation(value: &Value) -> Option<ResourceGeneration> {
     value
         .pointer("/status/resource/endpointGeneration")
         .or_else(|| value.pointer("/status/resource/endpoint_generation"))
         .and_then(Value::as_u64)
         .and_then(|generation| ResourceGeneration::new(generation).ok())
-        .unwrap_or(fallback)
 }
 
 /// Resolve one committed Guest and its controller-owned guest-control
@@ -13468,7 +13538,9 @@ pub(crate) async fn resolve_committed_guest_session_target(
         endpoint_ref,
         endpoint_uid: endpoint.metadata().uid().clone(),
         endpoint_resource_generation: endpoint.metadata().generation(),
-        endpoint_generation: status_generation(&endpoint_value, endpoint.metadata().generation()),
+        endpoint_generation: status_generation(&endpoint_value)
+            .ok_or_else(|| "guest-session:endpoint-generation-missing".to_owned())?,
+        provider_uid: provider.metadata().uid().clone(),
         provider_generation: provider.metadata().generation(),
     })
 }
@@ -13511,6 +13583,7 @@ async fn resolve_component_session_endpoint_for_guest(
     )
     .map_err(|_| "guest-session:provider-invalid".to_owned())?;
     if provider.metadata().zone() != target.zone()
+        || provider.metadata().uid() != target.provider_uid()
         || provider.metadata().generation() != target.provider_generation()
     {
         return Err("guest-session:committed-identity-changed".to_owned());
@@ -13524,6 +13597,37 @@ async fn resolve_component_session_endpoint_for_guest(
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    let endpoint_generation = status_generation(&endpoint_value)
+        .ok_or_else(|| "guest-session:endpoint-generation-missing".to_owned())?;
+    let endpoint_spec = serde_json::from_slice::<EndpointSpec>(
+        &endpoint
+            .spec()
+            .base_with_provider_ref()
+            .to_canonical_bytes(),
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    if endpoint.metadata().zone() != target.zone()
+        || endpoint.metadata().owner_ref() != Some(target.guest_ref())
+        || endpoint.metadata().uid() != target.endpoint_uid()
+        || endpoint.metadata().generation() != target.endpoint_resource_generation()
+    {
+        return Err("guest-session:endpoint-identity-changed".to_owned());
+    }
+    if endpoint_generation != target.endpoint_generation()
+        || endpoint_spec.producer_ref() != target.guest_ref()
+        || endpoint_spec.provider_ref() != provider_ref
+        || endpoint_spec.purpose().as_str() != "guest-control"
+        || endpoint_spec.endpoint_class() != EndpointClass::Control
+        || endpoint_spec.transport() != EndpointTransport::OpaqueCarriage
+        || endpoint_spec.locality() != EndpointLocality::CrossDomain
+        || endpoint_spec.visibility() != EndpointVisibility::Provider
+        || !endpoint_spec
+            .consumer_policy()
+            .allowed_operations()
+            .contains(&EndpointOperation::Resolve)
+    {
+        return Err("guest-session:endpoint-invalid".to_owned());
+    }
     if endpoint.status().phase() != ResourcePhase::Ready {
         return Err("guest-session:endpoint-not-ready".to_owned());
     }
@@ -13611,9 +13715,9 @@ async fn resolve_component_session_endpoint_for_guest(
         target.endpoint_ref().clone(),
         target.guest_ref().clone(),
         target.zone().clone(),
-        target.endpoint_uid().clone(),
-        target.endpoint_resource_generation(),
-        target.endpoint_generation(),
+        endpoint.metadata().uid().clone(),
+        endpoint.metadata().generation(),
+        endpoint_generation,
         target.provider_generation(),
         descriptor.descriptor().seed().fingerprint().clone(),
         true,
@@ -13889,6 +13993,10 @@ pub(crate) async fn connect_guest_component_session_for_guest(
     ) {
         return Ok(Arc::clone(session));
     }
+    sessions.retain(|candidate, _| {
+        !candidate.is_guest_identity(target.zone(), target.guest_ref(), target.guest_uid())
+            || candidate == &key
+    });
     sessions.insert(key, Arc::clone(&client));
     Ok(client)
 }

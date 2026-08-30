@@ -723,6 +723,7 @@ struct CloudHypervisorResourceSession {
     execution_ref: ResourceRef,
     descriptor: VerifiedGuestSetupDescriptor,
     controller_generation: ControllerGeneration,
+    session_target: Option<crate::CommittedGuestSessionTarget>,
     session_evidence: Option<GuestSessionEvidence>,
 }
 
@@ -751,6 +752,8 @@ fn guest_session_evidence(
     if identity.zone() != target.zone()
         || identity.guest_ref() != guest_ref
         || identity.guest_uid() != target.guest_uid()
+        || identity.provider_generation()
+            != target.provider_generation().get()
     {
         return None;
     }
@@ -797,6 +800,23 @@ impl std::fmt::Debug for CloudHypervisorResourceSession {
 impl CloudHypervisorResourceSession {
     fn api_error() -> CloudHypervisorResourceApiError {
         CloudHypervisorResourceApiError::Transport
+    }
+
+    fn session_key(
+        &self,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> Result<crate::GuestComponentSessionKey, CloudHypervisorResourceApiError> {
+        let Some(target) = self.session_target.as_ref() else {
+            return Err(CloudHypervisorResourceApiError::Authentication);
+        };
+        if target.zone() != &self.zone
+            || target.guest_ref() != guest_ref
+            || target.guest_uid() != guest_uid
+        {
+            return Err(CloudHypervisorResourceApiError::Conflict);
+        }
+        Ok(target.key())
     }
 
     async fn get_stored(
@@ -895,11 +915,7 @@ impl CloudHypervisorResourceSession {
             "cloud-hypervisor-guest-session",
         )
         .await?;
-        let key = crate::GuestComponentSessionKey::for_guest(
-            self.zone.clone(),
-            guest_ref.clone(),
-            guest_uid.clone(),
-        );
+        let key = self.session_key(guest_ref, guest_uid)?;
         let session = self
             .guest_sessions
             .lock()
@@ -922,11 +938,7 @@ impl CloudHypervisorResourceSession {
         guest_uid: &ResourceUid,
     ) -> Result<(), CloudHypervisorResourceApiError> {
         let _ = self.authenticated_guest_session(guest_ref, guest_uid).await?;
-        let key = crate::GuestComponentSessionKey::for_guest(
-            self.zone.clone(),
-            guest_ref.clone(),
-            guest_uid.clone(),
-        );
+        let key = self.session_key(guest_ref, guest_uid)?;
         let mut sessions = self.guest_sessions.lock().await;
         let removed = if sessions
             .get(&key)
@@ -1644,11 +1656,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         )
                     })
                     .collect();
-                let session_key = crate::GuestComponentSessionKey::for_guest(
-                    self.zone.clone(),
-                    guest_ref.clone(),
-                    guest_uid.clone(),
-                );
+                let session_key = self.session_key(&guest_ref, &guest_uid)?;
                 let session = self
                     .guest_sessions
                     .lock()
@@ -1714,11 +1722,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     "cloud-hypervisor-invalidate-session",
                 )
                 .await?;
-                let key = crate::GuestComponentSessionKey::for_guest(
-                    self.zone.clone(),
-                    guest_ref.clone(),
-                    guest_uid.clone(),
-                );
+                let key = self.session_key(&guest_ref, &guest_uid)?;
                 let mut sessions = self.guest_sessions.lock().await;
                 let removed = if sessions.get(&key).is_some_and(|session| {
                     session.identity().guest_uid() == &guest_uid
@@ -4274,6 +4278,7 @@ impl ZoneResourceRuntime {
                     .policy_snapshot
                     .controller_generation
                     .unwrap_or_else(|| ControllerGeneration::new(1).expect("generation one")),
+                session_target: guest_session_target,
                 session_evidence,
             };
             let adapter = AuthenticatedResourceApiAdapter::new(Arc::new(session));
