@@ -728,7 +728,7 @@ impl GuestSetupDescriptorVerifier for CatalogDescriptorVerifier {
             return false;
         };
         let Ok(canonical) = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(
-            manifest.api_bindings(),
+            &manifest.api_bindings().to_vec(),
         ) else {
             return false;
         };
