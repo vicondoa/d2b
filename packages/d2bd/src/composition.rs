@@ -266,6 +266,7 @@ pub(crate) enum GuestComponentSessionKey {
         endpoint_uid: ResourceUid,
         provider_uid: ResourceUid,
         provider_generation: ResourceGeneration,
+        endpoint_generation: ResourceGeneration,
     },
     LegacyVm(String),
 }
@@ -278,6 +279,7 @@ impl GuestComponentSessionKey {
         endpoint_uid: ResourceUid,
         provider_uid: ResourceUid,
         provider_generation: ResourceGeneration,
+        endpoint_generation: ResourceGeneration,
     ) -> Self {
         Self::Guest {
             zone,
@@ -286,6 +288,7 @@ impl GuestComponentSessionKey {
             endpoint_uid,
             provider_uid,
             provider_generation,
+            endpoint_generation,
         }
     }
 
@@ -341,6 +344,7 @@ impl CommittedGuestSessionTarget {
             self.endpoint_uid.clone(),
             self.provider_uid.clone(),
             self.provider_generation,
+            self.endpoint_generation,
         )
     }
 
@@ -378,6 +382,12 @@ impl CommittedGuestSessionTarget {
 
     fn provider_uid(&self) -> &ResourceUid {
         &self.provider_uid
+    }
+
+    fn same_guest_identity(&self, other: &Self) -> bool {
+        self.zone == other.zone
+            && self.guest_ref == other.guest_ref
+            && self.guest_uid == other.guest_uid
     }
 }
 
@@ -1325,7 +1335,14 @@ impl ZoneLinkGatewayComposition {
         self.fence_gateway_session();
         self.apply_event(ZoneLinkEvent::Revoke)
             .map(|_| ())
-            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        *self
+            .reconnect_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            ReconnectGeneration::new(1)
+                .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        Ok(())
     }
 
     fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
@@ -1830,6 +1847,7 @@ mod zone_link_gateway_composition_tests {
             uid('2'),
             uid('3'),
             ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
         );
         let second = GuestComponentSessionKey::for_guest(
             ZoneId::parse("other").expect("Zone"),
@@ -1838,6 +1856,7 @@ mod zone_link_gateway_composition_tests {
             uid('2'),
             uid('3'),
             ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
         );
         let replacement = GuestComponentSessionKey::for_guest(
             ZoneId::parse("child").expect("Zone"),
@@ -1846,6 +1865,7 @@ mod zone_link_gateway_composition_tests {
             uid('2'),
             uid('3'),
             ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
         );
         let endpoint_replacement = GuestComponentSessionKey::for_guest(
             ZoneId::parse("child").expect("Zone"),
@@ -1854,6 +1874,7 @@ mod zone_link_gateway_composition_tests {
             uid('4'),
             uid('3'),
             ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(2).expect("Endpoint generation"),
         );
         assert_ne!(first, second);
         assert_ne!(first, replacement);
@@ -1897,6 +1918,10 @@ mod zone_link_gateway_composition_tests {
         assert!(composition.gateway_guest().is_some());
         composition.fence_gateway_session();
         assert!(composition.gateway_guest().is_none());
+        *composition.reconnect_generation.lock().unwrap() =
+            ReconnectGeneration::new(7).unwrap();
+        composition.reset_gateway_guest_identity().unwrap();
+        assert_eq!(composition.reconnect_generation().get(), 1);
     }
 
     #[test]
@@ -7141,8 +7166,14 @@ fn admit_gateway_zone_request(
     if composition
         .last_gateway_guest()
         .as_ref()
-        .is_some_and(|previous| previous != &gateway_guest)
+        .is_some_and(|previous| !previous.same_guest_identity(&gateway_guest))
     {
+        if let Some(previous) = composition.last_gateway_guest() {
+            block_on_future(invalidate_guest_component_session_for_guest(
+                state,
+                &previous,
+            ));
+        }
         composition
             .reset_gateway_guest_identity()
             .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
