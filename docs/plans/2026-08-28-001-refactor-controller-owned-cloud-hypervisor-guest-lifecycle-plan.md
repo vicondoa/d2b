@@ -491,12 +491,17 @@ flowchart TB
   U22 --> U13
   U23 --> U13
   U24 --> U13
+  U25[U25 pure ZoneLink proof] --> U14
+  U26[U26 inert Nix cleanup] --> U15
+  U27[U27 unreachable CLI deletion] --> U17
+  U28[U28 inert broker cleanup] --> U18
   U13 --> U7[U7 daemon composition]
   U7 --> U14[U14 U10 and U5 closure]
   U14 --> U15[U15 U6 Nix removal]
   U15 --> U16[U16 U7 consumers]
   U16 --> U17[U17 legacy CLI and core delete]
   U16 --> U18[U18 gateway and Provider delete]
+  U14 --> U18
   U17 --> U19[U19 shared graph and docs convergence]
   U18 --> U19
   U19 --> U20[U20 VM and real-host acceptance]
@@ -509,6 +514,8 @@ flowchart TB
 - After U8 commits, U22, U23, and U24 may run concurrently in isolated worktrees. They own only `bootstrap_graph.rs`, `health.rs`, and `state.rs` plus owner-local tests and separate changelog fragments; they must not touch `controller.rs`, daemon composition, session transport, target-local runtime, package metadata, generated artifacts, or locks.
 - Merge U22-U24 serially through the integration owner in any order, rerunning focused verification and delta review for each result. U3 starts only after all three are integrated.
 - U3, U4, and U5 form a serial chain. One owner controls `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` from U3 through U5; U4 or U5 may prepare disjoint test fixtures only after their declared prerequisites settle.
+- U25 audits and closes pure ZoneLink proof while U4-U7 progress. U26, U27, and U28 may author concurrently because they preserve the interfaces consumed by Guest lifecycle work; same-file edits are allowed when symbol ownership and interface behavior remain independent.
+- U14 owns daemon and Gateway composition proof only. All booted-VM, canary, restart, deletion, and host acceptance moves to U20.
 - U17 and U18 use separate worktrees for retired CLI/core and gateway/Provider owners, then merge through U19.
 
 **Serial barriers**
@@ -538,12 +545,16 @@ flowchart TB
 | U5 | Add recovery, upgrade, and finalizer-safe deletion | CH lifecycle modules, Core cleanup | U3, U4, U8, U23-U24 |
 | U13 | Converge CH package, contracts, and generated artifacts | CH package metadata, locks, schemas, manifests | U3-U6, U8, U22-U24 |
 | U7 | Wire daemon composition and isolate legacy connectors | d2bd composition/runtime, Provider deployment | U4, U5, U13 |
-| U14 | Finish Zone-only U10 lifecycle and U5 ZoneLink acceptance | lifecycle, ZoneLink, Gateway composition, VM test | U7, U13 |
-| U15 | Finish Zone-only U6 gateway-coupled Nix removal | legacy Nix imports/options/tests | U14 |
+| U25 | Close pure ZoneLink routing proof | Zone routing, Core ZoneLink, Relay reconnect tests | None |
+| U26 | Remove inert Nix emitter surfaces | host-tool options, v1 launcher emitter, Nix tests/docs | None |
+| U27 | Delete unreachable private CLI code | legacy CLI modules and realm entrypoint | None |
+| U28 | Trim inert broker arguments and classify survivors | broker parser/config and Gateway/Provider disposition | None |
+| U14 | Finish Zone-only U10 lifecycle and U5 ZoneLink composition | lifecycle, ZoneLink, Gateway composition | U7, U13, U25 |
+| U15 | Finish Zone-only U6 gateway-coupled Nix removal | legacy Nix imports/options/tests | U14, U26 |
 | U16 | Finish Zone-only U7 daemon, xtask, and shared consumer migration | d2bd-runtime, xtask, CLI/generated convergence | U15 |
-| U17 | Delete retired CLI and Core owners | legacy CLI, realm controller/workload owners | U16 |
-| U18 | Delete retired gateway and Provider owners | gateway crates and legacy Provider modules | U16 |
-| U19 | Finish Zone-only U8 and converge final graph, generated artifacts, docs, and audit | locks, Bazel, CLI generation, docs, changelog | U17, U18 |
+| U17 | Delete retired Core owners | realm controller/workload owners | U16, U27 |
+| U18 | Delete retired gateway and Provider owners | gateway crates and legacy Provider modules | U14, U16, U28 |
+| U19 | Finish Zone-only U8 and converge final graph, generated artifacts, docs, and audit | locks, Bazel, CLI generation, docs, changelog | U17, U18, U25-U28 |
 | U20 | Prove VM and real-host acceptance and land | host integration, operator configuration, review/PR | U19 |
 
 ---
@@ -908,32 +919,104 @@ flowchart TB
   - Nix emits no controller-owned CH child Resource.
 - **Verification:** One clean reviewed CH foundation head passes package, contract, Nix, fixture, supply-chain, policy, changelog, and drift gates.
 
-### U14. Finish Zone-only U10 lifecycle and U5 ZoneLink acceptance
+### U25. Close pure ZoneLink routing and admission proof
+
+- **Goal:** Separate pure route, admission, reconnect, cursor, revocation, queue, and replay proof from daemon and Gateway composition.
+- **Requirements:** R3-R4, R12-R17; AE7-AE8.
+- **Dependencies:** None.
+- **Files:** `packages/d2b-zone-routing/src/engine.rs`, `resolver.rs`, `service.rs`, `packages/d2b-zone-routing/tests/route_engine_vectors.rs`, `packages/d2b-core-controller/src/zone_links.rs`, `zonelink.rs`, `packages/d2b-provider-transport-azure-relay/src/reconnect.rs`, `packages/d2b-provider-transport-azure-relay/tests/reconnect_backoff.rs`.
+- **Approach:**
+  1. Audit existing owner-local coverage before writing code; treat U25 as satisfied when current proof already covers the contract.
+  2. Preserve runtime-issued single-use admissions bound to ZoneLink, edge, controller and reconnect generations, Zone identities, operation, capability, policy revision, and expiry.
+  3. Preserve cursor-owner quarantine, monotonic resync, revocation fencing, bounded queues, replay windows, loop and multi-parent rejection, and no reciprocal parent row.
+  4. Stop and defer to the serial contract owner if closure requires a shared session or wire contract change.
+- **Test scenarios:**
+  - Exact route admission succeeds only for the committed identity tuple.
+  - Target, verb, capability, policy, generation, cursor, time, or relay substitution fails closed.
+  - Expired, revoked, replayed, stale-generation, and disconnected admissions fail closed.
+  - Missing, duplicate, or mismatched cursor owner proof is quarantined.
+  - Reconnect resumes from the last valid revision without reusing old authority.
+  - Advertisement replay, expiry, loop, multi-parent, capacity, withdrawal, and capability narrowing remain covered.
+- **Verification:** Existing Zone routing, Core controller, and Relay owner suites pass; a zero-delta satisfied result is valid when no proof gap exists.
+
+### U26. Remove inert Nix emitter surfaces and isolate retained host tooling
+
+- **Goal:** Delete legacy Nix output that already has a current successor while separating retained host-tool package plumbing from the gateway tombstone.
+- **Requirements:** R6-R8, R14-R17; AE2, AE5, AE8.
+- **Dependencies:** None.
+- **Files:** `nixos-modules/options-host.nix`, `options-gateway.nix`, `realm-workloads-launcher-json.nix`, `bundle-artifacts.nix`, `default.nix`, `flake.nix`, root `BUILD.bazel`, `bazel/checks/nix/BUILD.bazel`, `tests/unit/nix/cases/realm-workloads.nix`, `host-tools-source.nix`, `gateway-vm.nix`, active reference documentation, and changelog.
+- **Approach:**
+  1. Move the internal `d2b._hostToolPackages` declaration from `options-gateway.nix` to `options-host.nix` without changing its producers or consumers.
+  2. Remove the v1 `realm-workloads-launcher.json` emitter, artifact registry entry, fixture materialization, explicit Nix source inputs, and v1-only tests.
+  3. Preserve the v2 launcher artifact and update active reference documentation to teach only that current output.
+  4. Leave active legacy hierarchy, Gateway VM, Process DAG, realm controller, and realm identity emitters for U15.
+- **Execution note:** Characterize rendered artifacts first; this slice must leave Guest, bundle, daemon, and host-tool shapes unchanged except removal of the superseded v1 launcher output.
+- **Test scenarios:**
+  - V2 launcher metadata remains emitted and installed while no v1 launcher artifact is materialized.
+  - Source and prebuilt host-tool overrides still resolve from the moved internal option.
+  - Gateway tombstone behavior remains unchanged.
+  - Guest, bundle, daemon, and Process lifecycle shapes remain unchanged.
+- **Verification:** Focused Nix surfaces, fixture contracts, drift, and changelog checks pass without a generated runtime contract change.
+
+### U27. Delete unreachable private CLI and realm-entrypoint code
+
+- **Goal:** Remove the legacy CLI implementation and old realm entrypoint that cannot execute through the current command surface.
+- **Requirements:** R1-R2, R4-R8, R14-R17; AE1, AE2, AE5, AE9.
+- **Dependencies:** None.
+- **Files:** `packages/d2b/src/lib.rs`, `dispatch.rs`, delete `legacy.rs`, `status_read_model.rs`, and `target_routing.rs`, `packages/d2b/BUILD.bazel`, `packages/d2b-zone-routing/src/lib.rs`, delete `realm_entrypoint.rs`, related CLI and route tests, and changelog.
+- **Approach:**
+  1. Remove private module declarations, the stale dispatch comment, parser-only tests, and explicit Bazel compile inputs.
+  2. Preserve modern Zone, Guest, Process, resource, auth, audit, doctor, host, and support commands.
+  3. Keep shared Cargo dependencies and current Core realm artifact readers until U19 and U17 remove their remaining consumers.
+- **Execution note:** Prove unreachability from the current parser and dispatch path before deletion.
+- **Test scenarios:**
+  - Current parser rejects realm, VM, and retired aliases through ordinary unknown-command behavior.
+  - Current Zone, Guest, Process, and Resource commands retain their CLI contract.
+  - Zone routing compiles and passes without the old realm entrypoint table.
+  - No production module imports the deleted private modules.
+- **Verification:** Package-local compile, CLI contract, route tests, and changelog checks pass without lock or generated CLI changes.
+
+### U28. Trim inert broker arguments and classify Gateway and Provider survivors
+
+- **Goal:** Remove broker configuration fields that are parsed but never consumed and freeze the later Gateway/Provider deletion boundary.
+- **Requirements:** R13, R15-R19; AE7-AE8.
+- **Dependencies:** None.
+- **Files:** `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/tests/common/mod.rs`, `socket_activation.rs`, Gateway and Provider source graph as read-only inventory input, and changelog.
+- **Approach:**
+  1. Remove only `realm_controllers_path`, `realm_identity_path`, their defaults, parser flags, and parser tests; preserve corresponding bundle fields until their consumers migrate.
+  2. Classify retained Guest-local ZoneLink runtime, credential handling, Relay transport, and `d2bd::serve_guest` ownership separately from retired display, ACA, prologue, and enrollment paths.
+  3. Do not delete a Gateway or Provider capability solely from its historical name; actual deletion remains U18 after U14 and U16.
+  4. Record disposition in implementation and review evidence, not a new inventory file or repository-wide census gate.
+- **Test scenarios:**
+  - Removed broker flags fail through ordinary parser behavior.
+  - Host and Guest broker modes retain current socket, profile, and authorization behavior.
+  - Current Guest-local ZoneLink and Relay tests remain unchanged.
+- **Verification:** Broker owner tests and changelog checks pass; Gateway/Provider disposition is concrete enough for U18 without adding a shipped ledger.
+
+### U14. Finish Zone-only U10 lifecycle and U5 ZoneLink composition
 
 - **Goal:** Integrate the controller-owned Guest lifecycle with daemon authorization, Gateway Guest resolution, ZoneLink routing, and credential custody.
 - **Requirements:** R9-R19; F1-F3; AE1-AE7.
-- **Dependencies:** U7, U13.
-- **Files:** `packages/d2b/src/guest.rs`, `packages/d2bd/src/provider_effects.rs`, `provider_registry.rs`, `process_resource_runtime.rs`, `resource_runtime.rs`, `packages/d2bd-runtime/src/supervisor/state.rs`, `admission.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-zone-routing/`, `packages/d2b-core-controller/src/zone_links.rs`, `packages/d2bd/src/composition.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, `tests/host-integration/host-realm-isolation.nix`, and focused tests.
+- **Dependencies:** U7, U13, U25.
+- **Files:** `packages/d2b/src/guest.rs`, `packages/d2bd/src/provider_effects.rs`, `provider_registry.rs`, `process_resource_runtime.rs`, `resource_runtime.rs`, `packages/d2bd-runtime/src/supervisor/state.rs`, `admission.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-zone-routing/`, `packages/d2b-core-controller/src/zone_links.rs`, `packages/d2bd/src/composition.rs`, and focused owner-local tests.
 - **Approach:**
   1. Complete exact Zone/Guest lifecycle authorization, restart adoption, stale snapshot quarantine, and stop-only shutdown constraints.
   2. Resolve Gateway Guest and guest-control Endpoint from committed Zone Resources; remove `find_process_vm` and VM-name session keys for v3.
   3. Keep relay credentials, Provider state, and audit inside the Gateway Guest.
-  4. Complete ZoneLink route admission, reconnect, cursor, revocation, queue, and no-reciprocal-parent invariants.
-  5. Migrate the focused host test to the final controller-owned child graph without weakening its real broker launch or canary proof.
+  4. Consume U25 route proof and integrate it through Gateway and daemon composition without changing the frozen route contract.
 - **Test scenarios:**
   - Start, stop, restart, delete, forced stop, no-wait, adoption, stale assignment, and unauthorized caller cases are identity-fenced.
   - Gateway Guest creation reaches Ready through child Resources and authenticated session without host credential material.
   - Session loss revokes route and seed authority, then reconnect resumes by revision without duplicate processes or resources.
   - Forged time, target, verb, capability, generation, cursor, or relay identity fails closed.
-  - The real Gateway Guest opens the sealed canary and the host remains free of credential and relay material.
-- **Verification:** U10 and U5 pass owner-local suites and focused VM acceptance on a freshly reviewed head.
+- **Verification:** U10, U5, Gateway composition, and ZoneLink owner-local suites pass on a freshly reviewed head; booted-VM and credential-canary acceptance belongs only to U20.
 
 ### U15. Finish Zone-only U6 gateway-coupled Nix removal
 
 - **Goal:** Remove the remaining pre-Zone Nix hierarchy and legacy process emitters after the replacement Guest lifecycle and ZoneLink path are proven.
 - **Requirements:** R1, R5, R15-R19; AE1, AE7, AE8.
-- **Dependencies:** U14.
-- **Files:** `nixos-modules/options-envs.nix`, `options-realms*.nix`, `options-vms.nix`, `options-gateway.nix`, `options.nix`, `default.nix`, `index.nix`, `host*.nix`, `closures-json.nix`, `minijail-profiles.nix`, `processes-json.nix`, legacy Nix tests, and Nix Bazel declarations.
+- **Dependencies:** U14, U26.
+- **Files:** `nixos-modules/options-envs.nix`, `options-realms*.nix`, `options-vms.nix`, remaining `options-gateway.nix`, `options.nix`, `default.nix`, `index.nix`, `host*.nix`, `closures-json.nix`, `minijail-profiles.nix`, `processes-json.nix`, realm controller and identity emitters, legacy Nix tests, and Nix Bazel declarations.
 - **Approach:**
   1. Remove legacy option imports and current consumers in one coherent switch.
   2. Remove CH and Gateway lifecycle authority from `processes.json`, legacy indexes, per-realm services, users, groups, sockets, and state declarations.
@@ -966,33 +1049,30 @@ flowchart TB
   - No required current behavior depends semantically on a retired owner.
 - **Verification:** Focused consumer suites, metadata, supply-chain, policy, changelog, and applicable generated-artifact gates pass.
 
-### U17. Delete retired CLI and Core owners
+### U17. Delete retired Core owners
 
-- **Goal:** Remove retired CLI commands, target routing, realm contracts, controller configuration, and workload-launcher owners after U16.
+- **Goal:** Remove remaining retired realm contracts, controller configuration, and workload-launcher owners after U16 and U27.
 - **Requirements:** R15-R19.
-- **Dependencies:** U16.
-- **Files:** `packages/d2b/src/legacy.rs`, `target_routing.rs`, retired CLI dispatch/context surfaces, `packages/d2b-contracts/src/realm.rs`, `packages/d2b-core/src/realm_controller_config.rs`, `realm_workloads_launcher.rs`, related tests, manpage/completion inputs, and changelog.
+- **Dependencies:** U16, U27.
+- **Files:** `packages/d2b-contracts/src/realm.rs`, `packages/d2b-core/src/realm_controller_config.rs`, `realm_workloads_launcher.rs`, remaining related tests and package-local build declarations, and changelog.
 - **Approach:**
-  1. Use separate isolated worktrees for CLI and Core deletion when their file ownership is disjoint.
-  2. Remove definitions, exports, tests, and package-local build edges together.
+  1. Consume U27's private CLI deletion and remove remaining Core definitions, exports, tests, and package-local build edges together.
   3. Preserve current Zone, Guest, Process, resource, auth, audit, and support commands.
   4. Defer shared locks and generated convergence to U19.
 - **Test scenarios:**
-  - Retired CLI commands and request shapes are unknown through normal parser behavior.
-  - Current CLI commands retain their generated contract and output behavior.
   - No production target imports realm controller or workload-launcher owners.
   - Package-local tests and compile-time visibility checks pass after deletion.
-- **Verification:** Retired CLI/Core owners have no current consumer, package export, or package-local build edge.
+- **Verification:** Retired Core owners have no current consumer, package export, or package-local build edge.
 
 ### U18. Delete retired gateway and Provider owners
 
 - **Goal:** Remove retired gateway crates, gateway runtime, gateway display wire, legacy Provider modules, and remaining graph edges after U16.
 - **Requirements:** R15-R19.
-- **Dependencies:** U16.
-- **Files:** `packages/d2b-gateway/`, `packages/d2b-gateway-runtime/`, retired gateway Provider modules, `packages/d2b-zone-routing/src/realm_entrypoint.rs`, related fixtures/tests, package manifests, and package-local Bazel declarations.
+- **Dependencies:** U14, U16, U28.
+- **Files:** `packages/d2b-gateway/`, proven-retired modules and binaries under `packages/d2b-gateway-runtime/`, proven-retired Gateway and Provider modules, related fixtures/tests, package manifests, and package-local Bazel declarations.
 - **Approach:**
   1. Use disjoint worktrees for gateway crates and Provider legacy modules.
-  2. Delete only after current CH Guest, ZoneLink, credential, and transport paths pass their owner suites.
+  2. Delete only after current CH Guest, ZoneLink, credential, and transport paths pass their owner suites; preserve U28-classified Guest-local ZoneLink, credential, Relay, and `serve_guest` paths.
   3. Remove package-local exports and fixtures with the owner.
   4. Leave shared workspace and generated convergence to U19.
 - **Test scenarios:**
@@ -1006,7 +1086,7 @@ flowchart TB
 
 - **Goal:** Merge U17-U18, remove shared graph edges, regenerate current artifacts, and publish Zone-only current documentation.
 - **Requirements:** R18-R20; AE8-AE9.
-- **Dependencies:** U17, U18.
+- **Dependencies:** U17, U18, U25, U26, U27, U28.
 - **Files:** root `Cargo.toml`, `Cargo.lock`, `packages/Cargo.guest.lock`, root/package `BUILD.bazel`, `bazel/checks/`, `packages/xtask/`, generated CLI schemas/manpages/completions, `README.md`, `STRATEGY.md`, `AGENTS.md`, current `docs/explanation/`, `docs/how-to/`, `docs/reference/`, examples, templates, and changelog fragments.
 - **Approach:**
   1. Merge deletion slices serially and regenerate root/Guest locks, policy closures, schemas, manifests, CLI artifacts, and fixtures.
@@ -1027,12 +1107,13 @@ flowchart TB
 - **Dependencies:** U19.
 - **Files:** `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, `tests/host-integration/host-realm-isolation.nix`, `tests/host-integration/resource-operator-activation.nix`, host-consumer configuration outside the repository, and final review/PR evidence.
 - **Approach:**
-  1. Run focused owner suites, all required static gates, and the complete host-integration lane on the exact committed head.
-  2. Before execution, require the operator to supply the exact host-consumer flake path, `nixosConfiguration` name, target host, known-good generation, and approved rollback command. Evaluate and build that configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
-  3. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify controller and VMM Processes, child Resources, authenticated Guest readiness, ZoneLink canary, credential custody, and audit.
-  4. Restart `d2bd`, verify adoption without duplicate processes or resources, delete the Guest and verify finalizer drain, then verify rollback to the known-good NixOS generation.
-  5. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
-  6. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
+  1. Own all booted-VM acceptance moved from U14 and U19: final child graph, Gateway canary, credential custody, reconnect and revocation, forged route claims, restart adoption, blocked finalization, deletion order, and rollback.
+  2. Run focused owner suites, all required static gates, and the complete host-integration lane on the exact committed head.
+  3. Before execution, require the operator to supply the exact host-consumer flake path, `nixosConfiguration` name, target host, known-good generation, and approved rollback command. Evaluate and build that configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
+  4. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify controller and VMM Processes, child Resources, authenticated Guest readiness, ZoneLink canary, credential custody, and audit.
+  5. Restart `d2bd`, verify adoption without duplicate processes or resources, delete the Guest and verify finalizer drain, then verify rollback to the known-good NixOS generation.
+  6. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
+  7. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
 - **Execution note:** The real-host switch and rollback are operator-authorized manual acceptance. Do not add a new live-host evidence script or treat an environment/advisory skip as success.
 - **Test scenarios:**
   - Covers AE1-AE8. The KVM lane proves atomic pre-UID child batch creation, uncertain-response relist, returned UID fencing, Process/Endpoint/Volume readiness, guest-local seeding, Ready-to-Degraded session loss, reconnect, same-name cross-Zone isolation, same-Zone Guest reincarnation fencing, interrupted Provider generation recycle, blocked finalization, and deletion order.
@@ -1063,8 +1144,8 @@ Each unit runs the smallest owner-local Bazel target that proves its changed sur
 | `make test-flake` | U15, U19 | Current examples and flake evaluations succeed without legacy option imports. |
 | `make test-changelog` | Every committed code unit and U19 | Every code change has valid release notes with no internal planning markers. |
 | `make test-integration` | U13, U14, U19 | Conditional foreign-userland and cross-process integration passes where applicable. |
-| `D2B_VM_CHECK=runtime-cloud-hypervisor-guest-preflight make test-host-integration` | U14 and U19 | Real KVM/broker Guest child graph, atomic batch/relist, launch, session loss/reconnect, reincarnation fencing, interrupted recycle, adoption, blocked finalization, and deletion proof passes after production daemon composition is wired. |
-| `D2B_VM_CHECK=host-realm-isolation make test-host-integration` | U14 and U19 | Gateway Guest, ZoneLink, sealed credential canary, and host custody proof pass. |
+| `D2B_VM_CHECK=runtime-cloud-hypervisor-guest-preflight make test-host-integration` | U20 | Real KVM/broker Guest child graph, atomic batch/relist, launch, session loss/reconnect, reincarnation fencing, interrupted recycle, adoption, blocked finalization, and deletion proof passes on the final converged head. |
+| `D2B_VM_CHECK=host-realm-isolation make test-host-integration` | U20 | Gateway Guest, ZoneLink, sealed credential canary, and host custody proof pass on the final converged head. |
 | Package-local compile and import checks | U17 and U18 | Retired owners have no current source consumer, package export, fixture import, or package-local build edge before U19 removes shared graph edges. |
 | `make test-host-integration` | U20 | The complete retained host VM suite passes on the final reviewed head. |
 | Real host configuration evaluation, build, dry activation, switch, restart/adoption, Guest deletion, and NixOS rollback | U20 | The deployed host remains healthy, the three-unit control plane is correct, Guests are collision-free and Ready, restart creates no duplicates, deletion drains descendants, and rollback restores the known-good generation. |
@@ -1125,7 +1206,11 @@ An environment or advisory skip is not acceptance evidence. KVM, broker, filesys
 | U5 | Recovery, upgrade, failure, and deletion are status-first and finalizer-safe. |
 | U13 | CH contracts, package metadata, locks, schemas, manifests, fixtures, and generated artifacts converge on one reviewed head. |
 | U7 | Production daemon composition uses the controller-owned lifecycle and cannot fall back to legacy v3 lookup. |
-| U14 | U10 lifecycle and U5 ZoneLink Gateway acceptance pass, including credential custody. |
+| U25 | Pure ZoneLink admission, reconnect, cursor, revocation, queue, and replay proof is complete or verified already satisfied. |
+| U26 | Superseded v1 launcher output is gone and retained host-tool option plumbing is isolated from the gateway tombstone. |
+| U27 | Unreachable private CLI and realm-entrypoint code is absent while current CLI contracts remain intact. |
+| U28 | Inert broker arguments are absent and retained versus retired Gateway/Provider ownership is classified without a shipped ledger. |
+| U14 | U10 lifecycle and U5 ZoneLink Gateway composition pass owner-local proof without VM acceptance. |
 | U15 | Pre-Zone Nix hierarchy and legacy process emitters are removed. |
 | U16 | Every current Rust/xtask consumer uses a Zone-neutral owner. |
 | U17 | Retired CLI and Core owners have no source or build edge. |
