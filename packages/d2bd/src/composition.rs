@@ -13354,12 +13354,6 @@ fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
-fn value_resource_ref(value: &Value) -> Option<ResourceRef> {
-    let resource_type = value.get("type").and_then(Value::as_str)?;
-    let name = value.pointer("/metadata/name").and_then(Value::as_str)?;
-    ResourceRef::parse(&format!("{resource_type}/{name}")).ok()
-}
-
 fn status_generation(value: &Value, fallback: ResourceGeneration) -> ResourceGeneration {
     value
         .pointer("/status/resource/endpointGeneration")
@@ -13379,16 +13373,13 @@ pub(crate) async fn resolve_committed_guest_session_target(
     if guest_ref.resource_type().as_str() != "Guest" {
         return Err("guest-session:guest-ref-invalid".to_owned());
     }
-    let guests = runtime
-        .committed_resources_of_type("Guest")
+    let guest_value = runtime
+        .committed_resource_value(guest_ref, "guest-session-guest")
         .await
         .map_err(|_| "guest-session:guest-unavailable".to_owned())?;
-    let guest_value = guests
-        .iter()
-        .find(|value| value_resource_ref(value).as_ref() == Some(guest_ref))
-        .ok_or_else(|| "guest-session:guest-unavailable".to_owned())?;
     let guest = ResourceEnvelope::from_json(
-        &serde_json::to_vec(guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
+        &serde_json::to_vec(&guest_value)
+            .map_err(|_| "guest-session:guest-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:guest-invalid".to_owned())?;
     if guest.metadata().zone() != runtime.zone()
@@ -13409,16 +13400,12 @@ pub(crate) async fn resolve_committed_guest_session_target(
     if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(&provider_ref) {
         return Err("guest-session:provider-ref-unsupported".to_owned());
     }
-    let providers = runtime
-        .committed_resources_of_type("Provider")
+    let provider_value = runtime
+        .committed_resource_value(&provider_ref, "guest-session-provider")
         .await
         .map_err(|_| "guest-session:provider-unavailable".to_owned())?;
-    let provider_value = providers
-        .iter()
-        .find(|value| value_resource_ref(value).as_ref() == Some(&provider_ref))
-        .ok_or_else(|| "guest-session:provider-unavailable".to_owned())?;
     let provider = ResourceEnvelope::from_json(
-        &serde_json::to_vec(provider_value)
+        &serde_json::to_vec(&provider_value)
             .map_err(|_| "guest-session:provider-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:provider-invalid".to_owned())?;
@@ -13436,16 +13423,12 @@ pub(crate) async fn resolve_committed_guest_session_target(
         d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
     )
     .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
-    let endpoints = runtime
-        .committed_resources_of_type("Endpoint")
+    let endpoint_value = runtime
+        .committed_resource_value(&endpoint_ref, "guest-session-endpoint")
         .await
         .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
-    let endpoint_value = endpoints
-        .iter()
-        .find(|value| value_resource_ref(value).as_ref() == Some(&endpoint_ref))
-        .ok_or_else(|| "guest-session:endpoint-unavailable".to_owned())?;
     let endpoint = ResourceEnvelope::from_json(
-        &serde_json::to_vec(endpoint_value)
+        &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
@@ -13485,7 +13468,7 @@ pub(crate) async fn resolve_committed_guest_session_target(
         endpoint_ref,
         endpoint_uid: endpoint.metadata().uid().clone(),
         endpoint_resource_generation: endpoint.metadata().generation(),
-        endpoint_generation: status_generation(endpoint_value, endpoint.metadata().generation()),
+        endpoint_generation: status_generation(&endpoint_value, endpoint.metadata().generation()),
         provider_generation: provider.metadata().generation(),
     })
 }
@@ -13499,20 +13482,45 @@ async fn resolve_component_session_endpoint_for_guest(
     runtime: &resource_runtime::ZoneResourceRuntime,
     target: &CommittedGuestSessionTarget,
 ) -> Result<d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint, String> {
-    let current = resolve_committed_guest_session_target(runtime, target.guest_ref()).await?;
-    if &current != target {
+    let guest_value = runtime
+        .committed_resource_value(target.guest_ref(), "guest-session-guest")
+        .await
+        .map_err(|_| "guest-session:guest-unavailable".to_owned())?;
+    let guest = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&guest_value)
+            .map_err(|_| "guest-session:guest-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:guest-invalid".to_owned())?;
+    if guest.metadata().zone() != target.zone()
+        || guest.metadata().uid() != target.guest_uid()
+        || guest.metadata().generation() != target.guest_generation
+    {
         return Err("guest-session:committed-identity-changed".to_owned());
     }
-    let endpoint_values = runtime
-        .committed_resources_of_type("Endpoint")
+    let provider_ref = guest
+        .spec()
+        .provider_ref()
+        .ok_or_else(|| "guest-session:provider-ref-missing".to_owned())?;
+    let provider_value = runtime
+        .committed_resource_value(provider_ref, "guest-session-provider")
+        .await
+        .map_err(|_| "guest-session:provider-unavailable".to_owned())?;
+    let provider = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&provider_value)
+            .map_err(|_| "guest-session:provider-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:provider-invalid".to_owned())?;
+    if provider.metadata().zone() != target.zone()
+        || provider.metadata().generation() != target.provider_generation()
+    {
+        return Err("guest-session:committed-identity-changed".to_owned());
+    }
+    let endpoint_value = runtime
+        .committed_resource_value(target.endpoint_ref(), "guest-session-endpoint")
         .await
         .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
-    let endpoint_value = endpoint_values
-        .iter()
-        .find(|value| value_resource_ref(value).as_ref() == Some(target.endpoint_ref()))
-        .ok_or_else(|| "guest-session:endpoint-unavailable".to_owned())?;
     let endpoint = ResourceEnvelope::from_json(
-        &serde_json::to_vec(endpoint_value)
+        &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
@@ -13549,16 +13557,12 @@ async fn resolve_component_session_endpoint_for_guest(
         d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
     )
     .map_err(|_| "guest-session:process-ref-invalid".to_owned())?;
-    let processes = runtime
-        .committed_resources_of_type("Process")
+    let process_value = runtime
+        .committed_resource_value(&process_ref, "guest-session-process")
         .await
         .map_err(|_| "guest-session:process-unavailable".to_owned())?;
-    let process_value = processes
-        .iter()
-        .find(|value| value_resource_ref(value).as_ref() == Some(&process_ref))
-        .ok_or_else(|| "guest-session:process-unavailable".to_owned())?;
     let process = ResourceEnvelope::from_json(
-        &serde_json::to_vec(process_value)
+        &serde_json::to_vec(&process_value)
             .map_err(|_| "guest-session:process-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:process-invalid".to_owned())?;
@@ -17829,10 +17833,10 @@ async fn gateway_guest_for_provider(
     runtime: &resource_runtime::ZoneResourceRuntime,
     provider_ref: &ResourceRef,
 ) -> Option<CommittedGuestSessionTarget> {
-    let providers = runtime.committed_resources_of_type("Provider").await.ok()?;
-    let provider = providers.into_iter().find(|provider| {
-        value_resource_ref(provider).as_ref() == Some(provider_ref)
-    })?;
+    let provider = runtime
+        .committed_resource_value(provider_ref, "gateway-guest-provider")
+        .await
+        .ok()?;
     let guest_ref = provider
         .get("spec")
         .and_then(|spec| spec.get("config"))

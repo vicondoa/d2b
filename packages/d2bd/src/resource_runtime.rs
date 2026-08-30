@@ -4061,6 +4061,35 @@ impl ZoneResourceRuntime {
         Ok(out)
     }
 
+    pub(crate) async fn committed_resource_value(
+        &self,
+        target: &ResourceRef,
+        operation_id: &str,
+    ) -> Result<Value, ResourceRuntimeError> {
+        let resource = self
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: target.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        if resource.zone != self.zone || resource.resource_ref != *target {
+            return Err(ResourceRuntimeError::StoreReadFailed);
+        }
+        serde_json::from_slice(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+    }
+
     /// Publish a validated status projection from the real system-core
     /// handler observations.
     pub fn publish_zone_status(&self, input: ZoneStatusInput) -> Result<(), ResourceRuntimeError> {
