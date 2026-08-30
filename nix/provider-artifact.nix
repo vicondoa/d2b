@@ -78,17 +78,22 @@ let
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    first = hashlib.sha256(
-        b"d2b:v3:provider-executable-set\0" + executable_map
-    ).digest()
     pathlib.Path(output_path).write_text(
-        "sha256:" + hashlib.sha256(first).hexdigest(),
+        "sha256:" + hashlib.sha256(
+            b"d2b:v3:provider-executable-set\0" + executable_map
+        ).hexdigest(),
         encoding="ascii",
     )
     PY
   '';
   executableSetDigest =
     lib.removeSuffix "\n" (builtins.readFile executableSetDigestFile);
+  manifestExecutableDigest = manifestData.digests.executable or null;
+  targetCapabilityDigests = lib.concatMap
+    (component:
+      map (capability: capability.artifactDigest or null)
+        (component.targetCapabilities or [ ]))
+    (manifestData.components or [ ]);
   manifestDigest = rawDigest manifest;
   configDigest = rawDigest configSchema;
   componentSetDigest = "sha256:${builtins.hashString "sha256"
@@ -220,6 +225,10 @@ assert packageDigestOverride == null
   || packageDigestOverride == computedPackageDigest;
 assert builtins.isString executableSetDigest
   && builtins.match digestPattern executableSetDigest != null;
+assert manifestExecutableDigest == executableSetDigest;
+assert lib.all
+  (digest: digest == executableSetDigest)
+  targetCapabilityDigests;
 assert builtins.isString manifestDigest
   && builtins.match digestPattern manifestDigest != null;
 assert builtins.isString configDigest
