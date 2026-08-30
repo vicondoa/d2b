@@ -1568,7 +1568,6 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
- "d2b-process-conformance",
  "d2b-session",
  "d2b-session-unix",
  "serde",

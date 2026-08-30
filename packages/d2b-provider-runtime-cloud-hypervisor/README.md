@@ -30,6 +30,14 @@ finalizes the Guest in reverse dependency order.
 
 The controller runs on an explicit Host, while the VMM is broker-spawned and
 daemon-supervised. No per-VM systemd unit or direct broker socket is used.
+The crate has no direct dependency on `d2b-broker` or either Resource Store
+crate. Launch, mount, storage, socket, device, and network effects remain
+owned by the corresponding Resource controllers and broker adapters.
+
+The package ships the signed `provider-manifest.json`, its detached signature,
+the publisher public key, and `root-config.schema.json`. These files are
+packaged by `nix/provider-artifact.nix`; the manifest is canonicalized by the
+Provider toolkit rather than maintained as a second runtime contract.
 
 ## RBAC requirements
 

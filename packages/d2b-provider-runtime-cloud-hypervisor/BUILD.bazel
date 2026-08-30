@@ -2,20 +2,33 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
+    [
+        "BUILD.bazel",
+        "nix/default.nix",
+        "nix/tests/default.nix",
+        "provider-manifest.json",
+        "provider-manifest.json.sig",
+        "publisher-public-key.pem",
+        "root-config.schema.json",
+    ],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_runtime_cloud_hypervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml", "provider-manifest.json"],
+    compile_data = [
+        "Cargo.toml",
+        "provider-manifest.json",
+        "provider-manifest.json.sig",
+        "publisher-public-key.pem",
+        "root-config.schema.json",
+    ],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-session:d2b_session",
         "//packages/d2b-session-unix:d2b_session_unix",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -44,7 +57,6 @@ rust_test(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-session:d2b_session",
         "//packages/d2b-session-unix:d2b_session_unix",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -146,21 +158,6 @@ rust_test(
 )
 
 rust_test(
-    name = "vmm_argv_golden_test",
-    srcs = [
-        "tests/vmm_argv_golden_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_runtime_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "guest_spec_validation_test",
     srcs = [
         "tests/guest_spec_validation_test.rs",
@@ -232,7 +229,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "provider-manifest.json",
+            "provider-manifest.json.sig",
+            "publisher-public-key.pem",
             "README.md",
+            "root-config.schema.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

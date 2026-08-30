@@ -261,6 +261,8 @@ in
         in {
           enabled = projection.enabled;
           hasProcessProjection = projection ? processesByZone;
+          hasResourceProjection = projection.resourcesByZone == { };
+          hasGuestPatchProjection = projection.guestPatchesByZone == { };
           descriptorCount = lib.length descriptors;
           descriptorGuest = (lib.head descriptors).guest or null;
           descriptorSystemArtifactId =
@@ -278,6 +280,8 @@ in
       expected = {
         enabled = true;
         hasProcessProjection = false;
+        hasResourceProjection = true;
+        hasGuestPatchProjection = true;
         descriptorCount = 1;
         descriptorGuest = "guest";
         descriptorSystemArtifactId = "guest-system";

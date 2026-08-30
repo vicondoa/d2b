@@ -52,6 +52,10 @@ packages/d2b-provider-runtime-cloud-hypervisor/
   src/
   tests/
   integration/
+  provider-manifest.json
+  provider-manifest.json.sig
+  publisher-public-key.pem
+  root-config.schema.json
   README.md
 
 The workspace policy gate rejects the crate if any of these four top-level paths
@@ -59,15 +63,19 @@ is absent. A nested `integration/README.md` is recommended but optional and is
 not enforced by the policy gate.
 ```
 
-- `src/`: controller binary, guest-bootstrap actor, VMM process template
-  builder, reconcile/observe/finalize handlers, config schema, internal
-  modules, and colocated unit tests.
+- `src/`: controller binary, guest-bootstrap actor, deterministic child and
+  descriptor planners, reconcile/observe/finalize handlers, config schema,
+  internal modules, and colocated unit tests.
 - `tests/`: hermetic Cargo integration tests - ResourceType conformance,
   fault/retry/restart scenarios, redaction, schema golden vectors, fake-port
   bus tests, and pidfd adoption property tests.
 - `integration/`: heavier container/Host/Guest/cross-process fixtures invoked
   by existing repository test orchestration (`make test-integration`,
   `make test-host-integration`).
+- The signed manifest, detached signature, publisher key, and root
+  configuration schema are package inputs. Nix assembles them with the
+  controller binary through the shared Provider artifact helper; the
+  controller package does not carry a VMM argv or direct-effect adapter.
 - `README.md`: Provider identity/config, ResourceTypes, controllers/services/
   workers/binaries, placement, dependencies/RBAC, security/state/telemetry,
   build/test/integration commands, and standalone-repository consumption.
@@ -1708,11 +1716,15 @@ bundle and are never swept by configuration generation cleanup.
 
 ### 22.1 Summary
 
+The current converged package does not expose the historical VMM argv adapter.
+The Guest controller submits only Resource API intents; the Process Provider
+resolves private launch inputs and owns the broker effect.
+
 | Item | Treatment |
 | --- | --- |
 | Current anchor | `packages/d2b-host/src/runtime_provider.rs` (`CloudHypervisorRuntimeProvider`, `CloudHypervisorRuntimeControl`); `packages/d2b-host/src/ch_argv.rs` (`ChArgvInput`, `ChArgvGenerator`); `packages/d2bd/src/provider_shutdown.rs` (`CloudHypervisorShutdown`); `packages/d2b-core/src/processes.rs` (`ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`); `packages/d2b-host-providers/src/lib.rs` (`RuntimeProvider` adapter); `nixos-modules/components/tpm.nix`; `nixos-modules/network.nix`; `nixos-modules/processes-json.nix` (VMM/swtpm/net-VM process node emitters); `nixos-modules/store.nix` |
 | Evidence class | `production-reachable` for all items above; see migration map §2 |
-| Behavior retained | Typed argv generation (pure data, no syscalls); pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
+| Behavior retained | pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
 | Required delta | Controller as async ResourceReconciler; Guest ResourceSpec validation; VMM Process as single owned child resource; direct dependency-readiness gate via ResourceClient (no EphemeralProcess); ComponentSession guest-control health in observe handler; typed provider descriptor; framework-provisioned ProviderStateSet; bus-only resource access; ResourceMutationBatch status writes; explicit Device/kvm in Guest deviceAttachments; required controllerExecutionRef in Provider config |
 | Reuse path | See §22.2 |
 | Replacement/deletion | Current `d2b-<vm>-vm.service` systemd unit, `SpawnRunner{role: CloudHypervisor}` broker op, `RuntimeProvider` trait calls, and `CloudHypervisorRuntimeProvider` adapter remain until runtime-cloud-hypervisor integration passes full test parity |
@@ -1722,7 +1734,7 @@ bundle and are never swept by configuration generation cleanup.
 
 | Current symbol / path | Evidence class | Current callers | Reuse action | v3 destination |
 | --- | --- | --- | --- | --- |
-| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `spec.provider.settings` schema; store paths move to private artifact-catalog resolution; the v3 builder accepts only the declared LaunchTicket child fd slot for tap argv and has no handoff-mode or tap-name input; no `spec.*` exposure |
+| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | historical | `d2b-host/src/runtime_provider.rs` | RETIRED | The converged Guest controller has no VMM argv adapter; the Process Provider owns private launch-input resolution and broker handoff |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeControl` trait | production-reachable | `d2bd`; supervisor test seams | REPLACE | Supervisor ticket passed through `Provider/system-minijail` LaunchTicket; no ambient trait |
 | `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
@@ -1733,7 +1745,7 @@ bundle and are never swept by configuration generation cleanup.
 | `d2b-host/src/virtiofsd_argv.rs` | production-reachable | `d2bd` virtiofsd start | MOVE | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
 | `nixos-modules/processes-json.nix` (CloudHypervisor/Swtpm/NetVm node emitters) | nix-emitted | Bundle artifact consumer | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/` Nix builder per `ADR-046-nix-configuration`; current emitters deleted after integration |
 | `nixos-modules/store.nix` | nix-emitted | Per-VM hardlink farm setup | REPLACE | `Provider/volume-local` owns Volume with `VolumeKind: state` for store farm; the controller watches Volume readiness via ResourceClient before creating the VMM Process - no EphemeralProcess preflight |
-| `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | test-only | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | COPY/ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/tests/vmm_argv_golden_test.rs`; new golden vectors for v3 spec-driven argv; old shell golden tests adapted to `integration/` |
+| `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | historical | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | RETIRED | VMM argv golden coverage belongs to the Process Provider; no controller-side argv fixture remains |
 | `tests/video-sidecar-hardening-eval.sh` | test-only | `make test-policy` | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/integration/video_sidecar_integration_test.rs`; device-gpu Provider must also have a corresponding test |
 | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*` with `vm=` label) | production-reachable | Current Prometheus hand-roll | REPLACE | `d2b_runtime_ch_*` metrics from §18.3; `vm=` label removed from metric labels; VM identity stays in OTEL resource attributes only |
 
@@ -1796,17 +1808,17 @@ per-test advisory threshold.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-002; artifact catalog foundation |
+| Dependency/owner | Historical ADR046-ch-002; artifact catalog foundation |
 | Current source | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv`; `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` |
-| Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
-| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; tap argv accepts only the declared child fd slot inherited from the sealed LaunchTicket, with no runtime-selected handoff mode or host tap name; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
-| Integration | ProviderSupervisor LaunchTicket resolution, including direct inheritance of the precreated connected tap fd |
+| Reuse action | retired |
+| Destination | None. The historical controller-side argv adapter and its golden test were removed during U13 convergence. |
+| Detailed design | Process Provider launch tickets resolve private kernel, initramfs, socket, share, and fd inputs. The Guest controller carries no raw path, locator, argv, or fd and performs no broker effect. |
+| Integration | Provider/system-minijail and the broker-owned SpawnRunner path |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; tap vector accepts only the declared LaunchTicket child fd slot; redaction test (no store path in Debug output) |
-| Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; the old network-handoff mode and tap-name branches have no v3 callers; old golden test files adapted |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Validation | Process Provider ticket and broker launch tests cover the private effect path; Guest controller tests cover Resource API-only behavior and redaction |
+| Removal proof | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` and `tests/vmm_argv_golden_test.rs` are absent; no current caller exports the old adapter |
+| Implementation state | Retired by U13 |
+| Evidence | U13 package convergence removed the duplicate controller-side effect surface and retained the Process Provider as the sole launch owner. |
 
 ### ADR046-ch-004 (Nix resource compiler)
 
@@ -1878,11 +1890,10 @@ workspace policy gate rejects the crate unless all four paths exist:
 ```text
 packages/d2b-provider-runtime-cloud-hypervisor/
   src/
-    lib.rs                       # crate root; re-exports controller, guest_spec, vmm_argv
+    lib.rs                       # crate root; re-exports controller, config, and lifecycle helpers
     controller.rs                # async ResourceReconciler, describe/validate/plan/reconcile/finalize/observe
     bootstrap_graph.rs           # VMM Process spec builder and dependency-readiness check
-    vmm_argv.rs                  # VmmArgvInput, vmm_argv_build (pure; no store paths in output)
-    guest_spec.rs                # GuestProviderSpecSettings, spec.provider.settings schema, validateSpec
+    config.rs                    # Provider and Guest configuration bounds
     health.rs                    # ComponentSession KK health check, GuestReachable condition (observe)
     adoption.rs                  # pidfd adoption, ambiguity detection, quarantine
     shutdown.rs                  # graceful shutdown via guest-control session
@@ -1890,7 +1901,6 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     audit.rs                     # bounded durable audit record types and emit helpers
     state.rs                     # controller status-first operational-state projection helpers (no state Volume)
   tests/
-    vmm_argv_golden_test.rs      # golden argv vectors (headless, q35, gpu, video, macvtap)
     guest_spec_validation_test.rs # validateSpec: Endpoint required, memoryShared, systemArtifactId,
                                  # controllerExecutionRef; rejects cmdlineExtra/seccompOverride
     bootstrap_graph_test.rs      # VMM Process spec construction, dependency ordering,
@@ -1941,8 +1951,7 @@ Each file under `integration/` uses the existing repository test orchestration
   warning; do not fail closed for TCG-only CI);
 - `device_kvm_test.rs` explicitly validates both KVM and TCG paths;
 - the `d2b-controller-toolkit` fake-bus adapters for unit tests;
-- `tests/integration/containers/` for container-level (non-KVM) integration
-  (e.g., `vmm_argv_golden_test` can run without KVM).
+- `tests/integration/containers/` for container-level (non-KVM) integration.
 
 Real Host/Guest fixtures are declared as `runNixOSTest` modules in
 `tests/host-integration/runtime-cloud-hypervisor.nix`. They import the

@@ -33,10 +33,9 @@ Roles, from
 - `virtiofsd` - one instance per `microvm.shares` row. The current
   headless shape uses four shares: `ro-store`, `d2b-meta`,
   `d2b-hkeys`, and `d2b-ssh-host`.
-- `cloud-hypervisor-runner` - the CH binary launched against the
-  argv emitted by the
-  [`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
-  Provider.
+- `cloud-hypervisor-runner` - the CH binary launched by the sealed Process
+  Provider ticket. The Guest controller supplies only the owned Process
+  intent and never constructs VMM argv.
 - `component-session` - the Guest-side `d2bd guest` target agent owns the
   enrolled parent-Zone ComponentSession. It is not a host DAG node and does
   not create a host public socket or local Zone store; session evidence and
@@ -333,9 +332,10 @@ per-share systemd template/watchdog combination
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) - wire
   envelope shapes and typed-error catalog.
-- [`runtime-cloud-hypervisor::vmm_argv`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
-  / [`swtpm_argv`](../../packages/d2b-provider-device-tpm/src/swtpm_argv.rs) -
-  pure argv generators feeding the broker `SpawnRunner` op.
+- [`swtpm_argv`](../../packages/d2b-provider-device-tpm/src/swtpm_argv.rs) -
+  the device-tpm Provider's pure argv generator feeding its broker
+  `SpawnRunner` op. Cloud Hypervisor launch arguments are owned by the
+  Process Provider and are not part of the Guest controller package.
 - [`virtiofsd_argv`](../../packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs)
   is owned by the volume-virtiofs Provider.
 - [`d2bd_runtime::supervisor::dag`](../../packages/d2bd-runtime/src/supervisor/dag.rs)

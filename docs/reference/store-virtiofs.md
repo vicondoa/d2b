@@ -17,10 +17,9 @@ enrollment keys are not delivered through virtiofs.
 | `d2b-hkeys`    | `/run/d2b/vms/corp-vm/d2b-hkeys.sock` | `/var/lib/d2b/vms/corp-vm/host-keys`             | RW   |
 | `d2b-ssh-host` | `/run/d2b/vms/corp-vm/d2b-ssh-host.sock` | `/var/lib/d2b/vms/corp-vm/sshd-host-keys`      | RW   |
 
-CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
-flag (see `ChArgvInput.fs_shares` in the
-[`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
-Provider).
+The Cloud Hypervisor Process receives these broker-resolved share descriptors
+through its sealed Process Provider launch ticket. The Guest controller does
+not construct VMM argv or receive host socket paths.
 
 ## virtiofsd argv shape
 

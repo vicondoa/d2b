@@ -18,7 +18,6 @@ pub mod identity;
 pub mod metrics;
 pub mod shutdown;
 pub mod state;
-pub mod vmm_argv;
 
 pub use adoption::{
     AdoptionObservationError, AdoptionOutcome, ProcessAdoptionStatus, ProcessIdentity,
@@ -67,7 +66,6 @@ pub use state::{
     GuestGenerationSet, GuestRuntimeStatus, GuestStatusObservation, GuestStatusPhase,
     finalization_eligible, reduce_status,
 };
-pub use vmm_argv::{ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv};
 
 /// Stable Provider implementation identifier.
 pub const CLOUD_HYPERVISOR_IMPLEMENTATION_ID: &str = "cloud-hypervisor";

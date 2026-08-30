@@ -400,6 +400,32 @@
               fi
             '';
           };
+        providerArtifact = import ./nix/provider-artifact.nix {
+          inherit pkgs;
+        };
+        cloudHypervisorController = rustWorkspace {
+          pname = "d2b-cloud-hypervisor-controller";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-provider-runtime-cloud-hypervisor"
+            "--bin"
+            "d2b-cloud-hypervisor-controller"
+          ];
+          doCheck = false;
+          meta.mainProgram = "d2b-cloud-hypervisor-controller";
+        };
+        cloudHypervisorArtifact = providerArtifact {
+          artifactId = "runtime-cloud-hypervisor";
+          binary = cloudHypervisorController;
+          binaryRef = "d2b-cloud-hypervisor-controller";
+          manifest = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
+          signature = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json.sig;
+          configSchema = ./packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
+          publicKey = ./packages/d2b-provider-runtime-cloud-hypervisor/publisher-public-key.pem;
+          providerName = "runtime-cloud-hypervisor";
+          packageName = "d2b-provider-runtime-cloud-hypervisor";
+          signatureId = "default";
+        };
         # The canonical Provider package surface is present before semantic
         # Provider artifacts are implemented. These outputs compile each
         # Provider crate and publish only a scaffold marker; owning Provider
@@ -502,7 +528,7 @@
         d2b-provider-runtime-azure-virtual-machine =
           providerScaffoldPackage "d2b-provider-runtime-azure-virtual-machine";
         d2b-provider-runtime-cloud-hypervisor =
-          providerScaffoldPackage "d2b-provider-runtime-cloud-hypervisor";
+          cloudHypervisorArtifact.package;
         d2b-provider-runtime-qemu-media =
           providerScaffoldPackage "d2b-provider-runtime-qemu-media";
         d2b-provider-shell-terminal =
@@ -1620,6 +1646,29 @@
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
         buildProviderElfShim = providerElfShim;
+        mkProviderArtifact = args:
+          let
+            system = args.system or builtins.currentSystem;
+            providerPkgs = args.pkgs or nixpkgsFor.${system};
+            helperArgs = builtins.removeAttrs args [ "pkgs" "system" ];
+          in
+          (import ./nix/provider-artifact.nix {
+            pkgs = providerPkgs;
+          }) helperArgs;
+        buildProviderArtifact = args: self.lib.mkProviderArtifact args;
+        providerRuntimeCloudHypervisor = system:
+          let
+            package = self.packages.${system}.d2b-provider-runtime-cloud-hypervisor;
+            metadata = package.passthru.providerArtifact;
+          in {
+            inherit package;
+            inherit (metadata) catalog trustedPublisher;
+            descriptor = {
+              package = package;
+              type = "provider";
+              inherit (metadata) catalog;
+            };
+          };
         evalGuest = {
           system ? builtins.currentSystem,
           extraSpecialArgs ? { },
