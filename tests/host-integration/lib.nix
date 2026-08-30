@@ -158,9 +158,9 @@ let
         output = pathlib.Path(output_path)
         (output / "bin").mkdir(parents=True)
         (output / "share/d2b/provider").mkdir(parents=True)
-        (output / "bin/d2b-cloud-hypervisor-controller").write_bytes(
-            pathlib.Path(controller_path).read_bytes()
-        )
+        controller_output = output / "bin/d2b-cloud-hypervisor-controller"
+        controller_output.write_bytes(pathlib.Path(controller_path).read_bytes())
+        controller_output.chmod(0o755)
         (output / "share/d2b/provider/provider-manifest.json").write_bytes(
             manifest_bytes
         )
