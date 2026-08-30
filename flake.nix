@@ -818,14 +818,62 @@
           d2b._bundle.extraArtifacts.artifactCatalog =
             lib.mkOverride 0 fixtureArtifactCatalogArtifact;
         };
+        fixtureResourceCompilerEnv =
+          builtins.getEnv "D2B_FIXTURE_RESOURCE_COMPILER";
+        fixtureResourceCompiler =
+          if fixtureResourceCompilerEnv == "" then
+            self.packages.${system}.d2b-resource-compiler
+          else
+            pkgs.stdenv.mkDerivation {
+              pname = "d2b-fixture-resource-compiler";
+              version = "0";
+              src = builtins.path {
+                path = /. + fixtureResourceCompilerEnv;
+                name = "d2b-resource-compiler";
+              };
+              dontUnpack = true;
+              nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+              buildInputs = [ pkgs.glibc pkgs.stdenv.cc.cc.lib ];
+              installPhase = ''
+                install -Dm755 "$src" "$out/bin/d2b-resource-compiler"
+              '';
+            };
+        fixtureHostToolPackage = pkgs.runCommand "d2b-fixture-host-tools" { } ''
+          mkdir -p "$out/bin"
+          for name in \
+            d2b \
+            d2bd \
+            d2b-broker \
+            d2b-activation-helper \
+            d2b-host-activation-helper \
+            d2b-unsafe-local-helper \
+            d2b-wayland-proxy
+          do
+            printf '#!%s\nexit 0\n' '${pkgs.runtimeShell}' > "$out/bin/$name"
+            chmod 0755 "$out/bin/$name"
+          done
+        '';
+        fixtureHostToolOverrides =
+          (pkgs.lib.genAttrs [
+            "d2b"
+            "d2bd"
+            "broker"
+            "activationHelper"
+            "hostActivationHelper"
+            "unsafeLocalHelper"
+            "resourceCompiler"
+            "waylandProxy"
+          ] (_: fixtureHostToolPackage))
+          // { resourceCompiler = fixtureResourceCompiler; };
         smokeEval = mkEval [
           smokeConfigModule
           ({ lib, ... }: {
-            # Contract fixtures must render the just-built workspace tools.
-            # Release prebuilts may not exist for unreleased development
-            # versions, and using prebuilts would hide changes to runner argv
-            # and helper paths from the rendered artifact tests.
+            # Bazel fixture actions inject their already-built host tools so
+            # rendered paths and argv track the current workspace without a
+            # second Rust build through Nix.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
+            _module.args.d2bHostToolOverrides =
+              lib.mkForce fixtureHostToolOverrides;
           })
           fixtureArtifactCatalogOverride
         ];
@@ -1000,6 +1048,8 @@
           fullFixtureVmTools
           ({ lib, ... }: {
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
+            _module.args.d2bHostToolOverrides =
+              lib.mkForce fixtureHostToolOverrides;
           })
           fixtureArtifactCatalogOverride
         ];

@@ -24,6 +24,9 @@ _FIXTURE_SOURCES = [
 nix_fixture(
     name = "fixture_smoke",
     flake = "//:flake.nix",
+    host_tools = [
+        "//packages/d2b-resource-compiler:d2b-resource-compiler",
+    ],
     nix = "@nix//:bin/nix",
     srcs = _FIXTURE_SOURCES,
     tags = [
