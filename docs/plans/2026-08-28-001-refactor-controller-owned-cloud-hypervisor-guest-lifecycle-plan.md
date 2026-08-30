@@ -1102,18 +1102,20 @@ flowchart TB
 
 ### U20. Prove VM and real-host acceptance and land the reviewed head
 
-- **Goal:** Validate the final Zone-only system under KVM and on a real configured host, then complete the reviewed PR lifecycle.
+- **Goal:** Switch the real host's `/etc/nixos` configuration to the final Zone-only system and prove d2b starts and boots a Cloud Hypervisor Guest correctly, then complete the reviewed PR lifecycle.
 - **Requirements:** R1-R20; F1-F3; AE1-AE9.
 - **Dependencies:** U19.
-- **Files:** `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, `tests/host-integration/host-realm-isolation.nix`, `tests/host-integration/resource-operator-activation.nix`, host-consumer configuration outside the repository, and final review/PR evidence.
+- **Files:** `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, `tests/host-integration/host-realm-isolation.nix`, `tests/host-integration/resource-operator-activation.nix`, the host's `/etc/nixos` configuration outside the repository, targeted v1/v2 host-path cleanup, and final review/PR evidence.
 - **Approach:**
   1. Own all booted-VM acceptance moved from U14 and U19: final child graph, Gateway canary, credential custody, reconnect and revocation, forged route claims, restart adoption, blocked finalization, deletion order, and rollback.
   2. Run focused owner suites, all required static gates, and the complete host-integration lane on the exact committed head.
-  3. Before execution, require the operator to supply the exact host-consumer flake path, `nixosConfiguration` name, target host, known-good generation, and approved rollback command. Evaluate and build that configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
-  4. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify controller and VMM Processes, child Resources, authenticated Guest readiness, ZoneLink canary, credential custody, and audit.
-  5. Restart `d2bd`, verify adoption without duplicate processes or resources, delete the Guest and verify finalizer drain, then verify rollback to the known-good NixOS generation.
-  6. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
-  7. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
+  3. Use the real `/etc/nixos` flake and selected `nixosConfiguration`; deep host configuration changes are allowed because this is a clean break from v1/v2, not an in-place compatibility migration.
+  4. Evaluate and build the configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
+  5. Remove only explicitly identified, d2b-owned v1/v2 host paths after the switch. No data migration or retention is required, but foreign ownership markers and unrelated host state remain untouched.
+  6. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify the controller and VMM Process Resources, authenticated Guest readiness, and successful Cloud Hypervisor Guest boot.
+  7. Restart `d2bd`, verify adoption without duplicate processes or resources, delete and recreate the test Guest without requiring retained v1/v2 data, then verify rollback to the known-good NixOS generation.
+  8. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
+  9. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
 - **Execution note:** The real-host switch and rollback are operator-authorized manual acceptance. Do not add a new live-host evidence script or treat an environment/advisory skip as success.
 - **Test scenarios:**
   - Covers AE1-AE8. The KVM lane proves atomic pre-UID child batch creation, uncertain-response relist, returned UID fencing, Process/Endpoint/Volume readiness, guest-local seeding, Ready-to-Degraded session loss, reconnect, same-name cross-Zone isolation, same-Zone Guest reincarnation fencing, interrupted Provider generation recycle, blocked finalization, and deletion order.
@@ -1123,6 +1125,7 @@ flowchart TB
   - Foreign nftables, NetworkManager, and cgroup ownership markers remain byte-for-byte unchanged; a missing or replaced previously provisioned TPM directory fails closed; forged route, target, verb, capability, generation, cursor, and relay identity are denied.
   - Real host deletion keeps `FinalizationBlocked` while any owned transitive worker, host-backed Guest Volume, unavailable-session uncertainty, or foreign leftover prevents proof of complete drain; the Guest finalizer clears only after owned descendants are absent.
   - Host rollback leaves new-generation Processes and owned Resources absent or quarantined, restores the known-good generation, starts a Guest successfully, and leaves the healthy three-unit control plane.
+- **Scope boundary:** ACA and other Provider acceptance are follow-up work after U20 and do not block this Cloud Hypervisor host cutover.
 - **Verification:** VM and real-host acceptance pass on the same reviewed head, final `make check` passes, CI is green, no actionable review finding remains, and the guarded squash merge succeeds.
 
 ---
@@ -1181,6 +1184,7 @@ An environment or advisory skip is not acceptance evidence. KVM, broker, filesys
 - Current docs, examples, templates, manpages, completions, schemas, changelog, and classified removal audit agree with the implementation and treat conflicting historical ADR text as drift.
 - All focused, integration, Nix, fixture, supply-chain, policy, drift, flake, changelog, VM, and aggregate gates required by the Verification Contract pass.
 - Real-host dry activation, switch, service health, Guest readiness, daemon restart adoption, deletion/finalizer drain, and NixOS rollback pass on the reviewed head.
+- The real `/etc/nixos` configuration switches successfully, d2b starts, and a Cloud Hypervisor Guest boots; v1/v2 data retention and ACA acceptance are not required.
 - Directly related specifications, README content, changelog entry, schemas, and generated evidence agree with the implementation.
 - Abandoned direct-effect or duplicate child-ownership attempts are removed rather than left as dormant fallback code.
 - One reviewed PR contains the final work, CI is green, no actionable finding remains, and the guarded squash merge succeeds.
