@@ -1007,8 +1007,9 @@ let
             inherit (homeBrokerService.serviceConfig) Group Slice;
             execStartHasAuditDir =
               lib.hasInfix "--audit-dir /var/lib/d2b/audit/realms/home" homeBrokerService.serviceConfig.ExecStart;
-            execStartHasRealmControllersPath =
-              lib.hasInfix "--realm-controllers-path /etc/d2b/realm-controllers.json" homeBrokerService.serviceConfig.ExecStart;
+            execStartHasNoRealmMetadataPaths =
+              !(lib.hasInfix "--realm-controllers-path " homeBrokerService.serviceConfig.ExecStart)
+              && !(lib.hasInfix "--realm-identity-path " homeBrokerService.serviceConfig.ExecStart);
             execStartHasStateDir =
               lib.hasInfix "--state-dir /var/lib/d2b/realms/home" homeBrokerService.serviceConfig.ExecStart;
             execStartHasD2bdUid =
@@ -1140,7 +1141,7 @@ let
           afterBrokerSocket = true;
           Group = "d2br-${realmHash "home"}";
           execStartHasAuditDir = true;
-          execStartHasRealmControllersPath = true;
+          execStartHasNoRealmMetadataPaths = true;
           execStartHasStateDir = true;
           execStartHasD2bdUid = true;
           execStartHasD2bdGid = true;

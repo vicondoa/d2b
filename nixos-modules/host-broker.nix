@@ -278,8 +278,6 @@ in
           "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
-          "--realm-controllers-path /etc/d2b/realm-controllers.json " +
-          "--realm-identity-path /etc/d2b/realm-identity.json " +
           "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";
