@@ -184,6 +184,10 @@ pkgs.testers.runNixOSTest {
         "grep -qw 'pids' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control || "
         "{ echo 'required delegated d2b.slice cgroup posture unavailable' >&2; exit 1; }"
     )
+    machine.succeed(
+        "! journalctl -u d2bd.service --no-pager -b 2>/dev/null "
+        "| grep -F 'Bundle resolver could not load'"
+    )
 
     machine.succeed(
         "test -r /etc/d2b/artifact-catalog.json && "
