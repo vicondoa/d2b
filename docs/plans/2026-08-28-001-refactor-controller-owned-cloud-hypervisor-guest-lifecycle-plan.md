@@ -462,20 +462,35 @@ flowchart TB
   U12 --> U1
   U1 --> U2[U2 Core child batch]
   U1 --> U6[U6 Nix Guest-only authoring]
+  U1 --> U22[U22 pure child graph planning]
+  U2 --> U22
+  U1 --> U23[U23 bound Guest-session evidence]
+  U12 --> U23
+  U1 --> U24[U24 pure Guest status projection]
   U2 --> U3[U3 CH child controller]
   U11 --> U8[U8 Process broker identity]
   U2 --> U8
   U8 --> U3
   U12 --> U3
+  U22 --> U3
+  U23 --> U3
+  U24 --> U3
   U3 --> U4[U4 Guest session and seed]
   U12 --> U4
+  U23 --> U4
+  U24 --> U4
   U3 --> U5[U5 recovery and deletion]
   U4 --> U5
   U8 --> U5
+  U23 --> U5
+  U24 --> U5
   U3 --> U13[U13 CH shared convergence]
   U5 --> U13
   U6 --> U13
   U8 --> U13
+  U22 --> U13
+  U23 --> U13
+  U24 --> U13
   U13 --> U7[U7 daemon composition]
   U7 --> U14[U14 U10 and U5 closure]
   U14 --> U15[U15 U6 Nix removal]
@@ -491,6 +506,8 @@ flowchart TB
 
 - U9 transport and artifact work may use disjoint owner-local worktrees under one U9 coordinator; artifact regeneration and the U9 merge remain serial.
 - After U1 freezes shared contracts, U2 and U6 may run in separate worktrees. U8 starts only after U2 and U11.
+- After U8 commits, U22, U23, and U24 may run concurrently in isolated worktrees. They own only `bootstrap_graph.rs`, `health.rs`, and `state.rs` plus owner-local tests and separate changelog fragments; they must not touch `controller.rs`, daemon composition, session transport, target-local runtime, package metadata, generated artifacts, or locks.
+- Merge U22-U24 serially through the integration owner in any order, rerunning focused verification and delta review for each result. U3 starts only after all three are integrated.
 - U3, U4, and U5 form a serial chain. One owner controls `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` from U3 through U5; U4 or U5 may prepare disjoint test fixtures only after their declared prerequisites settle.
 - U17 and U18 use separate worktrees for retired CLI/core and gateway/Provider owners, then merge through U19.
 
@@ -513,10 +530,13 @@ flowchart TB
 | U2 | Generalize Core owned-child batches | Core owner/dependency engines | U1, U10 |
 | U6 | Replace Nix child projection with Guest-only authoring | CH Nix, artifact catalog, Nix tests | U1 |
 | U8 | Harden Process, supervisor, and broker identity | Process runtime, ProviderSupervisor, broker | U1, U2, U11 |
-| U3 | Build the CH child controller | CH controller and graph tests | U1, U2, U8, U12 |
-| U4 | Add Guest session and target-local seeding | CH session adapter, guest runtime, session tests | U1, U3, U12 |
-| U5 | Add recovery, upgrade, and finalizer-safe deletion | CH lifecycle modules, Core cleanup | U3, U4, U8 |
-| U13 | Converge CH package, contracts, and generated artifacts | CH package metadata, locks, schemas, manifests | U3-U6, U8 |
+| U22 | Extract pure CH child graph planning | CH bootstrap graph and unit tests | U1, U2 |
+| U23 | Freeze authenticated Guest-session evidence | CH health evidence and unit tests | U1, U12 |
+| U24 | Add pure Guest status projection | CH state reducer and status tests | U1 |
+| U3 | Build the CH child controller | CH controller and graph integration tests | U1, U2, U8, U12, U22-U24 |
+| U4 | Add Guest session and target-local seeding | CH session adapter, guest runtime, session tests | U1, U3, U12, U23-U24 |
+| U5 | Add recovery, upgrade, and finalizer-safe deletion | CH lifecycle modules, Core cleanup | U3, U4, U8, U23-U24 |
+| U13 | Converge CH package, contracts, and generated artifacts | CH package metadata, locks, schemas, manifests | U3-U6, U8, U22-U24 |
 | U7 | Wire daemon composition and isolate legacy connectors | d2bd composition/runtime, Provider deployment | U4, U5, U13 |
 | U14 | Finish Zone-only U10 lifecycle and U5 ZoneLink acceptance | lifecycle, ZoneLink, Gateway composition, VM test | U7, U13 |
 | U15 | Finish Zone-only U6 gateway-coupled Nix removal | legacy Nix imports/options/tests | U14 |
@@ -599,12 +619,76 @@ flowchart TB
   - Dependency-ready and dependency-changed triggers reach the exact Guest owner without dropping coalesced reasons.
 - **Verification:** Core supplies one bounded owner/dependency plan that the Guest controller can apply through Resource API calls without direct store access.
 
-### U3. Build the Cloud Hypervisor child graph planner and authenticated Resource API adapter
+### U22. Extract side-effect-free Cloud Hypervisor child graph planning
+
+- **Goal:** Separate deterministic direct-child planning and VMM launch gating from the effectful controller reconcile loop.
+- **Requirements:** R2-R8, R10-R13; F1; AE1, AE3, AE4.
+- **Dependencies:** U1, U2.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs`, inline `#[cfg(test)]` coverage, `changelog.d/ch-guest-child-graph-plan.md`.
+- **Approach:**
+  1. Reuse `GuestChildBatch::from_descriptor` and existing Core child-ordering primitives instead of duplicating identity or dependency logic.
+  2. Produce deterministic UID-free direct-child intents and a pure VMM lifecycle eligibility result.
+  3. Keep the VMM Process stopped until required Device, Network, Volume, Export, and setup dependencies are Ready.
+  4. Perform no Resource API, broker, store, locator, session, or Process effect.
+- **Execution note:** Implement the pure planning contract test-first and keep all effectful integration in U3.
+- **Patterns to follow:** `packages/d2b-provider-runtime-cloud-hypervisor/src/identity.rs` `GuestChildBatch`; current `BootstrapGraph` readiness logic; `d2b-core-controller` owned-child ordering.
+- **Test scenarios:**
+  - Covers AE1 and AE3. A valid descriptor produces the fixed deterministic direct-child graph with exact Guest owner and Zone references and no child UID discovery round trip.
+  - Covers AE4. Any Pending Device, Network, Volume, Export, or setup dependency keeps the VMM lifecycle stopped.
+  - A complete same-generation dependency set permits the VMM running transition.
+  - An invalid descriptor or ResourceRef fails before a graph is returned.
+  - Repeated planning produces identical output containing no UID, path, credential, argv, or locator.
+- **Verification:** The owner-local CH package test target proves deterministic, UID-free, redacted planning without controller, broker, or runtime effects.
+
+### U23. Freeze authenticated Guest-session evidence
+
+- **Goal:** Define the exact bounded evidence consumed by Guest-local seeding and Guest readiness.
+- **Requirements:** R4, R8, R11-R13, R17; F2; AE1, AE4, AE5.
+- **Dependencies:** U1, U12.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`, inline `#[cfg(test)]` coverage, `changelog.d/ch-guest-session-evidence.md`.
+- **Approach:**
+  1. Preserve current `GuestSessionEvidence` construction and probe boundaries while adding exact Guest UID, descriptor/schema digest, Provider/controller generation, reconnect/session generation, Endpoint readiness, and seed readiness commitments.
+  2. Reject mismatches, zero or stale generations, malformed digests, and unbounded capability data.
+  3. Expose only bounded health and readiness evidence; credentials, paths, locators, transport wiring, and target-local mutation remain in U4.
+- **Execution note:** Add failing evidence-validation cases before changing the additive health contract.
+- **Patterns to follow:** `GuestIdentity::validate_route`, `GuestComponentSessionDescriptor`, and current bounded health error codes.
+- **Test scenarios:**
+  - Exact bound evidence reaches Ready only when Endpoint, controller, session, and seed generations agree.
+  - Guest UID, descriptor, Provider, controller, Endpoint, reconnect, or session mismatch fails closed.
+  - Stale or disconnected evidence cannot become Ready without a newer session generation.
+  - Capability bounds and malformed descriptor/schema digests reject before readiness.
+  - Debug and status output contain no identity payload, credential, path, or locator.
+- **Verification:** The additive health contract passes owner-local tests and leaves existing daemon fake probes source-compatible.
+
+### U24. Add pure Guest status projection
+
+- **Goal:** Freeze public readiness, degradation, drain, and finalization precedence without effectful lifecycle mutation.
+- **Requirements:** R12-R14; F1-F3; AE4, AE6.
+- **Dependencies:** U1.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs`, `changelog.d/ch-guest-status-projection.md`.
+- **Approach:**
+  1. Add a pure reducer over bounded observations and exact generation equality.
+  2. Keep public states bounded to Pending, Ready, Degraded, and Draining.
+  3. Represent drain and finalization eligibility separately from actual finalizer mutation.
+  4. Keep PIDs, UIDs, paths, argv, credentials, CIDs, and cgroup data out of public status and debug output.
+- **Execution note:** Define status precedence through failing table-driven tests before adding the reducer.
+- **Patterns to follow:** Existing `GuestRuntimeStatus`, controller health handling, and Core dependency status reduction.
+- **Test scenarios:**
+  - Any missing dependency produces Pending.
+  - A Ready Process with incomplete Endpoint, session, or seed evidence remains Pending.
+  - A complete same-generation graph produces Ready.
+  - Session or required-child health loss produces Degraded.
+  - Provider, descriptor, controller, child, or session generation mismatch cannot produce Ready.
+  - Deletion with an active session or descendants produces Draining; finalization eligibility requires a complete drain.
+  - Public status and debug output remain identity-free.
+- **Verification:** Owner-local state tests prove status precedence and finalization eligibility without broker, session transport, or controller effects.
+
+### U3. Build the Cloud Hypervisor child controller and authenticated Resource API adapter
 
 - **Goal:** Replace direct VMM effect calls with deterministic Guest-owned child creation, repair, observation, and dependency gating.
 - **Requirements:** R1-R7, R10-R13; F1; AE1-AE5.
-- **Dependencies:** U1, U2, U8, U12.
-- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/config.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/Cargo.toml`, `packages/d2b-provider-runtime-cloud-hypervisor/BUILD.bazel`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/bootstrap_graph_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/reconcile_state_machine_test.rs`.
+- **Dependencies:** U1, U2, U8, U12, U22, U23, U24.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/config.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/Cargo.toml`, `packages/d2b-provider-runtime-cloud-hypervisor/BUILD.bazel`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/reconcile_state_machine_test.rs`.
 - **Approach:**
   1. Register the controller with the descriptor and watch Guest, owned Process/Endpoint/Volume children, and Device/Network dependency statuses.
   2. Read a fresh Guest snapshot and complete owner-index child relist for every reconcile.
@@ -628,8 +712,8 @@ flowchart TB
 
 - **Goal:** Establish the authenticated Guest session and seed post-boot Resources through the target-local Resource API.
 - **Requirements:** R4, R8, R11-R13, R17; F2; AE1, AE4, AE5.
-- **Dependencies:** U1, U3, U12.
-- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/guest_local.rs`, `packages/d2bd-runtime/src/guest_resource_runtime.rs`, `packages/d2b-session/src/`, `packages/d2b-session-unix/src/`, `packages/d2b-bus/src/`, `packages/d2b-resource-client/src/zone_client.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/health_check_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/guest_local_seed_test.rs`.
+- **Dependencies:** U1, U3, U12, U23, U24.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/guest_local.rs`, `packages/d2bd-runtime/src/guest_resource_runtime.rs`, `packages/d2b-session/src/`, `packages/d2b-session-unix/src/`, `packages/d2b-bus/src/`, `packages/d2b-resource-client/src/zone_client.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/health_check_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/guest_local_seed_test.rs`.
 - **Approach:**
   1. Resolve the Guest-control Endpoint through the authorized Endpoint path and bind the session to Guest UID, Endpoint UID/generation, descriptor digest, Provider generation, and reconnect generation.
   2. Extend the target-local Guest Resource API to admit `CommitBatch` and the exact descriptor-approved seed Resource types, then submit the complete UID-free name-addressed set over the authenticated ComponentSession.
@@ -649,8 +733,8 @@ flowchart TB
 
 - **Goal:** Complete restart recovery, health degradation, disruptive upgrade handling, and reverse-order Guest deletion.
 - **Requirements:** R3, R6-R7, R9-R10, R12-R14, R17; F1-F3; AE2, AE4, AE6.
-- **Dependencies:** U3, U4, U8.
-- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/adoption.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/adoption_property_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/finalize_ordering_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs`, `packages/d2b-core-controller/src/dependencies.rs`, `packages/d2b-resource-api/src/service.rs`.
+- **Dependencies:** U3, U4, U8, U23, U24.
+- **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/src/adoption.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/adoption_property_test.rs`, `packages/d2b-provider-runtime-cloud-hypervisor/tests/finalize_ordering_test.rs`, `packages/d2b-core-controller/src/dependencies.rs`, `packages/d2b-resource-api/src/service.rs`.
 - **Approach:**
   1. Treat status as observation and reverify live Process identity through the Process Provider after restart.
   2. Quarantine ambiguous or stale Process adoption and never issue a broad kill or name-only stop.
@@ -808,9 +892,9 @@ flowchart TB
 
 ### U13. Converge the CH package and shared generated artifacts
 
-- **Goal:** Merge U1-U6 and U8 into one coherent CH package, contract, Nix, manifest, lock, and generated-artifact head.
+- **Goal:** Merge U1-U6, U8, and U22-U24 into one coherent CH package, contract, Nix, manifest, lock, and generated-artifact head.
 - **Requirements:** R1-R18; AE1-AE7.
-- **Dependencies:** U1-U6, U8.
+- **Dependencies:** U1-U6, U8, U22, U23, U24.
 - **Files:** `packages/d2b-provider-runtime-cloud-hypervisor/Cargo.toml`, `BUILD.bazel`, `README.md`, package manifests/signatures, shared Resource/Provider contracts, `Cargo.lock`, `packages/Cargo.guest.lock`, `docs/reference/schemas/v3/`, policy closures, fixture declarations, and changelog fragments.
 - **Approach:**
   1. Merge isolated authoring branches in dependency order and resolve `controller.rs` through one convergence owner.
@@ -1033,6 +1117,9 @@ An environment or advisory skip is not acceptance evidence. KVM, broker, filesys
 | U2 | Core plans and applies complete Process/Endpoint/Volume child sets atomically and safely. |
 | U6 | Nix authors Guest-only desired state and emits no CH child lifecycle graph. |
 | U8 | Process, ProviderSupervisor, broker, cgroup, pidfd, and audit identity are exact and collision-safe. |
+| U22 | Pure planning produces one deterministic UID-free child graph and gates VMM start without effects. |
+| U23 | Guest-session health evidence is exact, generation-bound, bounded, and redacted. |
+| U24 | Public Guest status precedence and finalization eligibility are pure, generation-fenced, and identity-free. |
 | U3 | CH controller reconciles the direct child graph through Resource API and has no direct effect path. |
 | U4 | Guest-control Endpoint and target-local seed batches are authenticated and revision-resumable. |
 | U5 | Recovery, upgrade, failure, and deletion are status-first and finalizer-safe. |
