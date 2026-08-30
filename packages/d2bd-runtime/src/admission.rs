@@ -1,5 +1,4 @@
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_control::public_wire;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
 use uzers::get_group_by_name;
