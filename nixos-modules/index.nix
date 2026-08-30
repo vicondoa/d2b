@@ -118,8 +118,7 @@ let
     ));
 
   # Compute a single workload index row from a declared realm workload.
-  # Does NOT reference cfg.manifest to avoid circular deps with manifest.nix;
-  # vsockCid derivation lives in realm-workloads-launcher-json.nix.
+  # Does NOT reference cfg.manifest to avoid circular deps with manifest.nix.
   launcherItemRow = itemId: item: {
     id = itemId;
     inherit (item) type name graphical;

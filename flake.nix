@@ -895,7 +895,6 @@
             "allocator.json" = top "allocatorJson";
             "realm-controllers.json" = top "realmControllersJson";
             "realm-identity.json" = top "realmIdentityJson";
-            "realm-workloads-launcher.json" = top "realmWorkloadsLauncherJson";
             "realm-workloads-launcher-v2.json" = top "realmWorkloadsLauncherV2Json";
             "unsafe-local-workloads.json" = top "unsafeLocalWorkloadsJson";
             "bundle.json" = top "bundle";
@@ -918,7 +917,6 @@
           cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
-          cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
           cp ${bundle.bundle.path} $out/bundle.json

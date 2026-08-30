@@ -177,7 +177,6 @@ exports_files([
     "nixos-modules/resources-zones-processes.nix",
     "nixos-modules/realm-controller-config-json.nix",
     "nixos-modules/realm-identity-config-json.nix",
-    "nixos-modules/realm-workloads-launcher-json.nix",
     "nixos-modules/ui-colors.nix",
     "nixos-modules/unsafe-local-helper.nix",
     "nixos-modules/unsafe-local-workloads-json.nix",

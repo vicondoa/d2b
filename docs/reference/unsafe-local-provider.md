@@ -70,8 +70,8 @@ expose:
 - provider availability and graphical posture on runtime status.
 
 They never expose argv, uid, environment, cwd, scope identity, or compositor
-paths. The compatibility `realm-workloads-launcher.json` remains schema v1 and
-omits unsafe-local rows.
+paths. Configured argv remains in the private `unsafe-local-workloads.json`
+artifact and is not part of the public launcher metadata.
 
 `contractPublic` describes the artifact's safe data shape, not direct filesystem
 access. The bundle copy remains `0640 root:d2bd`; unprivileged CLI and desktop

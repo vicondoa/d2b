@@ -2494,7 +2494,6 @@ Evidence classes: **A** = implemented-and-reachable from production binary,
 | `RealmControllersJson` (schema v2) | `d2b-core/src/realm_controller_config.rs` | **C** | Loaded at d2bd startup (lib.rs:1408) and priv-broker (runtime.rs:687); logs "runtime routing remains inert" | → compiler-only `parentZone` bootstrap topology + runtime Zone self-resource + child-local ZoneLink resources; artifact retires |
 | `WorkloadTargetIndex` | `d2bd/src/workload_target_index.rs` | **A** | d2bd `lib.rs:16745` in `PublicRequestArtifacts`; maps canonical targets → VM names for exec dispatch | → Guest/Host resource lookup; retires with legacy VM dispatch |
 | `realm-workloads-launcher-v2.json` | `nixos-modules/realm-workloads-launcher-v2-json.nix` | **C** | Active bundle artifact (installed root:d2bd 0640); consumed by launcher clients | → v3 workload catalog from Zone resources |
-| `realm-workloads-launcher.json` (v1) | `nixos-modules/realm-workloads-launcher-json.nix` | **C** | **NOT installed** by `bundle.nix`; declared artifact but dead | Retire |
 | `d2b.realms.*` Nix options | `nixos-modules/options-realms.nix`, `options-realms-workloads.nix`, `options-realms-network.nix` | **C** | Eval-time; drives JSON artifact emission | → `d2b.zones.*` with compiler-only `parentZone` plus schema-mirrored resources |
 
 ### Architecture change summary

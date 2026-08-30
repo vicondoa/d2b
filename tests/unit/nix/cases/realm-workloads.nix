@@ -6,9 +6,8 @@
 #   • Workload index row rendering: targetAddress, canonicalTarget, runtimeKind,
 #     substrateId, capabilityRefs sorted+deduped, appCommand, actions,
 #     all/enabled/byVm accessors
-#   • realm-workloads-launcher.json emitter: schemaVersion, runtimeState,
-#     per-workload fields (incl. canonicalTarget, appCommand, actions),
-#     vsockCid advisory, invariants block (noSensitiveCommandPayloads)
+#   • realm-workloads-launcher-v2.json emitter: public-safe metadata,
+#     typed execution posture, and argv exclusion
 #   • Bundle artifact registration: installFileName, classification,
 #     sensitivity, /etc install mode
 #   • Cross-realm vsock CID collision assertion: fires when two workloads in
@@ -181,8 +180,6 @@ let
     };
   };
   gatewayProjectionCfg = (mkEval [ gatewayProjectionFixture ]).config;
-  gatewayProjectionLauncher =
-    gatewayProjectionCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
   gatewayProjectionControllers =
     gatewayProjectionCfg.d2b._bundle.realmControllersJson.data.controllers;
   gatewayProjectionHostEnvironments =
@@ -191,22 +188,6 @@ let
     gatewayProjectionCfg.d2b._bundle.processesJson.data.vms;
   gatewayProjectionClosures =
     gatewayProjectionCfg.d2b._bundle.closures;
-  gatewayProjectionCorpLauncher = lib.findFirst
-    (row: row.workloadName == "corp-laptop")
-    null
-    gatewayProjectionLauncher.workloads;
-  gatewayProjectionPersonalLauncher = lib.findFirst
-    (row: row.workloadName == "personalbox")
-    null
-    gatewayProjectionLauncher.workloads;
-  gatewayProjectionCrossPairLauncher = lib.findFirst
-    (row: row.workloadName == "cross-pair")
-    null
-    gatewayProjectionLauncher.workloads;
-  gatewayProjectionLabLauncher = lib.findFirst
-    (row: row.workloadName == "lab-laptop")
-    null
-    gatewayProjectionLauncher.workloads;
   gatewayProjectionWorkController = lib.findFirst
     (row: row.realmName == "work")
     null
@@ -692,24 +673,6 @@ let
   extNetCfg = (mkEval [ extNetConflictFixture ]).config;
   extNetMessages = failureMessagesFromConfig extNetCfg;
 
-  duplicateIconFixture = lib.recursiveUpdate workloadSchemaBase {
-    d2b.realms.realm-a = {
-      path = "realm-a";
-      workloads.browser = {
-        launcher.label = "Web Browser";
-        launcher.icon.id = "web-browser";
-      };
-    };
-    d2b.realms.realm-b = {
-      path = "realm-b";
-      workloads.browser = {
-        launcher.label = "Web Browser";
-        launcher.icon.id = "web-browser";
-      };
-    };
-  };
-  duplicateIconLauncherData =
-    (mkEval [ duplicateIconFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
 in
 {
   "realm-workloads/first-class-local-vm-private-launcher" = {
@@ -1012,13 +975,6 @@ in
         !(builtins.hasAttr "personalbox" gatewayProjectionClosures);
       crossPairClosureAbsent =
         !(builtins.hasAttr "wrongbox" gatewayProjectionClosures);
-      launcherSchema = gatewayProjectionLauncher.schemaVersion;
-      corpLauncherVsockIsInt =
-        builtins.isInt gatewayProjectionCorpLauncher.vsockCid;
-      labLauncherVsockIsInt =
-        builtins.isInt gatewayProjectionLabLauncher.vsockCid;
-      nonGatewayLauncherVsock = gatewayProjectionPersonalLauncher.vsockCid;
-      crossPairLauncherVsock = gatewayProjectionCrossPairLauncher.vsockCid;
       workControllerHasRuntime =
         gatewayProjectionWorkController.localRuntime != null;
       workControllerHasCorpbox =
@@ -1051,11 +1007,6 @@ in
       closureNames = [ "corpbox" "labbox" ];
       nonGatewayClosureAbsent = true;
       crossPairClosureAbsent = true;
-      launcherSchema = "v1";
-      corpLauncherVsockIsInt = true;
-      labLauncherVsockIsInt = true;
-      nonGatewayLauncherVsock = null;
-      crossPairLauncherVsock = null;
       workControllerHasRuntime = true;
       workControllerHasCorpbox = true;
       workControllerExcludesWrongbox = true;
@@ -1075,378 +1026,6 @@ in
       # sorted alphabetically by name (sortedMapAttrsToList)
       allNames = [ "archived" "corp-laptop" "provider-service" ];
       enabledNames = [ "corp-laptop" "provider-service" ];
-    };
-  };
-
-  # ── launcher JSON: shape and required fields ─────────────────────────────────
-  "realm-workloads/launcher-json-shape" = {
-    expr =
-      let
-        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
-        corpRow = lib.findFirst
-          (w: w.workloadName == "corp-laptop")
-          null
-          data.workloads;
-        providerRow = lib.findFirst
-          (w: w.workloadName == "provider-service")
-          null
-          data.workloads;
-      in {
-        schemaVersion = data.schemaVersion;
-        runtimeState = data.runtimeState;
-        workloadCount = builtins.length data.workloads;
-        corpFields = {
-          realmName = corpRow.realmName;
-          realmPath = corpRow.realmPath;
-          workloadName = corpRow.workloadName;
-          workloadId = corpRow.workloadId;
-          targetAddress = corpRow.targetAddress;
-          canonicalTarget = corpRow.canonicalTarget;
-          actionId = corpRow.actionId;
-          label = corpRow.label;
-          icon = corpRow.icon;
-          iconId = corpRow.iconId;
-          iconName = corpRow.iconName;
-          iconGroupKey = corpRow.iconGroupKey;
-          capabilityRefs = corpRow.capabilityRefs;
-          appCommand = corpRow.appCommand;
-          actionsCount = builtins.length corpRow.actions;
-          firstActionId = (builtins.head corpRow.actions).id;
-          firstActionLabel = (builtins.head corpRow.actions).label;
-          legacyVmName = corpRow.legacyVmName;
-          substrateId = corpRow.substrateId;
-          runtimeKind = corpRow.runtimeKind;
-          runtimeProviderId = corpRow.runtimeProviderId;
-          vsockCidIsInt = builtins.isInt corpRow.vsockCid;
-        };
-        providerFields = {
-          workloadName = providerRow.workloadName;
-          workloadId = providerRow.workloadId;
-          legacyVmName = providerRow.legacyVmName;
-          runtimeKind = providerRow.runtimeKind;
-          appCommand = providerRow.appCommand;
-          actionsEmpty = providerRow.actions == [ ];
-          iconId = providerRow.iconId;
-          iconName = providerRow.iconName;
-          iconGroupKey = providerRow.iconGroupKey;
-          vsockCid = providerRow.vsockCid;
-        };
-      };
-    expected = {
-      schemaVersion = "v1";
-      runtimeState = "metadata-only";
-      # only enabled workloads appear in the launcher JSON
-      workloadCount = 2;
-      corpFields = {
-        realmName = "work";
-        realmPath = "work.home";
-        workloadName = "corp-laptop";
-        workloadId = "corp-laptop";
-        targetAddress = "corp-laptop.work.home.d2b";
-        # canonicalTarget matches targetAddress when no override is set
-        canonicalTarget = "corp-laptop.work.home.d2b";
-        actionId = "corp-laptop";
-        label = "Corp Laptop";
-        icon = "computer-laptop";
-        iconId = "computer-laptop";
-        iconName = null;
-        iconGroupKey = "computer-laptop";
-        capabilityRefs = [ "graphics" "guest-exec" ];
-        appCommand = "d2b vm exec corp-laptop -- bash -l";
-        actionsCount = 2;
-        firstActionId = "open-terminal";
-        firstActionLabel = "Open Terminal";
-        legacyVmName = "corpbox";
-        substrateId = "corpbox";
-        runtimeKind = "nixos";
-        runtimeProviderId = "local-cloud-hypervisor";
-        vsockCidIsInt = true;
-      };
-      providerFields = {
-        workloadName = "provider-service";
-        workloadId = "provider-service";
-        legacyVmName = null;
-        runtimeKind = null;
-        appCommand = null;
-        actionsEmpty = true;
-        iconId = null;
-        iconName = null;
-        iconGroupKey = null;
-        # no legacyVmName → vsockCid must be null
-        vsockCid = null;
-      };
-    };
-  };
-
-  # ── launcher JSON: canonicalTarget override ──────────────────────────────────
-  # When launcher.app.targetRealm is set, canonicalTarget must use the override
-  # rather than the derived targetAddress.  The override value must end in
-  # `.d2b` to be a valid WorkloadTarget; `corp-laptop.alt.d2b` is a valid
-  # target that differs from the default `corp-laptop.work.home.d2b`.
-  "realm-workloads/launcher-json-canonical-target-override" = {
-    expr =
-      let
-        overrideFixture = lib.recursiveUpdate workloadFixture {
-          d2b.realms.work.workloads.corp-laptop.launcher.app.targetRealm =
-            "corp-laptop.alt.d2b";
-        };
-        data = (mkEval [ overrideFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
-        row = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
-      in {
-        targetAddress = row.targetAddress;
-        canonicalTarget = row.canonicalTarget;
-        overrideDiffers = row.canonicalTarget != row.targetAddress;
-      };
-    expected = {
-      targetAddress = "corp-laptop.work.home.d2b";
-      canonicalTarget = "corp-laptop.alt.d2b";
-      overrideDiffers = true;
-    };
-  };
-
-  # ── launcher JSON: invariants block ─────────────────────────────────────────
-  "realm-workloads/launcher-json-invariants" = {
-    expr = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data.invariants;
-    expected = {
-      noSecretsOrCredentials = true;
-      # appCommand and actions[].command are static operator-declared launch
-      # metadata, not sensitive payloads; the invariant reflects this.
-      noSensitiveCommandPayloads = true;
-      noOpaqueSessionHandles = true;
-      noProviderTokens = true;
-      metadataOnly = true;
-    };
-  };
-
-  # ── launcher JSON: bundle artifact registration ───────────────────────────────
-  "realm-workloads/launcher-json-bundle-artifact" = {
-    expr =
-      let
-        artifact = wlCfg.d2b._bundle.realmWorkloadsLauncherJson;
-      in {
-        installFileName = artifact.installFileName;
-        classification = artifact.classification;
-        sensitivity = artifact.sensitivity;
-        installedAtEtc = wlCfg.environment.etc ? "d2b/realm-workloads-launcher.json";
-      };
-    expected = {
-      installFileName = "realm-workloads-launcher.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-      installedAtEtc = true;
-    };
-  };
-
-  # ── launcher JSON: disabled workload excluded from emitted JSON ───────────────
-  "realm-workloads/launcher-json-excludes-disabled" = {
-    expr =
-      let
-        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
-        names = map (w: w.workloadName) data.workloads;
-      in {
-        archivedExcluded = !(builtins.elem "archived" names);
-        corpPresent = builtins.elem "corp-laptop" names;
-      };
-    expected = {
-      archivedExcluded = true;
-      corpPresent = true;
-    };
-  };
-
-  # ── launcher JSON: workloadId field equals workloadName ─────────────────────
-  # The launcher row must expose `workloadId` as an explicit DTO-named alias
-  # for `workloadName`, matching the WorkloadIdentity.workloadId contract used
-  # by daemon/broker consumers.
-  "realm-workloads/launcher-json-workload-id-field" = {
-    expr =
-      let
-        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
-        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
-        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
-      in {
-        corpWorkloadId = corpRow.workloadId;
-        corpWorkloadIdEqualsName = corpRow.workloadId == corpRow.workloadName;
-        providerWorkloadId = providerRow.workloadId;
-        providerWorkloadIdEqualsName = providerRow.workloadId == providerRow.workloadName;
-      };
-    expected = {
-      corpWorkloadId = "corp-laptop";
-      corpWorkloadIdEqualsName = true;
-      providerWorkloadId = "provider-service";
-      providerWorkloadIdEqualsName = true;
-    };
-  };
-
-  # ── launcher JSON: iconId and iconName fields present separately ─────────────
-  # The launcher row must expose `iconId` (raw launcher.icon.id) and `iconName`
-  # (raw launcher.icon.name) in addition to the resolved `icon` string, so that
-  # desktop tooling can round-trip option values and distinguish primary-id from
-  # symbolic-name.
-  "realm-workloads/launcher-json-icon-id-name-fields" = {
-    expr =
-      let
-        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
-        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
-        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
-      in {
-        # corp-laptop sets icon.id = "computer-laptop" and no icon.name
-        corpIconId = corpRow.iconId;
-        corpIconName = corpRow.iconName;
-        corpIconResolved = corpRow.icon;
-        corpIconIdEqualsResolved = corpRow.iconId == corpRow.icon;
-        # provider-service sets neither icon.id nor icon.name
-        providerIconId = providerRow.iconId;
-        providerIconName = providerRow.iconName;
-        providerIconResolved = providerRow.icon;
-      };
-    expected = {
-      corpIconId = "computer-laptop";
-      corpIconName = null;
-      corpIconResolved = "computer-laptop";
-      corpIconIdEqualsResolved = true;
-      providerIconId = null;
-      providerIconName = null;
-      providerIconResolved = null;
-    };
-  };
-
-  # ── launcher JSON: iconGroupKey stable grouping key ──────────────────────────
-  # iconGroupKey must equal iconId when set, else iconName, else null.
-  # It is always identical to the resolved `icon` field.
-  "realm-workloads/launcher-json-icon-group-key" = {
-    expr =
-      let
-        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
-        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
-        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
-      in {
-        # corp-laptop: iconGroupKey = iconId (preferred over iconName)
-        corpGroupKey = corpRow.iconGroupKey;
-        corpGroupKeyEqualsIcon = corpRow.iconGroupKey == corpRow.icon;
-        corpGroupKeyEqualsIconId = corpRow.iconGroupKey == corpRow.iconId;
-        # provider-service: neither id nor name → null group key
-        providerGroupKey = providerRow.iconGroupKey;
-      };
-    expected = {
-      corpGroupKey = "computer-laptop";
-      corpGroupKeyEqualsIcon = true;
-      corpGroupKeyEqualsIconId = true;
-      providerGroupKey = null;
-    };
-  };
-
-  # ── launcher JSON: iconGroupKey prefers iconId over iconName ─────────────────
-  # When both icon.id and icon.name are set, iconGroupKey must equal iconId.
-  "realm-workloads/launcher-json-icon-group-key-prefers-id-over-name" = {
-    expr =
-      let
-        bothIconFixture = lib.recursiveUpdate workloadSchemaBase {
-          d2b.realms.home = {
-            name = "Home";
-            path = "home";
-            workloads.notes = {
-              launcher.label = "Notes";
-              launcher.icon.id = "notes-app";
-              launcher.icon.name = "notes";
-            };
-          };
-        };
-        data = (mkEval [ bothIconFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
-        row = lib.findFirst (w: w.workloadName == "notes") null data.workloads;
-      in {
-        iconId = row.iconId;
-        iconName = row.iconName;
-        iconGroupKey = row.iconGroupKey;
-        iconResolved = row.icon;
-        groupKeyEqualsId = row.iconGroupKey == row.iconId;
-      };
-    expected = {
-      iconId = "notes-app";
-      iconName = "notes";
-      iconGroupKey = "notes-app";
-      iconResolved = "notes-app";
-      groupKeyEqualsId = true;
-    };
-  };
-
-  # ── launcher JSON: iconGroupKey equals iconName when only name is set ─────────
-  # When icon.name is set but icon.id is null, iconGroupKey must equal iconName.
-  "realm-workloads/launcher-json-icon-group-key-falls-back-to-name" = {
-    expr =
-      let
-        nameOnlyFixture = lib.recursiveUpdate workloadSchemaBase {
-          d2b.realms.home = {
-            name = "Home";
-            path = "home";
-            workloads.legacy-app = {
-              launcher.label = "Legacy App";
-              launcher.icon.name = "application-x-generic";
-            };
-          };
-        };
-        data = (mkEval [ nameOnlyFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
-        row = lib.findFirst (w: w.workloadName == "legacy-app") null data.workloads;
-      in {
-        iconId = row.iconId;
-        iconName = row.iconName;
-        iconGroupKey = row.iconGroupKey;
-        iconResolved = row.icon;
-        groupKeyEqualsName = row.iconGroupKey == row.iconName;
-      };
-    expected = {
-      iconId = null;
-      iconName = "application-x-generic";
-      iconGroupKey = "application-x-generic";
-      iconResolved = "application-x-generic";
-      groupKeyEqualsName = true;
-    };
-  };
-
-  # ── launcher JSON: duplicate icon - iconGroupKey identical across realms ───────
-  # Two workloads in different realms with the same icon.id must have identical
-  # iconGroupKey values so desktop consumers can use it as a cluster key for
-  # duplicate-app chooser semantics.
-  "realm-workloads/launcher-json-duplicate-icon-group-key-matches" = {
-    expr =
-      let
-        browserRows = lib.filter
-          (w: w.workloadName == "browser")
-          duplicateIconLauncherData.workloads;
-        groupKeys = lib.unique (map (w: w.iconGroupKey) browserRows);
-      in {
-        bothPresent = builtins.length browserRows == 2;
-        # Both rows must share exactly one iconGroupKey value.
-        singleGroupKey = builtins.length groupKeys == 1;
-        theGroupKey = builtins.head groupKeys;
-        # workloadId must differ (different realms, same workload name).
-        distinctRealms = lib.sort lib.lessThan
-          (lib.unique (map (w: w.realmPath) browserRows));
-      };
-    expected = {
-      bothPresent = true;
-      singleGroupKey = true;
-      theGroupKey = "web-browser";
-      distinctRealms = [ "realm-a" "realm-b" ];
-    };
-  };
-
-  # ── launcher JSON: duplicate icon/label - both rows preserved ─────────────────
-  # Two workloads in different realms sharing the same icon and label must both
-  # appear in the emitted workloads list (no silent deduplication).
-  "realm-workloads/launcher-json-no-implicit-dedup" = {
-    expr =
-      let
-        browserRows = lib.filter
-          (w: w.workloadName == "browser")
-          duplicateIconLauncherData.workloads;
-      in {
-        bothPresent = builtins.length browserRows == 2;
-        distinctRealms = lib.sort lib.lessThan
-          (lib.unique (map (w: w.realmPath) browserRows));
-      };
-    expected = {
-      bothPresent = true;
-      distinctRealms = [ "realm-a" "realm-b" ];
     };
   };
 
@@ -1612,12 +1191,6 @@ in
         maxSessions = 8;
       };
     };
-  };
-
-  "realm-workloads/unsafe-local-omitted-from-launcher-v1" = {
-    expr =
-      unsafeCfg.d2b._bundle.realmWorkloadsLauncherJson.data.workloads == [ ];
-    expected = true;
   };
 
   "realm-workloads/unsafe-local-artifacts-and-bundle-v11" = {

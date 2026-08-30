@@ -72,8 +72,7 @@ and appear in `d2b launch <target> --item <id>`.
 
 Private configured unsafe-local and local-VM launcher data is installed as
 `/etc/d2b/unsafe-local-workloads.json`. Public provider-neutral launcher
-metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`; the compatibility
-schema remains `/etc/d2b/realm-workloads-launcher.json`.
+metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`.
 
 ## Persistent shell session names
 

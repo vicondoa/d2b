@@ -11,50 +11,6 @@ let
   realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
 in
 {
-  options.d2b._hostToolPackages = {
-    d2b = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved host d2b CLI package.";
-    };
-
-    d2bd = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved host d2bd package.";
-    };
-
-    d2bBroker = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved shared d2b-broker package.";
-    };
-
-    d2bUnsafeLocalHelper = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved same-uid unsafe-local user helper package.";
-    };
-
-    d2bWaylandProxy = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved immutable d2b Wayland proxy package.";
-    };
-
-    d2bGatewayRuntime = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved gateway runtime helper package.";
-    };
-  };
-
   options.d2b.gateways = lib.mkOption {
     description = ''
       Removed gateway/ACA compatibility surface.

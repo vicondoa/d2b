@@ -197,21 +197,20 @@ the host daemon.
 
 `d2b.realms.<realm>.workloads.<workload>.launcher` is the shared desktop
 metadata source for d2b-aware launchers and bars. Enabled workload rows appear
-in `/etc/d2b/realm-workloads-launcher.json`, a private non-secret bundle
-artifact installed as `root:d2bd 0640`. Desktop tools should receive this data
-through d2bd/public helper surfaces or generated user config, not by reading the
+in `/etc/d2b/realm-workloads-launcher-v2.json`, a public-safe bundle artifact
+installed as `root:d2bd 0640`. Desktop tools should receive this data through
+d2bd/public helper surfaces or generated user config, not by reading the
 root-owned artifact directly.
 
 Each row includes:
 
 | Field | Meaning |
 | --- | --- |
-| `realmName`, `realmId`, `realmPath` | Owning realm identity. |
-| `workloadName`, `workloadId` | Workload identity. |
-| `targetAddress`, `canonicalTarget` | Public workload target such as `laptop.work.d2b`. |
-| `legacyVmName` | Existing VM substrate when the workload wraps `d2b.vms.<vm>`. |
-| `label`, `icon`, `iconId`, `iconName`, `iconGroupKey` | Presentation and duplicate-app grouping metadata. |
-| `appCommand`, `actions[]` | Operator-declared launch actions. |
+| `identity` | Workload, realm, canonical-target, and runtime identity metadata. |
+| `providerKind`, `executionPosture` | Provider-neutral execution classification. |
+| `label`, `icon`, `realmAccentColor` | Presentation metadata and realm UI color. |
+| `launcherEnabled`, `defaultItemId`, `capabilities` | Launcher policy and capability metadata. |
+| `items[]` | Typed item id, type, name, icon, graphical flag, and capability metadata. |
 
 Waybar quick-launch buttons, wlcontrol realm cards, wlterm shell grouping, and
 clip-picker realm grouping all consume the same realm/workload identity model.

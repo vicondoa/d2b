@@ -152,7 +152,6 @@ let
     "allocatorJson"
     "realmControllersJson"
     "realmIdentityJson"
-    "realmWorkloadsLauncherJson"
     "realmWorkloadsLauncherV2Json"
     "unsafeLocalWorkloadsJson"
   ];
@@ -252,14 +251,6 @@ in
       internal = true;
       visible = false;
       description = "Internal typed realm-identity.json artifact metadata.";
-    };
-
-    realmWorkloadsLauncherJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed realm-workloads-launcher.json artifact metadata for desktop launcher consumers.";
     };
 
     realmWorkloadsLauncherV2Json = lib.mkOption {

@@ -82,7 +82,6 @@ in
     ./allocator-json.nix
     ./realm-controller-config-json.nix
     ./realm-identity-config-json.nix
-    ./realm-workloads-launcher-json.nix
     ./realm-workloads-launcher-v2-json.nix
     ./unsafe-local-workloads-json.nix
     ./privileges-json.nix

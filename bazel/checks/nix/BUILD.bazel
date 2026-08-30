@@ -91,7 +91,6 @@ _SURFACES = {
             "nixos-modules/options-realms-workloads.nix",
             "nixos-modules/realm-controller-config-json.nix",
             "nixos-modules/realm-identity-config-json.nix",
-            "nixos-modules/realm-workloads-launcher-json.nix",
             "nixos-modules/realm-workloads-launcher-v2-json.nix",
         ],
     },
