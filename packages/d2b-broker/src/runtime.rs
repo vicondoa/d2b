@@ -28,6 +28,7 @@ use nix::sys::socket::{SockFlag, accept4};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
+#[cfg(not(feature = "layer1-bootstrap"))]
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use tracing::info;
@@ -10841,6 +10842,7 @@ fn private_cgroup_placement(
     Ok(private)
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_spawn_runner_request_matches_intent(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
