@@ -715,6 +715,7 @@ struct CloudHypervisorResourceSession {
             >,
         >,
     >,
+    closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<String>>>,
     zone: ZoneId,
     zone_uid: ResourceUid,
     policy_revision: u64,
@@ -873,26 +874,159 @@ impl CloudHypervisorResourceSession {
         Ok(guest)
     }
 
-    async fn remove_guest_session(
+    async fn authenticated_guest_session(
+        &self,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> Result<
+        Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+        CloudHypervisorResourceApiError,
+    > {
+        self.guest_for_fenced_operation(
+            guest_ref,
+            guest_uid,
+            "cloud-hypervisor-guest-session",
+        )
+        .await?;
+        let key = guest_ref.name().as_str().to_owned();
+        let session = self
+            .guest_sessions
+            .lock()
+            .await
+            .get(&key)
+            .cloned()
+            .ok_or(CloudHypervisorResourceApiError::Authentication)?;
+        if session.identity().guest_ref() != guest_ref
+            || session.identity().guest_uid() != guest_uid
+        {
+            return Err(CloudHypervisorResourceApiError::Conflict);
+        }
+        Ok(session)
+    }
+
+    async fn close_guest_session(
         &self,
         guest_ref: &ResourceRef,
         guest_uid: &ResourceUid,
     ) -> Result<(), CloudHypervisorResourceApiError> {
-        self.guest_for_fenced_operation(
-            guest_ref,
-            guest_uid,
-            "cloud-hypervisor-close-session",
-        )
-        .await?;
+        let _ = self.authenticated_guest_session(guest_ref, guest_uid).await?;
         let key = guest_ref.name().as_str().to_owned();
         let mut sessions = self.guest_sessions.lock().await;
-        if let Some(session) = sessions.get(&key)
-            && session.identity().guest_uid() != guest_uid
+        let removed = if sessions
+            .get(&key)
+            .is_some_and(|session| session.identity().guest_uid() == guest_uid)
         {
-            return Err(CloudHypervisorResourceApiError::Conflict);
+            sessions.remove(&key);
+            true
+        } else {
+            false
+        };
+        drop(sessions);
+        if removed {
+            self.closed_guest_sessions.lock().await.insert(key);
         }
-        sessions.remove(&key);
         Ok(())
+    }
+
+    async fn list_guest_local_resources(
+        &self,
+        session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
+        operation: &str,
+    ) -> Result<Vec<wire::ResourceEnvelopeBytes>, CloudHypervisorResourceApiError> {
+        let client = session.resource_service_client();
+        let mut request = wire::ListRequest::new();
+        request.meta = MessageField::some(public_request_meta(operation));
+        request.resource_types = d2b_provider_runtime_cloud_hypervisor::GUEST_SEED_RESOURCE_TYPES
+            .iter()
+            .map(|resource_type| (*resource_type).to_owned())
+            .collect();
+        request.page_size = 256;
+        let mut projection = wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+        request.projection = MessageField::some(projection);
+        let mut resources = Vec::new();
+        loop {
+            let response = client
+                .list(ttrpc::context::Context::default(), &request)
+                .await
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+            if response.error.is_some() || response.truncated {
+                return Err(if response.truncated {
+                    CloudHypervisorResourceApiError::Truncated
+                } else {
+                    CloudHypervisorResourceApiError::Transport
+                });
+            }
+            for resource in response.resources {
+                if resources.len() >= 256 {
+                    return Err(CloudHypervisorResourceApiError::Truncated);
+                }
+                resources.push(resource);
+            }
+            let Some(cursor) = response.next_cursor.as_ref() else {
+                break;
+            };
+            request.cursor = MessageField::some(cursor.clone());
+        }
+        Ok(resources)
+    }
+
+    async fn drain_guest_local_resources(
+        &self,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        let session = self.authenticated_guest_session(guest_ref, guest_uid).await?;
+        let resources = self
+            .list_guest_local_resources(&session, "cloud-hypervisor-drain-list")
+            .await?;
+        let client = session.resource_service_client();
+        for resource in resources {
+            let identity = resource
+                .identity
+                .as_ref()
+                .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?;
+            let uid = ResourceUid::parse(
+                identity
+                    .uid
+                    .as_deref()
+                    .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?,
+            )
+            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+            let revision = ZoneRevision::new(
+                identity
+                    .revision
+                    .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?,
+            );
+            let mut mutation = wire::Mutation::new();
+            mutation.kind =
+                EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+            mutation.target = MessageField::some(identity.clone());
+            mutation.precondition =
+                MessageField::some(ch_exact_precondition(&uid, revision));
+            let mut request = wire::DeleteRequest::new();
+            request.meta = MessageField::some(public_request_meta(&format!(
+                "cloud-hypervisor-drain-delete-{}",
+                uid.as_str()
+            )));
+            request.mutation = MessageField::some(mutation);
+            let response = client
+                .delete(ttrpc::context::Context::default(), &request)
+                .await
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+            if response.error.is_some() {
+                return Err(CloudHypervisorResourceApiError::Conflict);
+            }
+        }
+        if self
+            .list_guest_local_resources(&session, "cloud-hypervisor-drain-verify")
+            .await?
+            .is_empty()
+        {
+            Ok(())
+        } else {
+            Err(CloudHypervisorResourceApiError::Conflict)
+        }
     }
 
     fn guest_descriptor_digest(&self) -> SchemaFingerprint {
@@ -976,12 +1110,6 @@ impl CloudHypervisorResourceSession {
             .and_then(|value| value.get("metadata").cloned())
             .and_then(|metadata| metadata.get("deletionRequestedAt").cloned())
             .is_some_and(|value| !value.is_null());
-        let prior_ready_status = serde_json::from_slice::<Value>(&guest.canonical_json)
-            .ok()
-            .and_then(|value| value.get("status").cloned())
-            .and_then(|status| status.get("phase").cloned())
-            .and_then(|phase| phase.as_str().map(|phase| phase == "Ready"))
-            .unwrap_or(false);
         let snapshot = GuestSnapshot::new(
             self.zone.clone(),
             self.zone_uid.clone(),
@@ -1006,7 +1134,6 @@ impl CloudHypervisorResourceSession {
             deleting,
         )
         .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-        let snapshot = snapshot.with_prior_ready_status(prior_ready_status);
         Ok(match self.session_evidence.clone() {
             Some(evidence) => snapshot.with_session_evidence(evidence),
             None => snapshot,
@@ -1501,19 +1628,34 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         )
                     })
                     .collect();
-                let session_active = self
+                let session = self
                     .guest_sessions
                     .lock()
                     .await
-                    .contains_key(guest_ref.name().as_str());
+                    .get(guest_ref.name().as_str())
+                    .cloned();
+                let closed = self
+                    .closed_guest_sessions
+                    .lock()
+                    .await
+                    .contains(guest_ref.name().as_str());
+                let (session_state, guest_local_drained) = match session {
+                    Some(session) => (
+                        SessionState::Active,
+                        self.list_guest_local_resources(
+                            &session,
+                            "cloud-hypervisor-finalization-local-list",
+                        )
+                        .await?
+                        .is_empty(),
+                    ),
+                    None if closed => (SessionState::Closed, true),
+                    None => (SessionState::Unknown, false),
+                };
                 let observation = GuestFinalizationInput::new(
                     guest_uid,
-                    if session_active {
-                        SessionState::Active
-                    } else {
-                        SessionState::Closed
-                    },
-                    !session_active,
+                    session_state,
+                    guest_local_drained,
                     process_state,
                     direct_children,
                     transitive_descendants_present,
@@ -1528,12 +1670,16 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
             CloudHypervisorResourceRequest::DrainGuestLocal {
                 guest_ref,
                 guest_uid,
+            } => {
+                self.drain_guest_local_resources(&guest_ref, &guest_uid)
+                    .await?;
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }
-            | CloudHypervisorResourceRequest::CloseGuestSession {
+            CloudHypervisorResourceRequest::CloseGuestSession {
                 guest_ref,
                 guest_uid,
             } => {
-                self.remove_guest_session(&guest_ref, &guest_uid).await?;
+                self.close_guest_session(&guest_ref, &guest_uid).await?;
                 Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }
             CloudHypervisorResourceRequest::InvalidateGuestSession {
@@ -1548,14 +1694,19 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 )
                 .await?;
                 let key = guest_ref.name().as_str().to_owned();
-                let should_remove = self
-                    .guest_sessions
-                    .lock()
-                    .await
-                    .get(&key)
-                    .is_some_and(|session| session.generation() < minimum_generation);
-                if should_remove {
-                    self.guest_sessions.lock().await.remove(&key);
+                let mut sessions = self.guest_sessions.lock().await;
+                let removed = if sessions.get(&key).is_some_and(|session| {
+                    session.identity().guest_uid() == &guest_uid
+                        && session.generation() < minimum_generation
+                }) {
+                    sessions.remove(&key);
+                    true
+                } else {
+                    false
+                };
+                drop(sessions);
+                if removed {
+                    self.closed_guest_sessions.lock().await.insert(key);
                 }
                 Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }
@@ -1730,6 +1881,7 @@ pub struct ZoneResourceRuntime {
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
+    closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<String>>>,
     controller_deployment: ProviderDeployment,
     controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
     controller_session_reconcile_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -2487,6 +2639,7 @@ impl ZoneResourceRuntime {
             process_watch_task: Mutex::new(None),
             guest_setup_descriptors: BTreeMap::new(),
             guest_setup_descriptor_catalog_keys: BTreeMap::new(),
+            closed_guest_sessions: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
             controller_deployment: ProviderDeployment::new(
                 DaemonMode::Host,
                 d2bd_runtime::target_runtime::AdmissionLimits::host_default(),
@@ -3999,6 +4152,28 @@ impl ZoneResourceRuntime {
                 .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
             let (provider_ref, execution_ref, config, graph) =
                 self.cloud_hypervisor_inputs(&guest_ref).await?;
+            let (_, guest_uid, guest_generation, provider_assignment_generation) = self
+                .guest_lifecycle_identity(&guest_ref)
+                .await?;
+            let lifecycle_intent = state
+                .provider_runtime
+                .latest_v3_lifecycle_operation(
+                    &provider_ref,
+                    &self.store_metadata.zone_uid,
+                    &guest_ref,
+                    &guest_uid,
+                    guest_generation,
+                    provider_assignment_generation,
+                    self.store_metadata.policy_snapshot.policy_revision,
+                )
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?
+                .map(|operation| match operation {
+                    crate::provider_effects::GuestLifecycleOperation::Stop => DesiredLifecycle::Stopped,
+                    crate::provider_effects::GuestLifecycleOperation::Start
+                    | crate::provider_effects::GuestLifecycleOperation::Restart => {
+                        DesiredLifecycle::Running
+                    }
+                });
             let guest_session = state
                 .guest_component_sessions
                 .lock()
@@ -4023,6 +4198,7 @@ impl ZoneResourceRuntime {
                     .process_providers()
                     .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?,
                 guest_sessions: Arc::clone(&state.guest_component_sessions),
+                closed_guest_sessions: Arc::clone(&self.closed_guest_sessions),
                 zone: self.zone.clone(),
                 zone_uid: self.store_metadata.zone_uid.clone(),
                 policy_revision: self.store_metadata.policy_snapshot.policy_revision,
@@ -4043,6 +4219,7 @@ impl ZoneResourceRuntime {
                 descriptor,
                 Arc::new(adapter),
             )
+            .map(|controller| controller.with_lifecycle_intent(lifecycle_intent))
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
             controller
                 .register()

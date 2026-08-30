@@ -258,7 +258,6 @@ pub struct GuestSnapshot {
     system_artifact_id: Option<String>,
     generations: GuestGenerationSet,
     session_evidence: Option<GuestSessionEvidence>,
-    prior_ready_status: bool,
     deleting: bool,
 }
 
@@ -301,7 +300,6 @@ impl GuestSnapshot {
             system_artifact_id,
             generations,
             session_evidence: None,
-            prior_ready_status: false,
             deleting,
         })
     }
@@ -309,12 +307,6 @@ impl GuestSnapshot {
     /// Attach the latest bounded authenticated session evidence.
     pub fn with_session_evidence(mut self, evidence: GuestSessionEvidence) -> Self {
         self.session_evidence = Some(evidence);
-        self
-    }
-
-    /// Record whether the last persisted Guest status was Ready.
-    pub fn with_prior_ready_status(mut self, ready: bool) -> Self {
-        self.prior_ready_status = ready;
         self
     }
 
@@ -371,11 +363,6 @@ impl GuestSnapshot {
     /// Borrow the latest authenticated session evidence.
     pub fn session_evidence(&self) -> Option<&GuestSessionEvidence> {
         self.session_evidence.as_ref()
-    }
-
-    /// Whether the last persisted Guest status was Ready.
-    pub const fn prior_ready_status(&self) -> bool {
-        self.prior_ready_status
     }
 
     /// Whether deletion has been requested.
@@ -1636,7 +1623,7 @@ pub struct CloudHypervisorController<A> {
     retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
     observed_process_status: Option<ProcessAdoptionStatus>,
-    operator_stop_requested: bool,
+    lifecycle_intent: Option<DesiredLifecycle>,
 }
 
 impl<A> CloudHypervisorController<A>
@@ -1668,7 +1655,7 @@ where
             retired_child_uids: BTreeSet::new(),
             upgrade_progress: BTreeMap::new(),
             observed_process_status: None,
-            operator_stop_requested: false,
+            lifecycle_intent: None,
         })
     }
 
@@ -1692,6 +1679,12 @@ where
     /// Borrow the verified setup descriptor.
     pub const fn descriptor(&self) -> &VerifiedGuestSetupDescriptor {
         &self.descriptor
+    }
+
+    /// Set the durable lifecycle intent admitted by the daemon dispatcher.
+    pub fn with_lifecycle_intent(mut self, intent: Option<DesiredLifecycle>) -> Self {
+        self.lifecycle_intent = intent;
+        self
     }
 
     /// Register the controller on its authenticated Resource API session.
@@ -1895,36 +1888,11 @@ where
             }
         }
 
-        let existing_process = child_plan
-            .child_batch()
-            .child_ref(ChildRole::VmmProcess)
-            .and_then(|target| children.get(target));
-        if existing_process
-            .is_some_and(|process| process.desired_lifecycle() == Some(DesiredLifecycle::Running))
-        {
-            self.operator_stop_requested = false;
-        } else if dependency_readiness == DependencyReadiness::Ready
-            && guest.prior_ready_status()
-        {
-            self.operator_stop_requested = true;
-        }
         let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
-        } else if self.operator_stop_requested
-            && existing_process
-                .is_some_and(|process| {
-                    process.desired_lifecycle() == Some(DesiredLifecycle::Stopped)
-                })
-        {
-            DesiredLifecycle::Stopped
         } else {
-            DesiredLifecycle::Running
+            self.lifecycle_intent.unwrap_or(DesiredLifecycle::Running)
         };
-        let preserve_operator_stop = self.operator_stop_requested
-            && dependency_readiness == DependencyReadiness::Ready
-            && existing_process.is_some_and(|process| {
-                process.desired_lifecycle() == Some(DesiredLifecycle::Stopped)
-            });
         if let Err(error) = self
             .repair_children(
                 child_plan.child_batch(),
@@ -1946,9 +1914,7 @@ where
                     &lifecycle_conditions,
                     force_degraded,
                 );
-                if !preserve_operator_stop {
-                    self.api.update_status(&guest, status.clone()).await?;
-                }
+                self.api.update_status(&guest, status.clone()).await?;
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
             return Err(error);
@@ -1963,9 +1929,7 @@ where
             &lifecycle_conditions,
             force_degraded,
         );
-        if !preserve_operator_stop {
-            self.api.update_status(&guest, status.clone()).await?;
-        }
+        self.api.update_status(&guest, status.clone()).await?;
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
     }
 

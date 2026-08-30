@@ -1136,6 +1136,40 @@ impl ProviderLifecycleDispatch {
                 == Some(mutation.desired_generation))
     }
 
+    /// Return the latest operation for one exact persisted Guest identity.
+    pub(crate) fn latest_operation_for_identity(
+        &self,
+        zone_uid: &ResourceUid,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+        guest_generation: ResourceGeneration,
+        provider_assignment_generation: ResourceGeneration,
+        policy_revision: u64,
+    ) -> Result<Option<GuestLifecycleOperation>, ProviderEffectError> {
+        let mut mutations = self
+            .mutations
+            .lock()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        self.retain_live(&mut mutations);
+        let latest = mutations
+            .values()
+            .filter(|mutation| !mutation.quarantined)
+            .filter(|mutation| {
+                let Some(authorization) = mutation.authorization.as_ref() else {
+                    return false;
+                };
+                authorization.zone_uid() == zone_uid
+                    && authorization.guest_ref() == guest_ref
+                    && authorization.guest_uid() == guest_uid
+                    && authorization.guest_generation() == guest_generation
+                    && authorization.provider_assignment_generation()
+                        == provider_assignment_generation
+                    && authorization.policy_revision() == policy_revision
+            })
+            .max_by_key(|mutation| mutation.desired_generation);
+        Ok(latest.map(|mutation| mutation.operation))
+    }
+
     fn retain_live(&self, mutations: &mut BTreeMap<String, LifecycleMutation>) {
         let now = now_ms();
         mutations.retain(|_, mutation| {

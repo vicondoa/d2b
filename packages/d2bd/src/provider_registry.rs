@@ -868,6 +868,41 @@ impl ProviderRuntime {
         active.lifecycle.is_latest(caller, &request)
     }
 
+    /// Return the latest durable v3 lifecycle intent for one exact Provider
+    /// and Guest authorization identity.
+    pub(crate) fn latest_v3_lifecycle_operation(
+        &self,
+        provider_ref: &ResourceRef,
+        zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+        guest_ref: &ResourceRef,
+        guest_uid: &d2b_contracts_resource::v3::ResourceUid,
+        guest_generation: ResourceGeneration,
+        provider_assignment_generation: ResourceGeneration,
+        policy_revision: u64,
+    ) -> Result<Option<GuestLifecycleOperation>, ProviderEffectError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        let ProviderRuntimeState::Active(active) = &*state else {
+            return Err(ProviderEffectError::RegistryUnavailable);
+        };
+        if provider_ref.resource_type().as_str() != "Provider"
+            || guest_ref.resource_type().as_str() != "Guest"
+            || active.registry.current().descriptor(provider_ref).is_none()
+        {
+            return Err(ProviderEffectError::ProviderNotRegistered);
+        }
+        active.lifecycle.latest_operation_for_identity(
+            zone_uid,
+            guest_ref,
+            guest_uid,
+            guest_generation,
+            provider_assignment_generation,
+            policy_revision,
+        )
+    }
+
     fn compose_host_runtime(
         &self,
         host: &HostJson,
