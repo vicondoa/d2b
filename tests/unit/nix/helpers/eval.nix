@@ -109,23 +109,7 @@ let
       yubikey.enable = false;
       usePrebuiltHostTools = lib.mkDefault (evalSystem == "x86_64-linux");
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.vms.corp-vm = {
-      enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      config = {
-        networking.hostName = lib.mkDefault "corp-vm";
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
-        };
-      };
-    };
+    d2b.zones.local-root = { };
   };
 
   pkgsFor = evalSystem:

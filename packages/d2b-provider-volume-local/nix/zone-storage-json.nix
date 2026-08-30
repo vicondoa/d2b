@@ -3,13 +3,9 @@
 let
   cfg = config.d2b;
   identity = import ../../../nixos-modules/resources-bundle.nix { inherit lib; };
-  enabledEnvNames = builtins.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs);
   declaredZoneNames = builtins.attrNames (cfg._zoneCompiler.topology or { });
-  # The compiler topology is the authoritative declared-Zone index. Keep
-  # enabled legacy environments as compatibility rows, but do not derive
-  # storage membership from VM placement.
   zoneNames = lib.unique
-    ([ cfg._zoneCompiler.localRoot ] ++ enabledEnvNames ++ declaredZoneNames);
+    ([ cfg._zoneCompiler.localRoot ] ++ declaredZoneNames);
 
   storageRow = zoneName: {
     identity = {

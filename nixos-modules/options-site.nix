@@ -1,6 +1,5 @@
-# d2b.site.* - host-level site knobs that every VM inherits,
-# plus the top-level `d2b.hostLanCidrs` list. Extracted from
-# options.nix for reviewability.
+# d2b.site.* - host-level site defaults plus the top-level
+# `d2b.hostLanCidrs` list.
 { lib, ... }:
 
 {
@@ -16,12 +15,8 @@
       default = "/var/lib/d2b";
       example = "/var/lib/d2b";
       description = ''
-        Root of every d2b-managed state file on the host. Per-VM
-        state lives under `${"$"}{stateDir}/vms/<vm>/`; d2b-
-        managed SSH keys under `${"$"}{stateDir}/keys/`. Must be on
-        the same filesystem as `/nix/store` for the per-VM hardlink
-        farm to work (see `d2b.store.stateDir`, which defaults to
-        `${"$"}{stateDir}/vms`).
+        Root of every d2b-managed state file on the host. Zone
+        runtime and audit state is anchored below this directory.
 
         **Reserved in v0.4.0.** The framework still hardcodes
         `/var/lib/d2b` in several host-side paths, so eval now
@@ -49,9 +44,10 @@
       type = lib.types.bool;
       default = false;
       description = ''
-        Acknowledge that `d2b.envs.<env>.lan.allowEastWest = true`
-        is an explicit out-of-threat-model mode. Leave this at `false`
-        to preserve the default peer-guest isolation boundary.
+        Acknowledge that enabling
+        `Network.spec.isolation.allowEastWest` is an explicit
+        out-of-threat-model mode. Leave this at `false` to preserve
+        the default peer-Guest isolation boundary.
       '';
     };
 
@@ -73,9 +69,9 @@
         default = "tap-fd";
         example = "persistent-tap";
         description = ''
-          Cloud Hypervisor net-handoff mode for long-lived runners The emitted `host.json.ch.netHandoffMode`
-          records this declared value; the broker's `host check`
-          probes the packaged CH binary at runtime and fails closed
+          Cloud Hypervisor net-handoff mode for long-lived runners.
+          The selected runtime Provider records this value; the broker's
+          host check probes the packaged CH binary and fails closed
           with `ch-net-handoff-not-supported` if neither mode
           satisfies the declared VM network resources without
           `CAP_NET_ADMIN` in the long-lived runner.
@@ -248,10 +244,9 @@
       default = "/var/lib/d2b/keys";
       example = "/var/lib/d2b/keys";
       description = ''
-        Directory where the framework generates and stores
-        per-VM SSH host keys. Mode 0700 owned by root, with a per-
-        key ACL granting read access to the `d2b` group
-        (so the CLI can drive `ssh` to each VM without sudo).
+        Directory where the framework stores managed SSH host keys.
+        Mode 0700 is owned by root, with narrow ACLs for authorized
+        lifecycle clients.
 
         Default tracks `${"$"}{stateDir}/keys`. If you override
         `stateDir`, override this too - the option default is a
@@ -259,14 +254,8 @@
         independently of other options.
 
         **ADVISORY ONLY in v0.1.0** (same caveat as `stateDir`).
-        host-keys.nix's tmpfiles rules and activation script DO
-        thread `cfg.site.keysDir`, but host.nix's tmpfiles rule
-        currently re-declares the literal `/var/lib/d2b/keys`,
-        and the migration script under `scripts/` hardcodes the
-        same path. Overriding this option in v0.1.0 will leave
-        those stale entries on disk; the per-VM key flow itself
-        still works because everything goes through host-keys.nix.
-        Full alignment lands in v0.2.0.
+        The directory is independent of Zone resource names; the
+        daemon resolves the requested Guest identity.
       '';
     };
 
@@ -280,15 +269,13 @@
         ]
       '';
       description = ''
-        Extra SSH public keys to authorize for the SSH user inside
-        every d2b-managed VM. Entries may be either paths to a
+        Extra SSH public keys to authorize for d2b-managed Guests.
+        Entries may be either paths to a
         `.pub` file or literal pubkey strings.
 
-        These are merged with the framework's own per-VM
-        d2b-managed pubkey when the guest-side
-        `d2b-load-host-keys.service` populates the SSH user's
-        `authorized_keys` file. Empty list = only the framework's
-        own pubkey is authorized.
+        These are merged with the framework's managed key when the
+        Guest activation Provider populates the authorized-keys
+        file. Empty list means only the managed key is authorized.
 
         Eval fails if any entry doesn't look like a supported pubkey
         type (ed25519, RSA, ECDSA, security-key variants) or contains
@@ -298,9 +285,7 @@
 
     yubikey.enable = lib.mkOption {
       type = lib.types.bool;
-      # Intentionally kept `true` for backward compatibility. Host-side
-      # USBIP units and `usbip-host` now materialize only when an enabled
-      # VM also opts into `usbip.yubikey`.
+      # Host-side USBIP support remains enabled by default.
       default = true;
       example = false;
       description = ''
@@ -312,13 +297,9 @@
         the device into a guest via USBIP.
 
         Set to `false` on hosts that do not use Yubikeys. With this
-        option off the framework does not load `usbip-host` and does
-        not emit Yubico udev rules; any per-VM `usbip.yubikey = true`
-        flag still pulls in the guest-side `usbip` CLI + `vhci_hcd`
-        module, but the host side has no Yubikey-specific
-        machinery installed. The `/dev/kvm` udev rule (locking the
-        device to `GROUP="kvm"`) stays in place regardless - it is
-        not a Yubikey-specific rule.
+        option off the framework does not load `usbip-host` or emit
+        Yubico udev rules. The `/dev/kvm` udev rule remains because
+        it is not Yubikey-specific.
       '';
     };
 
@@ -326,27 +307,14 @@
       type = lib.types.attrsOf lib.types.unspecified;
       default = { };
       example = lib.literalExpression ''
-        # Pass the consumer flake's `inputs` to every per-VM module
-        # so VMs can reference `inputs.<consumer-input>.*`. Mirrors
+        # Pass consumer-specific arguments to guest evaluators. Mirrors
         # home-manager's `extraSpecialArgs` pattern.
         { inherit inputs; }
       '';
       description = ''
-        Extra module-arguments merged into every per-VM
-        `microvm.vms.<vm>.specialArgs` after the framework's own
-        baseline (`{ inherit inputs; }` where `inputs` is the
-        d2b FLAKE's inputs). Consumer keys take precedence on
-        collision - set `inputs = consumerInputs;` here if your
-        per-VM modules need `inputs.<your-flake>` visibility (e.g.
-        `inputs.entrablau`, `inputs.llm-agents`).
-
-        Use this when:
-        - A per-VM module file (e.g. `vms/work.nix`) takes
-          `{ inputs, ... }:` and references inputs your consumer
-          flake declares but d2b's flake does not.
-        - You want to thread a consumer-side overlay set (e.g.
-          `{ myOverlay = inputs.something.overlays.default; }`)
-          into per-VM evals without re-importing it in each VM.
+        Extra module arguments merged into consumer-supplied guest
+        evaluations after the framework's own baseline. Consumer
+        keys take precedence on collision.
 
         Mirrors `home-manager.extraSpecialArgs` from the
         Home-Manager NixOS module - same semantics, same intent.
@@ -354,10 +322,8 @@
     };
   };
 
-  # Top-level option: CIDRs of the host's own physical LAN(s). These
-  # get unioned into every `d2b.envs.<env>.hostBlocklist`
-  # automatically, so a workload VM cannot reach any host on the
-  # wire the host itself sits on - not just the host's own IP.
+  # Top-level option: CIDRs of the host's own physical LAN(s). The
+  # Network Provider merges these into each Zone's forwarding policy.
   #
   # Defaults to the empty list; override to your actual subnet.
   # `ip route` on the host will tell you what to put here, e.g.
@@ -368,17 +334,10 @@
     default = [ ];
     example = [ "192.168.1.0/24" "10.0.0.0/24" ];
     description = ''
-      CIDRs of the host's own physical LAN(s). Automatically merged
-      into every env's net-VM DROP rule so VMs cannot reach the
-      host's neighbours (printer, NAS, other workstations…) - not
-      just the host's IP.
-
-      Same-env workload VMs share an env (and its `sys-<env>-net`
-      net VM) but cannot directly reach peer workload VMs -
-      workload taps are `Isolated = true` in the per-env LAN
-      bridge. Traffic to peers and to the host's LAN both leave
-      via the net VM (where the merged DROP rules apply); there
-      is no east-west bypass.
+      Guests cannot reach the host's neighbours or bypass the
+      broker-owned Network effect path. Zone peer traffic remains
+      isolated unless the Network resource explicitly opts into
+      east-west access.
     '';
   };
 }

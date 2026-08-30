@@ -6,14 +6,10 @@ _SURFACES = {
     "daemon": {
         "cases": [],
         "modules": [
-            "nixos-modules/activation-nixos-cleanup.nix",
-            "nixos-modules/host-activation.nix",
             "nixos-modules/host-broker.nix",
             "nixos-modules/host-daemon.nix",
-            "nixos-modules/manifest.nix",
-            "nixos-modules/observability-host-secrets.nix",
             "nixos-modules/options-daemon.nix",
-            "nixos-modules/processes-json.nix",
+            "nixos-modules/host-users.nix",
         ],
     },
     "broker-profiles": {
@@ -41,20 +37,7 @@ _SURFACES = {
         "modules": [
             "nixos-modules/component-session.nix",
             "nixos-modules/guest-broker.nix",
-            "nixos-modules/processes-json.nix",
             "nixos-modules/vm-guest-base.nix",
-        ],
-    },
-    "network": {
-        "cases": ["net-vm-network"],
-        "package": "packages/d2b-provider-network-local",
-        "files": [
-            "packages/d2b-provider-network-local/nix/net-mdns.nix",
-            "packages/d2b-provider-network-local/nix/net.nix",
-        ],
-        "modules": [
-            "nixos-modules/options-envs.nix",
-            "packages/d2b-provider-network-local/nix/resources-network.nix",
         ],
     },
     "storage-volume": {
@@ -70,28 +53,11 @@ _SURFACES = {
             "packages/d2b-provider-volume-local/nix/zone-storage-json.nix",
         ],
     },
-    "process-sandbox": {
-        "cases": [],
-        "files": [
-            "nixos-modules/vm-evaluator.nix",
-        ],
+    "network": {
+        "cases": ["net-vm-network"],
+        "package": "packages/d2b-provider-network-local",
         "modules": [
-            "nixos-modules/minijail-profiles.nix",
-            "nixos-modules/options-vms.nix",
-            "nixos-modules/unsafe-local-helper.nix",
-            "nixos-modules/unsafe-local-workloads-json.nix",
-        ],
-    },
-    "realm-zone": {
-        "cases": [],
-        "modules": [
-            "nixos-modules/bundle-zones.nix",
-            "nixos-modules/options-realms.nix",
-            "nixos-modules/options-realms-network.nix",
-            "nixos-modules/options-realms-workloads.nix",
-            "nixos-modules/realm-controller-config-json.nix",
-            "nixos-modules/realm-identity-config-json.nix",
-            "nixos-modules/realm-workloads-launcher-v2-json.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
         ],
     },
     "zone-control": {
@@ -119,17 +85,17 @@ _SURFACES = {
             "packages/d2b-provider-volume-local/nix/options-volumes.nix",
         ],
     },
-    "allocator-topology": {
-        "cases": ["allocator-topology"],
-        "files": [
-            "nixos-modules/allocator-json.nix",
-        ],
-        "modules": [],
-    },
-    "desktop-interaction": {
-        "cases": [],
+    "zone-only": {
+        "cases": ["zone-only"],
+        "package": "packages/d2b-provider-runtime-qemu-media",
         "modules": [
-            "nixos-modules/ui-colors.nix",
+            "nixos-modules/options.nix",
+            "nixos-modules/options-site.nix",
+            "nixos-modules/options-host-sccache.nix",
+            "nixos-modules/options-host.nix",
+            "nixos-modules/options-daemon.nix",
+            "nixos-modules/options-observability.nix",
+            "packages/d2b-provider-runtime-qemu-media/nix/default.nix",
         ],
     },
     "provider-catalog": {
@@ -147,16 +113,6 @@ _SURFACES = {
             "packages/d2b-provider-activation-nixos/nix/default.nix",
             "nixos-modules/providers/system-minijail.nix",
             "nixos-modules/providers/system-systemd.nix",
-        ],
-    },
-    "examples": {
-        "cases": [],
-        "modules": [
-            "nixos-modules/components/observability/default.nix",
-            "nixos-modules/components/observability/guest.nix",
-            "nixos-modules/components/observability/host.nix",
-            "nixos-modules/components/observability/stack.nix",
-            "nixos-modules/observability-vm.nix",
         ],
     },
     "eval-jobs": {

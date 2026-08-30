@@ -1,9 +1,7 @@
 # Process and EphemeralProcess resource compiler.
 #
-# The legacy processes.json emitter remains active while the Provider
-# migration is in progress. This module is the v3 projection: executable
-# paths, argv, environment maps, and numeric identities never cross this
-# boundary.
+# This is the sole Nix process projection. Executable paths, argv, environment
+# maps, and numeric identities never cross the Zone resource boundary.
 { config, lib, ... }:
 
 let

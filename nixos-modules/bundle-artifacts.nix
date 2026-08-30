@@ -144,16 +144,8 @@ let
 
   singletonArtifactNames = [
     "bundle"
-    "hostJson"
-    "processesJson"
     "privilegesJson"
-    "storageJson"
-    "syncJson"
-    "allocatorJson"
-    "realmControllersJson"
-    "realmIdentityJson"
     "realmWorkloadsLauncherV2Json"
-    "unsafeLocalWorkloadsJson"
   ];
 
   shouldInstall = artifact:
@@ -189,68 +181,12 @@ in
       description = "Internal typed bundle.json artifact metadata.";
     };
 
-    hostJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed host.json artifact metadata.";
-    };
-
-    processesJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed processes.json artifact metadata.";
-    };
-
     privilegesJson = lib.mkOption {
       type = artifactModule;
       default = { };
       internal = true;
       visible = false;
       description = "Internal typed privileges.json artifact metadata.";
-    };
-
-    storageJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed storage.json artifact metadata.";
-    };
-
-    syncJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed sync.json artifact metadata.";
-    };
-
-    allocatorJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed allocator.json artifact metadata.";
-    };
-
-    realmControllersJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed realm-controllers.json artifact metadata.";
-    };
-
-    realmIdentityJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed realm-identity.json artifact metadata.";
     };
 
     realmWorkloadsLauncherV2Json = lib.mkOption {
@@ -261,13 +197,6 @@ in
       description = "Internal typed realm-workloads-launcher-v2.json public metadata artifact.";
     };
 
-    unsafeLocalWorkloadsJson = lib.mkOption {
-      type = artifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed unsafe-local-workloads.json private configured-item artifact.";
-    };
 
     extraArtifacts = lib.mkOption {
       type = types.attrsOf artifactModule;
@@ -275,22 +204,6 @@ in
       internal = true;
       visible = false;
       description = "Internal typed extension point for future singleton bundle artifacts.";
-    };
-
-    closures = lib.mkOption {
-      type = types.attrsOf nestedArtifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed closures/<vm>.json artifact metadata table.";
-    };
-
-    minijailProfiles = lib.mkOption {
-      type = types.attrsOf nestedArtifactModule;
-      default = { };
-      internal = true;
-      visible = false;
-      description = "Internal typed minijail profile artifact metadata table.";
     };
 
     zoneResourceBundles = lib.mkOption {

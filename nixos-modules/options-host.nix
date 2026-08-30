@@ -142,19 +142,12 @@ in
 
       When enabled, the d2b host broker is authorised to open the
       configured FIDO/CTAP hidraw node(s) and relay CTAP HID traffic
-      to requesting guest VMs over AF_VSOCK. Guest VMs must
-      individually opt in with
-      `d2b.vms.<name>.usb.securityKey.enable = true`.
-
-      Phase 1 note: security-key proxying and YubiKey USBIP
-      passthrough (`d2b.vms.<name>.usbip.yubikey`) are mutually
-      exclusive per VM; a VM cannot simultaneously use both proxy
-      modes for the same physical key. The eval-time assertion in
-      `nixos-modules/assertions.nix` enforces this constraint.
+      to requesting Zone Guest resources over AF_VSOCK. Guest
+      bindings select the frontend through the typed Device and
+      Credential resource contracts.
 
       Disabling this option removes all udev group grants and broker
-      capability flags for hidraw access; it does NOT affect the
-      legacy `d2b.site.yubikey.enable` USBIP path.
+      capability flags for hidraw access.
     '';
 
     devices = lib.mkOption {
@@ -172,7 +165,7 @@ in
       '';
       description = ''
         List of FIDO/CTAP security keys the host broker is allowed to
-        open for VM-side CTAP HID relay. Each entry is a stable selector
+        open for Guest-side CTAP HID relay. Each entry is a stable selector
         (vendorId + productId + optional serial); raw `/dev/hidrawN`
         paths and USB bus IDs are NOT accepted.
 
