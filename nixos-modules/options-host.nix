@@ -128,12 +128,6 @@ in
       description = "Internal: resolved immutable d2b Wayland proxy package.";
     };
 
-    d2bGatewayRuntime = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal: resolved gateway runtime helper package.";
-    };
   };
 
   options.d2b.host.usb.securityKey = {

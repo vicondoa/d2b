@@ -32,11 +32,6 @@ let
       else activationHelperSourcePackage;
   };
 
-  # Keep the Provider runtime package in the host-tool table for the current
-  # U26 package-selection contract. Gateway lifecycle is no longer emitted by
-  # this module.
-  gatewayRuntimePackage = d2bHostTools.gatewayRuntime;
-
   d2bCliShellArtifactsPackage = pkgs.runCommand "d2b-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
     ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
@@ -120,7 +115,6 @@ in
     d2b._hostToolPackages = {
       d2b = d2bCliPackage;
       d2bd = d2bdPackage;
-      d2bGatewayRuntime = gatewayRuntimePackage;
     };
 
     environment.systemPackages = [

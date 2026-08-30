@@ -10,7 +10,6 @@ mod deployment_service;
 mod effects;
 #[allow(missing_docs)]
 mod error;
-pub mod gateway;
 mod rate_limit;
 mod metrics;
 

@@ -3,8 +3,6 @@
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-#[cfg(test)]
-use std::collections::hash_map::Entry;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
@@ -142,8 +140,6 @@ use d2b_zone_routing::engine::{
 use d2b_zone_routing::resolver::{SealedZoneTopology, ZoneEntrypointResolver};
 use d2b_zone_routing::engine::ZoneRouteRequest;
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
-#[cfg(test)]
-use d2b_contracts::target::TargetName;
 use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 use d2b_core::allocator_config::AllocatorZoneTopology;
 pub(crate) use d2bd_runtime::broker_transport::{
@@ -406,11 +402,6 @@ use d2bd_runtime::admission::{
     verb_allowed_for_host_shutdown, verb_requires_admin,
 };
 #[cfg(test)]
-use d2bd_runtime::admission::{
-    gateway_display_op_requires_admin, gateway_display_peer_principal,
-    gateway_display_peer_principal_string,
-};
-#[cfg(test)]
 use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
 // Provider-neutral startup and protocol helpers live in `d2bd-runtime`.
 // Provider selection and effect adapters remain local to this crate.
@@ -440,8 +431,6 @@ const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
-#[cfg(test)]
-const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// The static composition root is one artifact for both process-start modes.
 pub const D2BD_ARTIFACT_FAMILY: &str = "d2bd";
@@ -574,82 +563,6 @@ mod tpm_migration_inventory_tests {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GatewayFileConfig {
-    gateway: String,
-    realm: String,
-    #[serde(default)]
-    state_dir: Option<PathBuf>,
-    #[serde(default)]
-    credential_path: Option<PathBuf>,
-    #[serde(default)]
-    seal_key_path: Option<PathBuf>,
-    #[serde(default)]
-    allow_host_relay_credentials: bool,
-    #[serde(default)]
-    relay: GatewayRelayFileConfig,
-    #[serde(default)]
-    aca: GatewayAcaFileConfig,
-    #[serde(default)]
-    display: GatewayDisplayFileConfig,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayRelayFileConfig {
-    #[serde(default)]
-    namespace: Option<String>,
-    #[serde(default)]
-    entity: Option<String>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayAcaFileConfig {
-    #[serde(default)]
-    endpoint: Option<String>,
-    #[serde(default)]
-    subscription: Option<String>,
-    #[serde(default)]
-    resource_group: Option<String>,
-    #[serde(default)]
-    sandbox_group: Option<String>,
-    #[serde(default)]
-    region: Option<String>,
-    #[serde(default)]
-    disk_image_id: Option<String>,
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    disk_name: Option<String>,
-    #[serde(default)]
-    managed_identity_resource_id: Option<String>,
-    #[serde(default)]
-    managed_identity_client_id: Option<String>,
-    #[serde(default)]
-    cpu: Option<String>,
-    #[serde(default)]
-    memory: Option<String>,
-    #[serde(default)]
-    auto_suspend_interval_secs: Option<u32>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayDisplayFileConfig {
-    #[serde(default)]
-    vsock_port: Option<u32>,
-    #[serde(default)]
-    waypipe_compression: Option<String>,
-    #[serde(default)]
-    waypipe_socket: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct ServerState {
     config: DaemonConfig,
@@ -666,9 +579,6 @@ struct ServerState {
     /// session is a daemon-held authenticated named-stream client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
-    /// Test-only compatibility fixture for the retired GatewayDisplay owner.
-    #[cfg(test)]
-    gateway_display: Arc<GatewayDisplayRuntime>,
     /// Bounded admission gate for in-flight connection-handler threads.
     /// The accept loop performs a non-blocking try-acquire and refuses
     /// (typed-busy) on a miss rather than ever blocking `accept()`.
@@ -3605,337 +3515,6 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GatewaySessionState {
-    Running,
-    Closed,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct GatewaySessionHandle(String);
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct GatewayOpenSession {
-    session_id: String,
-    agent: GatewaySessionHandle,
-    listener: GatewaySessionHandle,
-    operation_id: String,
-    peer_principal: String,
-    state: GatewaySessionState,
-    request_hash: u64,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct GatewaySessionSummary {
-    session_id: String,
-    operation_id: String,
-    peer_principal: String,
-    state: GatewaySessionState,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GatewayError {
-    ProviderAllocationFailed,
-}
-
-#[cfg(test)]
-impl GatewayError {
-    fn slug(self) -> &'static str {
-        match self {
-            Self::ProviderAllocationFailed => "provider-allocation-failed",
-        }
-    }
-}
-
-#[cfg(test)]
-impl std::fmt::Display for GatewayError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.slug())
-    }
-}
-
-#[cfg(test)]
-impl std::error::Error for GatewayError {}
-
-#[cfg(test)]
-struct GatewayOrchestrator {
-    available: bool,
-    sessions: Mutex<HashMap<String, GatewayOpenSession>>,
-}
-
-#[cfg(test)]
-impl GatewayOrchestrator {
-    fn new(available: bool) -> Self {
-        Self {
-            available,
-            sessions: Mutex::new(HashMap::new()),
-        }
-    }
-
-    async fn open(
-        &self,
-        target: &str,
-        operation_id: &str,
-        peer_principal: &str,
-        request_hash: u64,
-    ) -> Result<GatewayOpenSession, GatewayError> {
-        if !self.available {
-            return Err(GatewayError::ProviderAllocationFailed);
-        }
-        let session_id = format!("gw-{operation_id}");
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-        if let Some(existing) = sessions.get(&session_id)
-            && existing.request_hash == request_hash
-            && existing.operation_id == operation_id
-            && existing.peer_principal == peer_principal
-        {
-            return Ok(existing.clone());
-        }
-        let session = GatewayOpenSession {
-            session_id: session_id.clone(),
-            agent: GatewaySessionHandle(format!("agent-{target}")),
-            listener: GatewaySessionHandle(format!("listener-{target}")),
-            operation_id: operation_id.to_owned(),
-            peer_principal: peer_principal.to_owned(),
-            state: GatewaySessionState::Running,
-            request_hash,
-        };
-        sessions.insert(session_id, session.clone());
-        Ok(session)
-    }
-
-    async fn close(&self, session: &GatewayOpenSession) -> Result<(), GatewayError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-        if let Some(existing) = sessions.get_mut(&session.session_id) {
-            existing.state = GatewaySessionState::Closed;
-        }
-        Ok(())
-    }
-
-    fn list_sessions(&self) -> Result<Vec<GatewaySessionSummary>, GatewayError> {
-        let sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-        Ok(sessions
-            .values()
-            .map(|session| GatewaySessionSummary {
-                session_id: session.session_id.clone(),
-                operation_id: session.operation_id.clone(),
-                peer_principal: session.peer_principal.clone(),
-                state: session.state,
-            })
-            .collect())
-    }
-}
-
-#[cfg(test)]
-struct GatewayDisplayRuntime {
-    orchestrator: GatewayOrchestrator,
-    sessions: Mutex<HashMap<String, GatewayDisplaySession>>,
-    lifecycle: Box<dyn GatewayLifecycle>,
-    preflight: Option<GatewayDisplayPreflight>,
-}
-
-#[cfg(test)]
-impl std::fmt::Debug for GatewayDisplayRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("GatewayDisplayRuntime(<state>)")
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct GatewayDisplaySession {
-    target: String,
-    principal: String,
-    open: GatewayOpenSession,
-    opened_at: Instant,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct GatewayDisplayPreflight {
-    allow_host_relay_credentials: bool,
-    waypipe_socket_path: Option<PathBuf>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct ValidatedWaypipeSocket;
-
-#[cfg(test)]
-#[async_trait]
-trait GatewayLifecycle: Send + Sync {
-    async fn start(&self, target: &TargetName) -> Result<String, GatewayError>;
-    async fn stop(&self, target: &TargetName) -> Result<String, GatewayError>;
-}
-
-#[cfg(test)]
-struct UnavailableGatewayLifecycle;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for UnavailableGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayLifecycle;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for DaemonGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("ready".to_owned())
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("stopped".to_owned())
-    }
-}
-
-#[cfg(test)]
-fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
-    Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(false),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(UnavailableGatewayLifecycle),
-        preflight: None,
-    })
-}
-
-#[cfg(test)]
-fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
-    Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(true),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(DaemonGatewayLifecycle),
-        preflight: None,
-    })
-}
-
-#[cfg(test)]
-fn gateway_display_preflight_from_config(
-    config: &GatewayFileConfig,
-) -> Result<GatewayDisplayPreflight, TypedError> {
-    let waypipe_socket_path = config
-        .display
-        .waypipe_socket
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-    Ok(GatewayDisplayPreflight {
-        allow_host_relay_credentials: config.allow_host_relay_credentials,
-        waypipe_socket_path,
-    })
-}
-
-#[cfg(test)]
-fn validate_gateway_host_relay_transition_guard(
-    config: &GatewayFileConfig,
-) -> Result<(), TypedError> {
-    if config.allow_host_relay_credentials {
-        return Err(gateway_display_config_error(
-            "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocket, TypedError> {
-    if !path.is_absolute() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be an absolute Unix socket path",
-            path.display()
-        )));
-    }
-    reject_symlink_components(path)?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| {
-        gateway_display_config_error(format!(
-            "waypipeSocket {} cannot be inspected without following symlinks: {err}; create an operator-owned Unix socket with mode 0600",
-            path.display()
-        ))
-    })?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must point directly at an operator-owned Unix socket, not a symlink",
-            path.display()
-        )));
-    }
-    if !file_type.is_socket() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be a Unix socket owned by the operator with mode 0600",
-            path.display()
-        )));
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must have mode 0600; current mode is {mode:#05o}; run chmod 0600 on the socket path",
-            path.display()
-        )));
-    }
-    let uid = metadata.uid();
-    if uid == 0 {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be owned by an unprivileged operator uid, not root",
-            path.display()
-        )));
-    }
-    Ok(ValidatedWaypipeSocket)
-}
-
-#[cfg(test)]
-fn reject_symlink_components(path: &Path) -> Result<(), TypedError> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        current.push(component.as_os_str());
-        if current.parent().is_none() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current).map_err(|err| {
-            gateway_display_config_error(format!(
-                "waypipeSocket component {} cannot be inspected without following symlinks: {err}",
-                current.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(gateway_display_config_error(format!(
-                "waypipeSocket component {} must not be a symlink",
-                current.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
-    TypedError::GatewayDisplayUnavailable {
-        detail: detail.into(),
-    }
-}
-
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
@@ -4079,7 +3658,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             crate::exec_session::ExecSessionCaps::default(),
         )),
         #[cfg(test)]
-        gateway_display: new_gateway_display_runtime(),
         console_sessions: Arc::new(Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
@@ -6193,35 +5771,6 @@ fn handle_connection_authorized(
                 }
             }
         }
-        // The retired GatewayDisplay compatibility owner remains available
-        // only to owner-local tests; production requests fall through to the
-        // clean-break unsupported arm below.
-        #[cfg(test)]
-        if let d2bd_runtime::wire::Request::GatewayDisplay(op) = &request {
-            if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
-                continue;
-            }
-            let owner_state = state.clone();
-            let owner_peer = peer.clone();
-            let op = op.clone();
-            match std::thread::Builder::new()
-                .name("d2b-gateway-display".to_owned())
-                .spawn(move || {
-                    run_gateway_display_owner(stream, owner_state, owner_peer, op);
-                }) {
-                Ok(_) => return Ok(()),
-                Err(err) => {
-                    return Err(TypedError::InternalIo {
-                        context: "spawn gateway display handler".to_owned(),
-                        detail: err.to_string(),
-                    });
-                }
-            }
-        }
         let response =
             match dispatch_request(state, &peer, request) {
                 Ok(value) => value,
@@ -6233,25 +5782,6 @@ fn handle_connection_authorized(
             };
         write_json_frame(&stream, &response)?;
     }
-}
-
-#[cfg(test)]
-fn run_gateway_display_owner(
-    stream: Socket,
-    state: ServerState,
-    peer: PeerIdentity,
-    op: public_wire::GatewayDisplayOp,
-) {
-    let response = match dispatch_request(
-        &state,
-        &peer,
-        d2bd_runtime::wire::Request::GatewayDisplay(op),
-    ) {
-        Ok(value) => value,
-        Err(error) => serde_json::to_value(d2bd_runtime::wire::error_frame(&error))
-            .unwrap_or_else(|_| json!({ "type": "error" })),
-    };
-    let _ = write_json_frame(&stream, &response);
 }
 
 fn dispatch_request(
@@ -6384,16 +5914,6 @@ fn dispatch_request_locked(
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
         d2bd_runtime::wire::Request::Console(op) => dispatch_console(state, peer, op),
-        #[cfg(test)]
-        d2bd_runtime::wire::Request::GatewayDisplay(op) => {
-            dispatch_gateway_display(state, peer, op)
-        }
-        #[cfg(not(test))]
-        d2bd_runtime::wire::Request::GatewayDisplay(_) => {
-            Err(TypedError::WireUnsupportedRequest {
-                request_type: "gatewayDisplay".to_owned(),
-            })
-        }
         d2bd_runtime::wire::Request::Workload(op) => dispatch_workload(state, peer, op),
         d2bd_runtime::wire::Request::Audio(op) => {
             if !matches!(op, public_wire::AudioOp::Status(_))
@@ -10513,7 +10033,6 @@ mod workload_observability_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
-            gateway_display: new_gateway_display_runtime_for_tests(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -11309,341 +10828,6 @@ fn build_read_output_result(
             dropped_bytes: 0,
             is_eof: false,
         },
-    }
-}
-
-#[cfg(test)]
-fn dispatch_gateway_display(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    op: public_wire::GatewayDisplayOp,
-) -> Result<Value, TypedError> {
-    let response = match op {
-        public_wire::GatewayDisplayOp::Start(args) => {
-            if !matches!(peer.role, PeerRole::Admin) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                });
-            }
-            let target = parse_gateway_display_lifecycle_target(
-                &args.target,
-                &args.operation_id,
-                &args.principal,
-            )?;
-            let lifecycle_state = block_on_future(state.gateway_display.lifecycle.start(&target))
-                .map_err(gateway_error_to_typed)?;
-            public_wire::GatewayDisplayOpResponse::Start(public_wire::GatewayDisplayStartResult {
-                target: args.target,
-                state: lifecycle_state,
-            })
-        }
-        public_wire::GatewayDisplayOp::Stop(args) => {
-            if !matches!(peer.role, PeerRole::Admin) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                });
-            }
-            let target = parse_gateway_display_lifecycle_target(
-                &args.target,
-                &args.operation_id,
-                &args.principal,
-            )?;
-            close_gateway_sessions_for_target(state, &args.target)?;
-            let lifecycle_state = block_on_future(state.gateway_display.lifecycle.stop(&target))
-                .map_err(gateway_error_to_typed)?;
-            public_wire::GatewayDisplayOpResponse::Stop(public_wire::GatewayDisplayStopResult {
-                target: args.target,
-                state: lifecycle_state,
-            })
-        }
-        public_wire::GatewayDisplayOp::Open(args) => {
-            let target_text = args.target.clone();
-            let _target =
-                TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay target parse failed: {err}"),
-                })?;
-            let operation_id = d2b_contracts::OperationId::parse(args.operation_id.clone())
-                .map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay operation_id invalid: {err}"),
-                })?;
-            let correlation_id =
-                d2b_contracts::CorrelationId::parse(args.operation_id).map_err(|err| {
-                    TypedError::WireInvalidFrame {
-                        detail: format!(
-                            "gatewayDisplay operation_id cannot be used as correlation_id: {err}"
-                        ),
-                    }
-                })?;
-            let principal = gateway_display_peer_principal(peer);
-            if args.app_argv.is_empty() || args.app_argv.iter().any(String::is_empty) {
-                return Err(TypedError::WireInvalidFrame {
-                    detail:
-                        "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
-                            .to_owned(),
-                });
-            }
-            validate_gateway_display_open_preflight(state)?;
-            let _correlation_id = correlation_id;
-            let owner_principal = principal.to_string();
-            gateway_display_gc(state);
-            let open = block_on_future(state.gateway_display.orchestrator.open(
-                &target_text,
-                &operation_id.to_string(),
-                &owner_principal,
-                args.request_hash,
-            ))
-            .map_err(gateway_error_to_typed)?;
-            let session_id = open.session_id.to_string();
-            let mut sessions =
-                state
-                    .gateway_display
-                    .sessions
-                    .lock()
-                    .map_err(|_| TypedError::InternalIo {
-                        context: "lock gateway display sessions".to_owned(),
-                        detail: "mutex poisoned".to_owned(),
-                    })?;
-            match sessions.entry(session_id.clone()) {
-                Entry::Occupied(_) => {}
-                Entry::Vacant(slot) => {
-                    slot.insert(GatewayDisplaySession {
-                        target: target_text,
-                        principal: owner_principal,
-                        open,
-                        opened_at: Instant::now(),
-                    });
-                }
-            }
-            public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
-                session_id,
-                state: "running".to_owned(),
-            })
-        }
-        public_wire::GatewayDisplayOp::Close(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let session =
-                {
-                    let mut sessions = state.gateway_display.sessions.lock().map_err(|_| {
-                        TypedError::InternalIo {
-                            context: "lock gateway display sessions".to_owned(),
-                            detail: "mutex poisoned".to_owned(),
-                        }
-                    })?;
-                    let unauthorized = sessions.get(&args.session_id).is_some_and(|session| {
-                        !matches!(peer.role, PeerRole::Admin) && session.principal != peer_principal
-                    });
-                    if unauthorized {
-                        return Err(TypedError::AuthzNotAdmin {
-                            verb: "gatewayDisplay close".to_owned(),
-                        });
-                    }
-                    sessions.remove(&args.session_id)
-                };
-            let closed = if let Some(session) = session {
-                if let Err(err) =
-                    block_on_future(state.gateway_display.orchestrator.close(&session.open))
-                {
-                    tracing::warn!(error = %err, "gateway display close cleanup failed");
-                }
-                true
-            } else {
-                false
-            };
-            public_wire::GatewayDisplayOpResponse::Close(public_wire::GatewayDisplayCloseResult {
-                closed,
-            })
-        }
-        public_wire::GatewayDisplayOp::List(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let target_by_id: HashMap<String, String> = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .values()
-                .map(|session| (session.open.session_id.to_string(), session.target.clone()))
-                .collect();
-            let sessions = state
-                .gateway_display
-                .orchestrator
-                .list_sessions()
-                .map_err(gateway_error_to_typed)?
-                .into_iter()
-                .filter_map(|summary| {
-                    let session_id = summary.session_id.to_string();
-                    let target = target_by_id.get(&session_id)?.clone();
-                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
-                        return None;
-                    }
-                    if !matches!(peer.role, PeerRole::Admin)
-                        && summary.peer_principal.as_str() != peer_principal.as_str()
-                    {
-                        return None;
-                    }
-                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
-                    Some(public_wire::GatewayDisplaySessionSummary {
-                        session_id,
-                        target,
-                        state,
-                    })
-                })
-                .collect();
-            public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
-                sessions,
-            })
-        }
-        public_wire::GatewayDisplayOp::ListDetailed(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let target_by_id: HashMap<String, String> = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .values()
-                .map(|session| (session.open.session_id.to_string(), session.target.clone()))
-                .collect();
-            let sessions = state
-                .gateway_display
-                .orchestrator
-                .list_sessions()
-                .map_err(gateway_error_to_typed)?
-                .into_iter()
-                .filter_map(|summary| {
-                    let session_id = summary.session_id.to_string();
-                    let target = target_by_id.get(&session_id)?.clone();
-                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
-                        return None;
-                    }
-                    if !matches!(peer.role, PeerRole::Admin)
-                        && summary.peer_principal.as_str() != peer_principal.as_str()
-                    {
-                        return None;
-                    }
-                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
-                    Some(public_wire::GatewayDisplaySessionDetail {
-                        session_id,
-                        target,
-                        state,
-                        operation_id: summary.operation_id.to_string(),
-                        principal: summary.peer_principal.to_string(),
-                    })
-                })
-                .collect();
-            public_wire::GatewayDisplayOpResponse::ListDetailed(
-                public_wire::GatewayDisplayListDetailedResult { sessions },
-            )
-        }
-    };
-    let mut value = serde_json::to_value(response).map_err(|err| TypedError::InternalIo {
-        context: "serialize gatewayDisplay response".to_owned(),
-        detail: err.to_string(),
-    })?;
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("gatewayDisplayResponse".to_owned()),
-        );
-    }
-    Ok(value)
-}
-
-#[cfg(test)]
-fn parse_gateway_display_lifecycle_target(
-    target: &str,
-    operation_id: &str,
-    principal: &str,
-) -> Result<TargetName, TypedError> {
-    let target = TargetName::parse(target).map_err(|err| TypedError::WireInvalidFrame {
-        detail: format!("gatewayDisplay target parse failed: {err}"),
-    })?;
-    let _operation_id = d2b_contracts::OperationId::parse(operation_id).map_err(|err| {
-        TypedError::WireInvalidFrame {
-            detail: format!("gatewayDisplay operation_id invalid: {err}"),
-        }
-    })?;
-    let _principal = d2b_contracts::PrincipalId::parse(principal).map_err(|err| {
-        TypedError::WireInvalidFrame {
-            detail: format!("gatewayDisplay principal invalid: {err}"),
-        }
-    })?;
-    Ok(target)
-}
-
-#[cfg(test)]
-fn validate_gateway_display_open_preflight(state: &ServerState) -> Result<(), TypedError> {
-    if state
-        .gateway_display
-        .preflight
-        .as_ref()
-        .is_some_and(|preflight| preflight.allow_host_relay_credentials)
-    {
-        return Err(gateway_display_config_error(
-            "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Result<(), TypedError> {
-    gateway_display_gc(state);
-    let sessions: Vec<(String, GatewayDisplaySession)> = state
-        .gateway_display
-        .sessions
-        .lock()
-        .map_err(|_| TypedError::InternalIo {
-            context: "lock gateway display sessions".to_owned(),
-            detail: "mutex poisoned".to_owned(),
-        })?
-        .extract_if(|_, session| session.target == target)
-        .collect();
-    for (_id, session) in sessions {
-        if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, target = %target, "gateway display target cleanup failed");
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn gateway_error_to_typed(error: GatewayError) -> TypedError {
-    tracing::warn!(
-        gateway_error = error.slug(),
-        "gateway display request failed"
-    );
-    TypedError::GatewayDisplayUnavailable {
-        detail: error.slug().to_owned(),
-    }
-}
-
-#[cfg(test)]
-fn gateway_display_gc(state: &ServerState) {
-    let now = Instant::now();
-    let expired: Vec<(String, GatewayDisplaySession)> = match state.gateway_display.sessions.lock()
-    {
-        Ok(mut sessions) => sessions
-            .extract_if(|_, session| {
-                now.duration_since(session.opened_at) >= GATEWAY_DISPLAY_SESSION_TTL
-            })
-            .collect(),
-        Err(_) => {
-            tracing::warn!("gateway display GC skipped because session mutex was poisoned");
-            return;
-        }
-    };
-    for (_id, session) in expired {
-        if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, "gateway display GC cleanup failed");
-        }
     }
 }
 
@@ -25411,7 +24595,6 @@ mod public_status_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -25475,652 +24658,6 @@ mod public_status_tests {
         let json = serde_json::to_string(&envelope).unwrap();
         assert!(json.contains("\"role\":\"LauncherUid\""));
         assert!(!json.contains("\"role\":\"AdminUid\""));
-    }
-
-    fn gateway_config_for_waypipe(
-        path: &Path,
-        allow_host_relay_credentials: bool,
-    ) -> GatewayFileConfig {
-        GatewayFileConfig {
-            gateway: "gateway".to_owned(),
-            realm: "demo".to_owned(),
-            state_dir: None,
-            credential_path: Some(PathBuf::from("/run/d2b/test-gateway-credential.json")),
-            seal_key_path: Some(PathBuf::from("/run/d2b/test-gateway-seal.key")),
-            allow_host_relay_credentials,
-            relay: GatewayRelayFileConfig {
-                namespace: Some("relay.example.invalid".to_owned()),
-                entity: Some("gateway".to_owned()),
-            },
-            aca: GatewayAcaFileConfig::default(),
-            display: GatewayDisplayFileConfig {
-                vsock_port: None,
-                waypipe_compression: None,
-                waypipe_socket: Some(path.display().to_string()),
-            },
-        }
-    }
-
-    fn bind_test_waypipe_socket(root: &Path, name: &str, mode: u32) -> PathBuf {
-        let socket_path = root.join(name);
-        let _listener =
-            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind test socket");
-        fs::set_permissions(&socket_path, fs::Permissions::from_mode(mode))
-            .expect("set socket mode");
-        socket_path
-    }
-
-    fn gateway_unavailable_detail(error: &TypedError) -> &str {
-        match error {
-            TypedError::GatewayDisplayUnavailable { detail } => detail,
-            other => panic!("expected GatewayDisplayUnavailable, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn gateway_host_relay_guard_accepts_default_guest_owned_store() {
-        let dir = tempfile::tempdir().expect("gateway guard dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let config = gateway_config_for_waypipe(&socket_path, false);
-        validate_gateway_host_relay_transition_guard(&config)
-            .expect("default guest-owned credential store is accepted");
-    }
-
-    #[test]
-    fn gateway_host_relay_guard_rejects_retired_escape_hatch() {
-        let dir = tempfile::tempdir().expect("gateway guard dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let config = gateway_config_for_waypipe(&socket_path, true);
-        let preflight = gateway_display_preflight_from_config(&config)
-            .expect("display preflight stores config without touching the user-session socket");
-        assert_eq!(preflight.waypipe_socket_path.as_ref(), Some(&socket_path));
-        assert!(preflight.allow_host_relay_credentials);
-        let err = validate_gateway_host_relay_transition_guard(&config)
-            .expect_err("retired escape hatch is rejected");
-        assert!(gateway_unavailable_detail(&err).contains("retired"));
-        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
-    }
-
-    #[test]
-    fn waypipe_receiver_socket_validation_rejects_symlink() {
-        let dir = tempfile::tempdir().expect("waypipe symlink dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let link_path = dir.path().join("waypipe-link.sock");
-        std::os::unix::fs::symlink(&socket_path, &link_path).expect("symlink test socket");
-        let err = validate_waypipe_receiver_socket(&link_path)
-            .expect_err("waypipe socket validation must not follow symlinks");
-        assert!(gateway_unavailable_detail(&err).contains("symlink"));
-    }
-
-    #[test]
-    fn waypipe_receiver_socket_validation_requires_0600() {
-        let dir = tempfile::tempdir().expect("waypipe mode dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o660);
-        let err = validate_waypipe_receiver_socket(&socket_path)
-            .expect_err("waypipe socket must be private to the owner");
-        assert!(gateway_unavailable_detail(&err).contains("mode 0600"));
-    }
-
-    #[test]
-    fn gateway_display_open_refuses_retired_host_relay_before_orchestrator() {
-        let (mut state, _dir) = test_state();
-        let dir = tempfile::tempdir().expect("waypipe dispatch dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        state.gateway_display = Arc::new(GatewayDisplayRuntime {
-            orchestrator: GatewayOrchestrator::new(true),
-            sessions: Mutex::new(HashMap::new()),
-            lifecycle: Box::new(DaemonGatewayLifecycle),
-            preflight: Some(GatewayDisplayPreflight {
-                allow_host_relay_credentials: true,
-                waypipe_socket_path: Some(socket_path),
-            }),
-        });
-
-        let err = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-invalid-waypipe".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect_err("retired host relay credential path blocks gateway open");
-        assert!(gateway_unavailable_detail(&err).contains("retired"));
-        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_open_dispatches_to_orchestrator() {
-        let (state, _dir) = test_state();
-        let value = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect("gateway display open dispatches");
-        assert_eq!(
-            value.get("type").and_then(Value::as_str),
-            Some("gatewayDisplayResponse")
-        );
-        assert_eq!(value.get("op").and_then(Value::as_str), Some("open"));
-        assert_eq!(
-            value
-                .get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("running")
-        );
-        let session_id = value
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("open response has session id")
-            .to_owned();
-
-        let list = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("gateway display list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("sessionId").and_then(Value::as_str),
-            Some(session_id.as_str())
-        );
-        assert_eq!(
-            sessions[0].get("operationId").and_then(Value::as_str),
-            Some("gw-exec-1")
-        );
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1000")
-        );
-
-        let close = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: session_id.clone(),
-                },
-            )),
-        )
-        .expect("gateway display close dispatches");
-        assert_eq!(
-            close
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let empty = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("gateway display list after close dispatches");
-        assert_eq!(
-            empty
-                .get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn gateway_display_open_uses_peer_uid_as_trusted_principal() {
-        let (state, _dir) = test_state();
-        dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-launcher".to_owned(),
-                    principal: "uid-9999".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 43,
-                },
-            )),
-        )
-        .expect("launcher can open owned gateway display session");
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("launcher list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1001")
-        );
-    }
-
-    #[test]
-    fn gateway_display_open_rejects_invalid_operation_id() {
-        let (state, _dir) = test_state();
-        let err = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "not valid".to_owned(),
-                    principal: "uid-1001".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 46,
-                },
-            )),
-        )
-        .expect_err("invalid operation id is rejected before ledger insert");
-        match err {
-            TypedError::WireInvalidFrame { detail } => {
-                assert!(detail.starts_with("gatewayDisplay operation_id invalid:"));
-            }
-            other => panic!("expected WireInvalidFrame, got {other:?}"),
-        }
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_list_and_close_are_owner_scoped_for_launchers() {
-        let (state, _dir) = test_state();
-        let other_peer = PeerIdentity {
-            role: PeerRole::Launcher,
-            uid: 1002,
-        };
-
-        let first = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-owner".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 44,
-                },
-            )),
-        )
-        .expect("first launcher open dispatches");
-        let first_session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("first open response has session id")
-            .to_owned();
-
-        dispatch_request(
-            &state,
-            &other_peer,
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "other.work.d2b".to_owned(),
-                    operation_id: "gw-exec-other".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 45,
-                },
-            )),
-        )
-        .expect("second launcher open dispatches");
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("owner list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1001")
-        );
-
-        let denied = dispatch_request(
-            &state,
-            &other_peer,
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: first_session_id.clone(),
-                },
-            )),
-        )
-        .expect_err("other launcher cannot close session");
-        assert!(matches!(denied, TypedError::AuthzNotAdmin { .. }));
-
-        let closed = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: first_session_id,
-                },
-            )),
-        )
-        .expect("owner close dispatches");
-        assert_eq!(
-            closed
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn gateway_display_launcher_close_absent_session_is_idempotent() {
-        let (state, _dir) = test_state();
-        let close = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: "missing-session".to_owned(),
-                },
-            )),
-        )
-        .expect("absent close dispatches");
-        assert_eq!(
-            close
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn gateway_display_launcher_can_close_owned_terminal_tracked_session() {
-        let (state, _dir) = test_state();
-        let first = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-terminal".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 47,
-                },
-            )),
-        )
-        .expect("launcher open dispatches");
-        let session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("open response has session id")
-            .to_owned();
-        let open = state
-            .gateway_display
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .expect("session still tracked")
-            .open
-            .clone();
-        block_on_future(state.gateway_display.orchestrator.close(&open))
-            .expect("orchestrator can mark session terminal");
-
-        let closed = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs { session_id },
-            )),
-        )
-        .expect("owner close dispatches for terminal tracked session");
-        assert_eq!(
-            closed
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn gateway_display_start_and_stop_dispatch_lifecycle() {
-        let (state, _dir) = test_state();
-        let start = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 41,
-                },
-            )),
-        )
-        .expect("gateway display start dispatches");
-        assert_eq!(
-            start.get("type").and_then(Value::as_str),
-            Some("gatewayDisplayResponse")
-        );
-        assert_eq!(start.get("op").and_then(Value::as_str), Some("start"));
-        assert_eq!(
-            start
-                .get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("ready")
-        );
-
-        let stop = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Stop(
-                public_wire::GatewayDisplayStopArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-stop-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect("gateway display stop dispatches");
-        assert_eq!(stop.get("op").and_then(Value::as_str), Some("stop"));
-        assert_eq!(
-            stop.get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("stopped")
-        );
-    }
-
-    #[test]
-    fn gateway_display_unconfigured_runtime_fails_closed() {
-        let (mut state, _dir) = test_state();
-        state.gateway_display = crate::new_gateway_display_runtime();
-        let err = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-unconfigured".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 41,
-                },
-            )),
-        )
-        .expect_err("unconfigured gateway runtime must fail closed");
-        assert!(matches!(err, TypedError::GatewayDisplayUnavailable { .. }));
-    }
-
-    #[test]
-    fn gateway_display_replay_preserves_real_session_handles() {
-        let (state, _dir) = test_state();
-        let request = || {
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-replay".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            ))
-        };
-        let first = dispatch_request(&state, &admin_peer(), request()).expect("first open");
-        let session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        let second = dispatch_request(&state, &admin_peer(), request()).expect("replay open");
-        assert_eq!(
-            second
-                .get("result")
-                .and_then(|r| r.get("sessionId"))
-                .and_then(Value::as_str),
-            Some(session_id.as_str())
-        );
-        let sessions = state.gateway_display.sessions.lock().unwrap();
-        let session = sessions.get(&session_id).expect("session retained");
-        assert!(!session.open.agent.0.is_empty());
-        assert!(!session.open.listener.0.is_empty());
-    }
-
-    #[test]
-    fn gateway_display_list_gc_expires_stale_sessions() {
-        let (state, _dir) = test_state();
-        let value = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-gc".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 43,
-                },
-            )),
-        )
-        .expect("open session");
-        let session_id = value
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        {
-            let mut sessions = state.gateway_display.sessions.lock().unwrap();
-            sessions
-                .get_mut(&session_id)
-                .expect("session exists")
-                .opened_at = Instant::now() - GATEWAY_DISPLAY_SESSION_TTL - Duration::from_secs(1);
-        }
-        let list = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                public_wire::GatewayDisplayListArgs { target: None },
-            )),
-        )
-        .expect("list after gc");
-        assert_eq!(
-            list.get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_lifecycle_requires_admin_but_listing_is_launcher_scoped() {
-        let (state, _dir) = test_state();
-        let err = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-launcher".to_owned(),
-                    principal: "uid-1001".to_owned(),
-                    request_hash: 1,
-                },
-            )),
-        )
-        .expect_err("launcher must not start gateway display lifecycle");
-        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                public_wire::GatewayDisplayListArgs { target: None },
-            )),
-        )
-        .expect("launcher can list its own gateway display sessions");
-        assert_eq!(
-            list.get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
     }
 
     fn write_public_status_artifacts_with_state_dir(
@@ -27785,7 +26322,7 @@ mod detached_exec_routing_tests {
             .find("fn handle_connection_authorized(")
             .expect("authorized connection handler");
         let connection_end = source[connection_start..]
-            .find("\nfn run_gateway_display_owner(")
+            .find("\nfn dispatch_request(")
             .map(|offset| connection_start + offset)
             .expect("authorized connection handler end");
         let connection = &source[connection_start..connection_end];
@@ -28215,7 +26752,6 @@ mod detached_exec_routing_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -28313,7 +26849,6 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -29061,7 +27596,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -29113,7 +27647,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -30427,7 +28960,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn host_shutdown_peer_is_denied_for_read_only_and_gateway_display_requests() {
+    fn host_shutdown_peer_is_denied_for_read_only_requests() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-read"));
         let peer = host_shutdown_peer();
@@ -30447,12 +28980,6 @@ mod broker_dispatch_tests {
                 }),
             ),
             ("authStatus", d2bd_runtime::wire::Request::AuthStatus),
-            (
-                "gatewayDisplay",
-                d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                    public_wire::GatewayDisplayListArgs { target: None },
-                )),
-            ),
         ];
         for (expected_verb, request) in requests {
             let err = dispatch_request(&state, &peer, request)
@@ -30759,7 +29286,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -31013,7 +29539,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -31313,7 +29838,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -33330,7 +31854,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -34456,7 +32979,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -34595,7 +33117,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(

@@ -193,8 +193,6 @@ rust_test(
         "//packages/d2b-controller-toolkit:BUILD.bazel",
         "//packages/d2b-core:BUILD.bazel",
         "//packages/d2b-core-controller:BUILD.bazel",
-        "//packages/d2b-gateway:BUILD.bazel",
-        "//packages/d2b-gateway-runtime:BUILD.bazel",
         "//packages/d2b-host-activation-helper:BUILD.bazel",
         "//packages/d2b-process:BUILD.bazel",
         "//packages/d2b-process-conformance:BUILD.bazel",

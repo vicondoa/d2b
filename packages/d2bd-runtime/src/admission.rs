@@ -1,6 +1,5 @@
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_control::public_wire;
-use d2b_contracts::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
 use uzers::get_group_by_name;
@@ -195,22 +194,6 @@ pub fn verb_requires_admin(verb: &str) -> bool {
 /// running VMs.
 pub fn verb_allowed_for_host_shutdown(verb: &str) -> bool {
     matches!(verb, "vmStop")
-}
-
-pub fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
-    matches!(
-        op,
-        public_wire::GatewayDisplayOp::Start(_) | public_wire::GatewayDisplayOp::Stop(_)
-    )
-}
-
-pub fn gateway_display_peer_principal(peer: &PeerIdentity) -> PrincipalId {
-    PrincipalId::parse(format!("uid-{}", peer.uid))
-        .expect("trusted display principal derived from numeric uid is valid")
-}
-
-pub fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
-    gateway_display_peer_principal(peer).to_string()
 }
 
 pub fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
