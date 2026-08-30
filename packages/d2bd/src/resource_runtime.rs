@@ -710,12 +710,12 @@ struct CloudHypervisorResourceSession {
     guest_sessions: Arc<
         tokio::sync::Mutex<
             std::collections::HashMap<
-                String,
+                crate::GuestComponentSessionKey,
                 Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
             >,
         >,
     >,
-    closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<String>>>,
+    closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<crate::GuestComponentSessionKey>>>,
     zone: ZoneId,
     zone_uid: ResourceUid,
     policy_revision: u64,
@@ -726,8 +726,8 @@ struct CloudHypervisorResourceSession {
     session_evidence: Option<GuestSessionEvidence>,
 }
 
-struct CatalogDescriptorVerifier {
-    expected_key: String,
+pub(crate) struct CatalogDescriptorVerifier {
+    pub(crate) expected_key: String,
 }
 
 impl GuestSetupDescriptorVerifier for CatalogDescriptorVerifier {
@@ -745,9 +745,13 @@ fn guest_session_evidence(
     guest_ref: &ResourceRef,
     session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
     descriptor: &VerifiedGuestSetupDescriptor,
+    target: &crate::CommittedGuestSessionTarget,
 ) -> Option<GuestSessionEvidence> {
     let identity = session.identity();
-    if identity.guest_ref() != guest_ref {
+    if identity.zone() != target.zone()
+        || identity.guest_ref() != guest_ref
+        || identity.guest_uid() != target.guest_uid()
+    {
         return None;
     }
     let boot_digest = identity
@@ -757,6 +761,9 @@ fn guest_session_evidence(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let route = session.route_binding();
+    if !route.liveness().is_live() {
+        return None;
+    }
     let binding = GuestSessionEvidenceBinding::new(
         identity.guest_uid().to_canonical_string(),
         descriptor.descriptor().descriptor_digest().as_str(),
@@ -765,7 +772,7 @@ fn guest_session_evidence(
         identity.controller_generation(),
         session.generation(),
         route.reconnect_generation().get(),
-        1,
+        target.endpoint_generation().get(),
         1,
     )
     .ok()?;
@@ -888,7 +895,11 @@ impl CloudHypervisorResourceSession {
             "cloud-hypervisor-guest-session",
         )
         .await?;
-        let key = guest_ref.name().as_str().to_owned();
+        let key = crate::GuestComponentSessionKey::for_guest(
+            self.zone.clone(),
+            guest_ref.clone(),
+            guest_uid.clone(),
+        );
         let session = self
             .guest_sessions
             .lock()
@@ -896,7 +907,8 @@ impl CloudHypervisorResourceSession {
             .get(&key)
             .cloned()
             .ok_or(CloudHypervisorResourceApiError::Authentication)?;
-        if session.identity().guest_ref() != guest_ref
+        if session.identity().zone() != &self.zone
+            || session.identity().guest_ref() != guest_ref
             || session.identity().guest_uid() != guest_uid
         {
             return Err(CloudHypervisorResourceApiError::Conflict);
@@ -910,7 +922,11 @@ impl CloudHypervisorResourceSession {
         guest_uid: &ResourceUid,
     ) -> Result<(), CloudHypervisorResourceApiError> {
         let _ = self.authenticated_guest_session(guest_ref, guest_uid).await?;
-        let key = guest_ref.name().as_str().to_owned();
+        let key = crate::GuestComponentSessionKey::for_guest(
+            self.zone.clone(),
+            guest_ref.clone(),
+            guest_uid.clone(),
+        );
         let mut sessions = self.guest_sessions.lock().await;
         let removed = if sessions
             .get(&key)
@@ -1628,17 +1644,22 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         )
                     })
                     .collect();
+                let session_key = crate::GuestComponentSessionKey::for_guest(
+                    self.zone.clone(),
+                    guest_ref.clone(),
+                    guest_uid.clone(),
+                );
                 let session = self
                     .guest_sessions
                     .lock()
                     .await
-                    .get(guest_ref.name().as_str())
+                    .get(&session_key)
                     .cloned();
                 let closed = self
                     .closed_guest_sessions
                     .lock()
                     .await
-                    .contains(guest_ref.name().as_str());
+                    .contains(&session_key);
                 let (session_state, guest_local_drained) = match session {
                     Some(session) => (
                         SessionState::Active,
@@ -1693,7 +1714,11 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     "cloud-hypervisor-invalidate-session",
                 )
                 .await?;
-                let key = guest_ref.name().as_str().to_owned();
+                let key = crate::GuestComponentSessionKey::for_guest(
+                    self.zone.clone(),
+                    guest_ref.clone(),
+                    guest_uid.clone(),
+                );
                 let mut sessions = self.guest_sessions.lock().await;
                 let removed = if sessions.get(&key).is_some_and(|session| {
                     session.identity().guest_uid() == &guest_uid
@@ -1881,7 +1906,8 @@ pub struct ZoneResourceRuntime {
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
-    closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<String>>>,
+    closed_guest_sessions:
+        Arc<tokio::sync::Mutex<BTreeSet<crate::GuestComponentSessionKey>>>,
     controller_deployment: ProviderDeployment,
     controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
     controller_session_reconcile_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -4174,16 +4200,25 @@ impl ZoneResourceRuntime {
                         DesiredLifecycle::Running
                     }
                 });
-            let guest_session = state
-                .guest_component_sessions
-                .lock()
-                .await
-                .get(guest_ref.name().as_str())
-                .cloned();
+            let guest_session_target =
+                crate::resolve_committed_guest_session_target(self, &guest_ref)
+                    .await
+                    .ok();
+            let guest_session = match guest_session_target.as_ref() {
+                Some(target) => state
+                    .guest_component_sessions
+                    .lock()
+                    .await
+                    .get(&target.key())
+                    .cloned(),
+                None => None,
+            };
             let session_evidence = guest_session
                 .as_ref()
                 .and_then(|session| {
-                    guest_session_evidence(&guest_ref, session.as_ref(), &descriptor)
+                    guest_session_target.as_ref().and_then(|target| {
+                        guest_session_evidence(&guest_ref, session.as_ref(), &descriptor, target)
+                    })
                 });
             self.ensure_cloud_hypervisor_controller_deployment(
                 &provider_ref,
@@ -4322,9 +4357,15 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         guest_ref: &ResourceRef,
+        expected_guest_uid: &ResourceUid,
+        expected_guest_generation: ResourceGeneration,
         operation: crate::provider_effects::GuestLifecycleOperation,
     ) -> Result<(), ResourceRuntimeError> {
         if guest_ref.resource_type().as_str() != "Guest" {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        let (_, guest_uid, guest_generation, _) = self.guest_lifecycle_identity(guest_ref).await?;
+        if &guest_uid != expected_guest_uid || guest_generation != expected_guest_generation {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
         self.reconcile_cloud_hypervisor_guests(Arc::clone(&state))
@@ -4423,14 +4464,25 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         guest_ref: &ResourceRef,
+        expected_guest_uid: &ResourceUid,
+        expected_guest_generation: ResourceGeneration,
         operation: crate::provider_effects::GuestLifecycleOperation,
     ) -> Result<(), ResourceRuntimeError> {
         let (_, _, config, _) = self.cloud_hypervisor_inputs(guest_ref).await?;
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_millis(u64::from(config.startup_deadline_ms));
         loop {
+            let (_, guest_uid, guest_generation, _) =
+                self.guest_lifecycle_identity(guest_ref).await?;
+            if &guest_uid != expected_guest_uid || guest_generation != expected_guest_generation {
+                return Err(ResourceRuntimeError::RequestInvalid);
+            }
             self.reconcile_cloud_hypervisor_guests(Arc::clone(&state))
                 .await?;
+            if let Ok(target) = crate::resolve_committed_guest_session_target(self, guest_ref).await
+            {
+                let _ = crate::connect_guest_component_session_for_guest(&state, &target).await;
+            }
             let actual = self
                 .cloud_hypervisor_lifecycle_state(Arc::clone(&state), guest_ref)
                 .await?;
@@ -6464,7 +6516,13 @@ impl ZoneResourceRuntime {
         let guest_targets = guest_activation_targets(&snapshot);
         let mut process_snapshot = process_snapshot;
         for guest in guest_targets {
-            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await else {
+            let Ok(target) = crate::resolve_committed_guest_session_target(self, &guest).await
+            else {
+                continue;
+            };
+            let Ok(session) =
+                crate::connect_guest_component_session_for_guest(&state, &target).await
+            else {
                 continue;
             };
             match list_guest_process_snapshot(&session, &self.zone, &guest).await {
@@ -6476,7 +6534,7 @@ impl ZoneResourceRuntime {
                     process_snapshot.extend(resources);
                 }
                 Err(()) => {
-                    crate::invalidate_guest_component_session(&state, &guest).await;
+                    crate::invalidate_guest_component_session_for_guest(&state, &target).await;
                 }
             }
         }
@@ -8666,7 +8724,7 @@ fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRunt
     }
 }
 
-pub(crate) fn guest_activation_targets(resources: &[StoredResource]) -> BTreeSet<String> {
+pub(crate) fn guest_activation_targets(resources: &[StoredResource]) -> BTreeSet<ResourceRef> {
     resources
         .iter()
         .filter(|resource| {
@@ -8680,7 +8738,7 @@ pub(crate) fn guest_activation_targets(resources: &[StoredResource]) -> BTreeSet
             )
             .ok()?;
             (spec.execution_ref().resource_type().as_str() == "Guest")
-                .then(|| spec.execution_ref().name().as_str().to_owned())
+                .then(|| spec.execution_ref().clone())
         })
         .collect()
 }
@@ -8688,7 +8746,7 @@ pub(crate) fn guest_activation_targets(resources: &[StoredResource]) -> BTreeSet
 pub(crate) async fn list_guest_process_snapshot(
     session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
     zone: &ZoneId,
-    guest: &str,
+    guest: &ResourceRef,
 ) -> Result<Vec<StoredResource>, ()> {
     let mut request = wire::ListRequest::new();
     let mut meta = wire::RequestMeta::new();
@@ -8719,7 +8777,6 @@ pub(crate) async fn list_guest_process_snapshot(
             if resource.zone != *zone {
                 return Err(());
             }
-            let expected_target = ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| ())?;
             let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|_| ())?;
             let execution_ref = envelope
                 .spec()
@@ -8730,7 +8787,7 @@ pub(crate) async fn list_guest_process_snapshot(
                     _ => None,
                 })
                 .ok_or(())?;
-            if execution_ref != expected_target {
+            if execution_ref != *guest {
                 return Err(());
             }
             resources.push(resource);

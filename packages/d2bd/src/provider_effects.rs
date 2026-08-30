@@ -1424,7 +1424,12 @@ fn mutation_has_identity(
             .as_ref()
             .is_some_and(|current| {
                 current.zone_uid == authorization.zone_uid
+                    && current.guest_ref == authorization.guest_ref
                     && current.guest_uid == authorization.guest_uid
+                    && current.guest_generation == authorization.guest_generation
+                    && current.provider_assignment_generation
+                        == authorization.provider_assignment_generation
+                    && current.policy_revision == authorization.policy_revision
             })
 }
 
@@ -3113,6 +3118,49 @@ mod tests {
             Ok(EffectDispatch::Dispatched(1))
         );
         assert_eq!(calls.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn lifecycle_identity_fence_includes_generation_assignment_and_policy() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let dispatch = ProviderLifecycleDispatch::new(zone.clone());
+        let effect = RecordingEffect {
+            calls: Arc::new(AtomicUsize::new(0)),
+            reject: AtomicBool::new(false),
+        };
+        let original = request(&zone, GuestLifecycleOperation::Start, "original");
+        assert_eq!(
+            dispatch.dispatch(&caller, &original, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+
+        let replacement = GuestLifecycleRequest::new(
+            zone,
+            ResourceRef::parse("Guest/workstation").expect("Guest ref"),
+            GuestLifecycleOperation::Stop,
+            "replacement",
+            LifecycleAuthorization::for_test_with_guest(
+                "Guest/workstation",
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                2,
+                3,
+                4,
+                "replacement",
+            ),
+        )
+        .expect("replacement request");
+        assert_eq!(
+            dispatch.dispatch(&caller, &replacement, &effect),
+            Ok(EffectDispatch::Dispatched(2))
+        );
+        assert!(
+            dispatch
+                .is_latest(&caller, &original)
+                .expect("original identity remains independently latest"),
+            "a new Guest generation or Provider assignment must not supersede the old identity"
+        );
     }
 
     #[test]

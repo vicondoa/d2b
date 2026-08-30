@@ -69,7 +69,13 @@ use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
     NetworkProvenance, ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration,
-    ResourceRef, ResourceUid, SchemaFingerprint, ZoneId, ZoneResourceIdentity, ZoneRevision,
+    ResourceEnvelope, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
+    ZoneResourceIdentity,
+    ZoneRevision,
+    endpoint::{
+        EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+        EndpointVisibility,
+    },
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
@@ -250,6 +256,102 @@ use d2bd_runtime::workload_dispatch::{
     map_catalog_error as map_workload_catalog_error, map_helper_registry_error,
     unsafe_local_workload_availability, workload_availability_label, workload_provider_label,
 };
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum GuestComponentSessionKey {
+    Guest {
+        zone: ZoneId,
+        guest_ref: ResourceRef,
+        guest_uid: ResourceUid,
+    },
+    LegacyVm(String),
+}
+
+impl GuestComponentSessionKey {
+    pub(crate) fn for_guest(
+        zone: ZoneId,
+        guest_ref: ResourceRef,
+        guest_uid: ResourceUid,
+    ) -> Self {
+        Self::Guest {
+            zone,
+            guest_ref,
+            guest_uid,
+        }
+    }
+
+    fn for_legacy_vm(vm: impl Into<String>) -> Self {
+        Self::LegacyVm(vm.into())
+    }
+
+}
+
+impl std::fmt::Debug for GuestComponentSessionKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GuestComponentSessionKey(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct CommittedGuestSessionTarget {
+    zone: ZoneId,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    guest_generation: ResourceGeneration,
+    endpoint_ref: ResourceRef,
+    endpoint_uid: ResourceUid,
+    endpoint_resource_generation: ResourceGeneration,
+    endpoint_generation: ResourceGeneration,
+    provider_generation: ResourceGeneration,
+}
+
+impl CommittedGuestSessionTarget {
+    fn key(&self) -> GuestComponentSessionKey {
+        GuestComponentSessionKey::for_guest(
+            self.zone.clone(),
+            self.guest_ref.clone(),
+            self.guest_uid.clone(),
+        )
+    }
+
+    fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    fn guest_uid(&self) -> &ResourceUid {
+        &self.guest_uid
+    }
+
+    fn endpoint_ref(&self) -> &ResourceRef {
+        &self.endpoint_ref
+    }
+
+    fn endpoint_uid(&self) -> &ResourceUid {
+        &self.endpoint_uid
+    }
+
+    fn endpoint_resource_generation(&self) -> ResourceGeneration {
+        self.endpoint_resource_generation
+    }
+
+    fn endpoint_generation(&self) -> ResourceGeneration {
+        self.endpoint_generation
+    }
+
+    fn provider_generation(&self) -> ResourceGeneration {
+        self.provider_generation
+    }
+}
+
+impl std::fmt::Debug for CommittedGuestSessionTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CommittedGuestSessionTarget(<redacted>)")
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn test_scratch_root() -> PathBuf {
@@ -578,13 +680,14 @@ struct ServerState {
     guest_component_sessions: Arc<
         tokio::sync::Mutex<
             HashMap<
-                String,
+                GuestComponentSessionKey,
                 Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
             >,
         >,
     >,
-    guest_component_session_locks:
-        Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    guest_component_session_locks: Arc<
+        tokio::sync::Mutex<HashMap<GuestComponentSessionKey, Arc<tokio::sync::Mutex<()>>>>,
+    >,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -723,6 +826,7 @@ impl CommittedZoneTopology {
 pub(crate) struct ZoneLinkGatewayComposition {
     zone: ZoneId,
     link_uid: ResourceUid,
+    transport_provider_ref: ResourceRef,
     parent_path: ZonePath,
     child_path: ZonePath,
     edge: ZoneTreeEdge,
@@ -740,7 +844,7 @@ pub(crate) struct ZoneLinkGatewayComposition {
         Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>>,
     >,
     route_admission_authority: Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
-    gateway_vm: Mutex<Option<String>>,
+    gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
 }
 
 impl std::fmt::Debug for ZoneLinkGatewayComposition {
@@ -864,6 +968,7 @@ impl ZoneLinkGatewayComposition {
         Ok(Self {
             zone,
             link_uid,
+            transport_provider_ref: spec.transport_provider_ref().clone(),
             parent_path: parent_path.clone(),
             child_path: child_path_for_route,
             edge,
@@ -879,7 +984,7 @@ impl ZoneLinkGatewayComposition {
             resolver: ZoneEntrypointResolver::new(topology),
             gateway_session: Mutex::new(None),
             route_admission_authority: Mutex::new(None),
-            gateway_vm: Mutex::new(None),
+            gateway_guest: Mutex::new(None),
         })
     }
 
@@ -894,6 +999,10 @@ impl ZoneLinkGatewayComposition {
 
     const fn child_path(&self) -> &ZonePath {
         &self.child_path
+    }
+
+    fn transport_provider_ref(&self) -> &ResourceRef {
+        &self.transport_provider_ref
     }
 
     /// Return the child-local controller session state.
@@ -957,6 +1066,15 @@ impl ZoneLinkGatewayComposition {
         &self,
         session: Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
     ) -> Result<(), ZoneLinkGatewayCompositionError> {
+        let gateway_guest = self
+            .gateway_guest()
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        if session.identity().zone() != gateway_guest.zone()
+            || session.identity().guest_ref() != gateway_guest.guest_ref()
+            || session.identity().guest_uid() != gateway_guest.guest_uid()
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
         let session_generation = ReconnectGeneration::new(session.generation())
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
         let current_generation = self.reconnect_generation();
@@ -1162,15 +1280,15 @@ impl ZoneLinkGatewayComposition {
         }
     }
 
-    fn set_gateway_vm(&self, gateway_vm: String) {
+    fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
         *self
-            .gateway_vm
+            .gateway_guest
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_vm);
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest);
     }
 
-    fn gateway_vm(&self) -> Option<String> {
-        self.gateway_vm
+    fn gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
+        self.gateway_guest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -1641,6 +1759,47 @@ mod zone_link_gateway_composition_tests {
             error,
             ZoneLinkGatewayCompositionError::InvalidTransportSettings
         );
+    }
+
+    #[test]
+    fn v3_guest_sessions_use_committed_identity_keys_not_guest_names() {
+        let guest = ResourceRef::parse("Guest/gateway").expect("Guest ref");
+        let first = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            guest.clone(),
+            uid('1'),
+        );
+        let second = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("other").expect("Zone"),
+            guest.clone(),
+            uid('1'),
+        );
+        let replacement = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            guest,
+            uid('2'),
+        );
+        assert_ne!(first, second);
+        assert_ne!(first, replacement);
+        assert!(!format!("{first:?}").contains("gateway"));
+        assert!(!format!("{first:?}").contains("11111111"));
+    }
+
+    #[test]
+    fn v3_guest_session_resolution_does_not_use_legacy_process_dag_lookup() {
+        let source = include_str!("composition.rs");
+        let start = source
+            .rfind("async fn resolve_component_session_endpoint_for_guest(")
+            .expect("v3 Guest endpoint resolver");
+        let end = source
+            .rfind("/// Resolve the ComponentSession endpoint for `vm`")
+            .expect("legacy endpoint resolver");
+        assert!(
+            !source[start..end].contains("find_process_vm"),
+            "v3 Guest endpoint resolution must use committed resources"
+        );
+        assert!(source[start..end].contains("GuestControlEndpoint"));
+        assert!(source[start..end].contains("find_guest_vmm_intent"));
     }
 
     #[test]
@@ -6878,10 +7037,22 @@ fn admit_gateway_zone_request(
         .gateway_zone_link(runtime.zone())
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     if !composition.has_gateway_session() {
-        let Some(gateway_vm) = composition.gateway_vm() else {
+        let gateway_guest = match composition.gateway_guest() {
+            Some(gateway_guest) => gateway_guest,
+            None => block_on_future(gateway_guest_for_provider(
+                runtime,
+                composition.transport_provider_ref(),
+            ))
+            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
+        };
+        if composition.gateway_guest().is_none() {
+            composition.set_gateway_guest(gateway_guest);
+        }
+        let Some(gateway_guest) = composition.gateway_guest() else {
             return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
         };
-        let session = block_on_future(connect_guest_component_session(state, &gateway_vm))
+        let session =
+            block_on_future(connect_guest_component_session_for_guest(state, &gateway_guest))
             .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
         composition
             .bind_gateway_session(session)
@@ -6913,8 +7084,11 @@ fn admit_gateway_zone_request(
         )
     ) {
         composition.fence_gateway_session();
-        if let Some(gateway_vm) = composition.gateway_vm() {
-            block_on_future(invalidate_guest_component_session(state, &gateway_vm));
+        if let Some(gateway_guest) = composition.gateway_guest() {
+            block_on_future(invalidate_guest_component_session_for_guest(
+                state,
+                &gateway_guest,
+            ));
         }
     }
     result
@@ -7056,6 +7230,7 @@ fn dispatch_guest_lifecycle_resource_request(
         };
         let effect = DaemonGuestLifecycleEffect {
             state,
+            runtime: Arc::clone(&runtime),
             guest: target.clone(),
             caller_role: caller_role.clone(),
             force,
@@ -13179,6 +13354,286 @@ fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
+fn value_resource_ref(value: &Value) -> Option<ResourceRef> {
+    let resource_type = value.get("type").and_then(Value::as_str)?;
+    let name = value.pointer("/metadata/name").and_then(Value::as_str)?;
+    ResourceRef::parse(&format!("{resource_type}/{name}")).ok()
+}
+
+fn status_generation(value: &Value, fallback: ResourceGeneration) -> ResourceGeneration {
+    value
+        .pointer("/status/resource/endpointGeneration")
+        .or_else(|| value.pointer("/status/resource/endpoint_generation"))
+        .and_then(Value::as_u64)
+        .and_then(|generation| ResourceGeneration::new(generation).ok())
+        .unwrap_or(fallback)
+}
+
+/// Resolve one committed Guest and its controller-owned guest-control
+/// Endpoint. The returned target contains only store identities; endpoint
+/// carriage remains private to the Process Provider intent.
+pub(crate) async fn resolve_committed_guest_session_target(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    guest_ref: &ResourceRef,
+) -> Result<CommittedGuestSessionTarget, String> {
+    if guest_ref.resource_type().as_str() != "Guest" {
+        return Err("guest-session:guest-ref-invalid".to_owned());
+    }
+    let guests = runtime
+        .committed_resources_of_type("Guest")
+        .await
+        .map_err(|_| "guest-session:guest-unavailable".to_owned())?;
+    let guest_value = guests
+        .iter()
+        .find(|value| value_resource_ref(value).as_ref() == Some(guest_ref))
+        .ok_or_else(|| "guest-session:guest-unavailable".to_owned())?;
+    let guest = ResourceEnvelope::from_json(
+        &serde_json::to_vec(guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:guest-invalid".to_owned())?;
+    if guest.metadata().zone() != runtime.zone()
+        || guest.metadata().uid().as_str().is_empty()
+        || guest.metadata().generation().get() == 0
+        || matches!(
+            guest.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+    {
+        return Err("guest-session:guest-identity-invalid".to_owned());
+    }
+    let provider_ref = guest
+        .spec()
+        .provider_ref()
+        .cloned()
+        .ok_or_else(|| "guest-session:provider-ref-missing".to_owned())?;
+    if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(&provider_ref) {
+        return Err("guest-session:provider-ref-unsupported".to_owned());
+    }
+    let providers = runtime
+        .committed_resources_of_type("Provider")
+        .await
+        .map_err(|_| "guest-session:provider-unavailable".to_owned())?;
+    let provider_value = providers
+        .iter()
+        .find(|value| value_resource_ref(value).as_ref() == Some(&provider_ref))
+        .ok_or_else(|| "guest-session:provider-unavailable".to_owned())?;
+    let provider = ResourceEnvelope::from_json(
+        &serde_json::to_vec(provider_value)
+            .map_err(|_| "guest-session:provider-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:provider-invalid".to_owned())?;
+    if provider.metadata().zone() != runtime.zone()
+        || provider.metadata().generation().get() == 0
+        || matches!(
+            provider.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+    {
+        return Err("guest-session:provider-identity-invalid".to_owned());
+    }
+    let endpoint_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+        guest_ref,
+        d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
+    )
+    .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
+    let endpoints = runtime
+        .committed_resources_of_type("Endpoint")
+        .await
+        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint_value = endpoints
+        .iter()
+        .find(|value| value_resource_ref(value).as_ref() == Some(&endpoint_ref))
+        .ok_or_else(|| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint = ResourceEnvelope::from_json(
+        &serde_json::to_vec(endpoint_value)
+            .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    let endpoint_spec = serde_json::from_slice::<EndpointSpec>(
+        &endpoint
+            .spec()
+            .base_with_provider_ref()
+            .to_canonical_bytes(),
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    if endpoint.metadata().zone() != runtime.zone()
+        || endpoint.metadata().owner_ref() != Some(guest_ref)
+        || endpoint_spec.producer_ref() != guest_ref
+        || endpoint_spec.purpose().as_str() != "guest-control"
+        || endpoint_spec.provider_ref() != &provider_ref
+        || endpoint_spec.endpoint_class() != EndpointClass::Control
+        || endpoint_spec.transport() != EndpointTransport::OpaqueCarriage
+        || endpoint_spec.locality() != EndpointLocality::CrossDomain
+        || endpoint_spec.visibility() != EndpointVisibility::Provider
+        || !endpoint_spec
+            .consumer_policy()
+            .allowed_operations()
+            .contains(&EndpointOperation::Resolve)
+        || matches!(
+            endpoint.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+        || endpoint.metadata().generation().get() == 0
+    {
+        return Err("guest-session:endpoint-identity-invalid".to_owned());
+    }
+    Ok(CommittedGuestSessionTarget {
+        zone: runtime.zone().clone(),
+        guest_ref: guest_ref.clone(),
+        guest_uid: guest.metadata().uid().clone(),
+        guest_generation: guest.metadata().generation(),
+        endpoint_ref,
+        endpoint_uid: endpoint.metadata().uid().clone(),
+        endpoint_resource_generation: endpoint.metadata().generation(),
+        endpoint_generation: status_generation(endpoint_value, endpoint.metadata().generation()),
+        provider_generation: provider.metadata().generation(),
+    })
+}
+
+/// Resolve the private ComponentSession carriage for a committed Guest
+/// target. The public Guest and Endpoint resources fence the lookup; only the
+/// trusted private VMM intent supplies the socket and peer credentials.
+async fn resolve_component_session_endpoint_for_guest(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    target: &CommittedGuestSessionTarget,
+) -> Result<d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint, String> {
+    let current = resolve_committed_guest_session_target(runtime, target.guest_ref()).await?;
+    if &current != target {
+        return Err("guest-session:committed-identity-changed".to_owned());
+    }
+    let endpoint_values = runtime
+        .committed_resources_of_type("Endpoint")
+        .await
+        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint_value = endpoint_values
+        .iter()
+        .find(|value| value_resource_ref(value).as_ref() == Some(target.endpoint_ref()))
+        .ok_or_else(|| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint = ResourceEnvelope::from_json(
+        &serde_json::to_vec(endpoint_value)
+            .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    if endpoint.status().phase() != ResourcePhase::Ready {
+        return Err("guest-session:endpoint-not-ready".to_owned());
+    }
+    let descriptor_bytes = resolver
+        .guest_setup_descriptor_bytes(
+            target.zone().as_str(),
+            target.guest_ref().name().as_str(),
+        )
+        .ok_or_else(|| "guest-session:descriptor-unavailable".to_owned())?;
+    let descriptor =
+        d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+            descriptor_bytes,
+        )
+        .map_err(|_| "guest-session:descriptor-invalid".to_owned())?;
+    let expected_key = resolver
+        .guest_setup_descriptor_catalog_key(
+            target.zone().as_str(),
+            target.guest_ref().name().as_str(),
+        )
+        .ok_or_else(|| "guest-session:descriptor-key-unavailable".to_owned())?;
+    let descriptor = descriptor
+        .verify_with(&resource_runtime::CatalogDescriptorVerifier {
+            expected_key: expected_key.to_owned(),
+        })
+        .map_err(|_| "guest-session:descriptor-untrusted".to_owned())?;
+    if descriptor.descriptor().provider_generation() != target.provider_generation() {
+        return Err("guest-session:provider-generation-mismatch".to_owned());
+    }
+    let process_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+        target.guest_ref(),
+        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+    )
+    .map_err(|_| "guest-session:process-ref-invalid".to_owned())?;
+    let processes = runtime
+        .committed_resources_of_type("Process")
+        .await
+        .map_err(|_| "guest-session:process-unavailable".to_owned())?;
+    let process_value = processes
+        .iter()
+        .find(|value| value_resource_ref(value).as_ref() == Some(&process_ref))
+        .ok_or_else(|| "guest-session:process-unavailable".to_owned())?;
+    let process = ResourceEnvelope::from_json(
+        &serde_json::to_vec(process_value)
+            .map_err(|_| "guest-session:process-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:process-invalid".to_owned())?;
+    if process.metadata().zone() != runtime.zone()
+        || process.metadata().owner_ref() != Some(target.guest_ref())
+        || process.status().phase() != ResourcePhase::Ready
+    {
+        return Err("guest-session:process-identity-invalid".to_owned());
+    }
+    let process_spec =
+        serde_json::from_slice::<ProcessSpec>(&process.spec().base().to_canonical_bytes())
+            .map_err(|_| "guest-session:process-spec-invalid".to_owned())?;
+    let execution = process_spec.execution();
+    if execution.execution_ref().resource_type().as_str() != "Host" {
+        return Err("guest-session:process-execution-invalid".to_owned());
+    }
+    let execution_domain = match execution.domain().unwrap_or(
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
+    ) {
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System => {
+            d2b_core::processes::ProcessExecutionDomain::System
+        }
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User => {
+            d2b_core::processes::ProcessExecutionDomain::User
+        }
+    };
+    let intent = resolver
+        .find_guest_vmm_intent(
+            target.zone().as_str(),
+            target.guest_ref(),
+            descriptor.descriptor().descriptor_digest(),
+            &execution.execution_ref().to_canonical_string(),
+            execution_domain,
+            execution.template().as_str(),
+        )
+        .ok_or_else(|| "guest-session:vmm-intent-unavailable".to_owned())?;
+    let socket_path = cloud_hypervisor_vsock_socket(&intent.argv)
+        .ok_or_else(|| "guest-session:vmm-socket-unavailable".to_owned())?;
+    let state_root = socket_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "guest-session:vmm-socket-parent-unavailable".to_owned())?;
+    let (expected_state_root_uid, expected_state_root_gid) =
+        resolve_component_session_state_root_owner(state)?;
+    let endpoint = d2b_provider_runtime_cloud_hypervisor::GuestControlEndpoint::new(
+        target.endpoint_ref().clone(),
+        target.guest_ref().clone(),
+        target.zone().clone(),
+        target.endpoint_uid().clone(),
+        target.endpoint_resource_generation(),
+        target.endpoint_generation(),
+        target.provider_generation(),
+        descriptor.descriptor().seed().fingerprint().clone(),
+        true,
+    )
+    .map_err(|_| "guest-session:endpoint-contract-invalid".to_owned())?;
+    endpoint
+        .validate_for(
+            target.endpoint_ref(),
+            target.guest_ref(),
+            target.provider_generation(),
+            descriptor.descriptor().seed().fingerprint(),
+        )
+        .map_err(|_| "guest-session:endpoint-contract-invalid".to_owned())?;
+    Ok(d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
+        socket_path,
+        state_root,
+        expected_state_root_uid,
+        expected_state_root_gid,
+        expected_peer_uid: intent.uid,
+        expected_peer_gid: intent.gid,
+        setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+    })
+}
+
 /// Resolve the ComponentSession endpoint for `vm` from the trusted bundle:
 /// the per-VM vsock socket path + its parent state-root, the
 /// cloud-hypervisor runner's peer credentials (principal
@@ -13226,7 +13681,7 @@ pub(crate) async fn connect_guest_component_session(
     Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
     String,
 > {
-    connect_guest_component_session_with_mode(
+    connect_guest_component_session_legacy_with_mode(
         state,
         vm,
         GuestComponentSessionCacheMode::Reuse,
@@ -13241,7 +13696,7 @@ async fn connect_guest_component_session_fresh(
     Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
     String,
 > {
-    connect_guest_component_session_with_mode(
+    connect_guest_component_session_legacy_with_mode(
         state,
         vm,
         GuestComponentSessionCacheMode::Fresh,
@@ -13274,7 +13729,7 @@ where
     }
 }
 
-async fn connect_guest_component_session_with_mode(
+async fn connect_guest_component_session_legacy_with_mode(
     state: &ServerState,
     vm: &str,
     mode: GuestComponentSessionCacheMode,
@@ -13282,10 +13737,11 @@ async fn connect_guest_component_session_with_mode(
     Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
     String,
 > {
+    let key = GuestComponentSessionKey::for_legacy_vm(vm);
     let key_lock = {
         let mut locks = state.guest_component_session_locks.lock().await;
         locks
-            .entry(vm.to_owned())
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     };
@@ -13301,9 +13757,12 @@ async fn connect_guest_component_session_with_mode(
         .map_err(|_| "session-material-unavailable".to_owned())?;
     {
         let sessions = state.guest_component_sessions.lock().await;
+        let cached = sessions
+            .get(&key)
+            .filter(|session| session.route_binding().liveness().is_live());
         if let Some(session) = select_cached_guest_component_session(
             mode,
-            sessions.get(vm),
+            cached,
             |session| session.identity(),
             &config.identity,
         ) {
@@ -13326,20 +13785,127 @@ async fn connect_guest_component_session_with_mode(
     }
     let client = Arc::new(client);
     let mut sessions = state.guest_component_sessions.lock().await;
+    let cached = sessions
+        .get(&key)
+        .filter(|session| session.route_binding().liveness().is_live());
     if let Some(session) = select_cached_guest_component_session(
         mode,
-        sessions.get(vm),
+        cached,
         |session| session.identity(),
         &expected_identity,
     ) {
         return Ok(Arc::clone(session));
     }
-    sessions.insert(vm.to_owned(), Arc::clone(&client));
+    sessions.insert(key, Arc::clone(&client));
+    Ok(client)
+}
+
+/// Establish one authenticated v3 Guest session from the committed Guest and
+/// guest-control Endpoint identities.
+pub(crate) async fn connect_guest_component_session_for_guest(
+    state: &ServerState,
+    target: &CommittedGuestSessionTarget,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    let key = target.key();
+    let key_lock = {
+        let mut locks = state.guest_component_session_locks.lock().await;
+        locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _connect_lock = key_lock.lock().await;
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or_else(|| "guest-session:resource-plane-unavailable".to_owned())?;
+    let runtime = plane
+        .zone(target.zone())
+        .map_err(|_| "guest-session:zone-runtime-unavailable".to_owned())?;
+    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let endpoint =
+        resolve_component_session_endpoint_for_guest(state, &resolver, &runtime, target).await?;
+    let state_root = endpoint.state_root.clone();
+    let config =
+        d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
+            state_root,
+            endpoint,
+        )
+        .map_err(|_| "session-material-unavailable".to_owned())?;
+    if config.identity.zone() != target.zone()
+        || config.identity.guest_ref() != target.guest_ref()
+        || config.identity.guest_uid() != target.guest_uid()
+    {
+        return Err("guest-session:descriptor-identity-mismatch".to_owned());
+    }
+    {
+        let sessions = state.guest_component_sessions.lock().await;
+        let cached = sessions
+            .get(&key)
+            .filter(|session| session.route_binding().liveness().is_live());
+        if let Some(session) = select_cached_guest_component_session(
+            GuestComponentSessionCacheMode::Reuse,
+            cached,
+            |session| session.identity(),
+            &config.identity,
+        ) {
+            return Ok(Arc::clone(session));
+        }
+    }
+    let expected_identity = config.identity.clone();
+    let client = tokio::time::timeout(
+        d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        config.connect(),
+    )
+    .await
+    .map_err(|_| "session-timeout".to_owned())?
+    .map_err(|_| "session-unavailable".to_owned())?;
+    if client.identity() != &expected_identity
+        || client.identity().zone() != target.zone()
+        || client.identity().guest_ref() != target.guest_ref()
+        || client.identity().guest_uid() != target.guest_uid()
+    {
+        return Err("guest-session:authenticated-identity-mismatch".to_owned());
+    }
+    let client = Arc::new(client);
+    let mut sessions = state.guest_component_sessions.lock().await;
+    let cached = sessions
+        .get(&key)
+        .filter(|session| session.route_binding().liveness().is_live());
+    if let Some(session) = select_cached_guest_component_session(
+        GuestComponentSessionCacheMode::Reuse,
+        cached,
+        |session| session.identity(),
+        &expected_identity,
+    ) {
+        return Ok(Arc::clone(session));
+    }
+    sessions.insert(key, Arc::clone(&client));
     Ok(client)
 }
 
 pub(crate) async fn invalidate_guest_component_session(state: &ServerState, vm: &str) {
-    state.guest_component_sessions.lock().await.remove(vm);
+    state
+        .guest_component_sessions
+        .lock()
+        .await
+        .remove(&GuestComponentSessionKey::for_legacy_vm(vm));
+}
+
+pub(crate) async fn invalidate_guest_component_session_for_guest(
+    state: &ServerState,
+    target: &CommittedGuestSessionTarget,
+) {
+    state
+        .guest_component_sessions
+        .lock()
+        .await
+        .remove(&target.key());
 }
 
 #[cfg(test)]
@@ -17199,7 +17765,7 @@ async fn compose_gateway_zone_links(
                 continue;
             }
         };
-        let Some(gateway_vm) = gateway_guest_for_link(&runtime, link).await else {
+        let Some(gateway_guest) = gateway_guest_for_link(&runtime, link).await else {
             plane.refuse_gateway_zone_link(zone.clone());
             tracing::warn!(
                 zone = %zone,
@@ -17214,8 +17780,9 @@ async fn compose_gateway_zone_links(
             }
             continue;
         };
-        composition.set_gateway_vm(gateway_vm.clone());
-        let composition = match connect_guest_component_session(state, &gateway_vm).await {
+        composition.set_gateway_guest(gateway_guest.clone());
+        let composition =
+            match connect_guest_component_session_for_guest(state, &gateway_guest).await {
             Ok(session) => {
                 if let Err(error) = composition.bind_gateway_session(session) {
                     tracing::warn!(
@@ -17229,7 +17796,7 @@ async fn compose_gateway_zone_links(
             Err(error) => {
                 tracing::warn!(
                     zone = %zone,
-                    gateway = %gateway_vm,
+                    gateway = %gateway_guest.guest_ref().name().as_str(),
                     error = %error,
                     "Gateway Guest ComponentSession unavailable",
                 );
@@ -17249,28 +17816,33 @@ async fn compose_gateway_zone_links(
 async fn gateway_guest_for_link(
     runtime: &resource_runtime::ZoneResourceRuntime,
     link: &Value,
-) -> Option<String> {
+) -> Option<CommittedGuestSessionTarget> {
     let provider_ref = link
         .get("spec")
         .and_then(|spec| spec.get("transportProviderRef"))
         .and_then(Value::as_str)
         .and_then(|value| ResourceRef::parse(value).ok())?;
+    gateway_guest_for_provider(runtime, &provider_ref).await
+}
+
+async fn gateway_guest_for_provider(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    provider_ref: &ResourceRef,
+) -> Option<CommittedGuestSessionTarget> {
     let providers = runtime.committed_resources_of_type("Provider").await.ok()?;
     let provider = providers.into_iter().find(|provider| {
-        provider
-            .get("metadata")
-            .and_then(|metadata| metadata.get("name"))
-            .and_then(Value::as_str)
-            == Some(provider_ref.name().as_str())
+        value_resource_ref(provider).as_ref() == Some(provider_ref)
     })?;
-    provider
+    let guest_ref = provider
         .get("spec")
         .and_then(|spec| spec.get("config"))
         .and_then(|config| config.get("executionRef"))
         .and_then(Value::as_str)
         .and_then(|value| ResourceRef::parse(value).ok())
-        .filter(|value| value.resource_type().as_str() == "Guest")
-        .map(|value| value.name().as_str().to_owned())
+        .filter(|value| value.resource_type().as_str() == "Guest")?;
+    resolve_committed_guest_session_target(runtime, &guest_ref)
+        .await
+        .ok()
 }
 
 fn is_gateway_zone_link(link: &Value) -> bool {
@@ -20996,12 +21568,33 @@ fn dispatch_broker_vm_start_as(
 
 struct DaemonGuestLifecycleEffect<'a> {
     state: &'a ServerState,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
     guest: ResourceRef,
     caller_role: BrokerCallerRole,
     force: bool,
     wait_for_ready: bool,
     operation: provider_effects::GuestLifecycleOperation,
     authorization: provider_effects::LifecycleAuthorization,
+}
+
+impl DaemonGuestLifecycleEffect<'_> {
+    fn verify_identity(
+        &self,
+    ) -> Result<(), provider_effects::ProviderEffectError> {
+        let (zone_uid, guest_uid, guest_generation, provider_generation) =
+            block_on_future(self.runtime.guest_lifecycle_identity(&self.guest))
+                .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        if zone_uid != *self.authorization.zone_uid()
+            || guest_uid != *self.authorization.guest_uid()
+            || guest_generation != self.authorization.guest_generation()
+            || provider_generation != self.authorization.provider_assignment_generation()
+            || self.runtime.committed_policy_snapshot().policy_revision
+                != self.authorization.policy_revision()
+        {
+            return Err(provider_effects::ProviderEffectError::IdentityMismatch);
+        }
+        Ok(())
+    }
 }
 
 impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffect<'_> {
@@ -21011,22 +21604,8 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
-        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-            &self.state.zone_coordinator,
-            self.guest.name().as_str(),
-        )
-        .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
-        let plane = self
-            .state
-            .resource_plane
-            .lock()
-            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?
-            .clone()
-            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
-        let runtime = plane
-            .zone(&zone)
-            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
-        block_on_future(runtime.cloud_hypervisor_lifecycle_state(
+        self.verify_identity()?;
+        block_on_future(self.runtime.cloud_hypervisor_lifecycle_state(
             Arc::new(self.state.clone()),
             &self.guest,
         ))
@@ -21037,6 +21616,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        self.verify_identity()?;
         consume_lifecycle_lease(
             self.state,
             &self.authorization,
@@ -21044,31 +21624,20 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             &self.caller_role,
         )?;
         let _ = self.force;
-        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-            &self.state.zone_coordinator,
-            self.guest.name().as_str(),
-        )
-        .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
-        let plane = self
-            .state
-            .resource_plane
-            .lock()
-            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?
-            .clone()
-            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
-        let runtime = plane
-            .zone(&zone)
-            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
-        block_on_future(runtime.apply_cloud_hypervisor_lifecycle(
+        block_on_future(self.runtime.apply_cloud_hypervisor_lifecycle(
             Arc::new(self.state.clone()),
             &self.guest,
+            self.authorization.guest_uid(),
+            self.authorization.guest_generation(),
             self.operation,
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
         if self.wait_for_ready {
-            block_on_future(runtime.wait_cloud_hypervisor_lifecycle(
+            block_on_future(self.runtime.wait_cloud_hypervisor_lifecycle(
                 Arc::new(self.state.clone()),
                 &self.guest,
+                self.authorization.guest_uid(),
+                self.authorization.guest_generation(),
                 self.operation,
             ))
             .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;

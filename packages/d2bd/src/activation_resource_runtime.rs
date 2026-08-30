@@ -233,7 +233,7 @@ pub(crate) struct ActivationResourceRuntime {
     controller: ActivationController,
     records: BTreeMap<ResourceRef, DesiredRecord>,
     status_client: Option<Arc<dyn ActivationResourceClient>>,
-    guest_clients: BTreeMap<String, Arc<dyn ActivationResourceClient>>,
+    guest_clients: BTreeMap<ResourceRef, Arc<dyn ActivationResourceClient>>,
 }
 
 impl core::fmt::Debug for ActivationResourceRuntime {
@@ -267,10 +267,10 @@ impl ActivationResourceRuntime {
 
     pub(crate) fn set_guest_client(
         &mut self,
-        guest: impl Into<String>,
+        guest: ResourceRef,
         client: Arc<dyn ActivationResourceClient>,
     ) {
-        self.guest_clients.insert(guest.into(), client);
+        self.guest_clients.insert(guest, client);
     }
 
     pub(crate) fn clear_guest_clients(&mut self) {
@@ -283,7 +283,7 @@ impl ActivationResourceRuntime {
     ) -> Option<Arc<dyn ActivationResourceClient>> {
         if execution_ref.resource_type().as_str() == "Guest" {
             self.guest_clients
-                .get(execution_ref.name().as_str())
+                .get(execution_ref)
                 .cloned()
         } else {
             self.status_client.clone()
@@ -1431,8 +1431,24 @@ pub(crate) async fn run_activation_watch(
         };
         runtime.clear_guest_clients();
         let mut process_snapshot = process_snapshot;
+        let zone_runtime = state
+            .resource_plane
+            .lock()
+            .ok()
+            .and_then(|plane| plane.clone())
+            .and_then(|plane| plane.zone(&zone).ok());
         for guest in crate::resource_runtime::guest_activation_targets(&snapshot) {
-            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await else {
+            let Some(zone_runtime) = zone_runtime.as_ref() else {
+                continue;
+            };
+            let Ok(target) =
+                crate::resolve_committed_guest_session_target(zone_runtime, &guest).await
+            else {
+                continue;
+            };
+            let Ok(session) =
+                crate::connect_guest_component_session_for_guest(&state, &target).await
+            else {
                 continue;
             };
             match crate::resource_runtime::list_guest_process_snapshot(&session, &zone, &guest)
@@ -1446,7 +1462,7 @@ pub(crate) async fn run_activation_watch(
                     process_snapshot.extend(resources);
                 }
                 Err(()) => {
-                    crate::invalidate_guest_component_session(&state, &guest).await;
+                    crate::invalidate_guest_component_session_for_guest(&state, &target).await;
                 }
             }
         }
