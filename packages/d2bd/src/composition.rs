@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 #[cfg(test)]
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -24621,13 +24621,6 @@ mod public_status_tests {
 
     fn write_public_status_artifacts(root: &Path) -> ArtifactPaths {
         write_public_status_artifacts_with_state_dir(root, None)
-    }
-
-    fn admin_peer() -> PeerIdentity {
-        PeerIdentity {
-            role: PeerRole::Admin,
-            uid: 1000,
-        }
     }
 
     fn launcher_peer() -> PeerIdentity {
