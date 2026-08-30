@@ -22,9 +22,8 @@
 //! # Design
 //!
 //! `BundleResolver` loads the trusted bundle artifacts from disk
-//! (`bundle.json` + the `host.json`, `processes.json`,
-//! `manifest.json`, and per-VM `closures/<vm>.json` paths it points
-//! at) and builds a deterministic
+//! (`bundle.json` plus its private compatibility artifacts and the
+//! Zone resource/artifact-catalog documents) and builds a deterministic
 //! intent table keyed by a documented `BundleOpId` encoding:
 //!
 //! | Intent          | `BundleOpId` format                                       | Source data                                                       |
@@ -39,7 +38,8 @@
 //! | NM unmanaged    | `nm-unmanaged:host`                                       | [`crate::host::NetworkManagerUnmanaged`]                          |
 //! | USBIP firewall  | `usbip-fw:env:<env>:bus:<bus_id>`                         | [`crate::host::UsbipBusidLock`] + nft chain template              |
 //! | USBIP bind      | `usbip-bind:env:<env>:vm:<vm>:bus:<bus_id>`               | [`crate::host::UsbipBusidLock`]                                   |
-//! | runner          | `runner:vm:<vm>:role:<role_id>`                           | [`crate::processes::ProcessNode`] + [`crate::processes::RoleProfile`] |
+//! | runner          | `runner:vm:<vm>:role:<role_id>`                           | legacy [`crate::processes::ProcessNode`] + [`crate::processes::RoleProfile`] |
+//! | Guest VMM       | `runner:vm:<guest>:role:cloud-hypervisor`                | descriptor-bound private artifact-catalog intent |
 //! | role socket     | `socket:vm:<vm>:role:<role_id>`                           | [`crate::processes::ProcessNode`] (derived `/run/d2b/vms/...`)|
 //!
 //! The encoding is **deterministic**: callers (the daemon, integrators
@@ -58,13 +58,9 @@
 //!   `Unimplemented` for real-wire arms until they are wired to this
 //!   resolver (with `fd_passing::send_with_fd` for `OpenPidfd` /
 //!   `SpawnRunner`).
-//! - **Runner binary paths**: `ResolvedRunnerIntent::binary_path`
-//!   is populated as a placeholder (`/run/current-system/sw/bin/
-//!   <role>` for now) because `processes.json` does not carry the
-//!   per-role binary path today. The Nix emitter can include
-//!   `binary_path` per role, or the broker can maintain a static
-//!   role→binary mapping; the resolver shape keeps that wiring drop
-//!   purely additive.
+//! - **Legacy runner compatibility**: non-Guest callers may still load
+//!   `processes.json`, but the current Guest VMM path requires the complete
+//!   descriptor-bound private intent emitted by the artifact catalog.
 
 use crate::allocator_config::{AllocatorJson, AllocatorZoneTopology};
 use crate::bundle::Bundle;
@@ -76,7 +72,7 @@ use crate::host::{
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
-use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
 use crate::processes::{
     ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
     ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
@@ -120,6 +116,8 @@ pub struct BundleResolver {
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
+    guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
+    guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
@@ -161,6 +159,7 @@ impl fmt::Debug for BundleResolver {
             .field("bundle_version", &self.bundle.bundle_version)
             .field("zone_count", &self.zone_resource_bundles.len())
             .field("guest_descriptor_count", &self.guest_setup_descriptors.len())
+            .field("guest_vmm_count", &self.guest_vmm_intents.len())
             .field("runner_intent_count", &self.runner_intents.len())
             .finish()
     }
@@ -173,6 +172,8 @@ struct ParsedBundleArtifacts {
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
+    guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
+    guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
     provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
@@ -1169,6 +1170,8 @@ impl BundleResolver {
                 zone_resource_bundles: BTreeMap::new(),
                 guest_setup_descriptors: BTreeMap::new(),
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
+                guest_vmm_intents: BTreeMap::new(),
+                guest_vmm_zone_uids: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1216,6 +1219,8 @@ impl BundleResolver {
                 zone_resource_bundles,
                 guest_setup_descriptors: BTreeMap::new(),
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
+                guest_vmm_intents: BTreeMap::new(),
+                guest_vmm_zone_uids: BTreeMap::new(),
                 provider_controller_templates,
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1244,6 +1249,8 @@ impl BundleResolver {
             zone_resource_bundles,
             guest_setup_descriptors,
             guest_setup_descriptor_catalog_keys,
+            guest_vmm_intents,
+            guest_vmm_zone_uids,
             provider_controller_templates,
             zone_storage_rows,
             storage,
@@ -1345,6 +1352,8 @@ impl BundleResolver {
             zone_resource_bundles,
             guest_setup_descriptors,
             guest_setup_descriptor_catalog_keys,
+            guest_vmm_intents,
+            guest_vmm_zone_uids,
             zone_storage_rows,
             storage,
             sync,
@@ -1403,6 +1412,8 @@ impl BundleResolver {
                 zone_resource_bundles: BTreeMap::new(),
                 guest_setup_descriptors: BTreeMap::new(),
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
+                guest_vmm_intents: BTreeMap::new(),
+                guest_vmm_zone_uids: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage,
@@ -1449,7 +1460,12 @@ impl BundleResolver {
         })?;
         let (zone_resource_bundles, provider_controller_templates) =
             load_zone_resource_bundles(&bundle, bundle_root, policy)?;
-        let (guest_setup_descriptors, guest_setup_descriptor_catalog_keys) =
+        let (
+            guest_setup_descriptors,
+            guest_setup_descriptor_catalog_keys,
+            guest_vmm_intents,
+            guest_vmm_zone_uids,
+        ) =
             load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
         let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
         let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
@@ -1476,6 +1492,8 @@ impl BundleResolver {
                 zone_resource_bundles,
                 guest_setup_descriptors,
                 guest_setup_descriptor_catalog_keys,
+                guest_vmm_intents,
+                guest_vmm_zone_uids,
                 provider_controller_templates,
                 zone_storage_rows,
                 storage,
@@ -2003,18 +2021,41 @@ impl BundleResolver {
             return None;
         }
         let vm_name = guest_ref.name().as_str();
-        let mut matches = self.runner_intents.values().filter(|intent| {
-            intent.role == ProcessRole::CloudHypervisorRunner
-                && intent.vm_name == vm_name
-                && intent.execution_ref == execution_ref
-                && intent.execution_domain == execution_domain
-                && intent.user_ref.is_none()
-                && (intent.role_id == template
-                    || intent.profile_id == template
-                    || runner_template_name(&intent.role) == Some(template))
-        });
-        let first = matches.next()?;
-        matches.next().is_none().then_some(first)
+        let intent = self
+            .guest_vmm_intents
+            .get(&(zone.to_owned(), vm_name.to_owned()))?;
+        (intent.role == ProcessRole::CloudHypervisorRunner
+            && intent.vm_name == vm_name
+            && intent.execution_ref == execution_ref
+            && intent.execution_domain == execution_domain
+            && intent.user_ref.is_none()
+            && process_template_name_matches(intent, template))
+        .then_some(intent)
+    }
+
+    /// Find the private Guest VMM intent using the immutable Zone UID carried
+    /// by a Process launch ticket. This prevents two Zones with the same
+    /// Guest name from sharing a global runner lookup.
+    pub fn find_guest_vmm_intent_for_zone_uid(
+        &self,
+        zone_uid: &ResourceUid,
+        guest: &str,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let key = self
+            .guest_vmm_zone_uids
+            .iter()
+            .find_map(|(key, value)| (value == zone_uid && key.1 == guest).then_some(key))?;
+        let intent = self.guest_vmm_intents.get(key)?;
+        (intent.role == ProcessRole::CloudHypervisorRunner
+            && intent.vm_name == guest
+            && intent.execution_ref == execution_ref
+            && intent.execution_domain == execution_domain
+            && intent.user_ref.is_none()
+            && process_template_name_matches(intent, template))
+        .then_some(intent)
     }
 
     /// Find the static Provider controller intent for one exact Process
@@ -4176,20 +4217,29 @@ fn runner_template_name(role: &ProcessRole) -> Option<&'static str> {
 }
 
 fn process_template_name_matches(intent: &ResolvedRunnerIntent, template: &str) -> bool {
-    if intent.role != ProcessRole::WaylandProxy {
-        return false;
+    if intent.role == ProcessRole::CloudHypervisorRunner {
+        return template == "cloud-hypervisor-runner"
+            && cloud_hypervisor_intent_is_complete(intent);
     }
-    match template {
-        "wayland-proxy-worker" => intent
-            .execution_ref
-            .split_once('/')
-            .is_some_and(|(kind, _)| kind == "Host"),
-        "wayland-frontend-worker" => intent
-            .execution_ref
-            .split_once('/')
-            .is_some_and(|(kind, _)| kind == "Guest"),
-        _ => false,
+    if intent.role == ProcessRole::WaylandProxy {
+        return match template {
+            "wayland-proxy-worker" => intent
+                .execution_ref
+                .split_once('/')
+                .is_some_and(|(kind, _)| kind == "Host"),
+            "wayland-frontend-worker" => intent
+                .execution_ref
+                .split_once('/')
+                .is_some_and(|(kind, _)| kind == "Guest"),
+            _ => false,
+        };
     }
+    false
+}
+
+fn cloud_hypervisor_intent_is_complete(intent: &ResolvedRunnerIntent) -> bool {
+    intent.role == ProcessRole::CloudHypervisorRunner
+        && cloud_hypervisor_intent_is_complete_values(&intent.binary_path, &intent.argv)
 }
 
 fn is_placeholder_runner_spec(binary_path: &str, argv: &[String], role_name: &str) -> bool {
@@ -4634,12 +4684,19 @@ fn load_guest_setup_descriptors(
     (
         BTreeMap<(String, String), Vec<u8>>,
         BTreeMap<(String, String), String>,
+        BTreeMap<(String, String), ResolvedRunnerIntent>,
+        BTreeMap<(String, String), ResourceUid>,
     ),
     Error,
 > {
     let catalog_path = resolve_bundle_ref(bundle_root, "artifact-catalog.json");
     if !catalog_path.exists() {
-        return Ok((BTreeMap::new(), BTreeMap::new()));
+        return Ok((
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ));
     }
     let bytes = secure_open_and_read(&catalog_path, policy)?;
     let mut catalog: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
@@ -4768,7 +4825,381 @@ fn load_guest_setup_descriptors(
             ));
         }
     }
-    Ok((result, catalog_keys))
+    let (guest_vmm_intents, guest_vmm_zone_uids) =
+        load_guest_vmm_intents(&catalog, &result)?;
+    Ok((
+        result,
+        catalog_keys,
+        guest_vmm_intents,
+        guest_vmm_zone_uids,
+    ))
+}
+
+fn load_guest_vmm_intents(
+    catalog: &serde_json::Value,
+    descriptors: &BTreeMap<(String, String), Vec<u8>>,
+) -> Result<
+    (
+        BTreeMap<(String, String), ResolvedRunnerIntent>,
+        BTreeMap<(String, String), ResourceUid>,
+    ),
+    Error,
+> {
+    let Some(rows) = catalog
+        .get("guestClosures")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok((BTreeMap::new(), BTreeMap::new()));
+    };
+    let mut intents = BTreeMap::new();
+    let mut zone_uids = BTreeMap::new();
+    for row in rows {
+        let zone = row
+            .get("zone")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure Zone is invalid",
+                )
+            })?;
+        let guest = row
+            .get("guest")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure name is invalid",
+                )
+            })?;
+        let zone_uid = row
+            .get("vmm")
+            .and_then(|vmm| vmm.get("zoneUid"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM Zone identity is invalid",
+                )
+            })?;
+        let descriptor_digest = row
+            .get("vmm")
+            .and_then(|vmm| vmm.get("descriptorDigest"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| d2b_contracts_resource::v3::resource_schema::is_canonical_digest(value))
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM descriptor binding is invalid",
+                )
+            })?;
+        let descriptor = descriptors
+            .get(&(zone.to_owned(), guest.to_owned()))
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM descriptor binding is missing",
+                )
+            })?;
+        let descriptor_value: serde_json::Value =
+            serde_json::from_slice(descriptor).map_err(|_| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest setup descriptor is invalid while binding VMM intent",
+                )
+            })?;
+        if descriptor_value
+            .get("descriptorDigest")
+            .and_then(serde_json::Value::as_str)
+            != Some(descriptor_digest)
+        {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest VMM descriptor digest does not match setup descriptor",
+            ));
+        }
+        let artifact_id = row
+            .get("artifactId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure artifact binding is invalid",
+                )
+            })?;
+        if descriptor_value
+            .get("systemArtifactId")
+            .and_then(serde_json::Value::as_str)
+            != Some(artifact_id)
+        {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest VMM artifact does not match setup descriptor",
+            ));
+        }
+        let vmm = row.get("vmm").ok_or_else(|| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest VMM intent is missing",
+            )
+        })?;
+        let execution_ref = vmm
+            .get("executionRef")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .filter(|value| value.resource_type().as_str() == "Host")
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM execution reference is invalid",
+                )
+            })?;
+        let binary_path = vmm
+            .get("binaryPath")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && !value.contains('\0')
+                    && value.starts_with("/nix/store/")
+                    && !value
+                        .split('/')
+                        .any(|segment| matches!(segment, "." | ".."))
+            })
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM binary path is invalid",
+                )
+            })?;
+        let argv = vmm
+            .get("argv")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| {
+                !values.is_empty()
+                    && values.iter().all(|value| {
+                        value
+                            .as_str()
+                            .is_some_and(|argument| !argument.is_empty() && !argument.contains('\0'))
+                    })
+            })
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM argv is invalid",
+                )
+            })?;
+        let uid = vmm
+            .get("uid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                Error::manifest_parse_error("artifact-catalog.json", "Guest VMM uid is invalid")
+            })?;
+        let gid = vmm
+            .get("gid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                Error::manifest_parse_error("artifact-catalog.json", "Guest VMM gid is invalid")
+            })?;
+        let state_dir = vmm
+            .get("stateDir")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| {
+                value.starts_with('/')
+                    && !value.contains('\0')
+                    && !value.split('/').any(|segment| matches!(segment, "." | ".."))
+            })
+            .map(|value| value.to_owned())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM state directory is invalid",
+                )
+            })?;
+        let device_binds = vmm
+            .get("deviceBinds")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| {
+                values.iter().all(|value| {
+                    value
+                        .as_str()
+                        .is_some_and(|path| path.starts_with('/') && !path.contains('\0'))
+                })
+            })
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let profile_id = vmm
+            .get("profileId")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| {
+                d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(value.to_owned())
+                    .ok()
+            })
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM profile ID is invalid",
+                )
+            })?;
+        let cgroup_subtree = vmm
+            .get("cgroupSubtree")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && !value.starts_with('/')
+                    && !value.contains('\0')
+                    && !value.split('/').any(|segment| segment == "..")
+            })
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest VMM cgroup placement is invalid",
+                )
+            })?;
+        let cgroup_segments = cgroup_subtree.split('/').collect::<Vec<_>>();
+        if cgroup_segments.len() < 3
+            || cgroup_segments[0] != "d2b.slice"
+            || cgroup_segments[1] != guest
+        {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest VMM cgroup placement is not Guest-bound",
+            ));
+        }
+        let env = vmm
+            .get("env")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| {
+                values.iter().all(|value| {
+                    value.as_str().is_some_and(|entry| {
+                        !entry.is_empty() && !entry.contains('\0') && entry.contains('=')
+                    })
+                })
+            })
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![format!("D2B_VM={guest}")]);
+        if !cloud_hypervisor_intent_is_complete_values(&binary_path, &argv) {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest VMM intent does not carry a complete Cloud Hypervisor argv",
+            ));
+        }
+        let key = (zone.to_owned(), guest.to_owned());
+        if intents.contains_key(&key) {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "duplicate Guest VMM intent",
+            ));
+        }
+        let intent = ResolvedRunnerIntent {
+            intent_id: intent_id_runner(guest, "cloud-hypervisor"),
+            vm_name: guest.to_owned(),
+            execution_ref: execution_ref.to_canonical_string(),
+            owner_ref: None,
+            execution_domain: ProcessExecutionDomain::System,
+            user_ref: None,
+            role_id: "cloud-hypervisor".to_owned(),
+            role: ProcessRole::CloudHypervisorRunner,
+            binary_path,
+            argv,
+            env,
+            uid,
+            gid,
+            supplementary_groups: Vec::new(),
+            capabilities: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: true,
+                pid: false,
+                net: false,
+                ipc: true,
+                uts: false,
+                user: false,
+            },
+            seccomp_policy_ref: Some("w1-cloud-hypervisor-runner".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec!["/nix/store".to_owned()],
+                writable_paths: vec![WritablePath {
+                    path: state_dir,
+                    purpose: "Guest VMM runtime state".to_owned(),
+                }],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds,
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: cgroup_subtree.to_owned(),
+                controllers: vec![
+                    "cpu".to_owned(),
+                    "memory".to_owned(),
+                    "pids".to_owned(),
+                ],
+                delegated: false,
+            },
+            root_carve_out: false,
+            profile_id: profile_id.as_str().to_owned(),
+            user_namespace: None,
+            umask: None,
+        };
+        if intents.insert(key.clone(), intent).is_some()
+            || zone_uids.insert(key, zone_uid).is_some()
+        {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "duplicate Guest VMM Zone identity",
+            ));
+        }
+    }
+    Ok((intents, zone_uids))
+}
+
+fn cloud_hypervisor_intent_is_complete_values(binary_path: &Path, argv: &[String]) -> bool {
+    let value_for = |flag: &str| {
+        argv.iter()
+            .position(|argument| argument == flag)
+            .and_then(|index| argv.get(index + 1))
+    };
+    let kernel = value_for("--kernel");
+    let initrd = value_for("--initramfs");
+    let cmdline = value_for("--cmdline");
+    let api_socket = value_for("--api-socket");
+    binary_path.is_absolute()
+        && binary_path.starts_with("/nix/store/")
+        && binary_path.to_string_lossy().ends_with("/bin/cloud-hypervisor")
+        && !binary_path.starts_with("/run/current-system/sw/")
+        && kernel.is_some_and(|value| value.starts_with("/nix/store/"))
+        && initrd.is_some_and(|value| value.starts_with("/nix/store/"))
+        && cmdline.is_some_and(|value| value.contains("init=/nix/store/"))
+        && api_socket.is_some_and(|value| {
+            value.starts_with('/')
+                && !value.contains('\0')
+                && !value.split('/').any(|segment| matches!(segment, "." | ".."))
+        })
 }
 
 /// Load the integrity-pinned per-Zone storage rows emitted by Nix.
@@ -6087,9 +6518,17 @@ mod tests {
             id: NodeId("cloud-hypervisor".to_owned()),
             role: ProcessRole::CloudHypervisorRunner,
             unit: None,
-            binary_path: Some("/run/current-system/sw/bin/cloud-hypervisor".to_owned()),
+            binary_path: Some("/nix/store/cloud-hypervisor/bin/cloud-hypervisor".to_owned()),
             argv: vec![
                 "cloud-hypervisor".to_owned(),
+                "--kernel".to_owned(),
+                "/nix/store/guest-system/kernel".to_owned(),
+                "--initramfs".to_owned(),
+                "/nix/store/guest-system/initrd".to_owned(),
+                "--cmdline".to_owned(),
+                "init=/nix/store/guest-system/init".to_owned(),
+                "--api-socket".to_owned(),
+                "/var/lib/d2b/zones/personal/guests/personal-dev/personal-dev.sock".to_owned(),
                 "--net".to_owned(),
                 "tap=personal-u2,mac=02:00:00:00:00:01".to_owned(),
                 "fd=10,mac=02:00:00:00:00:02".to_owned(),
@@ -6130,6 +6569,19 @@ mod tests {
         assert_eq!(intents[0].parent_ifname.as_str(), "eno1");
         assert_eq!(intents[0].mode, ProcessMacvtapMode::Bridge);
         assert_eq!(intents[0].fd, 10);
+        resolver.runner_intents = build_runner_intents(&resolver.processes);
+        assert!(
+            resolver
+                .find_runner_intent_for_process_in_vm(
+                    Some("personal-dev"),
+                    "Host/host-system",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "cloud-hypervisor-runner",
+                )
+                .is_some(),
+            "the controller-owned VMM child template resolves to the trusted runner intent"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6882,6 +7334,111 @@ mod tests {
             super::resolve_runner_node(&dag, &dag.nodes[0]).is_none(),
             "video must fail closed when processes.json omits the patched crosvm video binary/argv"
         );
+    }
+
+    #[test]
+    fn cloud_hypervisor_requires_a_closed_runner_specification() {
+        let incomplete = ProcessNode {
+            execution_ref: Some("Host/host-system".to_owned()),
+            execution_domain: Some(ProcessExecutionDomain::System),
+            user_ref: None,
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: None,
+            argv: Vec::new(),
+            env: Vec::new(),
+            profile: role_profile(
+                1200,
+                1200,
+                &["/var/lib/d2b/vms/test-vm"],
+                "d2b.slice/test-vm/cloud-hypervisor",
+            ),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+        };
+        let intent =
+            ResolvedRunnerIntent::from_process_node("test-vm", &incomplete).expect("legacy intent");
+        assert!(!cloud_hypervisor_intent_is_complete(&intent));
+
+        let complete = ProcessNode {
+            binary_path: Some("/nix/store/cloud-hypervisor/bin/cloud-hypervisor".to_owned()),
+            argv: vec![
+                "cloud-hypervisor".to_owned(),
+                "--kernel".to_owned(),
+                "/nix/store/guest-system/kernel".to_owned(),
+                "--initramfs".to_owned(),
+                "/nix/store/guest-system/initrd".to_owned(),
+                "--cmdline".to_owned(),
+                "init=/nix/store/guest-system/init".to_owned(),
+                "--api-socket".to_owned(),
+                "/var/lib/d2b/zones/work/guests/test-vm/test-vm.sock".to_owned(),
+            ],
+            ..incomplete
+        };
+        let intent =
+            ResolvedRunnerIntent::from_process_node("test-vm", &complete).expect("closed intent");
+        assert!(cloud_hypervisor_intent_is_complete(&intent));
+    }
+
+    #[test]
+    fn catalog_guest_vmm_intent_is_zone_and_descriptor_bound() {
+        let descriptor_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let descriptors = BTreeMap::from([(
+            ("work".to_owned(), "guest".to_owned()),
+            serde_json::to_vec(&serde_json::json!({
+                "descriptorDigest": descriptor_digest,
+                "systemArtifactId": "guest-system"
+            }))
+            .expect("descriptor"),
+        )]);
+        let catalog = serde_json::json!({
+            "guestClosures": [{
+                "zone": "work",
+                "guest": "guest",
+                "artifactId": "guest-system",
+                "vmm": {
+                    "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+                    "descriptorDigest": descriptor_digest,
+                    "executionRef": "Host/host-system",
+                    "binaryPath": "/nix/store/cloud-hypervisor/bin/cloud-hypervisor",
+                    "argv": [
+                        "microvm@guest",
+                        "--kernel", "/nix/store/guest-system/kernel",
+                        "--initramfs", "/nix/store/guest-system/initrd",
+                        "--cmdline", "init=/nix/store/guest-system/init",
+                        "--api-socket", "/var/lib/d2b/zones/work/guests/guest/guest.sock"
+                    ],
+                    "uid": 50001,
+                    "gid": 50001,
+                    "stateDir": "/var/lib/d2b/zones/work/guests/guest",
+                    "deviceBinds": ["/dev/kvm", "/dev/vhost-net"],
+                    "profileId": "ch-guest",
+                    "cgroupSubtree": "d2b.slice/guest/cloud-hypervisor"
+                }
+            }]
+        });
+        let (intents, zone_uids) =
+            load_guest_vmm_intents(&catalog, &descriptors).expect("VMM intent");
+        let intent = intents
+            .get(&("work".to_owned(), "guest".to_owned()))
+            .expect("zone-local intent");
+        assert_eq!(intent.role, ProcessRole::CloudHypervisorRunner);
+        assert_eq!(intent.vm_name, "guest");
+        assert_eq!(intent.execution_ref, "Host/host-system");
+        assert_eq!(
+            zone_uids
+                .get(&("work".to_owned(), "guest".to_owned()))
+                .map(ResourceUid::as_str),
+            Some("123e4567-e89b-42d3-a456-426614174000")
+        );
+        assert!(process_template_name_matches(
+            intent,
+            "cloud-hypervisor-runner"
+        ));
+        assert!(!process_template_name_matches(intent, "cloud-hypervisor"));
     }
 
     // v1.2 swtpm broker-pre-NS extension.

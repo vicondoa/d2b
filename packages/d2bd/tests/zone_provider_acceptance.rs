@@ -151,6 +151,7 @@ impl VolumeSourceEffectPort for &FilesystemVolume {
     async fn resolve_root(
         &self,
         _source_policy_id: Option<&BoundedToken>,
+        _system_artifact_id: Option<&BoundedToken>,
         _kind: d2b_contracts_resource::v3::volume::SourceKind,
     ) -> Result<VolumeRootHandle, d2b_provider_volume_local::VolumeLocalError> {
         fs::create_dir_all(&self.root)

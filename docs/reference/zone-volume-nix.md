@@ -44,10 +44,12 @@ Layout and symlink paths are anchored below the Volume root. Absolute paths,
 parent components, backslashes, NULs, and path-separator homoglyphs are
 rejected during evaluation. ACL principals are same-Zone `User` references.
 
-The compiler emits a closure-only store-view Volume for each configured Guest.
-Its root layout keeps `state/` and `gcroots/` at the store-view root, serves
-only the `live/` view to the read-only virtiofs attachment, and never emits
-`/nix/store` as a served path. TPM-enabled Guests receive a separate
+For an evaluated Cloud Hypervisor Guest, the compiler emits a closure-only
+store-view Volume bound to the Guest's `systemArtifactId`. Private
+`closures/zones/<zone>/<guest>.json` metadata records the evaluated toplevel
+and closure paths; the broker's StoreSync path materializes that closure into
+the Guest-qualified store view. The public resource still contains only the
+artifact ID and semantic attachment. TPM-enabled Guests receive a separate
 fail-closed, secret-adjacent state Volume.
 
 Zone hierarchy is authored with the compiler-only `parentZone` scalar.

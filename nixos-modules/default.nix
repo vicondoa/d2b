@@ -30,6 +30,7 @@ in
     ./bundle-artifacts.nix
     ./provider-catalog.nix
     ./provider-runtime-contracts.nix
+    ./guest-closures.nix
     ../packages/d2b-provider-activation-nixos/nix/default.nix
     ../packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix
     ../packages/d2b-provider-runtime-qemu-media/nix/default.nix

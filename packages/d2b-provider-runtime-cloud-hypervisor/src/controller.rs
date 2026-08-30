@@ -2674,6 +2674,10 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
                 .get("executionRef")
                 .cloned()
                 .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
+            let system_artifact_id = spec_object
+                .get("systemArtifactId")
+                .cloned()
+                .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
             let view = spec_object
                 .get("view")
                 .cloned()
@@ -2685,8 +2689,8 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
                 serde_json::json!({
                     "executionRef": execution_ref,
                     "settings": {
-                        "kind": "local-path",
-                        "sourcePolicyId": "cloud-hypervisor.system.v1"
+                        "kind": "nix-closure",
+                        "systemArtifactId": system_artifact_id
                     }
                 }),
             );

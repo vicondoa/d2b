@@ -128,6 +128,22 @@ let
   };
 
   validVolume = (mkEval [ volumeBase ]).config;
+  nixClosureVolume = (mkEval [
+    volumeBase
+    {
+      d2b.artifacts.guest-system = {
+        package = pkgs.writeText "d2b-test-guest-system" "guest-system";
+        type = "nixos-system";
+      };
+      d2b.zones.local-root.resources.state.spec.source = {
+        executionRef = "Host/host-system";
+        settings = {
+          kind = "nix-closure";
+          systemArtifactId = "guest-system";
+        };
+      };
+    }
+  ]).config;
   generatedGuestVolume = (mkEval [
     volumeBase
     {
@@ -348,6 +364,23 @@ in
           lib.hasPrefix "d2b.zones.local-root.resources.state" assertion.message)
         validVolume.d2b._resourceCompiler.volumeValidation);
     expected = true;
+  };
+
+  "volume-mounts/v3-nix-closure-source-binds-system-artifact" = {
+    expr =
+      let
+        resources =
+          nixClosureVolume.d2b._bundle.zoneResourceBundlesV3.local-root.data.resources;
+        state = builtins.head (lib.filter (resource:
+          resource.type == "Volume" && resource.metadata.name == "state") resources);
+      in {
+        kind = state.spec.source.settings.kind;
+        artifact = state.spec.source.settings.systemArtifactId;
+      };
+    expected = {
+      kind = "nix-closure";
+      artifact = "guest-system";
+    };
   };
 
   "volume-mounts/v3-valid-resource-reaches-topical-compiler" = {

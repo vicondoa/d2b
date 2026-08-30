@@ -6,8 +6,9 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, DesiredLifecycle, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
-    ZoneId, ZoneRevision, execution_policy::BoundedToken, resource_schema::canonical_json_bytes,
+    ArtifactId, CanonicalJsonValue, DesiredLifecycle, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, ZoneId, ZoneRevision, execution_policy::BoundedToken,
+    resource_schema::canonical_json_bytes,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -362,12 +363,13 @@ impl<'de> Deserialize<'de> for EndpointCreateBody {
     }
 }
 
-/// UID-free setup Volume create body.
+/// UID-free setup Volume create body bound to the Guest system artifact.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VolumeCreateBody {
     provider_ref: ResourceRef,
     execution_ref: ResourceRef,
+    system_artifact_id: ArtifactId,
     view: BoundedToken,
 }
 
@@ -375,6 +377,7 @@ impl VolumeCreateBody {
     /// Construct a semantic setup Volume create body.
     pub fn new(
         execution_ref: ResourceRef,
+        system_artifact_id: ArtifactId,
         view: impl Into<String>,
     ) -> Result<Self, ChildIdentityError> {
         if execution_ref.resource_type().as_str() != "Host" {
@@ -384,6 +387,7 @@ impl VolumeCreateBody {
             provider_ref: ResourceRef::parse(VOLUME_PROVIDER_REF)
                 .map_err(|_| ChildIdentityError::WrongResourceType)?,
             execution_ref,
+            system_artifact_id,
             view: BoundedToken::parse(view.into()).map_err(|_| ChildIdentityError::InvalidToken)?,
         })
     }
@@ -396,6 +400,11 @@ impl VolumeCreateBody {
     /// Borrow the execution target.
     pub const fn execution_ref(&self) -> &ResourceRef {
         &self.execution_ref
+    }
+
+    /// Borrow the selected Guest system artifact.
+    pub const fn system_artifact_id(&self) -> &ArtifactId {
+        &self.system_artifact_id
     }
 
     /// Borrow the semantic Volume view.
@@ -417,12 +426,13 @@ impl<'de> Deserialize<'de> for VolumeCreateBody {
         struct Wire {
             provider_ref: ResourceRef,
             execution_ref: ResourceRef,
+            system_artifact_id: ArtifactId,
             view: BoundedToken,
         }
 
         let wire = Wire::deserialize(deserializer)?;
-        let body =
-            Self::new(wire.execution_ref, wire.view.as_str()).map_err(serde::de::Error::custom)?;
+        let body = Self::new(wire.execution_ref, wire.system_artifact_id, wire.view.as_str())
+            .map_err(serde::de::Error::custom)?;
         if body.provider_ref != wire.provider_ref {
             return Err(serde::de::Error::custom(
                 ChildIdentityError::WrongResourceType,
@@ -606,6 +616,7 @@ impl GuestChildBatch {
                 }
                 ChildRole::SystemVolume => ChildCreateBody::Volume(VolumeCreateBody::new(
                     execution_ref.clone(),
+                    descriptor.system_artifact_id().clone(),
                     role.volume_view().expect("fixed Volume view"),
                 )?),
             };

@@ -107,12 +107,22 @@ let
     (rowsOfType "Network"));
 
   closureIndex = lib.listToAttrs (map
-    (row: lib.nameValuePair "Guest/${row.zoneName}/${row.resourceName}" {
-      zone = row.zoneName;
-      guest = row.resourceName;
-      closureArtifact = row.resource.spec.systemArtifactId or null;
-      closurePath = "/etc/d2b/closures/zones/${row.zoneName}/${row.resourceName}.json";
-    })
+    (row:
+      let
+        artifactName = "guestClosure-${row.zoneName}-${row.resourceName}";
+        artifact = (cfg._guestClosureArtifacts or { }).${artifactName} or null;
+      in
+      lib.nameValuePair "Guest/${row.zoneName}/${row.resourceName}" {
+        zone = row.zoneName;
+        guest = row.resourceName;
+        closureArtifact = row.resource.spec.systemArtifactId or null;
+        closurePath =
+          if artifact != null && artifact.installFileName != null
+          then "/etc/d2b/${artifact.installFileName}"
+          else "/etc/d2b/closures/zones/${row.zoneName}/${row.resourceName}.json";
+        toplevel = if artifact == null then null else artifact.data.toplevel or null;
+        storeView = if artifact == null then null else artifact.data.storeView or null;
+      })
     (lib.filter
       (row: row.resource.type == "Guest"
         && (row.resource.spec.systemArtifactId or null) != null)

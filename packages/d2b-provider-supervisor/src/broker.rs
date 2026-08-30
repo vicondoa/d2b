@@ -447,13 +447,29 @@ impl BundleBackedLaunchResolver {
             ticket.template().as_str(),
             None,
         );
-        let generic_intent = self.bundle.find_runner_intent_for_process_in_vm(
-            Some(vm_name),
-            &expected_execution_ref,
-            expected_execution_domain,
-            expected_user_ref.as_deref(),
-            ticket.template().as_str(),
-        );
+        let generic_intent = if let Some(owner) = ticket
+            .owner_ref()
+            .filter(|owner| owner.resource_type().as_str() == "Guest")
+        {
+            let Some(zone_uid) = ticket.zone_uid() else {
+                return Err(ProcessEffectError::IdentityChanged);
+            };
+            self.bundle.find_guest_vmm_intent_for_zone_uid(
+                zone_uid,
+                owner.name().as_str(),
+                &expected_execution_ref,
+                expected_execution_domain,
+                ticket.template().as_str(),
+            )
+        } else {
+            self.bundle.find_runner_intent_for_process_in_vm(
+                Some(vm_name),
+                &expected_execution_ref,
+                expected_execution_domain,
+                expected_user_ref.as_deref(),
+                ticket.template().as_str(),
+            )
+        };
         let (intent, legacy_identity) = match ticket.component().as_str() {
             "vm-process" => (
                 legacy_intent.ok_or(ProcessEffectError::UnsupportedProvider)?,

@@ -607,7 +607,6 @@ impl ProductionProcessProviders {
                 ProcessRole::SwtpmPreStartFlush
                     | ProcessRole::Swtpm
                     | ProcessRole::Virtiofsd
-                    | ProcessRole::CloudHypervisorRunner
                     | ProcessRole::QemuMediaRunner
                     | ProcessRole::ActivationNixosRunner
                     | ProcessRole::Gpu

@@ -235,7 +235,8 @@ let
       settings = source.settings or { };
       kind = settings.kind or source.kind or null;
       sourcePolicyId = settings.sourcePolicyId or null;
-      systemArtifactId = source.systemArtifactId or null;
+      systemArtifactId =
+        settings.systemArtifactId or source.systemArtifactId or null;
       artifact = artifactFor systemArtifactId;
     in [
       {
@@ -245,6 +246,10 @@ let
       {
         assertion = builtins.elem kind sourceKinds;
         message = "${row.path}.spec.source kind is invalid.";
+      }
+      {
+        assertion = kind == "nix-closure" || sourcePolicyId == null;
+        message = "${row.path}.spec.source.settings.sourcePolicyId is valid only for local-path or block-image sources.";
       }
       {
         assertion = !(builtins.hasAttr "path" settings)
@@ -279,6 +284,9 @@ let
           path = "${row.path}.spec.attachments.${toString index}";
           view = attachment.view or null;
           views = row.spec.views or { };
+          source = row.spec.source or { };
+          sourceSettings = source.settings or { };
+          sourceKind = sourceSettings.kind or source.kind or null;
         in [
           {
             assertion = exactKeys [ "executionRef" "transport" "mountPath" "view" "access" ] attachment;
@@ -305,6 +313,11 @@ let
             assertion = builtins.elem (attachment.access or "read-only")
               [ "read-only" "read-write" "shared-write" ];
             message = "${path}.access is invalid.";
+          }
+          {
+            assertion = sourceKind != "nix-closure"
+              || (attachment.access or "read-only") == "read-only";
+            message = "${path}.access must be read-only for a nix-closure source.";
           }
           {
             assertion = (attachment.access or "read-only") == "read-only"
@@ -373,16 +386,17 @@ let
       source = spec.source or { };
       settings = source.settings or { };
       kind = settings.kind or source.kind or null;
+      systemArtifactId =
+        settings.systemArtifactId or source.systemArtifactId or null;
       canonicalSource =
-        if kind == "nix-closure" then {
-          executionRef = source.executionRef or null;
-          kind = "nix-closure";
-          systemArtifactId = source.systemArtifactId;
-        } else {
+        {
           executionRef = source.executionRef or null;
           settings = {
             kind = kind;
             sourcePolicyId = settings.sourcePolicyId or null;
+          }
+          // lib.optionalAttrs (kind == "nix-closure") {
+            inherit systemArtifactId;
           };
         };
     in (builtins.removeAttrs spec [ "source" ]) // { source = canonicalSource; };

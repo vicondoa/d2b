@@ -292,9 +292,13 @@ let
     freeformType = null;
     options = {
       kind = lib.mkOption {
-        type = types.enum [ "local-path" "block-image" "tmpfs" ];
+        type = types.enum [ "local-path" "block-image" "tmpfs" "nix-closure" ];
       };
       sourcePolicyId = lib.mkOption {
+        type = types.nullOr (types.strMatching tokenPattern);
+        default = null;
+      };
+      systemArtifactId = lib.mkOption {
         type = types.nullOr (types.strMatching tokenPattern);
         default = null;
       };
@@ -714,12 +718,18 @@ let
       source = {
         executionRef =
           providerExecutionRef guest.zoneName "volume-local";
-        settings = {
-          kind = "local-path";
-          sourcePolicyId = "state-root";
-          imageFormat = null;
-          preallocate = false;
-        };
+        settings =
+          if (guest.spec.systemArtifactId or null) != null
+          then {
+            kind = "nix-closure";
+            systemArtifactId = guest.spec.systemArtifactId;
+          }
+          else {
+            kind = "local-path";
+            sourcePolicyId = "state-root";
+            imageFormat = null;
+            preallocate = false;
+          };
       };
       kind = "durable";
       layout = storeViewLayout guestName;

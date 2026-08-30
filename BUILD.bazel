@@ -130,6 +130,7 @@ exports_files([
     "nixos-modules/bundle-artifacts.nix",
     "nixos-modules/bundle-zones.nix",
     "nixos-modules/bundle.nix",
+    "nixos-modules/guest-closures.nix",
     "nixos-modules/components/graphics.nix",
     "nixos-modules/components/observability/default.nix",
     "nixos-modules/components/observability/guest.nix",

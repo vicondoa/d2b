@@ -44,6 +44,11 @@ let
       projection = compiler.providerProjectionRuntimeCloudHypervisor or { };
       privateArtifact = projection.privateArtifact or { };
     in privateArtifact.guestSetupDescriptors or [ ];
+  guestClosures = lib.mapAttrsToList
+    (_: artifact:
+      builtins.fromJSON
+        (builtins.unsafeDiscardStringContext (builtins.readFile artifact.path)))
+    (cfg._guestClosureArtifacts or { });
   descriptorForbiddenRows =
     let
       resourceBundle = import ./resources-bundle.nix { inherit lib; };
@@ -78,28 +83,37 @@ let
     schemaVersion = 3;
     entries = compatibilityEntries;
     inherit guestSetupDescriptors;
+    inherit guestClosures;
   };
 
   catalogPath = pkgs.runCommand "d2b-artifact-catalog.json"
     {
       buildRowsJson = builtins.toJSON buildRows;
       guestSetupDescriptorsJson = builtins.toJSON guestSetupDescriptors;
+      guestClosuresJson = builtins.toJSON guestClosures;
       nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
-      passAsFile = [ "buildRowsJson" "guestSetupDescriptorsJson" ];
+      passAsFile = [
+        "buildRowsJson"
+        "guestSetupDescriptorsJson"
+        "guestClosuresJson"
+      ];
     } ''
       set -euo pipefail
-      python3 - "$buildRowsJsonPath" "$guestSetupDescriptorsJsonPath" "$out" <<'PY'
+      python3 - "$buildRowsJsonPath" "$guestSetupDescriptorsJsonPath" \
+        "$guestClosuresJsonPath" "$out" <<'PY'
       import hashlib
       import json
       import pathlib
       import subprocess
       import sys
 
-      rows_path, descriptors_path, output_path = sys.argv[1:]
+      rows_path, descriptors_path, closures_path, output_path = sys.argv[1:]
       with open(rows_path, encoding="utf-8") as handle:
           rows = json.load(handle)
       with open(descriptors_path, encoding="utf-8") as handle:
           guest_setup_descriptors = json.load(handle)
+      with open(closures_path, encoding="utf-8") as handle:
+          guest_closures = json.load(handle)
 
       def digest_path(path):
           digest = hashlib.sha256()
@@ -201,6 +215,7 @@ let
           })
       preimage = {
           "entries": entries,
+          "guestClosures": guest_closures,
           "guestSetupDescriptors": guest_setup_descriptors,
           "schemaVersion": 3,
       }
@@ -260,6 +275,7 @@ in
         catalogDigest
         catalogData
         catalogJson
+        guestClosures
         guestSetupDescriptors
         ;
       path = catalogPath;

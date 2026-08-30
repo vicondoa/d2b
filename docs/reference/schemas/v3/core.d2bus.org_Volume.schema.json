@@ -487,7 +487,8 @@
       "enum": [
         "local-path",
         "block-image",
-        "tmpfs"
+        "tmpfs",
+        "nix-closure"
       ],
       "type": "string"
     },
@@ -511,6 +512,16 @@
           "type": "boolean"
         },
         "sourcePolicyId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "systemArtifactId": {
           "anyOf": [
             {
               "$ref": "#/definitions/BoundedToken"

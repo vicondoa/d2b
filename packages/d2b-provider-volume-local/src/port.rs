@@ -92,10 +92,12 @@ pub enum QuotaCapability {
 /// observed for that root.
 pub trait VolumeSourceEffectPort: Send + Sync {
     /// Resolve the opaque source policy ID against the private allowlist
-    /// policy and return proof that the root descriptor is held.
+    /// policy, or resolve the selected system artifact for a Nix closure, and
+    /// return proof that the root descriptor is held.
     fn resolve_root(
         &self,
         source_policy_id: Option<&BoundedToken>,
+        system_artifact_id: Option<&BoundedToken>,
         kind: SourceKind,
     ) -> impl Future<Output = Result<VolumeRootHandle, VolumeLocalError>> + Send;
 

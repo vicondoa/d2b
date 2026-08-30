@@ -19,7 +19,8 @@ ComponentSession enrollment keys are never delivered through virtiofs.
 
 The Cloud Hypervisor Process receives these broker-resolved share descriptors
 through its sealed Process Provider launch ticket. The Guest controller does
-not construct VMM argv or receive host socket paths.
+not construct VMM argv or receive host socket paths; the private
+`artifact-catalog.json` Guest closure row carries the complete VMM intent.
 
 ## virtiofsd argv shape
 
@@ -78,8 +79,8 @@ broker resolves them from the trusted bundle for the `SpawnRunner` request.
 
 ## Cross-references
 
-- `nixos-modules/processes-json.nix` - current daemon-owned virtiofsd argv
-  emitter.
+- `nixos-modules/guest-closures.nix` - private evaluated Guest closure and
+  Cloud Hypervisor intent emitter.
 - [Runner-shape audit](runner-shape-audit.md) - historical microvm.nix
   runner evidence, not the current daemon parity oracle.
 - [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md) -

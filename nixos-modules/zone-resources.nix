@@ -27,6 +27,7 @@ let
   artifactCatalogPreimage = {
     schemaVersion = 3;
     entries = providerCatalogEntries;
+    guestClosures = cfg._artifactCatalogV3.guestClosures or [ ];
     guestSetupDescriptors =
       let
         compiler = cfg._resourceCompiler or { };

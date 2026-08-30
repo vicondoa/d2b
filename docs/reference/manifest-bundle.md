@@ -13,7 +13,8 @@ Providers, and `d2b-broker`. It is not a public lifecycle API.
 | `vms.json` | public compatibility projection | Bounded legacy inventory data for diagnostics and migration tooling. |
 | `bundle.json` | private | Bundle version, artifact paths, digests, and compatibility metadata. |
 | `host.json` | private | Host capabilities, Provider catalog, Network/Device requirements, and support tier. |
-| `processes.json` | private | Controller and runner intent, readiness predicates, and delegated sandbox metadata. |
+| `processes.json` | private compatibility artifact | Legacy runner intent input; it is not a public Guest resource field, and the current Guest controller owns the VMM child lifecycle. |
+| `artifact-catalog.json` | private | Signed Provider metadata and evaluated Zone/Guest closure commitments used by StoreSync. |
 | `storage.json` | private | Anchored managed paths, restart adoption, cleanup, repair, and degraded states. |
 | `sync.json` | private | OFD lock and fd-transfer policy, acquisition order, and stale-owner handling. |
 | `allocator.json` | private | Zone-scoped resource allocation metadata and opaque host-resource leases. |
@@ -22,12 +23,13 @@ Providers, and `d2b-broker`. It is not a public lifecycle API.
 | `realm-workloads-launcher-v2.json` | private, daemon-served | Argv-free launcher metadata exposed only through the authorized daemon API. |
 | `unsafe-local-workloads.json` | private | Validated unsafe-local Provider intent resolved by `d2bd`. |
 | `privileges.json` | private | Public API and broker authorization policy. |
-| `closures/<Guest>.json` | private | Per-Guest system closure and generation metadata. |
+| `closures/zones/<zone>/<guest>.json` | private | Zone/Guest-qualified evaluated system closure and broker StoreSync metadata. |
 | `minijail-profile.json` | private | Typed sandbox profile metadata used by approved Providers. |
 
 The daemon and broker own access to private artifacts. Secret bytes,
 credentials, raw host paths, executable arguments, and private runtime
-locators do not cross the public API boundary.
+locators do not cross the public API boundary. A current Guest lifecycle does
+not use a legacy VM DAG or expose its VMM argv through the Guest resource.
 
 ## Current ownership
 

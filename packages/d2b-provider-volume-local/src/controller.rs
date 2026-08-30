@@ -61,6 +61,7 @@ impl VolumeLocalProfile {
                 SourceKind::LocalPath,
                 SourceKind::BlockImage,
                 SourceKind::Tmpfs,
+                SourceKind::NixClosure,
             ]
             .into_iter()
             .collect(),
@@ -132,7 +133,11 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
 
         let root = self
             .source
-            .resolve_root(spec.source().settings().source_policy_id(), kind)
+            .resolve_root(
+                spec.source().settings().source_policy_id(),
+                spec.source().settings().system_artifact_id(),
+                kind,
+            )
             .await?;
         self.assert_quota(spec, &root).await?;
 
@@ -215,6 +220,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             .source
             .resolve_root(
                 spec.source().settings().source_policy_id(),
+                spec.source().settings().system_artifact_id(),
                 spec.source().settings().kind(),
             )
             .await?;

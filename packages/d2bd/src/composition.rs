@@ -7936,12 +7936,11 @@ fn dispatch_wave6_resource_reconcile(
             "resources": [resource],
         }));
     }
-    let resolver = load_bundle_resolver(state)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-
     let mut ready = true;
     let effect = match resource_type {
         "Volume" => {
+            let resolver = load_bundle_resolver(state)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
             let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
             let response = dispatch_broker_request_as(
                 state,
@@ -7970,6 +7969,8 @@ fn dispatch_wave6_resource_reconcile(
             }
         }
         "Network" => {
+            let resolver = load_bundle_resolver(state)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
             block_on_future(runtime.persist_public_reconcile_phase(
                 &resource_ref,
                 &uid,
@@ -8014,162 +8015,20 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
-            ensure_guest_networks_reconciled(
-                state,
-                peer,
-                runtime,
-                &resource,
-                &resolver,
-                operation_id,
-            )?;
-            let guest_vm = resource_ref.name().as_str();
-            let providers = state.provider_runtime.process_providers().ok_or_else(|| {
-                tracing::warn!(
-                    guest = guest_vm,
-                    "Guest Provider process runtime is unavailable"
-                );
-                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-            })?;
-            let node = providers
-                .node_for_role(guest_vm, "ch-runner")
-                .ok_or_else(|| {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        "Guest Provider Cloud Hypervisor node is missing"
-                    );
-                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                })?;
-            let snapshot_store = d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
-                &state.daemon_state_dir,
-            );
-            let runner_snapshot = d2bd_runtime::supervisor::state::SnapshotStore::get(
-                &snapshot_store,
-                guest_vm,
-                "ch-runner",
-            )
-            .map_err(|error| {
-                tracing::warn!(
-                    guest = guest_vm,
-                    error = %error,
-                    "Guest Provider adoption snapshot lookup failed"
-                );
-                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-            })?;
-            let expected_identity =
-                block_on_future(runtime.guest_lifecycle_identity(&resource_ref))
-                    .ok()
-                    .map(
-                        |(zone_uid, guest_uid, guest_generation, provider_generation)| {
-                            (
-                                zone_uid,
-                                guest_uid,
-                                guest_generation,
-                                provider_generation,
-                                runtime.committed_policy_snapshot().policy_revision,
-                            )
-                        },
-                    );
-            let adoption = match runner_snapshot.as_ref() {
-                None => process_provider_runtime::ProviderAdoption::Absent,
-                Some(snapshot)
-                    if !runner_snapshot_is_eligible(snapshot, expected_identity.as_ref()) =>
-                {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        "Guest Provider adoption quarantined without current lifecycle snapshot"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                Some(_) => {
-                    block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
-                        tracing::warn!(
-                            guest = guest_vm,
-                            error = %error,
-                            "Guest Provider Cloud Hypervisor adoption failed"
-                        );
-                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                    })?
-                }
-            };
-            let effect = match adoption {
-                process_provider_runtime::ProviderAdoption::Adopted(_) => {
-                    "cloud-hypervisor-adopted"
-                }
-                process_provider_runtime::ProviderAdoption::ControllerBootstrapMissing => {
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                process_provider_runtime::ProviderAdoption::Stale { .. } => {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        "Guest Provider Cloud Hypervisor adoption found a stale process"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                process_provider_runtime::ProviderAdoption::Quarantined(_) => {
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                process_provider_runtime::ProviderAdoption::Absent => {
-                    block_on_future(providers.launch_node(
-                        guest_vm,
-                        &node,
-                        Duration::from_secs(30),
-                    ))
-                    .map_err(|error| {
-                        tracing::warn!(
-                            guest = guest_vm,
-                            error = %error,
-                            "Guest Provider Cloud Hypervisor launch failed"
-                        );
-                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                    })?;
-                    let deadline = Instant::now() + Duration::from_secs(30);
-                    loop {
-                        match block_on_future(providers.probe_node(guest_vm, &node)).map_err(
-                            |error| {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    error = %error,
-                                    "Guest Provider liveness probe failed after launch"
-                                );
-                                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                            },
-                        )? {
-                            process_provider_runtime::ProviderLiveness::Alive => break,
-                            process_provider_runtime::ProviderLiveness::Exited => {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    "Guest Provider exited before becoming Ready"
-                                );
-                                return Err(
-                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
-                                );
-                            }
-                            process_provider_runtime::ProviderLiveness::Unknown
-                                if Instant::now() >= deadline =>
-                            {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    "Guest Provider liveness remained unknown after launch"
-                                );
-                                return Err(
-                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
-                                );
-                            }
-                            process_provider_runtime::ProviderLiveness::Unknown => {
-                                std::thread::sleep(Duration::from_millis(25));
-                            }
-                        }
-                    }
-                    "cloud-hypervisor-started"
-                }
-            };
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &resource_ref,
-                &uid,
-                operation_id,
-                "Ready",
-            ))?;
-            effect
+            ready = resource
+                .get("status")
+                .and_then(|status| status.get("phase"))
+                .and_then(Value::as_str)
+                == Some("Ready")
+                && resource
+                    .get("status")
+                    .and_then(|status| status.get("observedGeneration"))
+                    .and_then(Value::as_u64)
+                    == resource
+                        .get("metadata")
+                        .and_then(|metadata| metadata.get("generation"))
+                        .and_then(Value::as_u64);
+            "controller-managed"
         }
         _ => unreachable!(),
     };
@@ -8197,94 +8056,6 @@ fn public_resource_get_error(resource: &Value) -> Option<resource_runtime::Resou
     resource.get("error").is_some().then_some(
         resource_runtime::ResourceRuntimeError::ResourceGetFailed(kind),
     )
-}
-
-fn ensure_guest_networks_reconciled(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    guest: &Value,
-    resolver: &BundleResolver,
-    operation_id: &str,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let Some(network_attachments) = guest
-        .get("spec")
-        .and_then(|spec| spec.get("networkAttachments"))
-        .and_then(Value::as_array)
-    else {
-        return Ok(());
-    };
-    for attachment in network_attachments {
-        let network_ref = attachment
-            .get("networkRef")
-            .and_then(Value::as_str)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let network_ref = ResourceRef::parse(network_ref)
-            .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        if network_ref.resource_type().as_str() != "Network" {
-            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-        }
-        let get_request = json!({
-            "method": "Get",
-            "service": "d2b.resource.v3",
-            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
-            "resourceRef": network_ref.to_canonical_string(),
-        });
-        let network = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
-        if let Some(error) = public_resource_get_error(&network) {
-            return Err(error);
-        }
-        let network_uid = network
-            .get("metadata")
-            .and_then(|metadata| metadata.get("uid"))
-            .and_then(Value::as_str)
-            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let generation = network
-            .get("metadata")
-            .and_then(|metadata| metadata.get("generation"))
-            .and_then(Value::as_u64)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let ready = network
-            .get("status")
-            .and_then(|status| status.get("phase"))
-            .and_then(Value::as_str)
-            == Some("Ready")
-            && network
-                .get("status")
-                .and_then(|status| status.get("observedGeneration"))
-                .and_then(Value::as_u64)
-                == Some(generation);
-        if !ready {
-            tracing::warn!(
-                stage = "guest-network-readiness",
-                "Guest Provider is re-running Network reconciliation before launch"
-            );
-            let network_operation_id =
-                format!("{operation_id}-network-{}", network_ref.name().as_str());
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &network_ref,
-                &network_uid,
-                &network_operation_id,
-                "Pending",
-            ))?;
-            let network_ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
-                state,
-                peer,
-                runtime,
-                resolver,
-                resource_ref: &network_ref,
-                uid: &network_uid,
-                resource: &network,
-                operation_id: &network_operation_id,
-                ensure_host_base: false,
-            })?;
-            if !network_ready {
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-            }
-        }
-    }
-    Ok(())
 }
 
 struct Wave6NetworkEffectRequest<'a> {
@@ -17464,6 +17235,7 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
 enum VmRunnerLaunch {
     Legacy(Box<d2b_contracts_broker::broker_wire::SpawnRunnerResponse>),
     Provider,
+    ControllerOwned,
 }
 
 fn network_tap_context_from_admission(
@@ -17659,6 +17431,9 @@ impl VmStartRunner<'_> {
         runner_role: RunnerRole,
         timeout: Duration,
     ) -> Result<VmRunnerLaunch, String> {
+        if node.role == ProcessRole::CloudHypervisorRunner {
+            return Ok(VmRunnerLaunch::ControllerOwned);
+        }
         let intent_id = intent_id_runner(vm, &node.id.0);
         let intent = self
             .resolver
@@ -18052,10 +17827,16 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                             .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
                         block_on_future(providers.wait_for_exit(vm, node, budget.readiness))
                     }
+                    VmRunnerLaunch::ControllerOwned => {
+                        Err("controller-owned-one-shot-process-invalid".to_owned())
+                    }
                 }
             }
             VmStartNodeMode::LongLived(runner_role) => {
                 let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                if matches!(launch, VmRunnerLaunch::ControllerOwned) {
+                    return wait_for_readiness(node, readiness, budget.readiness, None);
+                }
                 let provider_liveness;
                 let legacy_liveness;
                 let liveness: &dyn d2bd_runtime::supervisor::readiness_liveness::LivenessProbe =
@@ -18083,6 +17864,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                         );
                             &legacy_liveness
                         }
+                        VmRunnerLaunch::ControllerOwned => unreachable!("handled above"),
                     };
                 wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
@@ -18133,6 +17915,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         timeout: Duration,
     ) -> d2bd_runtime::supervisor::dag::ApiReadyState {
         if is_guest_owned_process_node(node) {
+            return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
+        }
+        if node.role == ProcessRole::CloudHypervisorRunner {
             return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
         }
         if is_durable_wayland_process_node(node) {
