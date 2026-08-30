@@ -262,6 +262,18 @@ let
         manifest = json.loads(pathlib.Path(manifest_path).read_text())
         binary = pathlib.Path("${pkgs.coreutils}/bin/coreutils").read_bytes()
         raw_digest = "sha256:" + hashlib.sha256(binary).hexdigest()
+        resource_types = {"Device", "Network"}
+        manifest["apiBindings"] = [
+            binding
+            for binding in manifest.get("apiBindings", [])
+            if binding.get("resourceType") in resource_types
+        ]
+        for component in manifest.get("components", []):
+            component["exportedResourceTypes"] = [
+                resource_type
+                for resource_type in component.get("exportedResourceTypes", [])
+                if resource_type in resource_types
+            ]
         executable_map = json.dumps(
             {"acceptance-controller": raw_digest},
             ensure_ascii=False,
