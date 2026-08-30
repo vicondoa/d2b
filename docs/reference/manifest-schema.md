@@ -27,13 +27,18 @@ Private bundle documents and Provider manifests carry the inputs required by
 the daemon and broker. See [`manifest-bundle.md`](./manifest-bundle.md) and
 [`zone-control-nix.md`](./zone-control-nix.md).
 
-## Compatibility document
+## Current compatibility projection
 
 The manifest schema remains versioned and strict for readers that still need
-the public compatibility projection. Its fields may contain historical
-workload terminology because the compatibility format is frozen. Consumers
-must not infer lifecycle ownership, host paths, credentials, or Provider
-authority from those fields.
+the public diagnostic projection. Its fields may contain historical workload
+terminology because the DTO is still used by current internal readers.
+Consumers must not infer lifecycle ownership, host paths, credentials, or
+Provider authority from those fields.
+
+This is a clean break from v1/v2. The projection does not promise upgrade,
+state migration, data retention, or rollback preservation for older host
+paths. Current Guest lifecycle starts from the current Zone bundle and
+Resource store.
 
 Unknown fields, malformed digests, invalid names, and inconsistent generation
 metadata fail closed. A compatibility projection never authorizes a host

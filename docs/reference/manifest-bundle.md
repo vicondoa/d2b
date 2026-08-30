@@ -39,6 +39,8 @@ effects. `d2b-broker` performs only approved typed host mutations.
 The compatibility documents with `realm-` filenames may remain during host
 migration, but they cannot create, discover, or authorize a Guest lifecycle.
 The current authority is the Zone Resource store and authenticated session.
+The current line is a clean break from v1/v2 host state: these artifacts do
+not promise old-path adoption, data retention, or state conversion.
 
 ## Versioning
 

@@ -78,7 +78,8 @@ are not current configuration or command instructions.
 ## Historical references
 
 ADR 0015, ADR 0043, and the migration pages under `how-to/migrate-*` preserve
-the rationale and upgrade history for retired lifecycle owners. Pages named
+the rationale and upgrade history for retired lifecycle owners, but make no
+v1/v2 state, data-retention, or rollback-preservation promise. Pages named
 `realm-*`, `per-vm-*`, or `gateway-*` are historical unless explicitly linked
 from the current references above. Do not copy their option paths or command
 forms into a new configuration.

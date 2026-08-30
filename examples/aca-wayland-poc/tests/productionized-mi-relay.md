@@ -1,5 +1,8 @@
 # Historical live reproduction - MI-auth ACA + Wayland forwarding probe
 
+> Deferred acceptance: this historical probe is not U19 or U20 evidence. ACA
+> testing waits until after U20 local host acceptance.
+
 **Layer 2, manual** (provisions real Azure + needs a live Wayland
 compositor). This is the reproducible record behind the productionized
 acceptance bar for the earlier MI-auth relay probe: a Wayland-native `foot`
