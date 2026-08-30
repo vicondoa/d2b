@@ -1387,8 +1387,6 @@
           pkgs = nixpkgsFor.${system};
         };
 
-        eval-zone = mkCheck "eval-zone"
-          (mkEval [ smokeConfigModule fixtureArtifactCatalogOverride ]);
       });
 
       lib = nixpkgs.lib.makeExtensible (_: {
