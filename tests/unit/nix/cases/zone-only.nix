@@ -1,4 +1,4 @@
-{ mkModuleEval, lib, flakeRoot, ... }:
+{ mkEval, lib, flakeRoot, ... }:
 
 let
   legacyConfig = name: {
@@ -11,7 +11,7 @@ let
 
   unknownOption = name:
     builtins.tryEval (builtins.deepSeq
-      (mkModuleEval [ (legacyConfig name) ]).config
+      (mkEval [ (legacyConfig name) ]).config
       true);
 
   removedFiles = [

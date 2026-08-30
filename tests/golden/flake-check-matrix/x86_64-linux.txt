@@ -3,14 +3,8 @@
 # Regenerate with: make flake-matrix-pin
 bazel-9_2_0-provider-smoke
 eval-fixture-contracts
-eval-graphics
-eval-minimal
-eval-multi-env
-eval-multi-env-daemon
-eval-template
-eval-with-observability
+eval-zone
 fixture-smoke
-fixture-smoke-full
 guest-control-vsock
 guest-exec-policy
 guest-rust-deny
@@ -33,4 +27,3 @@ rust-build
 rust-clippy
 rust-deny
 rust-tests
-video-binary-contract

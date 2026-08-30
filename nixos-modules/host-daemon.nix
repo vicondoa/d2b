@@ -145,6 +145,7 @@ in
       "a+ /run/d2b - - - - m::rwx"
       "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
       "d /run/d2b/locks 0700 d2bd d2bd -"
+      "d /run/d2b/locks/usbip 0750 root d2bd -"
       "d /run/d2b/state 0700 d2bd d2bd -"
       "d /var/lib/d2b 0750 root d2bd -"
       "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"

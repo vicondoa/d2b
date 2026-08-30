@@ -109,7 +109,6 @@ let
       yubikey.enable = false;
       usePrebuiltHostTools = lib.mkDefault (evalSystem == "x86_64-linux");
     };
-    d2b.zones.local-root = { };
   };
 
   pkgsFor = evalSystem:

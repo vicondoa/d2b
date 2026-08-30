@@ -593,7 +593,7 @@ mod tests {
                 conclusion: CheckConclusion::Success,
             },
             RequiredCheck {
-                name: "eval-minimal".to_owned(),
+                name: "eval-zone".to_owned(),
                 conclusion: CheckConclusion::Success,
             },
         ]

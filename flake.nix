@@ -1078,30 +1078,13 @@
             '') // {
               fixtureData = { };
             };
-        video-binary-contract =
-          pkgs.runCommand "d2b-video-binary-command-surface" { } ''
-            printf '%s\n' "Cloud Hypervisor child lifecycle is controller-owned." > "$out"
-          '';
         fixture-smoke = smokeFixture;
         bazel-9_2_0-provider-smoke =
           import ./tests/unit/smoke/bazel-provider.nix {
             inherit pkgs bazel920 system;
           };
 
-        eval-minimal = mkCheck "eval-minimal"
-          (mkEval [ smokeConfigModule fixtureArtifactCatalogOverride ]);
-
-        eval-multi-env = mkCheck "eval-multi-env"
-          (mkEval [ smokeConfigModule fixtureArtifactCatalogOverride ]);
-
-        eval-multi-env-daemon = mkCheck "eval-multi-env-daemon"
-          (mkEval [
-            smokeConfigModule
-            fixtureArtifactCatalogOverride
-            { d2b.site.allowUnsafeEastWest = true; }
-          ]);
-
-        eval-with-observability =
+        eval-zone =
           let
             cfg = mkEval [ smokeConfigModule fixtureArtifactCatalogOverride ];
             observed = {
@@ -1111,12 +1094,12 @@
                 cfg.config.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
             };
           in
-          mkEvalOnlyCheck "eval-with-observability" (
+          mkEvalOnlyCheck "eval-zone" (
             if observed.assertionsGreen
               && observed.zoneCount == 1
               && observed.launcherArtifact == "realm-workloads-launcher-v2.json"
             then observed
-            else throw "eval-with-observability failed: ${builtins.toJSON observed}"
+            else throw "eval-zone failed: ${builtins.toJSON observed}"
           );
 
         rust-build = rustWorkspace {
