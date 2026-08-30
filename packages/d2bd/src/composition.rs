@@ -879,6 +879,7 @@ pub(crate) struct ZoneLinkGatewayComposition {
     >,
     route_admission_authority: Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
     gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
+    last_gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
 }
 
 impl std::fmt::Debug for ZoneLinkGatewayComposition {
@@ -1019,6 +1020,7 @@ impl ZoneLinkGatewayComposition {
             gateway_session: Mutex::new(None),
             route_admission_authority: Mutex::new(None),
             gateway_guest: Mutex::new(None),
+            last_gateway_guest: Mutex::new(None),
         })
     }
 
@@ -1319,7 +1321,18 @@ impl ZoneLinkGatewayComposition {
             .take();
     }
 
+    fn reset_gateway_guest_identity(&self) -> Result<(), ZoneLinkGatewayCompositionError> {
+        self.fence_gateway_session();
+        self.apply_event(ZoneLinkEvent::Revoke)
+            .map(|_| ())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)
+    }
+
     fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
+        *self
+            .last_gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest.clone());
         *self
             .gateway_guest
             .lock()
@@ -1328,6 +1341,13 @@ impl ZoneLinkGatewayComposition {
 
     fn gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
         self.gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn last_gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
+        self.last_gateway_guest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -7118,8 +7138,19 @@ fn admit_gateway_zone_request(
         composition.transport_provider_ref(),
     ))
     .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if composition
+        .last_gateway_guest()
+        .as_ref()
+        .is_some_and(|previous| previous != &gateway_guest)
+    {
+        composition
+            .reset_gateway_guest_identity()
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    }
     if composition.gateway_guest().as_ref() != Some(&gateway_guest) {
-        composition.fence_gateway_session();
+        if composition.gateway_guest().is_some() {
+            composition.fence_gateway_session();
+        }
         composition.set_gateway_guest(gateway_guest.clone());
     }
     if !composition.has_gateway_session() {
