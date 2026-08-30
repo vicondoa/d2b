@@ -8,7 +8,7 @@ owner-local contract tests and the applicable host lane.
 
 | Provider class | Current role | U19/U20 status |
 | --- | --- | --- |
-| Cloud Hypervisor Guest | Local Guest controller, Process/Endpoint/Volume children, authenticated Guest session | U20 host and KVM acceptance |
+| Cloud Hypervisor Guest | Local Guest controller, Process/Endpoint/Volume children, authenticated Guest session | U20 `/etc/nixos` switch, d2b startup, and KVM Guest boot |
 | QEMU media Guest | Optional local Provider projection | Layer-1 contract only in U19 |
 | Device, audio, display, shell, volume, network Providers | Zone-scoped specialized effects | Layer-1 contract and owner-local tests |
 | Azure Container Apps sandbox | Optional remote Provider-managed sandbox | Deferred until after U20; no ACA acceptance claim |

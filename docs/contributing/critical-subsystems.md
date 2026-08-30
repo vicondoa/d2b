@@ -142,5 +142,6 @@ make test-unit
 make check
 ```
 
-Host and VM acceptance are separate higher tiers owned by U20; an advisory
-skip is not evidence for those tiers.
+Host and VM acceptance are separate higher tiers owned by U20. U20's scope is
+the `/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot; an
+advisory skip is not evidence for those checks.

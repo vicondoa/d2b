@@ -8,8 +8,8 @@ startup, and Cloud Hypervisor Guest boot.
 
 | Surface | Current status |
 | --- | --- |
-| NixOS x86_64 host | Primary target; U20 owns real-host acceptance. |
-| Cloud Hypervisor Guest | Current local runtime; U20 owns KVM/boot acceptance. |
+| NixOS x86_64 host | Primary target; U20 owns the `/etc/nixos` switch and d2b startup check. |
+| Cloud Hypervisor Guest | Current local runtime; U20 owns the KVM Guest boot check. |
 | QEMU media Provider | Optional local contract; no U20 host acceptance claim. |
 | Device, audio, display, shell, storage, and network Providers | Zone-scoped Layer-1 contracts with owner-local tests. |
 | Azure Container Apps sandbox | Deferred; test only after U20. |
