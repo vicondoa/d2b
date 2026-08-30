@@ -14,6 +14,7 @@ use d2b_contracts_resource::v3::{
 use d2b_core_controller::{HintTarget, ObservedChild, OwnerIndex, OwnerLimits};
 
 use crate::{
+    adoption::ProcessAdoptionStatus,
     bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan},
     descriptor::{
         GuestSetupDescriptor, GuestSetupDescriptorError, GuestSetupDescriptorVerifier,
@@ -23,6 +24,10 @@ use crate::{
     identity::{
         ChildCreateBody, ChildMutation, ChildRole, ChildRoleSet, CommittedChild, GuestChildBatch,
         PrivateRuntimeScope, derive_private_runtime_scope,
+    },
+    shutdown::{
+        FencedChild, FinalizationDisposition, FinalizationStep, GuestFinalizationInput,
+        GuestUpgradePlan, LifecyclePlanError, UpgradeReason, plan_finalization, plan_upgrade,
     },
     state::{
         GuestGenerationSet, GuestRuntimeStatus, GuestStatusObservation, GuestStatusPhase,
@@ -50,6 +55,8 @@ pub enum CloudHypervisorResourceApiError {
     Truncated,
     /// The response type did not match the request.
     InvalidResponse,
+    /// The lifecycle operation is not implemented by this API adapter.
+    Unsupported,
 }
 
 impl CloudHypervisorResourceApiError {
@@ -63,6 +70,7 @@ impl CloudHypervisorResourceApiError {
             Self::Uncertain => "cloud-hypervisor-resource-uncertain",
             Self::Truncated => "cloud-hypervisor-resource-truncated",
             Self::InvalidResponse => "cloud-hypervisor-resource-invalid-response",
+            Self::Unsupported => "cloud-hypervisor-resource-unsupported",
         }
     }
 }
@@ -92,6 +100,8 @@ pub enum CloudHypervisorError {
     BatchResponseInvalid,
     /// The authenticated Resource API failed.
     ResourceApi(CloudHypervisorResourceApiError),
+    /// A bounded lifecycle plan could not be constructed.
+    LifecyclePlan(LifecyclePlanError),
 }
 
 impl fmt::Display for CloudHypervisorError {
@@ -110,6 +120,7 @@ impl fmt::Display for CloudHypervisorError {
                 formatter.write_str("cloud-hypervisor-batch-response-invalid")
             }
             Self::ResourceApi(error) => error.fmt(formatter),
+            Self::LifecyclePlan(error) => error.fmt(formatter),
         }
     }
 }
@@ -125,6 +136,12 @@ impl From<GuestSetupDescriptorError> for CloudHypervisorError {
 impl From<CloudHypervisorResourceApiError> for CloudHypervisorError {
     fn from(error: CloudHypervisorResourceApiError) -> Self {
         Self::ResourceApi(error)
+    }
+}
+
+impl From<LifecyclePlanError> for CloudHypervisorError {
+    fn from(error: LifecyclePlanError) -> Self {
+        Self::LifecyclePlan(error)
     }
 }
 
@@ -883,6 +900,14 @@ pub enum GuestCondition {
     SessionNotReady,
     /// The authenticated Guest session is degraded.
     SessionDegraded,
+    /// Process identity could not be adopted exactly after restart.
+    AdoptionAmbiguous,
+    /// The VMM Process exited or reported a terminal failure.
+    VmmProcessExited,
+    /// A disruptive D091 update requires a recycle.
+    UpgradeRequired,
+    /// Finalization is blocked by an unresolved lifecycle condition.
+    FinalizationBlocked,
 }
 
 /// Public Guest status plus only bounded base conditions.
@@ -909,6 +934,11 @@ impl GuestStatusProjection {
     /// Borrow bounded status conditions.
     pub fn conditions(&self) -> &[GuestCondition] {
         &self.conditions
+    }
+
+    /// Return whether this status contains one bounded condition.
+    pub fn has_condition(&self, condition: GuestCondition) -> bool {
+        self.conditions.contains(&condition)
     }
 }
 
@@ -956,6 +986,74 @@ pub enum CloudHypervisorResourceRequest {
         /// Status candidate.
         status: GuestStatusProjection,
     },
+    /// Observe Process Provider adoption outcome without exposing identity.
+    ObserveProcessAdoption {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// VMM Process child.
+        process_ref: ResourceRef,
+        /// Exact Process UID fence.
+        process_uid: ResourceUid,
+        /// Exact Process revision fence.
+        process_revision: ZoneRevision,
+    },
+    /// Assess whether a disruptive D091 upgrade is required.
+    AssessUpdate {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+    },
+    /// Observe finalization state and owned descendants.
+    ObserveFinalization {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// Current direct children.
+        children: Vec<OwnedChildSnapshot>,
+    },
+    /// Drain target-local Guest Resources.
+    DrainGuestLocal {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+    },
+    /// Close the authenticated Guest-control session.
+    CloseGuestSession {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+    },
+    /// Delete one direct child under exact identity fencing.
+    DeleteChild {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// Exact child fence.
+        child: FencedChild,
+    },
+    /// Invalidate prior session generations.
+    InvalidateGuestSession {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// Minimum accepted replacement generation.
+        minimum_generation: u64,
+    },
+    /// Clear the controller-owned Guest finalizer.
+    ClearGuestFinalizer {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// Exact Guest revision fence.
+        guest_revision: ZoneRevision,
+    },
 }
 
 impl fmt::Debug for CloudHypervisorResourceRequest {
@@ -972,6 +1070,22 @@ impl fmt::Debug for CloudHypervisorResourceRequest {
             Self::CommitBatch { .. } => "CloudHypervisorResourceRequest::CommitBatch",
             Self::UpdateSpec { .. } => "CloudHypervisorResourceRequest::UpdateSpec",
             Self::UpdateStatus { .. } => "CloudHypervisorResourceRequest::UpdateStatus",
+            Self::ObserveProcessAdoption { .. } => {
+                "CloudHypervisorResourceRequest::ObserveProcessAdoption"
+            }
+            Self::AssessUpdate { .. } => "CloudHypervisorResourceRequest::AssessUpdate",
+            Self::ObserveFinalization { .. } => {
+                "CloudHypervisorResourceRequest::ObserveFinalization"
+            }
+            Self::DrainGuestLocal { .. } => "CloudHypervisorResourceRequest::DrainGuestLocal",
+            Self::CloseGuestSession { .. } => "CloudHypervisorResourceRequest::CloseGuestSession",
+            Self::DeleteChild { .. } => "CloudHypervisorResourceRequest::DeleteChild",
+            Self::InvalidateGuestSession { .. } => {
+                "CloudHypervisorResourceRequest::InvalidateGuestSession"
+            }
+            Self::ClearGuestFinalizer { .. } => {
+                "CloudHypervisorResourceRequest::ClearGuestFinalizer"
+            }
         })
     }
 }
@@ -993,6 +1107,14 @@ pub enum CloudHypervisorResourceResponse {
     Updated(CommittedChild),
     /// UpdateStatus succeeded.
     StatusUpdated,
+    /// Process adoption outcome.
+    ProcessAdoption(ProcessAdoptionStatus),
+    /// D091 update assessment.
+    UpdateAssessment(Option<UpgradeReason>),
+    /// Finalization observation.
+    Finalization(GuestFinalizationInput),
+    /// A lifecycle mutation was accepted.
+    LifecycleApplied,
 }
 
 impl fmt::Debug for CloudHypervisorResourceResponse {
@@ -1005,6 +1127,10 @@ impl fmt::Debug for CloudHypervisorResourceResponse {
             Self::Committed(_) => "CloudHypervisorResourceResponse::Committed",
             Self::Updated(_) => "CloudHypervisorResourceResponse::Updated",
             Self::StatusUpdated => "CloudHypervisorResourceResponse::StatusUpdated",
+            Self::ProcessAdoption(_) => "CloudHypervisorResourceResponse::ProcessAdoption",
+            Self::UpdateAssessment(_) => "CloudHypervisorResourceResponse::UpdateAssessment",
+            Self::Finalization(_) => "CloudHypervisorResourceResponse::Finalization",
+            Self::LifecycleApplied => "CloudHypervisorResourceResponse::LifecycleApplied",
         })
     }
 }
@@ -1149,6 +1275,154 @@ where
             _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
         }
     }
+
+    async fn observe_process_adoption(
+        &self,
+        guest: &GuestSnapshot,
+        process: &OwnedChildSnapshot,
+    ) -> Result<ProcessAdoptionStatus, CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::ObserveProcessAdoption {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                process_ref: process.resource_ref.clone(),
+                process_uid: process.uid.clone(),
+                process_revision: process.revision,
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::ProcessAdoption(status) => Ok(status),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn assess_update(
+        &self,
+        guest: &GuestSnapshot,
+        children: &[OwnedChildSnapshot],
+    ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
+        let _ = children;
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::AssessUpdate {
+                guest_ref: guest.resource_ref.clone(),
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::UpdateAssessment(reason) => Ok(reason),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn observe_finalization(
+        &self,
+        guest: &GuestSnapshot,
+        children: &[OwnedChildSnapshot],
+    ) -> Result<GuestFinalizationInput, CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::ObserveFinalization {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                children: children.to_vec(),
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::Finalization(observation) => Ok(observation),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn drain_guest_local(
+        &self,
+        guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::DrainGuestLocal {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn close_guest_session(
+        &self,
+        guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::CloseGuestSession {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn delete_child(
+        &self,
+        guest: &GuestSnapshot,
+        child: FencedChild,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::DeleteChild {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                child,
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn invalidate_guest_session(
+        &self,
+        guest: &GuestSnapshot,
+        minimum_generation: u64,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::InvalidateGuestSession {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                minimum_generation,
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn clear_guest_finalizer(
+        &self,
+        guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::ClearGuestFinalizer {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                guest_revision: guest.revision,
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
 }
 
 /// Typed authenticated Resource API operations required by the Guest
@@ -1199,6 +1473,79 @@ pub trait CloudHypervisorResourceApi: Send + Sync {
         guest: &GuestSnapshot,
         status: GuestStatusProjection,
     ) -> Result<(), CloudHypervisorResourceApiError>;
+
+    /// Observe Process Provider identity candidates without opening a pidfd.
+    ///
+    /// The default reports that no restart adoption decision is required.
+    /// Production adapters must obtain this outcome from the Process Provider,
+    /// never infer identity from a Resource name or status alone.
+    async fn observe_process_adoption(
+        &self,
+        _guest: &GuestSnapshot,
+        _process: &OwnedChildSnapshot,
+    ) -> Result<ProcessAdoptionStatus, CloudHypervisorResourceApiError> {
+        Ok(ProcessAdoptionStatus::Current)
+    }
+
+    /// Assess whether a disruptive D091 upgrade is required.
+    async fn assess_update(
+        &self,
+        _guest: &GuestSnapshot,
+        _children: &[OwnedChildSnapshot],
+    ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
+        Ok(None)
+    }
+
+    /// Observe the exact state needed for finalizer-safe Guest deletion.
+    async fn observe_finalization(
+        &self,
+        _guest: &GuestSnapshot,
+        _children: &[OwnedChildSnapshot],
+    ) -> Result<GuestFinalizationInput, CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Drain target-local Guest Resources through the authenticated session.
+    async fn drain_guest_local(
+        &self,
+        _guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Close the authenticated Guest-control session.
+    async fn close_guest_session(
+        &self,
+        _guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Request deletion of one direct child under its exact UID/revision.
+    async fn delete_child(
+        &self,
+        _guest: &GuestSnapshot,
+        _child: FencedChild,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Invalidate the prior session generation before a replacement session.
+    async fn invalidate_guest_session(
+        &self,
+        _guest: &GuestSnapshot,
+        _minimum_generation: u64,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Clear the Guest controller finalizer after complete drain.
+    async fn clear_guest_finalizer(
+        &self,
+        _guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
 }
 
 /// Result of one direct-child CommitBatch call.
@@ -1271,6 +1618,10 @@ pub struct CloudHypervisorController<A> {
     registration: CloudHypervisorControllerRegistration,
     api: Arc<A>,
     registered: bool,
+    known_child_uids: BTreeMap<(ZoneId, ResourceRef), ResourceUid>,
+    pending_retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
+    retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
+    upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
 }
 
 impl<A> CloudHypervisorController<A>
@@ -1297,6 +1648,10 @@ where
             registration,
             api,
             registered: false,
+            known_child_uids: BTreeMap::new(),
+            pending_retired_child_uids: BTreeSet::new(),
+            retired_child_uids: BTreeSet::new(),
+            upgrade_progress: BTreeMap::new(),
         })
     }
 
@@ -1350,7 +1705,7 @@ where
 
     /// Reconcile one Guest from a fresh snapshot and complete owner relist.
     pub async fn reconcile(
-        &self,
+        &mut self,
         guest_ref: &ResourceRef,
     ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
         if !self.registered {
@@ -1376,19 +1731,73 @@ where
             .relist_owned_children(&guest, &expected_refs)
             .await?;
         let children = self.validate_owner_relist(&guest, &expected_refs, observed)?;
+        self.validate_child_incarnations(&guest, &children)?;
         let dependencies = self.api.observe_dependencies(&guest, &self.graph).await?;
         let (dependency_readiness, dependency_conditions) = dependencies.readiness(&self.graph);
 
         if guest.deleting() {
+            return self
+                .reconcile_deletion(
+                    &guest,
+                    &child_plan,
+                    &children,
+                    dependency_readiness,
+                    dependency_conditions,
+                )
+                .await;
+        }
+
+        let upgrade_required = self
+            .api
+            .assess_update(&guest, &children.values().cloned().collect::<Vec<_>>())
+            .await?
+            .is_some();
+        if upgrade_required {
             let status = self.project_status(
                 &guest,
                 &child_plan,
                 &children,
                 dependency_readiness,
                 dependency_conditions,
+                &[GuestCondition::UpgradeRequired],
+                true,
             );
             self.api.update_status(&guest, status.clone()).await?;
             return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
+        }
+        let mut lifecycle_conditions = Vec::new();
+        let mut force_degraded = false;
+        if let Some(process) = child_plan
+            .child_batch()
+            .child_ref(ChildRole::VmmProcess)
+            .and_then(|target| children.get(target))
+        {
+            let mut adoption_blocked = false;
+            match self.api.observe_process_adoption(&guest, process).await? {
+                ProcessAdoptionStatus::Unavailable | ProcessAdoptionStatus::Quarantined => {
+                    lifecycle_conditions.push(GuestCondition::AdoptionAmbiguous);
+                    force_degraded = true;
+                    adoption_blocked = true;
+                }
+                ProcessAdoptionStatus::Absent => {
+                    lifecycle_conditions.push(GuestCondition::VmmProcessExited);
+                    force_degraded = true;
+                }
+                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {}
+            }
+            if adoption_blocked {
+                let status = self.project_status(
+                    &guest,
+                    &child_plan,
+                    &children,
+                    dependency_readiness,
+                    dependency_conditions,
+                    &lifecycle_conditions,
+                    true,
+                );
+                self.api.update_status(&guest, status.clone()).await?;
+                return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
+            }
         }
 
         let missing = expected_refs
@@ -1417,6 +1826,8 @@ where
                             dependency_readiness,
                             dependency_conditions,
                             true,
+                            lifecycle_conditions,
+                            force_degraded,
                         )
                         .await;
                 }
@@ -1435,6 +1846,8 @@ where
                                     dependency_readiness,
                                     dependency_conditions,
                                     true,
+                                    lifecycle_conditions,
+                                    force_degraded,
                                 )
                                 .await;
                         }
@@ -1450,6 +1863,8 @@ where
                             dependency_readiness,
                             dependency_conditions,
                             true,
+                            lifecycle_conditions,
+                            force_degraded,
                         )
                         .await;
                 }
@@ -1479,6 +1894,8 @@ where
                     &children,
                     dependency_readiness,
                     dependency_conditions,
+                    &lifecycle_conditions,
+                    force_degraded,
                 );
                 self.api.update_status(&guest, status.clone()).await?;
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
@@ -1492,6 +1909,8 @@ where
             &children,
             dependency_readiness,
             dependency_conditions,
+            &lifecycle_conditions,
+            force_degraded,
         );
         self.api.update_status(&guest, status.clone()).await?;
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
@@ -1512,6 +1931,363 @@ where
         Ok(())
     }
 
+    fn validate_child_incarnations(
+        &mut self,
+        guest: &GuestSnapshot,
+        children: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
+    ) -> Result<(), CloudHypervisorError> {
+        let observed = children.keys().cloned().collect::<BTreeSet<_>>();
+        let pending = self
+            .pending_retired_child_uids
+            .iter()
+            .filter(|(zone, target, _)| zone == guest.zone() && !observed.contains(target))
+            .cloned()
+            .collect::<Vec<_>>();
+        for retired in pending {
+            self.promote_retired_child(retired);
+        }
+        for child in children.values() {
+            let key = (guest.zone().clone(), child.resource_ref().clone());
+            if self.retired_child_uids.contains(&(
+                guest.zone().clone(),
+                child.resource_ref().clone(),
+                child.uid().clone(),
+            )) {
+                return Err(CloudHypervisorError::ChildConflict);
+            }
+            if self
+                .known_child_uids
+                .get(&key)
+                .is_some_and(|known| known != child.uid())
+            {
+                return Err(CloudHypervisorError::ChildConflict);
+            }
+            self.known_child_uids.insert(key, child.uid().clone());
+        }
+        Ok(())
+    }
+
+    fn retire_child(&mut self, guest: &GuestSnapshot, child: &FencedChild) {
+        const MAX_PENDING_RETIRED_CHILD_UIDS: usize = 1024;
+        if self.pending_retired_child_uids.len() >= MAX_PENDING_RETIRED_CHILD_UIDS {
+            if let Some(oldest) = self.pending_retired_child_uids.iter().next().cloned() {
+                self.pending_retired_child_uids.remove(&oldest);
+            }
+        }
+        self.pending_retired_child_uids.insert((
+            guest.zone().clone(),
+            child.target().clone(),
+            child.uid().clone(),
+        ));
+    }
+
+    fn promote_retired_child(&mut self, retired: (ZoneId, ResourceRef, ResourceUid)) {
+        self.pending_retired_child_uids.remove(&retired);
+        self.known_child_uids
+            .remove(&(retired.0.clone(), retired.1.clone()));
+        const MAX_RETIRED_CHILD_UIDS: usize = 1024;
+        if self.retired_child_uids.len() >= MAX_RETIRED_CHILD_UIDS {
+            if let Some(oldest) = self.retired_child_uids.iter().next().cloned() {
+                self.retired_child_uids.remove(&oldest);
+            }
+        }
+        self.retired_child_uids.insert(retired);
+    }
+
+    fn promote_pending_for_ref(&mut self, guest: &GuestSnapshot, target: &ResourceRef) {
+        let pending = self
+            .pending_retired_child_uids
+            .iter()
+            .filter(|(zone, child_ref, _)| zone == guest.zone() && child_ref == target)
+            .cloned()
+            .collect::<Vec<_>>();
+        for retired in pending {
+            self.promote_retired_child(retired);
+        }
+    }
+
+    /// Build a D091 plan from the current exact direct-child observations.
+    pub fn plan_upgrade(
+        &self,
+        guest: &GuestSnapshot,
+        children: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
+        reason: UpgradeReason,
+    ) -> Result<GuestUpgradePlan, CloudHypervisorError> {
+        let fenced = children
+            .values()
+            .map(|child| {
+                let role = crate::shutdown::child_role_for_ref(child.resource_ref())
+                    .ok_or(CloudHypervisorError::ChildConflict)?;
+                FencedChild::new(
+                    role,
+                    child.resource_ref().clone(),
+                    child.uid().clone(),
+                    child.revision(),
+                )
+                .map_err(CloudHypervisorError::LifecyclePlan)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        plan_upgrade(
+            guest.resource_ref().clone(),
+            guest.uid().clone(),
+            fenced,
+            guest
+                .session_evidence()
+                .and_then(GuestSessionEvidence::session_generation),
+            reason,
+        )
+        .map_err(CloudHypervisorError::LifecyclePlan)
+    }
+
+    /// Execute a D091 recycle through exact Resource API operations.
+    pub async fn execute_upgrade(
+        &mut self,
+        guest: &GuestSnapshot,
+        child_plan: &GuestChildGraphPlan,
+        upgrade: &GuestUpgradePlan,
+    ) -> Result<(), CloudHypervisorError> {
+        if upgrade.guest_ref() != guest.resource_ref() || upgrade.guest_uid() != guest.uid() {
+            return Err(CloudHypervisorError::ChildConflict);
+        }
+        let (stored_reason, stored_cursor) = self
+            .upgrade_progress
+            .get(guest.uid())
+            .copied()
+            .unwrap_or((upgrade.reason(), 0));
+        let mut cursor = if stored_reason == upgrade.reason() {
+            stored_cursor
+        } else {
+            0
+        };
+        while cursor < upgrade.steps().len() {
+            let step = &upgrade.steps()[cursor];
+            match step {
+                FinalizationStep::DrainGuestLocal => {
+                    self.api.drain_guest_local(guest).await?;
+                    cursor += 1;
+                }
+                FinalizationStep::CloseSession => {
+                    self.api.close_guest_session(guest).await?;
+                    cursor += 1;
+                }
+                FinalizationStep::RecycleVmm { child } => {
+                    let observation = self.observe_upgrade_state(guest, child_plan).await?;
+                    if observation.guest_uid() != guest.uid() {
+                        return Err(CloudHypervisorError::ChildConflict);
+                    }
+                    let fresh_process = observation
+                        .direct_children()
+                        .iter()
+                        .find(|current| current.target() == child.target())
+                        .cloned();
+                    if let Some(fresh) = fresh_process.as_ref()
+                        && fresh.uid() != child.uid()
+                    {
+                        return Err(CloudHypervisorError::ChildConflict);
+                    }
+                    if observation.process().is_stopped_or_absent() {
+                        cursor += 1;
+                        self.upgrade_progress
+                            .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                        return Ok(());
+                    }
+                    let process = fresh_process.ok_or(CloudHypervisorError::ChildConflict)?;
+                    let mutation = child_plan
+                        .child_batch()
+                        .mutations()
+                        .iter()
+                        .find(|mutation| mutation.target() == child.target())
+                        .ok_or(CloudHypervisorError::ChildConflict)?;
+                    let update = ChildSpecUpdate::new(
+                        process.target().clone(),
+                        process.uid().clone(),
+                        process.revision(),
+                        mutation.body().clone(),
+                        Some(DesiredLifecycle::Stopped),
+                    )?;
+                    self.api.update_spec(update).await?;
+                    cursor += 1;
+                    self.upgrade_progress
+                        .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                    return Ok(());
+                }
+                FinalizationStep::DeleteChild(child) => {
+                    let observation = self.observe_upgrade_state(guest, child_plan).await?;
+                    if observation.guest_uid() != guest.uid() {
+                        return Err(CloudHypervisorError::ChildConflict);
+                    }
+                    if !observation.process().is_stopped_or_absent() {
+                        self.upgrade_progress
+                            .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                        return Ok(());
+                    }
+                    let fresh = observation
+                        .direct_children()
+                        .iter()
+                        .find(|current| current.target() == child.target())
+                        .cloned();
+                    let Some(fresh) = fresh else {
+                        self.retire_child(guest, child);
+                        self.promote_pending_for_ref(guest, child.target());
+                        cursor += 1;
+                        self.upgrade_progress
+                            .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                        return Ok(());
+                    };
+                    if fresh.uid() != child.uid() {
+                        return Err(CloudHypervisorError::ChildConflict);
+                    }
+                    if fresh.deletion_requested() || fresh.finalizers_pending() {
+                        self.upgrade_progress
+                            .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                        return Ok(());
+                    }
+                    let pending = self.pending_retired_child_uids.contains(&(
+                        guest.zone().clone(),
+                        child.target().clone(),
+                        child.uid().clone(),
+                    ));
+                    if !pending {
+                        self.api.delete_child(guest, fresh.clone()).await?;
+                        self.retire_child(guest, &fresh);
+                    }
+                    self.upgrade_progress
+                        .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+                    return Ok(());
+                }
+                FinalizationStep::InvalidateSession {
+                    next_generation, ..
+                } => {
+                    self.api
+                        .invalidate_guest_session(guest, *next_generation)
+                        .await?;
+                    cursor += 1;
+                }
+                FinalizationStep::StopVmm { .. }
+                | FinalizationStep::WaitForDescendants
+                | FinalizationStep::ClearGuestFinalizer => {
+                    cursor += 1;
+                }
+            }
+            self.upgrade_progress
+                .insert(guest.uid().clone(), (upgrade.reason(), cursor));
+        }
+        self.upgrade_progress.remove(guest.uid());
+        Ok(())
+    }
+
+    async fn observe_upgrade_state(
+        &self,
+        guest: &GuestSnapshot,
+        child_plan: &GuestChildGraphPlan,
+    ) -> Result<GuestFinalizationInput, CloudHypervisorError> {
+        let expected_refs = child_plan
+            .child_batch()
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone())
+            .collect::<Vec<_>>();
+        let children = self
+            .api
+            .relist_owned_children(guest, &expected_refs)
+            .await?;
+        self.api
+            .observe_finalization(guest, &children)
+            .await
+            .map_err(CloudHypervisorError::ResourceApi)
+    }
+
+    async fn reconcile_deletion(
+        &mut self,
+        guest: &GuestSnapshot,
+        plan: &GuestChildGraphPlan,
+        children: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
+        dependency_readiness: DependencyReadiness,
+        dependency_conditions: Vec<GuestCondition>,
+    ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
+        let observation = self
+            .api
+            .observe_finalization(guest, &children.values().cloned().collect::<Vec<_>>())
+            .await?;
+        let finalization = plan_finalization(observation)?;
+        let blocked = matches!(
+            finalization.disposition(),
+            FinalizationDisposition::Blocked(_)
+        );
+        for step in finalization.steps() {
+            match step {
+                FinalizationStep::DrainGuestLocal => {
+                    self.api.drain_guest_local(guest).await?;
+                }
+                FinalizationStep::CloseSession => {
+                    self.api.close_guest_session(guest).await?;
+                }
+                FinalizationStep::StopVmm { child, .. } => {
+                    let mutation = plan
+                        .child_batch()
+                        .mutations()
+                        .iter()
+                        .find(|mutation| mutation.target() == child.target())
+                        .ok_or(CloudHypervisorError::ChildConflict)?;
+                    let update = ChildSpecUpdate::new(
+                        child.target().clone(),
+                        child.uid().clone(),
+                        child.revision(),
+                        mutation.body().clone(),
+                        Some(DesiredLifecycle::Stopped),
+                    )?;
+                    self.api.update_spec(update).await?;
+                }
+                FinalizationStep::DeleteChild(child) => {
+                    self.api.delete_child(guest, child.clone()).await?;
+                    self.retire_child(guest, child);
+                }
+                FinalizationStep::ClearGuestFinalizer => {
+                    let status = self.project_status(
+                        guest,
+                        plan,
+                        children,
+                        dependency_readiness,
+                        dependency_conditions.clone(),
+                        &[],
+                        false,
+                    );
+                    self.api.update_status(guest, status.clone()).await?;
+                    self.api.clear_guest_finalizer(guest).await?;
+                    let expected = plan
+                        .child_batch()
+                        .mutations()
+                        .iter()
+                        .map(|mutation| mutation.target().clone())
+                        .collect::<BTreeSet<_>>();
+                    self.known_child_uids.retain(|(zone, target), _| {
+                        zone != guest.zone() || !expected.contains(target)
+                    });
+                    return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
+                }
+                FinalizationStep::RecycleVmm { .. }
+                | FinalizationStep::WaitForDescendants
+                | FinalizationStep::InvalidateSession { .. } => {}
+            }
+        }
+        let extra = if blocked {
+            [GuestCondition::FinalizationBlocked].as_slice()
+        } else {
+            &[]
+        };
+        let status = self.project_status(
+            guest,
+            plan,
+            children,
+            dependency_readiness,
+            dependency_conditions,
+            extra,
+            false,
+        );
+        self.api.update_status(guest, status.clone()).await?;
+        Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
+    }
+
     async fn pending_after_batch(
         &self,
         guest: &GuestSnapshot,
@@ -1520,8 +2296,18 @@ where
         dependency_readiness: DependencyReadiness,
         conditions: Vec<GuestCondition>,
         relist_required: bool,
+        extra_conditions: Vec<GuestCondition>,
+        force_degraded: bool,
     ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
-        let status = self.project_status(guest, plan, children, dependency_readiness, conditions);
+        let status = self.project_status(
+            guest,
+            plan,
+            children,
+            dependency_readiness,
+            conditions,
+            &extra_conditions,
+            force_degraded,
+        );
         self.api.update_status(guest, status.clone()).await?;
         Ok(CloudHypervisorReconcileOutcome::from_status(
             status,
@@ -1621,8 +2407,18 @@ where
                     .map_err(|_| CloudHypervisorError::BatchResponseInvalid)?;
             let lifecycle_drift = target.resource_type().as_str() == "Process"
                 && child.desired_lifecycle() != Some(desired_lifecycle);
+            let process_failed = target.resource_type().as_str() == "Process"
+                && matches!(
+                    child.phase(),
+                    ResourcePhase::Degraded | ResourcePhase::Failed | ResourcePhase::Unknown
+                )
+                && desired_lifecycle == DesiredLifecycle::Running;
             let generation_drift = child.generation() != expected_generation;
-            if child.spec_digest() != desired_digest || lifecycle_drift || generation_drift {
+            if child.spec_digest() != desired_digest
+                || lifecycle_drift
+                || process_failed
+                || generation_drift
+            {
                 let update = ChildSpecUpdate::new(
                     target.clone(),
                     child.uid().clone(),
@@ -1643,7 +2439,10 @@ where
         children: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
         dependency_readiness: DependencyReadiness,
         mut conditions: Vec<GuestCondition>,
+        extra_conditions: &[GuestCondition],
+        force_degraded: bool,
     ) -> GuestStatusProjection {
+        conditions.extend_from_slice(extra_conditions);
         for mutation in plan.child_batch().mutations() {
             let target = mutation.target();
             let role = [
@@ -1658,6 +2457,16 @@ where
             match children.get(target) {
                 None => conditions.push(GuestCondition::ChildMissing(role)),
                 Some(child) => {
+                    if role == ChildRole::VmmProcess
+                        && matches!(
+                            child.phase(),
+                            ResourcePhase::Degraded
+                                | ResourcePhase::Failed
+                                | ResourcePhase::Unknown
+                        )
+                    {
+                        conditions.push(GuestCondition::VmmProcessExited);
+                    }
                     if child.phase() != ResourcePhase::Ready
                         || child.generation() != guest.generation()
                     {
@@ -1720,7 +2529,10 @@ where
             process_stopped: process
                 .is_none_or(|child| child.desired_lifecycle() != Some(DesiredLifecycle::Running)),
         };
-        let status = reduce_status(&observation);
+        let mut status = reduce_status(&observation);
+        if force_degraded && !guest.deleting() {
+            status.phase = GuestStatusPhase::Degraded;
+        }
         GuestStatusProjection::new(status, conditions)
     }
 }

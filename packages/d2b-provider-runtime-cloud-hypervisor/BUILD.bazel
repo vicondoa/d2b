@@ -75,6 +75,32 @@ rust_test(
 )
 
 rust_test(
+    name = "adoption_property_test",
+    srcs = [
+        "tests/adoption_property_test.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_runtime_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "finalize_ordering_test",
+    srcs = [
+        "tests/finalize_ordering_test.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_runtime_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "controller",
     srcs = [
         "tests/controller.rs",

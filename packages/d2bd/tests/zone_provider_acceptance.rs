@@ -1241,6 +1241,24 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 Ok(CloudHypervisorResourceResponse::StatusUpdated)
             }
+            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
+                Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                    d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                ))
+            }
+            CloudHypervisorResourceRequest::AssessUpdate { .. } => {
+                Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
+            }
+            CloudHypervisorResourceRequest::ObserveFinalization { .. } => {
+                Err(CloudHypervisorResourceApiError::InvalidResponse)
+            }
+            CloudHypervisorResourceRequest::DrainGuestLocal { .. }
+            | CloudHypervisorResourceRequest::CloseGuestSession { .. }
+            | CloudHypervisorResourceRequest::DeleteChild { .. }
+            | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
         }
     }
 }

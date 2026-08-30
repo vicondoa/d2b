@@ -81,7 +81,7 @@ mocking the layers they exercise:
 | `Volume` | `VolumeLocalController` with a real temporary filesystem | activation, layout readiness, restart reconstruction, cleanup policy |
 | `Network` | `NetworkReconciler` with a filesystem-backed network effect/resource boundary | dependency wait, policy refusal before effects, and ordered finalization |
 | TPM `Device` | `TpmResourceController` with a real state directory and `swtpm`-shaped child process | state-volume creation, process/endpoint readiness, flush, and retained state on removal |
-| Cloud Hypervisor `Guest` | `CloudHypervisorController` with `/proc` identity inspection, a real child process, pidfd, and persisted recovery state | dependency gating, readiness, restart adoption, and finalization |
+| Cloud Hypervisor `Guest` | `CloudHypervisorController` with typed Process Provider adoption outcomes and Resource API lifecycle snapshots | dependency gating, readiness, restart adoption, disruptive recycle, and finalization |
 
 These adapters persist or inspect real state; they are not call-recording
 mocks. Host mutation and hardware/KVM prerequisites remain separate from this

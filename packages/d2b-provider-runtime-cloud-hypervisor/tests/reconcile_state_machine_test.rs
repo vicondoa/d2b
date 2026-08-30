@@ -10,12 +10,13 @@ use d2b_contracts_resource::v3::{
     ZoneRevision,
 };
 use d2b_provider_runtime_cloud_hypervisor::{
-    BootstrapGraph, BootstrapHandoff, ChildSpecUpdate, CloudHypervisorConfig,
+    BootstrapGraph, BootstrapHandoff, ChildRole, ChildSpecUpdate, CloudHypervisorConfig,
     CloudHypervisorController, CloudHypervisorError, CloudHypervisorResourceApi,
     CloudHypervisorResourceApiError, CommittedChild, DescriptorSignature, GuestChildCommitResponse,
-    GuestChildCreateBatch, GuestDependencySnapshot, GuestGenerationSet, GuestSeedContract,
-    GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot, GuestStatusProjection,
-    OwnedChildSnapshot, SignatureAlgorithm,
+    GuestChildCreateBatch, GuestDependencySnapshot, GuestFinalizationInput, GuestGenerationSet,
+    GuestSeedContract, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
+    GuestStatusProjection, OwnedChildSnapshot, ProcessAdoptionStatus, ProcessState, SessionState,
+    SignatureAlgorithm, UpgradeReason,
 };
 
 const ARTIFACT_DIGEST: &str =
@@ -101,6 +102,59 @@ fn guest(name: &str, zone: &str, uid: &str, zone_uid: &str) -> GuestSnapshot {
         ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
         Some("guest-system".to_owned()),
         GuestGenerationSet::all(1),
+        false,
+    )
+    .unwrap()
+}
+
+fn deleting_guest(name: &str, zone: &str, uid: &str, zone_uid: &str) -> GuestSnapshot {
+    let resource_ref = format!("Guest/{name}");
+    GuestSnapshot::new(
+        ZoneId::parse(zone).unwrap(),
+        ResourceUid::parse(zone_uid).unwrap(),
+        ResourceRef::parse(&resource_ref).unwrap(),
+        ResourceUid::parse(uid).unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(7),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(1),
+        true,
+    )
+    .unwrap()
+}
+
+fn finalization_input(
+    guest: &GuestSnapshot,
+    children: &[OwnedChildSnapshot],
+    session: SessionState,
+    guest_local_drained: bool,
+    process: ProcessState,
+) -> GuestFinalizationInput {
+    let fences = children
+        .iter()
+        .map(|child| {
+            let role =
+                d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(child.resource_ref())
+                    .unwrap();
+            d2b_provider_runtime_cloud_hypervisor::FencedChild::new(
+                role,
+                child.resource_ref().clone(),
+                child.uid().clone(),
+                child.revision(),
+            )
+            .unwrap()
+        })
+        .collect();
+    GuestFinalizationInput::new(
+        guest.uid().clone(),
+        session,
+        guest_local_drained,
+        process,
+        fences,
+        false,
+        false,
         false,
     )
     .unwrap()
@@ -203,6 +257,10 @@ struct ApiState {
     updates: Vec<ChildSpecUpdate>,
     update_results: VecDeque<Result<CommittedChild, CloudHypervisorResourceApiError>>,
     statuses: Vec<GuestStatusProjection>,
+    process_observation: Option<ProcessAdoptionStatus>,
+    finalization: Option<GuestFinalizationInput>,
+    upgrade_reason: Option<UpgradeReason>,
+    lifecycle_events: Vec<String>,
     get_calls: usize,
     relist_calls: usize,
 }
@@ -306,6 +364,103 @@ impl CloudHypervisorResourceApi for FakeApi {
         status: GuestStatusProjection,
     ) -> Result<(), CloudHypervisorResourceApiError> {
         self.state.lock().unwrap().statuses.push(status);
+        Ok(())
+    }
+
+    async fn observe_process_adoption(
+        &self,
+        _: &GuestSnapshot,
+        _: &OwnedChildSnapshot,
+    ) -> Result<ProcessAdoptionStatus, CloudHypervisorResourceApiError> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .process_observation
+            .clone()
+            .unwrap_or(ProcessAdoptionStatus::Current))
+    }
+
+    async fn assess_update(
+        &self,
+        _: &GuestSnapshot,
+        _: &[OwnedChildSnapshot],
+    ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
+        Ok(self.state.lock().unwrap().upgrade_reason)
+    }
+
+    async fn observe_finalization(
+        &self,
+        _: &GuestSnapshot,
+        _: &[OwnedChildSnapshot],
+    ) -> Result<GuestFinalizationInput, CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .finalization
+            .clone()
+            .ok_or(CloudHypervisorResourceApiError::InvalidResponse)
+    }
+
+    async fn drain_guest_local(
+        &self,
+        _: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .push("drain-guest-local".to_owned());
+        Ok(())
+    }
+
+    async fn close_guest_session(
+        &self,
+        _: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .push("close-session".to_owned());
+        Ok(())
+    }
+
+    async fn delete_child(
+        &self,
+        _: &GuestSnapshot,
+        child: d2b_provider_runtime_cloud_hypervisor::FencedChild,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .push(format!("delete-{}", child.role().suffix()));
+        Ok(())
+    }
+
+    async fn clear_guest_finalizer(
+        &self,
+        _: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .push("clear-finalizer".to_owned());
+        Ok(())
+    }
+
+    async fn invalidate_guest_session(
+        &self,
+        _: &GuestSnapshot,
+        minimum_generation: u64,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        self.state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .push(format!("invalidate-session-{minimum_generation}"));
         Ok(())
     }
 }
@@ -548,4 +703,520 @@ async fn foreign_child_owner_fails_closed_before_any_mutation() {
     assert!(state.commits.is_empty());
     assert!(state.updates.is_empty());
     assert!(state.statuses.is_empty());
+}
+
+#[tokio::test]
+async fn restart_adopts_only_the_exact_process_identity() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let batch = {
+        let plan = BootstrapGraph::plan_children(
+            guest.zone().clone(),
+            guest.resource_ref().clone(),
+            guest.execution_ref().clone(),
+            &descriptor(),
+        )
+        .unwrap();
+        GuestChildCreateBatch::new(
+            &guest,
+            plan.child_batch(),
+            plan.child_batch()
+                .mutations()
+                .iter()
+                .map(|mutation| mutation.target().clone()),
+        )
+        .unwrap()
+    };
+    {
+        let mut state = api.state.lock().unwrap();
+        state.children = matching_children(&guest, &batch);
+        state.process_observation = Some(ProcessAdoptionStatus::Adopted);
+    }
+    let state = Arc::clone(&api.state);
+    let mut controller = make_controller(api);
+    controller.register().await.unwrap();
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+
+    assert!(
+        !outcome.status().has_condition(
+            d2b_provider_runtime_cloud_hypervisor::GuestCondition::AdoptionAmbiguous
+        )
+    );
+    let state = state.lock().unwrap();
+    assert!(state.commits.is_empty());
+    assert!(state.updates.is_empty());
+}
+
+#[tokio::test]
+async fn stale_or_ambiguous_process_identity_is_degraded_without_stop() {
+    for observation in [
+        ProcessAdoptionStatus::Quarantined,
+        ProcessAdoptionStatus::Unavailable,
+    ] {
+        let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+        let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+        let batch = {
+            let plan = BootstrapGraph::plan_children(
+                guest.zone().clone(),
+                guest.resource_ref().clone(),
+                guest.execution_ref().clone(),
+                &descriptor(),
+            )
+            .unwrap();
+            GuestChildCreateBatch::new(
+                &guest,
+                plan.child_batch(),
+                plan.child_batch()
+                    .mutations()
+                    .iter()
+                    .map(|mutation| mutation.target().clone()),
+            )
+            .unwrap()
+        };
+        let state = Arc::clone(&api.state);
+        {
+            let mut state = state.lock().unwrap();
+            state.children = matching_children(&guest, &batch);
+            state.process_observation = Some(observation);
+        }
+        let mut controller = make_controller(api);
+        controller.register().await.unwrap();
+        let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+        assert!(matches!(
+            outcome,
+            d2b_provider_runtime_cloud_hypervisor::CloudHypervisorReconcileOutcome::Degraded(_)
+        ));
+        assert!(outcome.status().has_condition(
+            d2b_provider_runtime_cloud_hypervisor::GuestCondition::AdoptionAmbiguous
+        ));
+        assert!(state.lock().unwrap().updates.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn vmm_exit_is_bounded_degraded_and_retries_through_process_resource() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let plan = BootstrapGraph::plan_children(
+        guest.zone().clone(),
+        guest.resource_ref().clone(),
+        guest.execution_ref().clone(),
+        &descriptor(),
+    )
+    .unwrap();
+    let batch = GuestChildCreateBatch::new(
+        &guest,
+        plan.child_batch(),
+        plan.child_batch()
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone()),
+    )
+    .unwrap();
+    let mut children = matching_children(&guest, &batch);
+    let process_index = children
+        .iter()
+        .position(|child| child.resource_ref().resource_type().as_str() == "Process")
+        .unwrap();
+    let process_mutation = batch
+        .mutations()
+        .iter()
+        .find(|mutation| mutation.target().resource_type().as_str() == "Process")
+        .unwrap();
+    children[process_index] = OwnedChildSnapshot::new(
+        process_mutation.target().clone(),
+        guest.zone().clone(),
+        guest.resource_ref().clone(),
+        children[process_index].uid().clone(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(2),
+        batch.desired_digest(process_mutation.target()).unwrap(),
+        ResourcePhase::Degraded,
+        Some(DesiredLifecycle::Running),
+        false,
+    )
+    .unwrap()
+    .with_owner_uid(guest.uid().clone());
+    {
+        let mut state = api.state.lock().unwrap();
+        state.children = children;
+        state.process_observation = Some(ProcessAdoptionStatus::Absent);
+    }
+    let state = Arc::clone(&api.state);
+    let mut controller = make_controller(api);
+    controller.register().await.unwrap();
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+
+    assert!(matches!(
+        outcome,
+        d2b_provider_runtime_cloud_hypervisor::CloudHypervisorReconcileOutcome::Degraded(_)
+    ));
+    assert!(
+        outcome
+            .status()
+            .has_condition(d2b_provider_runtime_cloud_hypervisor::GuestCondition::VmmProcessExited)
+    );
+    let state = state.lock().unwrap();
+    assert_eq!(state.updates.len(), 1);
+    assert_eq!(
+        state.updates[0].desired_lifecycle(),
+        Some(DesiredLifecycle::Running)
+    );
+}
+
+#[tokio::test]
+async fn deletion_executes_reverse_order_and_clears_finalizer_only_after_absence() {
+    let guest = deleting_guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let plan = BootstrapGraph::plan_children(
+        guest.zone().clone(),
+        guest.resource_ref().clone(),
+        guest.execution_ref().clone(),
+        &descriptor(),
+    )
+    .unwrap();
+    let batch = GuestChildCreateBatch::new(
+        &guest,
+        plan.child_batch(),
+        plan.child_batch()
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone()),
+    )
+    .unwrap();
+    {
+        let mut state = api.state.lock().unwrap();
+        state.children = matching_children(&guest, &batch);
+        state.finalization = Some(finalization_input(
+            &guest,
+            &state.children,
+            SessionState::Active,
+            false,
+            ProcessState::Running {
+                identity_verified: true,
+            },
+        ));
+    }
+    let state = Arc::clone(&api.state);
+    let mut controller = make_controller(api.clone());
+    controller.register().await.unwrap();
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(state.lifecycle_events, vec!["drain-guest-local"]);
+    }
+
+    {
+        let mut state = state.lock().unwrap();
+        state.finalization = Some(finalization_input(
+            &guest,
+            &state.children,
+            SessionState::Active,
+            true,
+            ProcessState::Running {
+                identity_verified: true,
+            },
+        ));
+    }
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.lifecycle_events,
+            vec!["drain-guest-local", "close-session"]
+        );
+    }
+
+    {
+        let mut state = state.lock().unwrap();
+        state.finalization = Some(finalization_input(
+            &guest,
+            &state.children,
+            SessionState::Closed,
+            true,
+            ProcessState::Running {
+                identity_verified: true,
+            },
+        ));
+    }
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.updates[0].desired_lifecycle(),
+            Some(DesiredLifecycle::Stopped)
+        );
+        assert_eq!(state.lifecycle_events.len(), 2);
+    }
+
+    for expected_role in [
+        ChildRole::ChApiEndpoint,
+        ChildRole::GuestControlEndpoint,
+        ChildRole::VmmProcess,
+        ChildRole::SystemVolume,
+    ] {
+        {
+            let mut state = state.lock().unwrap();
+            state.finalization = Some(finalization_input(
+                &guest,
+                &state.children,
+                SessionState::Closed,
+                true,
+                ProcessState::Stopped,
+            ));
+        }
+        controller.reconcile(guest.resource_ref()).await.unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            let event = format!("delete-{}", expected_role.suffix());
+            assert_eq!(
+                state.lifecycle_events.last().map(String::as_str),
+                Some(event.as_str())
+            );
+            state.children.retain(|child| {
+                d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(child.resource_ref())
+                    != Some(expected_role)
+            });
+        }
+    }
+
+    state.lock().unwrap().finalization = Some(finalization_input(
+        &guest,
+        &[],
+        SessionState::Closed,
+        true,
+        ProcessState::Absent,
+    ));
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .lifecycle_events
+            .last()
+            .map(String::as_str),
+        Some("clear-finalizer")
+    );
+}
+
+#[tokio::test]
+async fn interrupted_upgrade_preserves_volume_and_fences_old_transient_uids() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let plan = BootstrapGraph::plan_children(
+        guest.zone().clone(),
+        guest.resource_ref().clone(),
+        guest.execution_ref().clone(),
+        &descriptor(),
+    )
+    .unwrap();
+    let batch = GuestChildCreateBatch::new(
+        &guest,
+        plan.child_batch(),
+        plan.child_batch()
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone()),
+    )
+    .unwrap();
+    let observed = matching_children(&guest, &batch);
+    let observed_map = observed
+        .iter()
+        .cloned()
+        .map(|child| (child.resource_ref().clone(), child))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let state = Arc::clone(&api.state);
+    state.lock().unwrap().children = observed.clone();
+    let mut controller = make_controller(api.clone());
+    controller.register().await.unwrap();
+    let upgrade = controller
+        .plan_upgrade(
+            &guest,
+            &observed_map,
+            d2b_provider_runtime_cloud_hypervisor::UpgradeReason::ProviderGenerationChanged,
+        )
+        .unwrap();
+    let durable_uid = upgrade.durable_volumes()[0].uid().clone();
+    assert_eq!(upgrade.next_session_generation(), 1);
+    {
+        let mut state = state.lock().unwrap();
+        state.finalization = Some(finalization_input(
+            &guest,
+            &state.children,
+            SessionState::Closed,
+            true,
+            ProcessState::Running {
+                identity_verified: true,
+            },
+        ));
+    }
+    controller
+        .execute_upgrade(&guest, &plan, &upgrade)
+        .await
+        .unwrap();
+
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(upgrade.durable_volumes()[0].uid(), &durable_uid);
+        assert!(
+            state
+                .lifecycle_events
+                .contains(&"invalidate-session-1".to_owned())
+        );
+        assert!(
+            !state
+                .lifecycle_events
+                .iter()
+                .any(|event| event == "delete-system")
+        );
+        assert_eq!(
+            state
+                .updates
+                .last()
+                .and_then(ChildSpecUpdate::desired_lifecycle),
+            Some(DesiredLifecycle::Stopped)
+        );
+    }
+
+    {
+        let mut state = state.lock().unwrap();
+        state.finalization = Some(finalization_input(
+            &guest,
+            &state.children,
+            SessionState::Closed,
+            true,
+            ProcessState::Stopped,
+        ));
+    }
+    for expected_role in [
+        ChildRole::ChApiEndpoint,
+        ChildRole::GuestControlEndpoint,
+        ChildRole::VmmProcess,
+    ] {
+        {
+            let mut state = state.lock().unwrap();
+            state.finalization = Some(finalization_input(
+                &guest,
+                &state.children,
+                SessionState::Closed,
+                true,
+                ProcessState::Stopped,
+            ));
+        }
+        controller
+            .execute_upgrade(&guest, &plan, &upgrade)
+            .await
+            .unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            let event = format!("delete-{}", expected_role.suffix());
+            assert_eq!(
+                state.lifecycle_events.last().map(String::as_str),
+                Some(event.as_str())
+            );
+            state.children.retain(|child| {
+                d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(child.resource_ref())
+                    != Some(expected_role)
+            });
+            state.finalization = Some(finalization_input(
+                &guest,
+                &state.children,
+                SessionState::Closed,
+                true,
+                ProcessState::Stopped,
+            ));
+        }
+        controller
+            .execute_upgrade(&guest, &plan, &upgrade)
+            .await
+            .unwrap();
+    }
+    state.lock().unwrap().finalization = Some(finalization_input(
+        &guest,
+        &[],
+        SessionState::Closed,
+        true,
+        ProcessState::Absent,
+    ));
+    controller
+        .execute_upgrade(&guest, &plan, &upgrade)
+        .await
+        .unwrap();
+
+    state.lock().unwrap().children = observed.clone();
+    let old_result = controller.reconcile(guest.resource_ref()).await;
+    assert_eq!(old_result, Err(CloudHypervisorError::ChildConflict));
+
+    let replacement_children = observed
+        .into_iter()
+        .enumerate()
+        .map(|(index, child)| {
+            let child_uid =
+                if d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(child.resource_ref())
+                    == Some(ChildRole::SystemVolume)
+                {
+                    child.uid().clone()
+                } else {
+                    ResourceUid::parse(format!("423e4567-e89b-42d3-a456-42661417{index:04}"))
+                        .unwrap()
+                };
+            OwnedChildSnapshot::new(
+                child.resource_ref().clone(),
+                child.zone().clone(),
+                child.owner_ref().clone(),
+                child_uid,
+                child.generation(),
+                child.revision(),
+                child.spec_digest().to_owned(),
+                ResourcePhase::Ready,
+                child.desired_lifecycle(),
+                true,
+            )
+            .unwrap()
+            .with_owner_uid(guest.uid().clone())
+        })
+        .collect::<Vec<_>>();
+    state.lock().unwrap().children = replacement_children;
+    assert!(controller.reconcile(guest.resource_ref()).await.is_ok());
+}
+
+#[tokio::test]
+async fn disruptive_update_reports_upgrade_required_without_in_place_repair() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let plan = BootstrapGraph::plan_children(
+        guest.zone().clone(),
+        guest.resource_ref().clone(),
+        guest.execution_ref().clone(),
+        &descriptor(),
+    )
+    .unwrap();
+    let batch = GuestChildCreateBatch::new(
+        &guest,
+        plan.child_batch(),
+        plan.child_batch()
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone()),
+    )
+    .unwrap();
+    let state = Arc::clone(&api.state);
+    {
+        let mut state = state.lock().unwrap();
+        state.children = matching_children(&guest, &batch);
+        state.upgrade_reason = Some(UpgradeReason::ImageOrSystemGenerationChanged);
+    }
+    let mut controller = make_controller(api);
+    controller.register().await.unwrap();
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(matches!(
+        outcome,
+        d2b_provider_runtime_cloud_hypervisor::CloudHypervisorReconcileOutcome::Degraded(_)
+    ));
+    assert!(
+        outcome
+            .status()
+            .has_condition(d2b_provider_runtime_cloud_hypervisor::GuestCondition::UpgradeRequired)
+    );
+    assert!(state.lock().unwrap().updates.is_empty());
 }

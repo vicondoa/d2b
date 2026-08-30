@@ -5,8 +5,8 @@ Canonical implementation of `Provider/runtime-cloud-hypervisor`.
 ## Provider identity
 
 The implementation identifier is `cloud-hypervisor`. It reconciles local
-`Guest` resources and owns the VMM Process lifecycle through a typed effect
-port.
+`Guest` resources and requests VMM Process lifecycle through the authenticated
+Resource API.
 
 ## Config schema
 
@@ -22,9 +22,9 @@ Core. Device, Network, and Volume resources remain owned by their Providers.
 ## Controllers / services / workers / binaries
 
 `CloudHypervisorController` gates launch on Device, Network, and Volume
-readiness, adopts exact process identity, probes the authenticated
-ComponentSession, and finalizes the target-local session before the VMM
-process.
+readiness, consumes exact Process Provider adoption outcomes, probes the
+authenticated ComponentSession, performs D091 realization recycling, and
+finalizes the Guest in reverse dependency order.
 
 ## Placement and dependencies
 
@@ -33,9 +33,10 @@ daemon-supervised. No per-VM systemd unit or direct broker socket is used.
 
 ## RBAC requirements
 
-Only opaque attachment refs and typed launch effects cross the Provider
-boundary. Pidfds are opened after PID, start-time, cgroup, executable,
-template, and generation evidence is verified.
+Only opaque attachment refs, bounded adoption outcomes, and typed Resource API
+requests cross the Provider boundary. The Process Provider verifies PID,
+start-time, cgroup, executable, template, and generation evidence locally
+before opening a pidfd.
 
 ## Security posture
 

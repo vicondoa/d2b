@@ -644,17 +644,20 @@ After a Guest `spec` durable commit:
 The controller restart trigger is `startup-relist`:
 
 1. The controller lists all `runtime-cloud-hypervisor` Guests in the Zone.
-2. For each Guest in `Ready` phase, it attempts to adopt its VMM Process by
-   verifying the existing pidfd (pid/start-time/cgroup/executable/template/
-   generation) within `adoptionWindow`.
-3. If adoption succeeds: the controller reconciles current state without
-   disrupting the running VMM.
-4. If adoption fails (process gone, ambiguous identity): the VMM Process
-   transitions to `Unknown`; the Guest transitions to `Degraded`; the
-   controller requests a restart through a new `desiredLifecycle: running`
-   expected-revision write.
-5. Ambiguous identity sets condition `AdoptionAmbiguous=True` and never issues
-   a broad kill.
+2. For each Guest in `Ready` phase, it reads the Process status and asks the
+   Process Provider for a fresh candidate observation. It opens a new pidfd
+   only after the complete identity tuple (PID, start time, cgroup,
+   executable, template, and generation) exactly matches the durable
+   expectation.
+3. If one candidate matches exactly, the controller adopts it and reconciles
+   current state without disrupting the running VMM.
+4. If the Process is absent, the Process remains the Resource lifecycle
+   authority: the Guest is reported `Degraded` with bounded
+   `vmm-process-exited` evidence and a generation-fenced `desiredLifecycle:
+   running` retry may be requested.
+5. A stale, mismatched, unavailable, or ambiguous candidate is quarantined.
+   The Guest is `Degraded` with `AdoptionAmbiguous=True`; the controller
+   issues no kill, name-only stop, replacement adoption, or broad cleanup.
 
 ### 9.5 Observe interval
 
@@ -1314,13 +1317,21 @@ Algorithm on `deletion-requested`:
 
 1. Set Guest status atomically: `status.provider.details.providerPhase: draining`,
    condition `GuestDraining=True`.
-2. Set `desiredLifecycle: stopped` on the VMM Process via expected-revision
-   `update-spec`.
-3. Wait for the owned VMM Process to be deleted (owner-child cascade with its
-   own finalizer).
-4. Verify VMM process exit through the local pidfd.
-5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer.
-6. Return `finalized`.
+2. Reject new admissions and drain already-owned Guest-local Resources over
+   the authenticated session.
+3. Close the session, then set `desiredLifecycle: stopped` on the VMM Process
+   using its exact UID and revision fence. The Process Provider verifies the
+   complete process identity before any stop effect.
+4. Delete direct Endpoints, the VMM Process, and setup Volumes in dependent-
+   first order. Wait for every transitive Export, worker Process, and Endpoint
+   descendant to disappear before proceeding.
+5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer only
+   after the session is closed, the VMM is stopped or absent, every owned
+   descendant is absent, and no host-backed Guest Volume remains.
+6. If the session is dead, the controller treats Guest-local descendants as
+   absent only after the stopped/absent VMM and no-host-backed-Volume proof.
+   Otherwise it retains the finalizer and reports bounded
+   `FinalizationBlocked`/`finalization-blocked` status; it never force-clears.
 
 If any child finalizer is blocked beyond `finalize` deadline (300 s), the
 finalizer returns `blocked` with condition `FinalizationBlocked` and a bounded
@@ -1478,7 +1489,10 @@ rather than applying in place. Non-disruptive spec changes reconcile normally.
 `execute_upgrade` recycles the VMM/runner `Process` and endpoints while
 preserving the Guest UID/spec identity, durable/data Volumes, and TPM identity
 supplied by `Provider/device-tpm`; the dependency-aware planner restarts the
-Guest after the recycle.
+Guest after the recycle. The prior session generation and transient child UIDs
+are invalidated before replacement admission; an interrupted recycle resumes
+from status and exact Resource UID/revision observations rather than adopting
+the pre-recycle Process or Endpoint.
 
 D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
 external effect, finalizer change, or status mutation until Core supplies

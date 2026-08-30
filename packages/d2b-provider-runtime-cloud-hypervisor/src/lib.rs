@@ -16,9 +16,14 @@ pub mod guest_local;
 pub mod health;
 pub mod identity;
 pub mod metrics;
+pub mod shutdown;
 pub mod state;
 pub mod vmm_argv;
 
+pub use adoption::{
+    AdoptionObservationError, AdoptionOutcome, ProcessAdoptionStatus, ProcessIdentity,
+    ProcessObservation,
+};
 pub use bootstrap_graph::{
     BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmLifecycleEligibility,
 };
@@ -52,13 +57,17 @@ pub use identity::{
     GuestChildBatch, ProcessCreateBody, VolumeCreateBody, deterministic_child_name,
     deterministic_child_ref, map_commit_response, map_wire_commit_response,
 };
+pub use shutdown::{
+    FencedChild, FinalizationBlockReason, FinalizationDisposition, FinalizationStep,
+    GuestFinalizationInput, GuestFinalizationPlan, GuestUpgradePlan, LifecyclePlanError,
+    ProcessState, SessionState, UpgradeReason, child_role_for_ref, plan_finalization, plan_upgrade,
+    session_generation_is_fresh,
+};
 pub use state::{
     GuestGenerationSet, GuestRuntimeStatus, GuestStatusObservation, GuestStatusPhase,
     finalization_eligible, reduce_status,
 };
-pub use vmm_argv::{
-    ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
-};
+pub use vmm_argv::{ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv};
 
 /// Stable Provider implementation identifier.
 pub const CLOUD_HYPERVISOR_IMPLEMENTATION_ID: &str = "cloud-hypervisor";
