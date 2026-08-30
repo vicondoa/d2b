@@ -49,6 +49,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core",
@@ -214,7 +215,6 @@ rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core",
-        "//packages/d2b-contracts:d2b_contracts",
         "@crates//:bolero",
         "@crates//:serde_json",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -252,6 +252,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_core",
