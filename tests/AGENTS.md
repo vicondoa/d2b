@@ -205,6 +205,12 @@ remain under `tests/tools/` or `tests/unit/` when it is the subject of a
 native Bazel test, a fixture materializer, a generator, or a Layer-2 lane; it
 must not schedule sibling Layer-1 work.
 
+For U20 final acceptance, both public integration targets,
+`make test-integration` and `make test-host-integration`, are mandatory and
+may be scheduled alongside the `/etc/nixos` real-host switch, d2b startup, and
+Cloud Hypervisor Guest boot. U19 only keeps their declarations and current
+inputs converged and does not run host acceptance.
+
 ### Standalone Rust workspaces
 
 Product crates use the repository-root `Cargo.toml` and `Cargo.lock` as

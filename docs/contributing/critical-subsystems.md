@@ -144,4 +144,7 @@ make check
 
 Host and VM acceptance are separate higher tiers owned by U20. U20's scope is
 the `/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot; an
-advisory skip is not evidence for those checks.
+advisory skip is not evidence for those checks. U20 must also run both
+`make test-host-integration` and `make test-integration`, which may be
+scheduled alongside real-host testing. U19 only converges their declarations
+and current inputs.

@@ -37,8 +37,11 @@ make check
 ```
 
 These gates do not substitute for U20's real-host switch, daemon startup, or
-Cloud Hypervisor boot. An unavailable host prerequisite blocks that acceptance
-lane rather than becoming a pass.
+Cloud Hypervisor boot. U20 must also run both public integration lanes:
+`make test-host-integration` and `make test-integration`. They may run
+alongside the real-host testing, but neither lane is U19 evidence. An
+unavailable host prerequisite blocks that acceptance lane rather than becoming
+a pass.
 
 See [the compatibility policy](./compatibility.md),
 [the daemon lifecycle](../explanation/daemon-lifecycle.md), and

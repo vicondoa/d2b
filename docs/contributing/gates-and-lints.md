@@ -148,6 +148,12 @@ only. Post-dispatch, analysis, policy, build, and test failures fail closed.
 The committed fixed workflow exposes one stable required `check` result. A
 guarded performance skip is advisory and is not validation evidence.
 
+For the final U20 acceptance lane, both public integration targets,
+`make test-host-integration` and `make test-integration`, are mandatory and
+may run alongside the `/etc/nixos` real-host switch/startup/Cloud Hypervisor
+Guest boot sequence. U19 leaves their declarations and current inputs
+converged but does not run host acceptance.
+
 The fixture-contract lane remains enforcing and local-only. It materializes
 `D2B_FIXTURES` through the existing Bazel fixture target and fails when
 `D2B_ENABLE_FIXTURE_BUILD=1` is absent. Nix actions remain local and remote
