@@ -60,8 +60,6 @@ impl TestBroker {
         let run_dir = scratch.path().join("run/d2b");
         let audit_dir = scratch.path().join("var/lib/d2b/audit");
         let state_dir = scratch.path().join("var/lib/d2b/state");
-        let realm_controllers_path = scratch.path().join("realm-controllers.json");
-        let realm_identity_path = scratch.path().join("realm-identity.json");
         fs::create_dir_all(&run_dir).expect("create broker run dir");
         fs::create_dir_all(&audit_dir).expect("create broker audit dir");
         fs::create_dir_all(&state_dir).expect("create broker state dir");
@@ -83,10 +81,6 @@ impl TestBroker {
             .arg(&audit_dir)
             .arg("--bundle-path")
             .arg(&bundle_path)
-            .arg("--realm-controllers-path")
-            .arg(&realm_controllers_path)
-            .arg("--realm-identity-path")
-            .arg(&realm_identity_path)
             .arg("--d2bd-uid")
             .arg(d2bd_uid.to_string())
             .arg("--d2bd-gid")

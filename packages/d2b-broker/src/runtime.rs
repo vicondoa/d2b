@@ -86,10 +86,6 @@ const DEFAULT_GUEST_AUDIT_DIR: &str = "/var/lib/d2b/guest-audit";
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_GUEST_BUNDLE_PATH: &str = "/etc/d2b/guest-bundle.json";
-const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
-const DEFAULT_GUEST_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/guest-realm-controllers.json";
-const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
-const DEFAULT_GUEST_REALM_IDENTITY_PATH: &str = "/etc/d2b/guest-realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
 const DEFAULT_GUEST_STATE_DIR: &str = "/var/lib/d2b/guest-broker";
 const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
@@ -122,12 +118,6 @@ pub struct ServerConfig {
     /// `/var/lib/d2b/current-bundle/manifest.json`; the NixOS module's
     /// `d2b.site.bundle.currentManifest` option overrides.
     pub bundle_path: PathBuf,
-    /// Legacy metadata path retained until U11 removes the retired argument
-    /// surface. The broker does not load this path.
-    pub realm_controllers_path: PathBuf,
-    /// Legacy metadata path retained until U11 removes the retired argument
-    /// surface. The broker does not load this path.
-    pub realm_identity_path: PathBuf,
     pub state_dir: PathBuf,
     /// Trusted target-local activation helper. The daemon never supplies
     /// this path on the wire.
@@ -411,14 +401,6 @@ where
         BrokerProfile::Host => DEFAULT_BUNDLE_PATH,
         BrokerProfile::Guest => DEFAULT_GUEST_BUNDLE_PATH,
     });
-    let mut realm_controllers_path = PathBuf::from(match profile {
-        BrokerProfile::Host => DEFAULT_REALM_CONTROLLERS_PATH,
-        BrokerProfile::Guest => DEFAULT_GUEST_REALM_CONTROLLERS_PATH,
-    });
-    let mut realm_identity_path = PathBuf::from(match profile {
-        BrokerProfile::Host => DEFAULT_REALM_IDENTITY_PATH,
-        BrokerProfile::Guest => DEFAULT_GUEST_REALM_IDENTITY_PATH,
-    });
     let mut state_dir = PathBuf::from(match profile {
         BrokerProfile::Host => DEFAULT_STATE_DIR,
         BrokerProfile::Guest => DEFAULT_GUEST_STATE_DIR,
@@ -464,16 +446,6 @@ where
                 // names a bundle path on the wire.
                 index += 1;
                 bundle_path = PathBuf::from(expect_arg(&rest, index, "--bundle-path")?);
-            }
-            "--realm-controllers-path" => {
-                index += 1;
-                realm_controllers_path =
-                    PathBuf::from(expect_arg(&rest, index, "--realm-controllers-path")?);
-            }
-            "--realm-identity-path" => {
-                index += 1;
-                realm_identity_path =
-                    PathBuf::from(expect_arg(&rest, index, "--realm-identity-path")?);
             }
             "--state-dir" => {
                 index += 1;
@@ -569,8 +541,6 @@ where
         audit_dir,
         audit_retention_days,
         bundle_path,
-        realm_controllers_path,
-        realm_identity_path,
         state_dir,
         activation_helper_path,
         d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
@@ -13959,59 +13929,24 @@ mod tests {
     }
 
     #[test]
-    // BrokerMode has additional variants only under layer1-bootstrap, so this
-    // match is refutable in that configuration and irrefutable without it.
-    // Rewriting it as a `let` would stop compiling with the feature enabled.
-    #[allow(clippy::infallible_destructuring_match)]
-    fn parse_command_accepts_realm_controllers_path_without_changing_socket_defaults() {
-        let mode = parse_command([
-            "host".to_owned(),
-            "--realm-controllers-path".to_owned(),
-            "/etc/d2b/custom-realm-controllers.json".to_owned(),
-            "--realm-identity-path".to_owned(),
-            "/etc/d2b/custom-realm-identity.json".to_owned(),
-            "--test-mode".to_owned(),
-        ])
-        .expect("host command parses");
+    fn parse_command_rejects_removed_realm_metadata_flags() {
+        for flag in ["--realm-controllers-path", "--realm-identity-path"] {
+            let error = parse_command([
+                "host".to_owned(),
+                flag.to_owned(),
+                "/etc/d2b/retired-realm-metadata.json".to_owned(),
+                "--test-mode".to_owned(),
+            ])
+            .expect_err("retired realm metadata flags must be rejected");
 
-        let config = match mode {
-            BrokerMode::Host(config) | BrokerMode::Guest(config) => config,
-            #[cfg(feature = "layer1-bootstrap")]
-            other => panic!("expected serve mode, got {other:?}"),
-        };
-        assert_eq!(
-            config.realm_controllers_path,
-            PathBuf::from("/etc/d2b/custom-realm-controllers.json")
-        );
-        assert_eq!(
-            config.realm_identity_path,
-            PathBuf::from("/etc/d2b/custom-realm-identity.json")
-        );
-        assert_eq!(config.socket_path, PathBuf::from(DEFAULT_SOCKET_PATH));
-    }
-
-    #[test]
-    // BrokerMode has additional variants only under layer1-bootstrap, so this
-    // match is refutable in that configuration and irrefutable without it.
-    // Rewriting it as a `let` would stop compiling with the feature enabled.
-    #[allow(clippy::infallible_destructuring_match)]
-    fn parse_command_defaults_realm_metadata_paths() {
-        let mode = parse_command(["host".to_owned(), "--test-mode".to_owned()])
-            .expect("host command parses with defaults");
-
-        let config = match mode {
-            BrokerMode::Host(config) | BrokerMode::Guest(config) => config,
-            #[cfg(feature = "layer1-bootstrap")]
-            other => panic!("expected serve mode, got {other:?}"),
-        };
-        assert_eq!(
-            config.realm_controllers_path,
-            PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH)
-        );
-        assert_eq!(
-            config.realm_identity_path,
-            PathBuf::from(DEFAULT_REALM_IDENTITY_PATH)
-        );
+            assert!(
+                matches!(
+                    error,
+                    RunError::Usage(ref message) if message == &format!("unknown host flag: {flag}")
+                ),
+                "unexpected parser error for {flag}: {error:?}"
+            );
+        }
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -14551,8 +14486,6 @@ mod tests {
             audit_dir: root.join("audit"),
             audit_retention_days: 14,
             bundle_path: manifest_path.to_path_buf(),
-            realm_controllers_path: root.join("realm-controllers.json"),
-            realm_identity_path: root.join("realm-identity.json"),
             state_dir: root.join("state"),
             activation_helper_path: root.join("activation-helper"),
             d2bd_uid: 1000,
