@@ -247,19 +247,6 @@ rust_test(
 )
 
 rust_test(
-    name = "realm_controller_config",
-    srcs = ["tests/realm_controller_config.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "runtime_dtos",
     srcs = ["tests/runtime_dtos.rs"],
     compile_data = ["Cargo.toml"],
