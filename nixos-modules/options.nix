@@ -6,7 +6,7 @@
 # option modules below. Removed pre-Zone option paths are intentionally not
 # declared here, so NixOS reports them through its ordinary unknown-option
 # behavior.
-{ lib, ... }:
+{ ... }:
 
 {
   imports = [

@@ -660,27 +660,12 @@
         description = "Minimal d2b host scaffold - one Zone";
       };
 
-      # Eval-only gates for the in-tree examples + template. The
+      # Eval-only gates for the current Zone module and fixture. The
       # `system.build.toplevel.drvPath` access is enough to force a
       # full module-system instantiation (option types, assertions,
       # CIDR validators, etc.) without actually realising the closure
       # - which is what we want from a `nix flake check` gate.
       #
-      # `with-entra-id` is intentionally absent: it imports
-      # `entrablau.nixosModules.default` from a separate sibling
-      # flake, and the root flake doesn't (and shouldn't) pull that
-      # in as an input. The example's own `flake.nix` still gates
-      # eval via `nix flake check` in its own directory; the
-      # The fixed flake evaluation lane exercises it.
-      #
-      # The template's `configuration.nix` carries sentinel
-      # assertions that fail eval until the operator replaces
-      # placeholder values (TODOs 2/3). To eval-check the template
-      # without disturbing those assertions for real users, we layer
-      # a third module on top that uses `lib.mkForce` to replace
-      # just the sentinel-gated fields with valid stand-ins. Sentinel
-      # detection logic stays in the template; the override is
-      # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         bazel920 = bazel920For system;

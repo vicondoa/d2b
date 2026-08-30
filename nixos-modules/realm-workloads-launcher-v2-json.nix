@@ -4,7 +4,7 @@
 # Rust consumer migrates to the Zone resource catalog. Workload lifecycle and
 # launcher ownership no longer come from a Nix realm/VM hierarchy, so the
 # transitional document contains no controller-authored workload rows.
-{ config, ... }:
+{ ... }:
 
 {
   config.d2b._bundle.realmWorkloadsLauncherV2Json = {

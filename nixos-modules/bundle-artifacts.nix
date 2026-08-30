@@ -115,27 +115,6 @@ let
     };
   });
 
-  nestedArtifactModule = types.submodule {
-    freeformType = types.attrsOf types.unspecified;
-
-    options = {
-      classification = lib.mkOption {
-        type = types.enum [ "contractPublic" "contractPrivateNonSecret" ];
-        default = "contractPrivateNonSecret";
-        internal = true;
-        visible = false;
-        description = "Internal non-secret nested bundle artifact classification.";
-      };
-
-      sensitivity = lib.mkOption {
-        type = types.enum [ "nonSecret" ];
-        default = "nonSecret";
-        internal = true;
-        visible = false;
-        description = "Internal sensitivity marker for nested store-materialised bundle artifacts.";
-      };
-    };
-  };
 
   privateGroup =
     if topConfig.d2b.daemonExperimental.enable
