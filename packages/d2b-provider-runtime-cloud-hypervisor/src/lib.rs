@@ -12,6 +12,7 @@ pub mod config;
 pub mod controller;
 mod controller_session;
 pub mod descriptor;
+pub mod guest_local;
 pub mod health;
 pub mod identity;
 pub mod metrics;
@@ -34,6 +35,13 @@ pub use descriptor::{
     BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
     GuestSetupDescriptorError, GuestSetupDescriptorVerifier, OpaqueDescriptorSignature,
     SignatureAlgorithm, VerifiedGuestSetupDescriptor,
+};
+pub use guest_local::{
+    GUEST_SEED_RESOURCE_TYPES, GuestControlEndpoint, GuestControlEndpointResolver,
+    GuestControlSessionConnector, GuestLocalController, GuestLocalError,
+    GuestLocalReconcileOutcome, GuestLocalResourceStatus, GuestLocalSeedBatch,
+    GuestLocalSeedResource, GuestLocalSeedResourceError, GuestLocalSeedResult, GuestLocalSession,
+    GuestLocalSessionBinding, GuestLocalSessionExpectation, GuestLocalStatus, GuestLocalWatch,
 };
 pub use health::{
     GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceProbe, GuestSessionHealth,

@@ -11,6 +11,24 @@ use d2b_session::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener, VsockStream};
 
+/// The transport descriptor required by an enrolled Guest-control session.
+pub const fn guest_control_transport_descriptor() -> TransportDescriptor {
+    TransportDescriptor {
+        class: TransportClass::NativeVsock,
+        locality: Locality::GuestLocal,
+        packet_atomic: false,
+        supports_attachments: false,
+    }
+}
+
+/// Check the transport evidence before a Guest-control session is admitted.
+pub fn is_guest_control_transport(descriptor: TransportDescriptor) -> bool {
+    descriptor.class == TransportClass::NativeVsock
+        && descriptor.locality == Locality::GuestLocal
+        && !descriptor.packet_atomic
+        && !descriptor.supports_attachments
+}
+
 pub struct FramedVsockTransport<S> {
     stream: S,
     descriptor: TransportDescriptor,
@@ -23,15 +41,7 @@ pub struct FramedVsockTransport<S> {
 
 impl<S> FramedVsockTransport<S> {
     pub fn new(stream: S) -> Self {
-        Self::with_descriptor(
-            stream,
-            TransportDescriptor {
-                class: TransportClass::NativeVsock,
-                locality: Locality::GuestLocal,
-                packet_atomic: false,
-                supports_attachments: false,
-            },
-        )
+        Self::with_descriptor(stream, guest_control_transport_descriptor())
     }
 
     /// Construct a framed stream with an explicitly bound transport

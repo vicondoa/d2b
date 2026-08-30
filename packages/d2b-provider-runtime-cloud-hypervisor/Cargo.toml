@@ -16,7 +16,7 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 async-trait = "0.1"
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
-d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", default-features = false, features = ["host-socket"] }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", default-features = false, features = ["host-socket", "native-vsock"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

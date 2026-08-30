@@ -152,6 +152,9 @@ pub use systemd::{
     ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
 };
 #[cfg(feature = "native-vsock")]
-pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
+pub use vsock::{
+    FramedVsockTransport, NativeVsockListener, NativeVsockTransport,
+    guest_control_transport_descriptor, is_guest_control_transport,
+};
 #[cfg(feature = "host-socket")]
 pub use zone_admission::{BootstrapProvider, ZoneAdmissionError, ZoneBootstrapIdentity};

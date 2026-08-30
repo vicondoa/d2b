@@ -350,6 +350,12 @@ impl SessionAuthorizationRequest {
         &self.operation
     }
 
+    /// Return whether this request is the bounded target-local Guest seed
+    /// operation.
+    pub fn is_guest_resource_commit_batch(&self) -> bool {
+        self.verb == SessionVerb::Invoke && self.operation.is_guest_resource_commit_batch()
+    }
+
     /// Borrow the immutable target Zone.
     pub fn target_zone(&self) -> &ZoneId {
         &self.target_zone

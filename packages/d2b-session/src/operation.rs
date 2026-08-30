@@ -289,6 +289,14 @@ impl SessionOperation {
         &self.member
     }
 
+    /// Return whether this is the only Resource API operation admitted for
+    /// target-local Guest seeding.
+    pub fn is_guest_resource_commit_batch(&self) -> bool {
+        self.service.as_str() == "d2b.resource.v3"
+            && self.member.is_method()
+            && self.member.as_str() == "ResourceService/CommitBatch"
+    }
+
     /// Resolve diagnostic operations to their closed native verb.
     pub fn required_verb(&self, ordinary: SessionVerb) -> SessionVerb {
         self.diagnostic_verb().unwrap_or(ordinary)
@@ -356,5 +364,16 @@ mod tests {
             SessionOperation::stream(service("d2b.support.v3"), "SupportService/GenerateBundle")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn guest_seed_operation_is_exactly_commit_batch() {
+        let commit =
+            SessionOperation::method(service("d2b.resource.v3"), "ResourceService/CommitBatch")
+                .unwrap();
+        assert!(commit.is_guest_resource_commit_batch());
+        let get = SessionOperation::method(service("d2b.resource.v3"), "ResourceService/Get")
+            .unwrap();
+        assert!(!get.is_guest_resource_commit_batch());
     }
 }

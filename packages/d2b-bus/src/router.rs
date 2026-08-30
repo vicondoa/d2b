@@ -384,6 +384,30 @@ pub enum ResourceCall {
 }
 
 impl ResourceCall {
+    /// Validate the closed Resource call admitted for Guest-local seeding.
+    ///
+    /// Guest bootstrap may submit one plain `CommitBatch` containing only
+    /// descriptor-approved Create targets. Scoped controller batches and all
+    /// other Resource verbs are refused before dispatch.
+    pub fn validate_guest_local_seed(
+        &self,
+        approved_resource_types: &BTreeSet<ResourceTypeName>,
+    ) -> Result<(), BusError> {
+        let ResourceCall::CommitBatch(mutations) = self else {
+            return Err(BusError::InvalidResourceCall);
+        };
+        if mutations.is_empty()
+            || mutations.len() > 128
+            || mutations.iter().any(|(target, verb)| {
+                *verb != ResourceVerb::Create
+                    || !approved_resource_types.contains(target.resource_type())
+            })
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        Ok(())
+    }
+
     pub(crate) fn authorization_request(
         &self,
         zone: ZoneId,
@@ -7364,5 +7388,27 @@ use d2b_contracts_resource::v3::identity::{
         assert_eq!(clock.now_tick(), 7);
         clock.advance_to(9);
         assert_eq!(clock.now_tick(), 9);
+    }
+
+    #[test]
+    fn guest_local_seed_call_allows_only_approved_creates() {
+        let approved =
+            BTreeSet::from([ResourceTypeName::parse("Process").expect("Process type")]);
+        let valid = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Process/agent").expect("Process ref"),
+            ResourceVerb::Create,
+        )]);
+        assert!(valid.validate_guest_local_seed(&approved).is_ok());
+
+        let update = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Process/agent").expect("Process ref"),
+            ResourceVerb::UpdateSpec,
+        )]);
+        assert!(update.validate_guest_local_seed(&approved).is_err());
+        let foreign = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Zone/work").expect("Zone ref"),
+            ResourceVerb::Create,
+        )]);
+        assert!(foreign.validate_guest_local_seed(&approved).is_err());
     }
 }
