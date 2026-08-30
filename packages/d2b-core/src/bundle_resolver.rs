@@ -1945,16 +1945,33 @@ impl BundleResolver {
     }
 
     /// Find the private Cloud Hypervisor VMM intent for a controller-owned
-    /// Guest Process. This is a distinct v3 seam from the legacy generic
-    /// process-DAG lookup so a Guest request cannot be fulfilled by an
-    /// unrelated legacy connector.
+    /// Guest Process. The caller must present the exact Zone-local Guest
+    /// reference and catalog-bound descriptor digest; a matching Guest name
+    /// alone is never sufficient.
     pub fn find_guest_vmm_intent(
         &self,
-        vm_name: &str,
+        zone: &str,
+        guest_ref: &ResourceRef,
+        descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
         execution_ref: &str,
         execution_domain: ProcessExecutionDomain,
         template: &str,
     ) -> Option<&ResolvedRunnerIntent> {
+        if guest_ref.resource_type().as_str() != "Guest" {
+            return None;
+        }
+        let descriptor = self
+            .guest_setup_descriptors
+            .get(&(zone.to_owned(), guest_ref.name().as_str().to_owned()))?;
+        let descriptor_value = serde_json::from_slice::<serde_json::Value>(descriptor).ok()?;
+        if descriptor_value
+            .get("descriptorDigest")
+            .and_then(serde_json::Value::as_str)
+            != Some(descriptor_digest.as_str())
+        {
+            return None;
+        }
+        let vm_name = guest_ref.name().as_str();
         let mut matches = self.runner_intents.values().filter(|intent| {
             intent.role == ProcessRole::CloudHypervisorRunner
                 && intent.vm_name == vm_name

@@ -16,7 +16,7 @@ use std::{
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourceGeneration, ResourcePhase,
-    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+    ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
     process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
 use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding};
@@ -241,6 +241,7 @@ pub(crate) struct ProcessResourceRuntime {
     /// execution reference, retained across relist/watch passes.
     target_owner_ref: Option<ResourceRef>,
     target_ref: Option<ResourceRef>,
+    guest_descriptor_digests: BTreeMap<ResourceRef, SchemaFingerprint>,
     status_client: Option<Arc<dyn ProcessResourceClient>>,
 }
 
@@ -297,6 +298,7 @@ impl ProcessResourceRuntime {
             policy_revision: None,
             target_owner_ref: None,
             target_ref: None,
+            guest_descriptor_digests: BTreeMap::new(),
             status_client: None,
         }
     }
@@ -334,6 +336,13 @@ impl ProcessResourceRuntime {
         self.target_ref = target_ref;
     }
 
+    pub(crate) fn set_guest_descriptor_digests(
+        &mut self,
+        descriptors: BTreeMap<ResourceRef, SchemaFingerprint>,
+    ) {
+        self.guest_descriptor_digests = descriptors;
+    }
+
     pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
     where
         C: ProcessResourceClient + 'static,
@@ -366,7 +375,12 @@ impl ProcessResourceRuntime {
                 .as_ref()
                 .map(GuestExecutionBinding::provider_generation),
         )
-        .with_owner_ref(owner_ref)
+        .with_owner_ref(owner_ref.clone())
+        .with_guest_descriptor_digest(
+            owner_ref
+                .as_ref()
+                .and_then(|owner| self.guest_descriptor_digests.get(owner)),
+        )
         .with_provider_identity(
             record.controller_provider_uid.as_ref(),
             record.controller_provider_generation,

@@ -900,6 +900,7 @@ struct RealCloudHypervisorResourceSession {
     dependencies_ready: Mutex<bool>,
     children: Mutex<BTreeMap<ResourceRef, OwnedChildSnapshot>>,
     process: Mutex<Option<Child>>,
+    lifecycle_updates: Mutex<Vec<DesiredLifecycle>>,
 }
 
 impl RealCloudHypervisorResourceSession {
@@ -918,6 +919,7 @@ impl RealCloudHypervisorResourceSession {
             dependencies_ready: Mutex::new(false),
             children: Mutex::new(BTreeMap::new()),
             process: Mutex::new(None),
+            lifecycle_updates: Mutex::new(Vec::new()),
         }
     }
 
@@ -1019,6 +1021,14 @@ impl RealCloudHypervisorResourceSession {
             .clear();
         fs::write(self.root.join("guest.removed"), b"removed")
             .map_err(|_| CloudHypervisorResourceApiError::Transport)
+    }
+
+    fn lifecycle_updates(&self) -> Result<Vec<DesiredLifecycle>, CloudHypervisorResourceApiError> {
+        Ok(self
+            .lifecycle_updates
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+            .clone())
     }
 }
 
@@ -1191,6 +1201,12 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 } else {
                     None
                 };
+                if let Some(desired_lifecycle) = desired_lifecycle {
+                    self.lifecycle_updates
+                        .lock()
+                        .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                        .push(desired_lifecycle);
+                }
                 match desired_lifecycle {
                     Some(DesiredLifecycle::Running) => self.start_process()?,
                     Some(DesiredLifecycle::Stopped) => self.stop_process()?,
@@ -1320,6 +1336,10 @@ async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_proce
         pending,
         CloudHypervisorReconcileOutcome::Pending(_)
     ));
+    assert!(
+        session.lifecycle_updates().unwrap().is_empty(),
+        "dependency-pending reconcile must not force the VMM Process Running"
+    );
 
     session.set_dependencies_ready(true).unwrap();
     let ready = controller

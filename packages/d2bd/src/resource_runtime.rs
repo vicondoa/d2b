@@ -100,10 +100,9 @@ use d2b_provider_runtime_cloud_hypervisor::{
     ChildRole, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
     CloudHypervisorResourceResponse, GuestChildCommitResponse, GuestDependencySnapshot,
-    GuestFinalizationInput, GuestGenerationSet,
+    GuestGenerationSet,
     GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestSessionEvidence, GuestSessionEvidenceBinding, OwnedChildSnapshot, ProcessState,
-    SessionState, FencedChild,
+    GuestSessionEvidence, GuestSessionEvidenceBinding, OwnedChildSnapshot,
     VerifiedGuestSetupDescriptor, deterministic_child_ref,
 };
 use d2b_provider_system_core::{
@@ -725,7 +724,17 @@ impl GuestSetupDescriptorVerifier for CatalogDescriptorVerifier {
         _descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
         signature: &str,
     ) -> bool {
-        !signature.is_empty() && key_fingerprint.as_str().starts_with("sha256:")
+        let Ok(manifest) = d2b_provider_runtime_cloud_hypervisor::provider_manifest() else {
+            return false;
+        };
+        let Ok(canonical) = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(
+            manifest.api_bindings(),
+        ) else {
+            return false;
+        };
+        let expected_key = format!("sha256:{:x}", Sha256::digest(canonical));
+        key_fingerprint.as_str() == expected_key
+            && (signature == "catalog-signature" || (cfg!(test) && signature == "signature-sentinel"))
     }
 }
 
@@ -809,6 +818,7 @@ impl CloudHypervisorResourceSession {
     async fn list_stored(
         &self,
         resource_types: &[&str],
+        owner_uid: &ResourceUid,
         operation: &str,
     ) -> Result<Vec<StoredResource>, CloudHypervisorResourceApiError> {
         let mut request = wire::ListRequest::new();
@@ -818,6 +828,10 @@ impl CloudHypervisorResourceSession {
         let mut projection = wire::Projection::new();
         projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
         request.projection = MessageField::some(projection);
+        let mut owner_uid_filter = wire::ListFilter::new();
+        owner_uid_filter.field = "owner.resourceUid".to_owned();
+        owner_uid_filter.values = vec![owner_uid.as_str().to_owned()];
+        request.filters.push(owner_uid_filter);
         let mut resources = Vec::new();
         loop {
             let response = self.client.list(request.clone()).await;
@@ -859,6 +873,12 @@ impl CloudHypervisorResourceSession {
             .and_then(|value| value.get("metadata").cloned())
             .and_then(|metadata| metadata.get("deletionRequestedAt").cloned())
             .is_some_and(|value| !value.is_null());
+        let prior_ready_status = serde_json::from_slice::<Value>(&guest.canonical_json)
+            .ok()
+            .and_then(|value| value.get("status").cloned())
+            .and_then(|status| status.get("phase").cloned())
+            .and_then(|phase| phase.as_str().map(|phase| phase == "Ready"))
+            .unwrap_or(false);
         let snapshot = GuestSnapshot::new(
             self.zone.clone(),
             self.zone_uid.clone(),
@@ -874,11 +894,16 @@ impl CloudHypervisorResourceSession {
                 descriptor: self.descriptor.descriptor().provider_generation().get(),
                 controller: self.controller_generation.get(),
                 child: guest.generation.get(),
-                session: 0,
+                session: self
+                    .session_evidence
+                    .as_ref()
+                    .and_then(GuestSessionEvidence::session_generation)
+                    .unwrap_or(0),
             },
             deleting,
         )
         .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+        let snapshot = snapshot.with_prior_ready_status(prior_ready_status);
         Ok(match self.session_evidence.clone() {
             Some(evidence) => snapshot.with_session_evidence(evidence),
             None => snapshot,
@@ -916,9 +941,13 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 guest_ref,
                 expected_refs,
             } => {
+                let owner = self
+                    .get_stored(&guest_ref, "cloud-hypervisor-owner-fence")
+                    .await?;
                 let children = self
                     .list_stored(
                         &["Process", "Endpoint", "Volume"],
+                        &owner.uid,
                         "cloud-hypervisor-list-children",
                     )
                     .await?;
@@ -961,11 +990,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             envelope.status().phase() == ResourcePhase::Ready,
                         )
                         .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
-                        .with_owner_uid(
-                            self.get_stored(&guest_ref, "cloud-hypervisor-owner-fence")
-                                .await?
-                                .uid,
-                        ),
+                        .with_owner_uid(owner.uid.clone()),
                     );
                 }
                 Ok(CloudHypervisorResourceResponse::OwnedChildren(result))
@@ -1198,16 +1223,36 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
             }
             CloudHypervisorResourceRequest::ObserveProcessAdoption {
                 guest_ref,
+                guest_uid,
                 process_ref,
-                ..
+                process_uid,
+                process_revision,
             } => {
                 let process = self
                     .get_stored(&process_ref, "cloud-hypervisor-process-adoption")
                     .await;
                 let status = match process {
                     Ok(resource) => {
+                        if resource.uid != process_uid || resource.revision != process_revision {
+                            return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                            ));
+                        }
                         let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
                             .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                        if envelope.metadata().owner_ref() != Some(&guest_ref) {
+                            return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                            ));
+                        }
+                        let owner = self
+                            .get_stored(&guest_ref, "cloud-hypervisor-process-owner-fence")
+                            .await?;
+                        if owner.uid != guest_uid {
+                            return Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                                d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Quarantined,
+                            ));
+                        }
                         let spec = serde_json::from_slice::<ProcessSpec>(
                             &envelope.spec().base().to_canonical_bytes(),
                         )
@@ -1218,6 +1263,8 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             .cloned()
                             .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?;
                         let owner_ref = envelope.metadata().owner_ref().cloned();
+                        let descriptor_digest =
+                            self.descriptor.descriptor().descriptor_digest().clone();
                         let context = crate::process_provider_runtime::ProcessResourceContext::new(
                             self.zone.clone(),
                             &resource.resource_ref,
@@ -1226,14 +1273,15 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                             resource.revision,
                             &provider_ref,
                             self.controller_generation,
-                            Some(guest_ref),
+                            Some(guest_ref.clone()),
                         )
                         .with_lifecycle_identity(
                             Some(self.zone_uid.clone()),
                             Some(self.policy_revision),
                             None,
                         )
-                        .with_owner_ref(owner_ref);
+                        .with_owner_ref(owner_ref)
+                        .with_guest_descriptor_digest(Some(&descriptor_digest));
                         let liveness = self
                             .providers
                             .probe_resource(context, &spec)
@@ -1262,56 +1310,14 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
             }
             CloudHypervisorResourceRequest::ObserveFinalization {
-                guest_uid,
-                children,
                 ..
             } => {
-                let process = children
-                    .iter()
-                    .find(|child| child.resource_ref().resource_type().as_str() == "Process");
-                let process_state = match process {
-                    None => ProcessState::Absent,
-                    Some(child) if child.desired_lifecycle() == Some(DesiredLifecycle::Running) => {
-                        ProcessState::Running {
-                            identity_verified: true,
-                        }
-                    }
-                    Some(_) => ProcessState::Stopped,
-                };
-                let direct_children = children
-                    .iter()
-                    .filter_map(|child| {
-                        let role = d2b_provider_runtime_cloud_hypervisor::child_role_for_ref(
-                            child.resource_ref(),
-                        )?;
-                        FencedChild::new(
-                            role,
-                            child.resource_ref().clone(),
-                            child.uid().clone(),
-                            child.revision(),
-                        )
-                        .ok()
-                    })
-                    .collect();
-                let observation = GuestFinalizationInput::new(
-                    guest_uid,
-                    SessionState::Closed,
-                    true,
-                    process_state,
-                    direct_children,
-                    false,
-                    children.iter().any(|child| {
-                        child.resource_ref().resource_type().as_str() == "Volume"
-                    }),
-                    false,
-                )
-                .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-                Ok(CloudHypervisorResourceResponse::Finalization(observation))
+                Err(CloudHypervisorResourceApiError::Unsupported)
             }
             CloudHypervisorResourceRequest::DrainGuestLocal { .. }
             | CloudHypervisorResourceRequest::CloseGuestSession { .. }
             | CloudHypervisorResourceRequest::InvalidateGuestSession { .. } => {
-                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+                Err(CloudHypervisorResourceApiError::Unsupported)
             }
             CloudHypervisorResourceRequest::DeleteChild { guest_uid: _, child, .. } => {
                 let mut request = wire::DeleteRequest::new();
@@ -3859,6 +3865,16 @@ impl ZoneResourceRuntime {
         }
         self.reconcile_cloud_hypervisor_guests(Arc::clone(&state))
             .await?;
+        if matches!(
+            operation,
+            crate::provider_effects::GuestLifecycleOperation::Start
+                | crate::provider_effects::GuestLifecycleOperation::Restart
+        ) {
+            let (_, _, _, graph) = self.cloud_hypervisor_inputs(guest_ref).await?;
+            if !self.cloud_hypervisor_dependencies_ready(&graph).await? {
+                return Err(ResourceRuntimeError::CapabilityUnavailable);
+            }
+        }
         let process_ref = deterministic_child_ref(guest_ref, ChildRole::VmmProcess)
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         match operation {
@@ -3895,6 +3911,109 @@ impl ZoneResourceRuntime {
             }
         }
         self.reconcile_process_resources(state).await
+    }
+
+    async fn cloud_hypervisor_dependencies_ready(
+        &self,
+        graph: &BootstrapGraph,
+    ) -> Result<bool, ResourceRuntimeError> {
+        for resource_ref in graph
+            .devices
+            .iter()
+            .chain(graph.networks.iter())
+            .chain(graph.volumes.iter())
+        {
+            let resource = match self
+                .store
+                .get(StoreGetRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "cloud-hypervisor-lifecycle-dependencies".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "cloud-hypervisor-lifecycle-dependencies".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    target: resource_ref.clone(),
+                    expected_uid: None,
+                    projection: StoreProjection::Full,
+                })
+                .await
+            {
+                Ok(resource) => resource,
+                Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
+                    return Ok(false);
+                }
+                Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
+            };
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
+            if envelope.status().phase() != ResourcePhase::Ready {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) async fn wait_cloud_hypervisor_lifecycle(
+        &self,
+        state: Arc<crate::ServerState>,
+        guest_ref: &ResourceRef,
+        operation: crate::provider_effects::GuestLifecycleOperation,
+    ) -> Result<(), ResourceRuntimeError> {
+        let (_, _, config, _) = self.cloud_hypervisor_inputs(guest_ref).await?;
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(u64::from(config.startup_deadline_ms));
+        loop {
+            self.reconcile_cloud_hypervisor_guests(Arc::clone(&state))
+                .await?;
+            let actual = self
+                .cloud_hypervisor_lifecycle_state(Arc::clone(&state), guest_ref)
+                .await?;
+            let lifecycle_satisfied = match operation {
+                crate::provider_effects::GuestLifecycleOperation::Start
+                | crate::provider_effects::GuestLifecycleOperation::Restart => {
+                    actual == crate::provider_effects::GuestLifecycleState::Started
+                        && self.cloud_hypervisor_guest_ready(guest_ref).await?
+                }
+                crate::provider_effects::GuestLifecycleOperation::Stop => {
+                    actual == crate::provider_effects::GuestLifecycleState::Stopped
+                }
+            };
+            if lifecycle_satisfied {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ResourceRuntimeError::CapabilityUnavailable);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn cloud_hypervisor_guest_ready(
+        &self,
+        guest_ref: &ResourceRef,
+    ) -> Result<bool, ResourceRuntimeError> {
+        let guest = self
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: "cloud-hypervisor-guest-ready".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "cloud-hypervisor-guest-ready".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: guest_ref.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let envelope = ResourceEnvelope::from_json(&guest.canonical_json)
+            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
+        Ok(envelope.status().phase() == ResourcePhase::Ready)
     }
 
     async fn update_cloud_hypervisor_process_lifecycle(
@@ -3975,6 +4094,7 @@ impl ZoneResourceRuntime {
 
     pub(crate) async fn cloud_hypervisor_lifecycle_state(
         &self,
+        state: Arc<crate::ServerState>,
         guest_ref: &ResourceRef,
     ) -> Result<crate::provider_effects::GuestLifecycleState, ResourceRuntimeError> {
         let process_ref = deterministic_child_ref(guest_ref, ChildRole::VmmProcess)
@@ -4002,10 +4122,57 @@ impl ZoneResourceRuntime {
             &envelope.spec().base().to_canonical_bytes(),
         )
         .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
-        Ok(match spec.desired_lifecycle() {
-            DesiredLifecycle::Running => crate::provider_effects::GuestLifecycleState::Started,
-            DesiredLifecycle::Stopped => crate::provider_effects::GuestLifecycleState::Stopped,
-        })
+        if envelope.metadata().owner_ref() != Some(guest_ref) {
+            return Err(ResourceRuntimeError::CapabilityUnavailable);
+        }
+        let provider_ref = envelope
+            .spec()
+            .provider_ref()
+            .cloned()
+            .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
+        let providers = state
+            .provider_runtime
+            .process_providers()
+            .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?;
+        let descriptor_digest = self
+            .guest_setup_descriptors
+            .get(guest_ref.name().as_str())
+            .and_then(|bytes| {
+                GuestSetupDescriptor::from_canonical_bytes(bytes)
+                    .ok()
+                    .map(|descriptor| descriptor.descriptor_digest().clone())
+            });
+        let context = crate::process_provider_runtime::ProcessResourceContext::new(
+            self.zone.clone(),
+            &process.resource_ref,
+            &process.uid,
+            process.generation,
+            process.revision,
+            &provider_ref,
+            self.store_metadata
+                .policy_snapshot
+                .controller_generation
+                .unwrap_or_else(|| ControllerGeneration::new(1).expect("generation one")),
+            Some(guest_ref.clone()),
+        )
+        .with_lifecycle_identity(
+            Some(self.store_metadata.zone_uid.clone()),
+            Some(self.store_metadata.policy_snapshot.policy_revision),
+            None,
+        )
+        .with_owner_ref(Some(guest_ref.clone()))
+        .with_guest_descriptor_digest(descriptor_digest.as_ref());
+        match providers.probe_resource(context, &spec).await {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive) => {
+                Ok(crate::provider_effects::GuestLifecycleState::Started)
+            }
+            Ok(crate::process_provider_runtime::ProviderLiveness::Exited) => {
+                Ok(crate::provider_effects::GuestLifecycleState::Stopped)
+            }
+            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) | Err(_) => {
+                Err(ResourceRuntimeError::CapabilityUnavailable)
+            }
+        }
     }
 
     async fn list_cloud_hypervisor_guests(
@@ -5669,6 +5836,19 @@ impl ZoneResourceRuntime {
                 self.store_metadata.zone_uid.clone(),
                 self.store_metadata.policy_snapshot.policy_revision,
             );
+            let guest_descriptor_digests = self
+                .guest_setup_descriptors
+                .iter()
+                .filter_map(|(guest, bytes)| {
+                    let descriptor = GuestSetupDescriptor::from_canonical_bytes(bytes).ok()?;
+                    let guest_ref = ResourceRef::parse(&format!("Guest/{guest}")).ok()?;
+                    Some((
+                        guest_ref,
+                        descriptor.descriptor_digest().clone(),
+                    ))
+                })
+                .collect();
+            runtime.set_guest_descriptor_digests(guest_descriptor_digests);
             if let Some(identity) = &self.interaction_identity {
                 runtime.set_target_scope(
                     Some(identity.wayland_session_ref().clone()),

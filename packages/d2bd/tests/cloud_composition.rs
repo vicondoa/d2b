@@ -329,6 +329,7 @@ fn cloud_children(
 #[derive(Clone, Copy)]
 enum CloudMode {
     Ready,
+    ProcessAbsent,
     Failed,
     Ambiguous,
 }
@@ -349,7 +350,7 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             }
             CloudHypervisorResourceRequest::GetGuest { .. } => match self.mode {
                 CloudMode::Failed => Err(CloudHypervisorResourceApiError::Transport),
-                CloudMode::Ready | CloudMode::Ambiguous => {
+                CloudMode::Ready | CloudMode::ProcessAbsent | CloudMode::Ambiguous => {
                     Ok(CloudHypervisorResourceResponse::Guest(cloud_guest()))
                 }
             },
@@ -361,7 +362,7 @@ impl AuthenticatedResourceSession for FakeCloudSession {
                             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
                         cloud_children(&guest, &expected_refs[..1], &wrong_owner)
                     }
-                    CloudMode::Ready | CloudMode::Failed => {
+                    CloudMode::Ready | CloudMode::ProcessAbsent | CloudMode::Failed => {
                         cloud_children(&guest, &expected_refs, guest.uid())
                     }
                 };
@@ -392,7 +393,12 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             }
             CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
                 Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                    d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                    match self.mode {
+                        CloudMode::ProcessAbsent => {
+                            d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                        }
+                        _ => d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                    },
                 ))
             }
             CloudHypervisorResourceRequest::AssessUpdate { .. } => {
@@ -508,4 +514,22 @@ async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
             .await,
         Err(d2b_provider_runtime_azure_container_apps::AcaControllerError::AmbiguousAdoption)
     );
+}
+
+#[tokio::test]
+async fn cloud_composition_requires_process_provider_liveness_for_ready() {
+    let mut cloud = cloud_controller(CloudMode::ProcessAbsent);
+    cloud.register().await.unwrap();
+    let outcome = cloud
+        .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.status().status().phase,
+        GuestStatusPhase::Degraded
+    );
+    assert!(!matches!(
+        outcome,
+        CloudHypervisorReconcileOutcome::Ready(_)
+    ));
 }

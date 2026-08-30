@@ -21008,7 +21008,10 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
         let runtime = plane
             .zone(&zone)
             .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
-        block_on_future(runtime.cloud_hypervisor_lifecycle_state(&self.guest))
+        block_on_future(runtime.cloud_hypervisor_lifecycle_state(
+            Arc::new(self.state.clone()),
+            &self.guest,
+        ))
             .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)
     }
 
@@ -21044,6 +21047,14 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        if self.wait_for_ready {
+            block_on_future(runtime.wait_cloud_hypervisor_lifecycle(
+                Arc::new(self.state.clone()),
+                &self.guest,
+                self.operation,
+            ))
+            .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        }
         let mut response = applied_response(
             "guest lifecycle",
             format!(

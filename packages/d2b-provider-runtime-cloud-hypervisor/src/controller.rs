@@ -258,6 +258,7 @@ pub struct GuestSnapshot {
     system_artifact_id: Option<String>,
     generations: GuestGenerationSet,
     session_evidence: Option<GuestSessionEvidence>,
+    prior_ready_status: bool,
     deleting: bool,
 }
 
@@ -300,6 +301,7 @@ impl GuestSnapshot {
             system_artifact_id,
             generations,
             session_evidence: None,
+            prior_ready_status: false,
             deleting,
         })
     }
@@ -307,6 +309,12 @@ impl GuestSnapshot {
     /// Attach the latest bounded authenticated session evidence.
     pub fn with_session_evidence(mut self, evidence: GuestSessionEvidence) -> Self {
         self.session_evidence = Some(evidence);
+        self
+    }
+
+    /// Record whether the last persisted Guest status was Ready.
+    pub fn with_prior_ready_status(mut self, ready: bool) -> Self {
+        self.prior_ready_status = ready;
         self
     }
 
@@ -363,6 +371,11 @@ impl GuestSnapshot {
     /// Borrow the latest authenticated session evidence.
     pub fn session_evidence(&self) -> Option<&GuestSessionEvidence> {
         self.session_evidence.as_ref()
+    }
+
+    /// Whether the last persisted Guest status was Ready.
+    pub const fn prior_ready_status(&self) -> bool {
+        self.prior_ready_status
     }
 
     /// Whether deletion has been requested.
@@ -1622,6 +1635,7 @@ pub struct CloudHypervisorController<A> {
     pending_retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
+    observed_process_status: Option<ProcessAdoptionStatus>,
 }
 
 impl<A> CloudHypervisorController<A>
@@ -1652,6 +1666,7 @@ where
             pending_retired_child_uids: BTreeSet::new(),
             retired_child_uids: BTreeSet::new(),
             upgrade_progress: BTreeMap::new(),
+            observed_process_status: None,
         })
     }
 
@@ -1713,6 +1728,7 @@ where
         }
         let guest = self.api.get_guest(guest_ref).await?;
         self.validate_guest(&guest, guest_ref)?;
+        self.observed_process_status = None;
         let child_plan = BootstrapGraph::plan_children(
             guest.zone.clone(),
             guest.resource_ref.clone(),
@@ -1782,8 +1798,11 @@ where
                 ProcessAdoptionStatus::Absent => {
                     lifecycle_conditions.push(GuestCondition::VmmProcessExited);
                     force_degraded = true;
+                    self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
                 }
-                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {}
+                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {
+                    self.observed_process_status = Some(ProcessAdoptionStatus::Current);
+                }
             }
             if adoption_blocked {
                 let status = self.project_status(
@@ -1798,6 +1817,9 @@ where
                 self.api.update_status(&guest, status.clone()).await?;
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
+        }
+        if self.observed_process_status.is_none() {
+            self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
         }
 
         let missing = expected_refs
@@ -1871,10 +1893,21 @@ where
             }
         }
 
-        let desired_lifecycle = if dependency_readiness == DependencyReadiness::Ready {
-            DesiredLifecycle::Running
-        } else {
+        let existing_process = child_plan
+            .child_batch()
+            .child_ref(ChildRole::VmmProcess)
+            .and_then(|target| children.get(target));
+        let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
+        } else if guest.prior_ready_status()
+            && existing_process
+                .is_some_and(|process| {
+                    process.desired_lifecycle() == Some(DesiredLifecycle::Stopped)
+                })
+        {
+            DesiredLifecycle::Stopped
+        } else {
+            DesiredLifecycle::Running
         };
         if let Err(error) = self
             .repair_children(
@@ -2494,7 +2527,13 @@ where
                     .and_then(|target| children.get(target))
                     .is_some_and(|child| child.phase() == ResourcePhase::Ready)
             });
-        let process_ready = process.is_some_and(|child| child.phase() == ResourcePhase::Ready);
+        let process_ready = process.is_some_and(|child| {
+            child.phase() == ResourcePhase::Ready
+                && matches!(
+                    self.observed_process_status,
+                    Some(ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted)
+                )
+        });
         let session_observed = guest.session_evidence().is_some();
         let session_evidence = guest
             .session_evidence()
@@ -2526,8 +2565,17 @@ where
             deletion_requested: guest.deleting(),
             session_active: session_observed,
             descendants_present: !children.is_empty(),
-            process_stopped: process
-                .is_none_or(|child| child.desired_lifecycle() != Some(DesiredLifecycle::Running)),
+            process_stopped: process.is_none_or(|child| {
+                child.desired_lifecycle() != Some(DesiredLifecycle::Running)
+                    || matches!(
+                        self.observed_process_status,
+                        Some(
+                            ProcessAdoptionStatus::Absent
+                                | ProcessAdoptionStatus::Quarantined
+                                | ProcessAdoptionStatus::Unavailable
+                        )
+                    )
+            }),
         };
         let mut status = reduce_status(&observation);
         if force_degraded && !guest.deleting() {

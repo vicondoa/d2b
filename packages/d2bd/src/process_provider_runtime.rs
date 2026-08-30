@@ -17,7 +17,8 @@ use std::{
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
+    ZoneRevision,
     process::ReadinessClass,
     process::{EphemeralProcessSpec, ProcessClass, ProcessSpec},
 };
@@ -179,6 +180,8 @@ pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) owner_ref: Option<ResourceRef>,
     /// Optional Guest selector for a shared Host execution reference.
     pub(crate) target_ref: Option<ResourceRef>,
+    /// Catalog-bound private Guest setup descriptor digest.
+    pub(crate) guest_descriptor_digest: Option<SchemaFingerprint>,
 }
 
 impl<'a> ProcessResourceContext<'a> {
@@ -208,6 +211,7 @@ impl<'a> ProcessResourceContext<'a> {
             provider_assignment_generation: None,
             owner_ref: None,
             target_ref,
+            guest_descriptor_digest: None,
         }
     }
 
@@ -243,6 +247,14 @@ impl<'a> ProcessResourceContext<'a> {
     ) -> Self {
         self.provider_uid = provider_uid.cloned();
         self.provider_generation = provider_generation;
+        self
+    }
+
+    pub(crate) fn with_guest_descriptor_digest(
+        mut self,
+        descriptor_digest: Option<&SchemaFingerprint>,
+    ) -> Self {
+        self.guest_descriptor_digest = descriptor_digest.cloned();
         self
     }
 }
@@ -2477,13 +2489,24 @@ fn resource_ticket(
     });
     let generic_intent = if exact_static_controller {
         None
-    } else if let (Some(owner), Some(vm_name)) = (
-        context.owner_ref.as_ref(),
-        target_vm_name,
-    ) && owner.resource_type().as_str() == "Guest"
+    } else if let Some(owner) = context
+        .owner_ref
+        .as_ref()
+        .filter(|owner| owner.resource_type().as_str() == "Guest")
     {
+        if context.resource_ref.resource_type().as_str() != "Process"
+            || context.resource_ref.name().as_str()
+                != format!("{}-vmm", owner.name().as_str())
+        {
+            return Err("provider-ticket:guest-process-not-vmm".to_owned());
+        }
+        let Some(descriptor_digest) = context.guest_descriptor_digest.as_ref() else {
+            return Err("provider-ticket:guest-descriptor-unbound".to_owned());
+        };
         bundle.find_guest_vmm_intent(
-            vm_name,
+            context.zone.as_str(),
+            owner,
+            descriptor_digest,
             &execution_ref,
             execution_domain,
             execution.template().as_str(),
