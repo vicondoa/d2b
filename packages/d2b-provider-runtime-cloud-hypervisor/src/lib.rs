@@ -35,6 +35,7 @@ pub use controller::{
     GuestChildCreateBatch, GuestCondition, GuestDependencySnapshot, GuestSnapshot,
     GuestStatusProjection, OwnedChildSnapshot,
 };
+pub use controller::GUEST_CONTROLLER_FINALIZER;
 pub use descriptor::{
     BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
     GuestSetupDescriptorError, GuestSetupDescriptorVerifier, OpaqueDescriptorSignature,
@@ -48,7 +49,8 @@ pub use guest_local::{
     GuestLocalSessionBinding, GuestLocalSessionExpectation, GuestLocalStatus, GuestLocalWatch,
 };
 pub use health::{
-    GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceProbe, GuestSessionHealth,
+    GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceBinding,
+    GuestSessionEvidenceProbe, GuestSessionHealth,
 };
 pub use identity::{
     ChildCreateBody, ChildIdentityError, ChildMutation, ChildRole, ChildRoleSet,

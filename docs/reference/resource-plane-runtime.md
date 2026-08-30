@@ -87,6 +87,13 @@ These adapters persist or inspect real state; they are not call-recording
 mocks. Host mutation and hardware/KVM prerequisites remain separate from this
 hermetic acceptance contract.
 
+The daemon composition loads the semantic Guest setup descriptor from the
+integrity-pinned artifact catalog and binds the controller to an authenticated
+Resource API session. A v3 Guest start, stop, or restart changes the
+controller-owned VMM `Process` child; the Process Provider remains the only
+launch, adoption, and stop effect owner. The retained VM/TPM/security-key/audio
+connectors are legacy-only and cannot satisfy that v3 path.
+
 ## Store restart, backup, and restore
 
 Normal daemon restart reopens the same broker-owned store row, validates its

@@ -2579,10 +2579,101 @@ fn validate_commit_response(
 fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudHypervisorError> {
     let body = serde_json::to_value(mutation.body())
         .map_err(|_| CloudHypervisorError::BatchResponseInvalid)?;
-    let spec = body
+    let mut spec = body
         .get("spec")
         .cloned()
         .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
+    let spec_object = spec
+        .as_object_mut()
+        .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
+    match mutation.target().resource_type().as_str() {
+        "Process" => {
+            spec_object
+                .entry("processClass".to_owned())
+                .or_insert_with(|| serde_json::Value::String("worker".to_owned()));
+        }
+        "Endpoint" => {
+            let producer_guest = spec_object
+                .get("producerRef")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value.starts_with("Guest/"));
+            spec_object
+                .entry("endpointClass".to_owned())
+                .or_insert_with(|| serde_json::Value::String("control".to_owned()));
+            spec_object
+                .entry("transport".to_owned())
+                .or_insert_with(|| serde_json::Value::String("opaque-carriage".to_owned()));
+            spec_object
+                .entry("locality".to_owned())
+                .or_insert_with(|| serde_json::Value::String(
+                    if producer_guest {
+                        "cross-domain"
+                    } else {
+                        "host-local"
+                    }
+                    .to_owned(),
+                ));
+            spec_object
+                .entry("visibility".to_owned())
+                .or_insert_with(|| serde_json::Value::String("provider".to_owned()));
+            spec_object
+                .entry("attachmentPolicy".to_owned())
+                .or_insert_with(|| {
+                    serde_json::json!({
+                        "supported": true,
+                        "maxAttachments": 1
+                    })
+                });
+            spec_object
+                .entry("consumerPolicy".to_owned())
+                .or_insert_with(|| {
+                    serde_json::json!({
+                        "allowedOperations": ["resolve", "attach", "observe"]
+                    })
+                });
+            spec_object
+                .entry("lifecyclePolicy".to_owned())
+                .or_insert_with(|| {
+                    serde_json::Value::String("recycle-with-producer".to_owned())
+                });
+        }
+        "Volume" => {
+            let execution_ref = spec_object
+                .get("executionRef")
+                .cloned()
+                .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
+            let view = spec_object
+                .get("view")
+                .cloned()
+                .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
+            let view_name = view.as_str().unwrap_or("system").to_owned();
+            spec_object.clear();
+            spec_object.insert(
+                "source".to_owned(),
+                serde_json::json!({
+                    "executionRef": execution_ref,
+                    "settings": {
+                        "kind": "local-path",
+                        "sourcePolicyId": "cloud-hypervisor.system.v1"
+                    }
+                }),
+            );
+            spec_object.insert("kind".to_owned(), serde_json::Value::String("state".to_owned()));
+            spec_object.insert("layout".to_owned(), serde_json::json!([]));
+            spec_object.insert(
+                "views".to_owned(),
+                serde_json::json!({
+                    view_name: {
+                        "path": "system",
+                        "rights": ["read", "write", "create", "delete", "traverse"]
+                    }
+                }),
+            );
+            spec_object.insert("attachments".to_owned(), serde_json::json!([]));
+            spec_object.insert("quota".to_owned(), serde_json::Value::Null);
+        }
+        _ => return Err(CloudHypervisorError::BatchResponseInvalid),
+    }
     let value = serde_json::json!({
         "apiVersion": "resources.d2bus.org/v3",
         "type": mutation.target().resource_type().as_str(),

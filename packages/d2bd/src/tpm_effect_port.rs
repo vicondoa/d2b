@@ -87,7 +87,9 @@ impl Drop for SwtpmSpawnReservation<'_> {
     }
 }
 
-/// Concrete daemon-side TPM effect executor.
+/// Concrete daemon-side TPM effect executor for the retained legacy TPM
+/// connector. v3 Cloud Hypervisor lifecycle reaches swtpm through its owned
+/// Process resources instead of this process-DAG lookup.
 ///
 /// All host paths, binaries, state markers, and pidfds remain inside the
 /// trusted bundle/broker boundary. The Provider sees only the opaque tickets

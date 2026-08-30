@@ -4,8 +4,9 @@ use d2b_contracts_resource::v3::{
     ZoneId, ZoneRevision,
 };
 use d2b_provider_runtime_cloud_hypervisor::{
-    BootstrapHandoff, ChildRole, DescriptorSignature, GuestChildBatch, GuestSeedContract,
-    GuestSetupDescriptor, GuestSetupDescriptorVerifier, SignatureAlgorithm, map_commit_response,
+    BootstrapHandoff, ChildRole, DescriptorSignature, GuestChildBatch, GuestChildCreateBatch,
+    GuestGenerationSet, GuestSeedContract, GuestSetupDescriptor, GuestSetupDescriptorVerifier,
+    GuestSnapshot, SignatureAlgorithm, map_commit_response,
 };
 
 const ARTIFACT_DIGEST: &str =
@@ -225,6 +226,45 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
             .windows(3)
             .all(|window| window != b"uid")
     );
+    let guest_snapshot = GuestSnapshot::new(
+        zone.clone(),
+        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+        guest.clone(),
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(1),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(1),
+        false,
+    )
+    .unwrap();
+    let create_batch = GuestChildCreateBatch::new(
+        &guest_snapshot,
+        &batch,
+        batch.mutations().iter().map(|mutation| mutation.target().clone()),
+    )
+    .unwrap();
+    for mutation in batch.mutations() {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&create_batch.canonical_payload(mutation.target()).unwrap())
+                .unwrap();
+        value
+            .get_mut("metadata")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "uid".to_owned(),
+                serde_json::Value::String(
+                    "00000000-0000-4000-8000-000000000000".to_owned(),
+                ),
+            );
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(
+            &serde_json::to_vec(&value).unwrap(),
+        )
+        .expect("controller child payload has a valid Resource schema");
+    }
 }
 
 #[test]

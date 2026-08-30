@@ -93,7 +93,8 @@ pub enum HostEnforcementResult {
     Failed,
 }
 
-/// Build the host controller for a VM based on its audio capability row.
+/// Build the retained legacy host controller for a VM based on its audio
+/// capability row. v3 Guest lifecycle does not use this process-DAG connector.
 ///
 /// * For `PipeWireVhostUserSound` providers (Cloud Hypervisor NixOS), reads
 ///   the audio ProcessNode from `processes.json` to extract `WPCTL_PATH` and

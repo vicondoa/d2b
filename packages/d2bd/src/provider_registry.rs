@@ -783,9 +783,62 @@ impl ProviderRuntime {
             .map(ProviderRuntimeDispatch::Active)
     }
 
-    pub(crate) fn lifecycle_admission_is_latest(
+    /// Route a v3 Guest lifecycle request from its committed ProviderRef.
+    ///
+    /// Unlike the retained legacy VM route above, this path never consults
+    /// the Host manifest's name-only Guest map. The Resource API has already
+    /// authenticated the Guest and supplied its exact Provider identity.
+    pub fn dispatch_v3_lifecycle<P: ProviderLifecycleEffectPort>(
         &self,
         caller: &BrokerCallerRole,
+        provider_ref: &ResourceRef,
+        guest_ref: ResourceRef,
+        operation: GuestLifecycleOperation,
+        idempotency_key: impl Into<String>,
+        authorization: LifecycleAuthorization,
+        effect: &P,
+    ) -> Result<ProviderRuntimeDispatch<P::Output>, ProviderEffectError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        let ProviderRuntimeState::Active(active) = &*state else {
+            return Err(ProviderEffectError::RegistryUnavailable);
+        };
+        if provider_ref.resource_type().as_str() != "Provider"
+            || guest_ref.resource_type().as_str() != "Guest"
+            || authorization.guest_ref() != &guest_ref
+        {
+            return Err(ProviderEffectError::GuestRefInvalid);
+        }
+        let registry = active.registry.current();
+        let descriptor = registry
+            .descriptor(provider_ref)
+            .ok_or(ProviderEffectError::ProviderNotRegistered)?;
+        let method = ProviderMethodName::parse(operation.as_str())
+            .map_err(|_| ProviderEffectError::ProviderCapabilityDenied)?;
+        if !descriptor.capabilities().contains_method(&method) {
+            return Err(ProviderEffectError::ProviderCapabilityDenied);
+        }
+        let request = GuestLifecycleRequest::new(
+            active.zone.clone(),
+            guest_ref,
+            operation,
+            idempotency_key,
+            authorization,
+        )?;
+        active
+            .lifecycle
+            .dispatch(caller, &request, effect)
+            .map(ProviderRuntimeDispatch::Active)
+    }
+
+    /// Check the latest v3 lifecycle admission without consulting the
+    /// legacy Host manifest route table.
+    pub(crate) fn lifecycle_admission_is_latest_v3(
+        &self,
+        caller: &BrokerCallerRole,
+        provider_ref: &ResourceRef,
         operation: GuestLifecycleOperation,
         authorization: &LifecycleAuthorization,
     ) -> Result<bool, ProviderEffectError> {
@@ -796,10 +849,6 @@ impl ProviderRuntime {
         let ProviderRuntimeState::Active(active) = &*state else {
             return Err(ProviderEffectError::RegistryUnavailable);
         };
-        let provider_ref = active
-            .routes
-            .get(authorization.guest_ref().name().as_str())
-            .ok_or(ProviderEffectError::ProviderNotRegistered)?;
         let registry = active.registry.current();
         let descriptor = registry
             .descriptor(provider_ref)
@@ -1212,6 +1261,36 @@ mod tests {
         assert_eq!(
             deployment.controller_phase(resources[0].process_ref()),
             Some(d2bd_runtime::target_runtime::ControllerProcessPhase::Pending)
+        );
+    }
+
+    #[test]
+    fn v3_lifecycle_does_not_require_the_legacy_guest_route_map() {
+        let provider_ref = ResourceRef::parse("Provider/runtime").expect("Provider ref");
+        let runtime = ProviderRuntime::from_bindings(
+            zone(),
+            1,
+            [binding("runtime")],
+            [],
+        )
+        .expect("runtime composition");
+        let effect = RecordingEffect;
+        let result = runtime
+            .dispatch_v3_lifecycle(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                &provider_ref,
+                ResourceRef::parse("Guest/workstation").expect("Guest ref"),
+                GuestLifecycleOperation::Start,
+                "v3-start",
+                authorization("v3-start"),
+                &effect,
+            )
+            .expect("v3 lifecycle dispatch");
+        assert_eq!(
+            result,
+            ProviderRuntimeDispatch::Active(EffectDispatch::Dispatched(
+                "broker-effect-dispatched"
+            ))
         );
     }
 }

@@ -92,14 +92,16 @@ use d2b_contracts_resource::v3::{
     NetworkProvenance,
     ResourceRef, ResourceUid,
     derive_network_ifname, derive_network_route_name, network::NetworkSpec,
+    resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{
-    ProcessTemplateBinding, ResourceBundle,
+    ARTIFACT_CATALOG_DOMAIN_TAG, ProcessTemplateBinding, ResourceBundle,
 };
 use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::io::Read as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -107,13 +109,14 @@ use std::path::{Path, PathBuf};
 /// Trusted-bundle intent lookup tables loaded from the broker-configured
 /// `bundle_path`. See the module docs for the `BundleOpId` encoding
 /// contract.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BundleResolver {
     pub bundle: Bundle,
     pub allocator: Option<AllocatorJson>,
     pub host: HostJson,
     pub processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
@@ -148,11 +151,24 @@ pub struct BundleResolver {
     rotate_known_host_intents: BTreeMap<String, ResolvedRotateKnownHostIntent>,
 }
 
+impl fmt::Debug for BundleResolver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BundleResolver")
+            .field("bundle_version", &self.bundle.bundle_version)
+            .field("zone_count", &self.zone_resource_bundles.len())
+            .field("guest_descriptor_count", &self.guest_setup_descriptors.len())
+            .field("runner_intent_count", &self.runner_intents.len())
+            .finish()
+    }
+}
+
 struct ParsedBundleArtifacts {
     allocator: Option<AllocatorJson>,
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
     provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
@@ -1147,6 +1163,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                guest_setup_descriptors: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1192,6 +1209,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles,
+                guest_setup_descriptors: BTreeMap::new(),
                 provider_controller_templates,
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1218,6 +1236,7 @@ impl BundleResolver {
             host,
             processes,
             zone_resource_bundles,
+            guest_setup_descriptors,
             provider_controller_templates,
             zone_storage_rows,
             storage,
@@ -1317,6 +1336,7 @@ impl BundleResolver {
             host,
             processes,
             zone_resource_bundles,
+            guest_setup_descriptors,
             zone_storage_rows,
             storage,
             sync,
@@ -1373,6 +1393,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                guest_setup_descriptors: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage,
@@ -1419,6 +1440,8 @@ impl BundleResolver {
         })?;
         let (zone_resource_bundles, provider_controller_templates) =
             load_zone_resource_bundles(&bundle, bundle_root, policy)?;
+        let guest_setup_descriptors =
+            load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
         let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
         let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
@@ -1442,6 +1465,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles,
+                guest_setup_descriptors,
                 provider_controller_templates,
                 zone_storage_rows,
                 storage,
@@ -1475,6 +1499,18 @@ impl BundleResolver {
     /// remains in `d2bd`, which owns the Resource API activation boundary.
     pub fn zone_resource_bundle_bytes(&self, zone: &str) -> Option<&[u8]> {
         self.zone_resource_bundles.get(zone).map(Vec::as_slice)
+    }
+
+    /// Return the canonical private Guest setup descriptor for one Zone-local
+    /// Guest, when the installed artifact catalog supplies one.
+    ///
+    /// The returned bytes are semantic descriptor data only. Store paths,
+    /// credentials, executable arguments, and broker operations are not part
+    /// of this projection.
+    pub fn guest_setup_descriptor_bytes(&self, zone: &str, guest: &str) -> Option<&[u8]> {
+        self.guest_setup_descriptors
+            .get(&(zone.to_owned(), guest.to_owned()))
+            .map(Vec::as_slice)
     }
 
     /// Return the Zone identities that have a verified resource bundle.
@@ -1903,6 +1939,31 @@ impl BundleResolver {
                     || intent.profile_id == template
                     || runner_template_name(&intent.role) == Some(template)
                     || process_template_name_matches(intent, template))
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
+    /// Find the private Cloud Hypervisor VMM intent for a controller-owned
+    /// Guest Process. This is a distinct v3 seam from the legacy generic
+    /// process-DAG lookup so a Guest request cannot be fulfilled by an
+    /// unrelated legacy connector.
+    pub fn find_guest_vmm_intent(
+        &self,
+        vm_name: &str,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let mut matches = self.runner_intents.values().filter(|intent| {
+            intent.role == ProcessRole::CloudHypervisorRunner
+                && intent.vm_name == vm_name
+                && intent.execution_ref == execution_ref
+                && intent.execution_domain == execution_domain
+                && intent.user_ref.is_none()
+                && (intent.role_id == template
+                    || intent.profile_id == template
+                    || runner_template_name(&intent.role) == Some(template))
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -4511,6 +4572,136 @@ fn load_zone_resource_bundles(
         process_templates.extend(parsed.process_templates);
     }
     Ok((bundles, process_templates))
+}
+
+/// Load the semantic Guest setup descriptors from the adjacent artifact
+/// catalog. The catalog is bound to every Zone resource bundle by its
+/// `artifactCatalogDigest`, so a descriptor cannot be selected from an
+/// unrelated catalog.
+fn load_guest_setup_descriptors(
+    zone_resource_bundles: &BTreeMap<String, Vec<u8>>,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<BTreeMap<(String, String), Vec<u8>>, Error> {
+    let catalog_path = resolve_bundle_ref(bundle_root, "artifact-catalog.json");
+    if !catalog_path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let bytes = secure_open_and_read(&catalog_path, policy)?;
+    let mut catalog: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error(
+            "artifact-catalog.json",
+            manifest_parse_reason(&error.to_string()),
+        )
+    })?;
+    let catalog_digest = catalog
+        .get("catalogDigest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "artifact catalog digest is missing",
+            )
+        })?
+        .to_owned();
+    let Some(object) = catalog.as_object_mut() else {
+        return Err(Error::manifest_parse_error(
+            "artifact-catalog.json",
+            "artifact catalog is not an object",
+        ));
+    };
+    object.remove("catalogDigest");
+    let preimage = serde_json::to_vec(&catalog).map_err(|_| {
+        Error::manifest_parse_error("artifact-catalog.json", "artifact catalog is invalid")
+    })?;
+    let canonical = CanonicalJsonValue::parse(&preimage).map_err(|_| {
+        Error::manifest_parse_error(
+            "artifact-catalog.json",
+            "artifact catalog is not canonical",
+        )
+    })?;
+    let canonical = canonical.to_canonical_bytes();
+    if framed_canonical_digest(ARTIFACT_CATALOG_DOMAIN_TAG, &canonical) != catalog_digest {
+        return Err(Error::manifest_parse_error(
+            "artifact-catalog.json",
+            "artifact catalog digest does not match its content",
+        ));
+    }
+    for bytes in zone_resource_bundles.values() {
+        let bundle = ResourceBundle::from_json(bytes).map_err(|_| {
+            Error::manifest_parse_error(
+                "resource-bundle.json",
+                "resource bundle is invalid while checking artifact catalog",
+            )
+        })?;
+        if bundle.integrity().artifact_catalog_digest != catalog_digest {
+            return Err(Error::manifest_parse_error(
+                "resource-bundle.json",
+                "resource bundle artifact catalog digest does not match",
+            ));
+        }
+    }
+    let descriptors = catalog
+        .get("guestSetupDescriptors")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest setup descriptor list is missing",
+            )
+        })?;
+    let mut result = BTreeMap::new();
+    for row in descriptors {
+        let zone = row
+            .get("zone")
+            .and_then(serde_json::Value::as_str)
+            .filter(|zone| !zone.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest setup descriptor Zone is invalid",
+                )
+            })?;
+        let guest = row
+            .get("guest")
+            .and_then(serde_json::Value::as_str)
+            .filter(|guest| !guest.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest setup descriptor name is invalid",
+                )
+            })?;
+        let descriptor = row.get("descriptor").ok_or_else(|| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest setup descriptor payload is missing",
+            )
+        })?;
+        let descriptor_bytes = serde_json::to_vec(descriptor).map_err(|_| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest setup descriptor payload is invalid",
+            )
+        })?;
+        let descriptor_value = CanonicalJsonValue::parse(&descriptor_bytes).map_err(|_| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest setup descriptor payload is not canonical",
+            )
+        })?;
+        let descriptor_bytes = descriptor_value.to_canonical_bytes();
+        if result
+            .insert((zone.to_owned(), guest.to_owned()), descriptor_bytes)
+            .is_some()
+        {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "duplicate Guest setup descriptor",
+            ));
+        }
+    }
+    Ok(result)
 }
 
 /// Load the integrity-pinned per-Zone storage rows emitted by Nix.

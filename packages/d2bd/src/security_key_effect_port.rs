@@ -145,6 +145,8 @@ struct RelayTarget {
     gid: u32,
 }
 
+/// Resolve the retained legacy security-key frontend. v3 Guest lifecycle
+/// requests never use this connector or its process-DAG locator.
 fn relay_target(
     resolver: &BundleResolver,
     vm_id: &str,

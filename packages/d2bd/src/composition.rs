@@ -7005,6 +7005,7 @@ fn dispatch_guest_lifecycle_resource_request(
     if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
         return Ok(response);
     }
+    let caller_role = broker_caller_role_for_peer(peer);
     let force = request
         .get("force")
         .and_then(Value::as_bool)
@@ -7013,7 +7014,6 @@ fn dispatch_guest_lifecycle_resource_request(
         .get("waitForReady")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let caller_role = broker_caller_role_for_peer(peer);
     let request_operation_id = d2bd_runtime::resource_runtime_support::public_operation_id(
         request,
         peer.uid,
@@ -7024,11 +7024,9 @@ fn dispatch_guest_lifecycle_resource_request(
         target.name().as_str(),
         &request_operation_id,
     );
-    let make_vm_request = |_operation_id: &str| public_wire::VmLifecycleRequest {
-        vm: target.name().as_str().to_owned(),
-        flags: flags.clone(),
-        force,
-        no_wait_api: !wait_for_ready,
+    let provider_ref = match block_on_future(runtime.guest_provider_ref(&target)) {
+        Ok(provider_ref) => provider_ref,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
     };
     let dispatch_one = |operation: provider_effects::GuestLifecycleOperation,
                         operation_id: &str|
@@ -7056,19 +7054,19 @@ fn dispatch_guest_lifecycle_resource_request(
                 ));
             }
         };
-        let vm_request = make_vm_request(operation_id);
-        let effect = DaemonProviderLifecycleEffect {
+        let effect = DaemonGuestLifecycleEffect {
             state,
-            request: vm_request,
+            guest: target.clone(),
             caller_role: caller_role.clone(),
-            term_timeout: VM_STOP_TIMEOUT,
-            kill_timeout: VM_STOP_TIMEOUT,
+            force,
+            wait_for_ready,
             operation,
             authorization: authorization.clone(),
         };
-        let response = match state.provider_runtime.dispatch_lifecycle(
+        let response = match state.provider_runtime.dispatch_v3_lifecycle(
             &caller_role,
-            target.name().as_str(),
+            &provider_ref,
+            target.clone(),
             operation,
             operation_id.to_owned(),
             authorization.clone(),
@@ -7112,8 +7110,9 @@ fn dispatch_guest_lifecycle_resource_request(
                 &verb,
             ));
         };
-        let stop_is_latest = match state.provider_runtime.lifecycle_admission_is_latest(
+        let stop_is_latest = match state.provider_runtime.lifecycle_admission_is_latest_v3(
             &caller_role,
+            &provider_ref,
             provider_effects::GuestLifecycleOperation::Stop,
             &stop_authorization,
         ) {
@@ -16798,6 +16797,24 @@ async fn open_resource_plane(
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
+        let descriptors = materialization_bundle
+            .resources
+            .iter()
+            .filter(|resource| resource.resource_type().as_str() == "Guest")
+            .filter_map(|resource| {
+                resolver
+                    .guest_setup_descriptor_bytes(
+                        zone.as_str(),
+                        resource.metadata().name().as_str(),
+                    )
+                    .map(|bytes| {
+                        (
+                            resource.metadata().name().as_str().to_owned(),
+                            bytes.to_vec(),
+                        )
+                    })
+            });
+        runtime.set_guest_setup_descriptors(descriptors);
         prepared_runtimes.push((zone, runtime, materialization_bundle));
     }
 
@@ -16952,7 +16969,29 @@ async fn open_resource_plane(
             return Err(error);
         }
         if let Err(error) = runtime
+            .reconcile_cloud_hypervisor_guests(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
+        if let Err(error) = runtime
             .reconcile_activation_resources(Arc::new(state.clone()))
+            .await
+        {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
+        if let Err(error) = runtime
+            .reconcile_cloud_hypervisor_guests(Arc::new(state.clone()))
             .await
         {
             let _ = runtime.shutdown().await;
@@ -20934,6 +20973,95 @@ fn dispatch_broker_vm_start_as(
             &request.vm,
             error,
         )),
+    }
+}
+
+struct DaemonGuestLifecycleEffect<'a> {
+    state: &'a ServerState,
+    guest: ResourceRef,
+    caller_role: BrokerCallerRole,
+    force: bool,
+    wait_for_ready: bool,
+    operation: provider_effects::GuestLifecycleOperation,
+    authorization: provider_effects::LifecycleAuthorization,
+}
+
+impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffect<'_> {
+    type Output = Value;
+
+    fn actual_state(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
+        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            &self.state.zone_coordinator,
+            self.guest.name().as_str(),
+        )
+        .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let plane = self
+            .state
+            .resource_plane
+            .lock()
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?
+            .clone()
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        let runtime = plane
+            .zone(&zone)
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        block_on_future(runtime.cloud_hypervisor_lifecycle_state(&self.guest))
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)
+    }
+
+    fn apply(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        consume_lifecycle_lease(
+            self.state,
+            &self.authorization,
+            self.operation,
+            &self.caller_role,
+        )?;
+        let _ = self.force;
+        let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            &self.state.zone_coordinator,
+            self.guest.name().as_str(),
+        )
+        .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        let plane = self
+            .state
+            .resource_plane
+            .lock()
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?
+            .clone()
+            .ok_or(provider_effects::ProviderEffectError::StateUnavailable)?;
+        let runtime = plane
+            .zone(&zone)
+            .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        block_on_future(runtime.apply_cloud_hypervisor_lifecycle(
+            Arc::new(self.state.clone()),
+            &self.guest,
+            self.operation,
+        ))
+        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        let mut response = applied_response(
+            "guest lifecycle",
+            format!(
+                "{} {}: controller-owned VMM Process lifecycle applied",
+                self.guest.to_canonical_string(),
+                self.operation.as_str()
+            ),
+        );
+        if !self.wait_for_ready {
+            response
+                .as_object_mut()
+                .expect("mutating response is an object")
+                .insert(
+                    "apiReady".to_owned(),
+                    Value::String("pending".to_owned()),
+                );
+        }
+        Ok(response)
     }
 }
 

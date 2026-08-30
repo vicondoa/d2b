@@ -2443,8 +2443,12 @@ fn resource_ticket(
             Some(target) if target.resource_type().as_str() == "Guest" => {
                 Some(target.name().as_str())
             }
+            None => context
+                .owner_ref
+                .as_ref()
+                .filter(|owner| owner.resource_type().as_str() == "Guest")
+                .map(|owner| owner.name().as_str()),
             Some(_) => return Err("provider-ticket:invalid-target".to_owned()),
-            None => None,
         },
         _ => return Err("provider-ticket:invalid-execution-ref".to_owned()),
     };
@@ -2473,6 +2477,17 @@ fn resource_ticket(
     });
     let generic_intent = if exact_static_controller {
         None
+    } else if let (Some(owner), Some(vm_name)) = (
+        context.owner_ref.as_ref(),
+        target_vm_name,
+    ) && owner.resource_type().as_str() == "Guest"
+    {
+        bundle.find_guest_vmm_intent(
+            vm_name,
+            &execution_ref,
+            execution_domain,
+            execution.template().as_str(),
+        )
     } else {
         bundle.find_runner_intent_for_process_in_vm(
             target_vm_name,

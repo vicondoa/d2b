@@ -306,57 +306,70 @@ pub async fn select_wave6_resources(
         Wave6ResourceKind::DeviceTpm,
         Wave6ResourceKind::CloudHypervisorGuest,
     ] {
-        let mut request = wire::ListRequest::new();
-        let mut meta = wire::RequestMeta::new();
-        meta.operation_id = kind.operation_id().to_owned();
-        meta.correlation_id = meta.operation_id.clone();
-        request.meta = MessageField::some(meta);
-        request.resource_types.push(kind.resource_type().to_owned());
-        let mut projection = wire::Projection::new();
-        projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
-        request.projection = MessageField::some(projection);
-        let response = client.list(request).await;
-        if response.error.is_some() || response.resources.len() != 1 {
-            return Err(Wave6BoundaryError::ResourceSelection);
-        }
-        let envelope = response
-            .resources
-            .into_iter()
-            .next()
-            .ok_or(Wave6BoundaryError::ResourceSelection)?;
-        let identity = envelope
-            .identity
-            .0
-            .ok_or(Wave6BoundaryError::ResourceSelection)?;
-        let resource_type = identity.resource_type;
-        if resource_type != kind.resource_type() {
-            return Err(Wave6BoundaryError::ResourceSelection);
-        }
-        let name = identity.name;
-        let resource_ref = ResourceRef::parse(&format!("{resource_type}/{name}"))
-            .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
-        let uid = ResourceUid::parse(identity.uid.ok_or(Wave6BoundaryError::ResourceSelection)?)
-            .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
-        let generation = ResourceGeneration::new(
-            identity
-                .generation
-                .ok_or(Wave6BoundaryError::ResourceSelection)?,
-        )
-        .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
-        let provider_ref = provider_ref_from_canonical(&envelope.canonical_json)?;
         Wave6ResourceSet::insert(
             &mut resources,
             kind,
-            Wave6Resource {
-                resource_ref,
-                uid,
-                generation,
-                provider_ref,
-                canonical_json: envelope.canonical_json,
-            },
+            select_authenticated_resource(client, kind).await?,
         );
     }
     Wave6ResourceSet::from_resources(resources)
+}
+
+/// Select exactly one resource through an already authenticated Resource API
+/// client. The caller supplies only the closed acceptance kind; identity and
+/// provider routing come from the committed response.
+pub async fn select_authenticated_resource(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    kind: Wave6ResourceKind,
+) -> Result<Wave6Resource, Wave6BoundaryError> {
+    let mut request = wire::ListRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = kind.operation_id().to_owned();
+    meta.correlation_id = meta.operation_id.clone();
+    request.meta = MessageField::some(meta);
+    request.resource_types.push(kind.resource_type().to_owned());
+    let mut projection = wire::Projection::new();
+    projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+    request.projection = MessageField::some(projection);
+    let response = client.list(request).await;
+    if response.error.is_some() || response.resources.len() != 1 {
+        return Err(Wave6BoundaryError::ResourceSelection);
+    }
+    let envelope = response
+        .resources
+        .into_iter()
+        .next()
+        .ok_or(Wave6BoundaryError::ResourceSelection)?;
+    let identity = envelope
+        .identity
+        .0
+        .ok_or(Wave6BoundaryError::ResourceSelection)?;
+    let resource_type = identity.resource_type;
+    if resource_type != kind.resource_type() {
+        return Err(Wave6BoundaryError::ResourceSelection);
+    }
+    let resource_ref = ResourceRef::parse(&format!("{resource_type}/{}", identity.name))
+        .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
+    let uid = ResourceUid::parse(
+        identity
+            .uid
+            .ok_or(Wave6BoundaryError::ResourceSelection)?,
+    )
+    .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
+    let generation = ResourceGeneration::new(
+        identity
+            .generation
+            .ok_or(Wave6BoundaryError::ResourceSelection)?,
+    )
+    .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
+    let provider_ref = provider_ref_from_canonical(&envelope.canonical_json)?;
+    Ok(Wave6Resource {
+        resource_ref,
+        uid,
+        generation,
+        provider_ref,
+        canonical_json: envelope.canonical_json,
+    })
 }
 
 fn provider_ref_from_canonical(canonical_json: &[u8]) -> Result<ResourceRef, Wave6BoundaryError> {
