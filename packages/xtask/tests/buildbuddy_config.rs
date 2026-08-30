@@ -14,6 +14,11 @@ use serde_json::Value;
 
 static REPO_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+#[test]
+fn pr_babysit_live_acceptance_requires_repair() {
+    assert!(false, "intentional PR babysitter repair-loop failure");
+}
+
 fn repo_root() -> &'static Path {
     REPO_ROOT
         .get_or_init(|| {
