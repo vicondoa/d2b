@@ -1110,13 +1110,15 @@ flowchart TB
   1. Own all booted-VM acceptance moved from U14 and U19: final child graph, Gateway canary, credential custody, reconnect and revocation, forged route claims, restart adoption, blocked finalization, deletion order, and rollback.
   2. Run focused owner suites and all required static gates on the exact committed head.
   3. Run `make test-host-integration` and `make test-integration` as mandatory acceptance lanes in parallel with real-host testing when their execution environments and heavy-gate ownership are independent; otherwise let the repository semaphore serialize them.
-  4. Use the real `/etc/nixos` flake and selected `nixosConfiguration`; deep host configuration changes are allowed because this is a clean break from v1/v2, not an in-place compatibility migration.
-  5. Evaluate and build the configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
-  6. Remove only explicitly identified, d2b-owned v1/v2 host paths after the switch. No data migration or retention is required, but foreign ownership markers and unrelated host state remain untouched.
-  7. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify the controller and VMM Process Resources, authenticated Guest readiness, and successful Cloud Hypervisor Guest boot.
-  8. Restart `d2bd`, verify adoption without duplicate processes or resources, delete and recreate the test Guest without requiring retained v1/v2 data, then verify rollback to the known-good NixOS generation.
-  9. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
-  10. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
+  4. Build the reviewed d2b CLI, daemon, broker, activation helpers, unsafe-local helper, Resource compiler, and Wayland proxy through Bazel's default remote profile; stage validated executable outputs through the same bounded host-tool bundle contract used by `make test-host-integration`.
+  5. Inject the staged Bazel outputs into the real `/etc/nixos` evaluation through `d2bHostToolOverrides`/`D2B_HOST_TOOL_BUNDLE`-equivalent wiring so host iterations never rebuild d2b Rust binaries through Nix.
+  6. Use the real `/etc/nixos` flake and selected `nixosConfiguration`; deep host configuration changes are allowed because this is a clean break from v1/v2, not an in-place compatibility migration.
+  7. Evaluate and build the configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
+  8. Remove only explicitly identified, d2b-owned v1/v2 host paths after the switch. No data migration or retention is required, but foreign ownership markers and unrelated host state remain untouched.
+  9. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify the controller and VMM Process Resources, authenticated Guest readiness, and successful Cloud Hypervisor Guest boot.
+  10. Restart `d2bd`, verify adoption without duplicate processes or resources, delete and recreate the test Guest without requiring retained v1/v2 data, then verify rollback to the known-good NixOS generation.
+  11. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
+  12. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
 - **Execution note:** The real-host switch and rollback are operator-authorized manual acceptance. Do not add a new live-host evidence script or treat an environment/advisory skip as success.
 - **Test scenarios:**
   - Covers AE1-AE8. The KVM lane proves atomic pre-UID child batch creation, uncertain-response relist, returned UID fencing, Process/Endpoint/Volume readiness, guest-local seeding, Ready-to-Degraded session loss, reconnect, same-name cross-Zone isolation, same-Zone Guest reincarnation fencing, interrupted Provider generation recycle, blocked finalization, and deletion order.
@@ -1127,6 +1129,7 @@ flowchart TB
   - Real host deletion keeps `FinalizationBlocked` while any owned transitive worker, host-backed Guest Volume, unavailable-session uncertainty, or foreign leftover prevents proof of complete drain; the Guest finalizer clears only after owned descendants are absent.
   - Host rollback leaves new-generation Processes and owned Resources absent or quarantined, restores the known-good generation, starts a Guest successfully, and leaves the healthy three-unit control plane.
   - The complete `make test-host-integration` and `make test-integration` lanes pass on the same reviewed head used for real-host testing.
+  - The switched host uses the staged Bazel-built d2b binaries, and the Nix evaluation does not compile replacement d2b Rust binaries.
 - **Scope boundary:** ACA and other Provider acceptance are follow-up work after U20 and do not block this Cloud Hypervisor host cutover.
 - **Verification:** VM and real-host acceptance pass on the same reviewed head, final `make check` passes, CI is green, no actionable review finding remains, and the guarded squash merge succeeds.
 
@@ -1153,7 +1156,7 @@ Each unit runs the smallest owner-local Bazel target that proves its changed sur
 | `D2B_VM_CHECK=host-realm-isolation make test-host-integration` | U20 | Gateway Guest, ZoneLink, sealed credential canary, and host custody proof pass on the final converged head. |
 | Package-local compile and import checks | U17 and U18 | Retired owners have no current source consumer, package export, fixture import, or package-local build edge before U19 removes shared graph edges. |
 | `make test-host-integration` | U20 | The complete retained host VM suite passes on the final reviewed head. |
-| Real host configuration evaluation, build, dry activation, switch, restart/adoption, Guest deletion, and NixOS rollback | U20 | The deployed host remains healthy, the three-unit control plane is correct, Guests are collision-free and Ready, restart creates no duplicates, deletion drains descendants, and rollback restores the known-good generation. |
+| Real host Bazel-tool staging, configuration evaluation, build, dry activation, switch, restart/adoption, Guest deletion, and NixOS rollback | U20 | The deployed host uses the reviewed Bazel outputs without rebuilding d2b through Nix; the three-unit control plane is healthy, the Cloud Hypervisor Guest boots, restart creates no duplicates, deletion drains descendants, and rollback restores the known-good generation. |
 | Fresh independent `ce-code-review mode:agent` | Every merged dependency wave and every head-changing fix | No actionable P0/P1 finding remains; fixes invalidate prior evidence and trigger a new review. |
 | `make check` | Final U20 head | Aggregate Bazel facade and all required repository gates pass after VM and real-host acceptance. |
 
