@@ -18,11 +18,17 @@ pub mod metrics;
 pub mod state;
 pub mod vmm_argv;
 
+pub use bootstrap_graph::{
+    BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmLifecycleEligibility,
+};
 pub use config::{CloudHypervisorConfig, CloudHypervisorGuestSettings, ConsoleType};
 pub use controller::{
-    CloudHypervisorClock, CloudHypervisorController, CloudHypervisorEffectPort,
-    CloudHypervisorError, CloudHypervisorPhase, CloudHypervisorReconcileOutcome,
-    CloudHypervisorRecoveryState, SystemCloudHypervisorClock,
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, ChildSpecUpdate,
+    CloudHypervisorController, CloudHypervisorControllerRegistration, CloudHypervisorError,
+    CloudHypervisorReconcileOutcome, CloudHypervisorResourceApi, CloudHypervisorResourceApiError,
+    CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, GuestChildCommitResponse,
+    GuestChildCreateBatch, GuestCondition, GuestDependencySnapshot, GuestSnapshot,
+    GuestStatusProjection, OwnedChildSnapshot,
 };
 pub use descriptor::{
     BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
@@ -37,6 +43,10 @@ pub use identity::{
     CommitResponseError, CommittedChild, CommittedChildren, CreatePrecondition, EndpointCreateBody,
     GuestChildBatch, ProcessCreateBody, VolumeCreateBody, deterministic_child_name,
     deterministic_child_ref, map_commit_response, map_wire_commit_response,
+};
+pub use state::{
+    GuestGenerationSet, GuestRuntimeStatus, GuestStatusObservation, GuestStatusPhase,
+    finalization_eligible, reduce_status,
 };
 pub use vmm_argv::{
     ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
