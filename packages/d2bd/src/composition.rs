@@ -3657,7 +3657,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
-        #[cfg(test)]
         console_sessions: Arc::new(Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
