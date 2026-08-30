@@ -450,6 +450,10 @@ impl BundleBackedLaunchResolver {
         let generic_intent = if let Some(owner) = ticket
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
+            .filter(|owner| {
+                ticket.process_ref().name().as_str()
+                    == format!("{}-vmm", owner.name().as_str())
+            })
         {
             let Some(zone_uid) = ticket.zone_uid() else {
                 return Err(ProcessEffectError::IdentityChanged);
