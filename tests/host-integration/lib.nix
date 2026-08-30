@@ -139,6 +139,9 @@ let
         ).digest()
         executable_digest = "sha256:" + hashlib.sha256(first).hexdigest()
         manifest["digests"]["executable"] = executable_digest
+        for component in manifest.get("components", []):
+            for capability in component.get("targetCapabilities", []):
+                capability["artifactDigest"] = raw_digest
         manifest_bytes = json.dumps(
             manifest,
             ensure_ascii=False,
