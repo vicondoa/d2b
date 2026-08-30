@@ -49,8 +49,8 @@ lowercase IDs, not ResourceRefs or filesystem paths.
 
 There are no framework-owned per-Guest systemd units or host-singleton
 lifecycle services. Broker-spawned runners use delegated leaves below
-`/sys/fs/cgroup/d2b.slice/<zone>/<resource>/<role>/`; the private identity is
-broker-resolved and is not a public naming API.
+`/sys/fs/cgroup/d2b.slice/<vm>/<role>/`; `<vm>` is the broker-private runtime
+identity derived from Zone and Guest state, not a public Guest-name lookup.
 
 ## Provider and artifact IDs
 
