@@ -1,10 +1,8 @@
-# Type-G runNixOSTest: Guest process-adoption preflight.
+# Type-G runNixOSTest: Zone-native Cloud Hypervisor Guest acceptance.
 #
-# This is the lowest public host selector that can exercise the installed
-# Cloud Hypervisor runner and pidfd recovery state. It exercises the production
-# daemon restart/process-adoption boundary when nested VM prerequisites are
-# available; otherwise it records an explicit environment block and does not
-# claim Guest adoption coverage.
+# This is the public host selector for the controller-owned Guest lifecycle.
+# It requires the nested KVM posture and fails closed when the host cannot
+# provide it; an environment block is not acceptance evidence.
 { pkgs, self }:
 
 let
@@ -13,77 +11,35 @@ let
     inherit self;
     inherit lib;
   };
-  acceptancePublisherKey = ''
-    -----BEGIN PUBLIC KEY-----
-    MCowBQYDK2VwAyEAu3/qwmKeWeFP7U5Z71uQOw/Zm5lBk4ZDbPVA2O7QlHg=
-    -----END PUBLIC KEY-----
-  '';
-  providerPackage = pkgs.runCommand "d2b-acceptance-provider" {
-    nativeBuildInputs = [ pkgs.coreutils ];
-  } ''
-    install -Dm644 ${../../tests/fixtures/provider-acceptance/provider-manifest.json} \
-      "$out/share/d2b/provider/provider-manifest.json"
-    install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
-      "$out/share/d2b/provider/config-schema.json"
-    install -d -m755 "$out/share/d2b/provider"
-    install -Dm755 ${pkgs.coreutils}/bin/true \
-      "$out/bin/acceptance-controller"
-    base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
-      >"$out/share/d2b/provider/provider-manifest.json.sig"
-  '';
-  providerCatalog = {
-    providerName = "acceptance-provider";
-    packageName = "d2b-acceptance-provider";
-    version = "0.0.0";
-    systems = [ "x86_64-linux" ];
-    platform = "x86_64-linux";
-    apiCompatibility = "d2b.zone.v3";
-    serviceCompatibility = "d2bd.resource";
-    signature = "default";
-    rootEpoch = 1;
-    revocationStatus = "clear";
-    denyStatus = "clear";
-    provenanceEvidence = "accepted";
-    sbomEvidence = "accepted";
-    licenseEvidence = "accepted";
-    vulnerabilityEvidence = "accepted";
-    conformanceAttestation = "accepted";
-    supportChannel = "stable";
-    supportContact = "d2b-acceptance@localhost";
-    publisher = "d2b-acceptance";
-    packageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-    executableDigest = "sha256:f84125779653dba770042fd2af2bd01299b05ae892c039c497e6b5ce45029d9c";
-    manifestDigest = "sha256:3c772c723cc2d508502132e10c325a2194c7683025d0c1e8ea9e125d163a10c3";
-    componentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    descriptorDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    configDigest = "sha256:ccb5a9d66e068ea8f4e205788589675a48e9e3754a840d8ac10120d14238e914";
+  cloudHypervisorArtifact =
+    d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
+  volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
+
+  cloudHypervisorConfig = {
+    controllerExecutionRef = "Host/host-system";
+    defaultVcpus = 2;
+    defaultMemoryMb = 512;
+    defaultMachineType = "microvm";
+    watchdog = true;
+    adoptionWindowMs = 30000;
+    healthCheckIntervalMs = 5000;
+    healthCheckTimeoutMs = 1000;
+    healthCheckFailureThreshold = 3;
+    startupDeadlineMs = 120000;
   };
-  providerArtifact = {
-    package = providerPackage;
-    type = "provider";
-    catalog = providerCatalog;
+  guestSystem = d2bLib.mkGuestSystem {
+    inherit pkgs;
+    name = "acceptance-guest";
   };
-  acceptanceArtifactCatalogDigest =
-    "sha256:${lib.concatStringsSep "" (lib.replicate 64 "a")}";
-  acceptanceArtifactCatalog = pkgs.writeText "d2b-acceptance-artifact-catalog.json"
-    (builtins.toJSON {
-      schemaVersion = 3;
-      catalogDigest = acceptanceArtifactCatalogDigest;
-      entries = map
-        (artifactId: {
-          inherit artifactId;
-          type = "provider";
-          storePath = "${providerPackage}";
-          packageDigest = providerCatalog.packageDigest;
-          closureDigest = acceptanceArtifactCatalogDigest;
-          closureSize = 0;
-        })
-        [ "acceptance-provider" ];
-    });
   artifacts = {
-    acceptance-provider = providerArtifact;
+    runtime-cloud-hypervisor = {
+      inherit (cloudHypervisorArtifact) package type catalog;
+    };
+    volume-acceptance-provider = {
+      inherit (volumeProviderArtifact) package type catalog;
+    };
     acceptance-system = {
-      package = pkgs.writeText "d2b-acceptance-system" "acceptance-system";
+      package = guestSystem.config.system.build.toplevel;
       type = "nixos-system";
     };
   };
@@ -93,38 +49,19 @@ pkgs.testers.runNixOSTest {
 
   nodes.machine = d2bLib.d2bDaemonNode {
     writableStore = true;
-    extra = { config, pkgs, ... }: {
-      systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
-        "+${pkgs.writeShellScript "d2b-runtime-cgroup-prep" ''
-          relative=$(sed -n 's/^0:://p' /proc/self/cgroup)
-          path="/sys/fs/cgroup''${relative}/cgroup.kill"
-          if [ -e "$path" ]; then
-            chown d2bd:d2bd "$path" 2>/dev/null || true
-            chmod u+w "$path" 2>/dev/null || true
-          fi
-        ''}"
-      ];
+    extra = { ... }: {
       d2b.site.adminUsers = [ "alice" ];
-      d2b.vms.corp-vm.env = lib.mkForce null;
-      environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
-      environment.systemPackages = with pkgs; [ jq iputils ];
+      environment.systemPackages = with pkgs; [ iproute2 jq iputils procps ];
       d2b.artifacts = artifacts;
-      d2b._artifactCatalogV3 = lib.mkForce {
-        catalogDigest = acceptanceArtifactCatalogDigest;
-        path = acceptanceArtifactCatalog;
-      };
-      d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
-        data = { schemaVersion = 3; catalogDigest = acceptanceArtifactCatalogDigest; entries = [ ]; };
-        jsonText = builtins.readFile acceptanceArtifactCatalog;
-        path = lib.mkForce acceptanceArtifactCatalog;
-        installFileName = "artifact-catalog.json";
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
-      d2b.zones.local-root.trustedPublishers.d2b-acceptance.signingKey =
-        acceptancePublisherKey;
-      d2b.zones.work.trustedPublishers.d2b-acceptance.signingKey =
-        acceptancePublisherKey;
+      d2b.guestSystems.work.acceptance-guest = guestSystem;
+      d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
+      d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
+      d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
+      d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
       d2b.zones.local-root.resources.host-system = {
         type = "Host";
         spec = {
@@ -171,25 +108,34 @@ pkgs.testers.runNixOSTest {
           volume-local = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
-              config = { };
+              artifactId = "volume-acceptance-provider";
+              config = {
+                controllerExecutionRef = "Host/host-system";
+                sourcePolicies = [
+                  {
+                    id = "default-state";
+                    class = "local-path";
+                    volumeKinds = [ "durable" "state" "cache" ];
+                  }
+                ];
+              };
             };
           };
           volume-virtiofs = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
-              config = { };
+              artifactId = "volume-acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
             };
           };
           runtime-cloud-hypervisor = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
-              config.controllerExecutionRef = "Host/host-system";
+              artifactId = "runtime-cloud-hypervisor";
+              config = cloudHypervisorConfig;
             };
           };
-          corp-vm = {
+          acceptance-guest = {
             type = "Guest";
             spec = {
               providerRef = "Provider/runtime-cloud-hypervisor";
@@ -202,68 +148,6 @@ pkgs.testers.runNixOSTest {
               deviceAttachments = [ ];
             };
           };
-          display-wayland = {
-            type = "Provider";
-            spec = {
-              artifactId = "acceptance-provider";
-              config = {
-                principalPoolSize = 4;
-                runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
-              };
-            };
-          };
-          display-wayland-policy = {
-            type = "display-wayland.d2bus.org.WaylandPolicy";
-            metadata.ownerRef = "Provider/display-wayland";
-            spec = {
-              allowGlobals = [ ];
-              denyGlobals = [ ];
-              maxVersions = { };
-              dmabufAllow = [ ];
-              dmabufDeny = [ ];
-              defaults = {
-                acceleratedRendering = "deny";
-                clipboardBoundary = "deny";
-                highRisk = "deny";
-                appDefaults = "deny";
-                offDefaults = "deny";
-                unclassified = "deny";
-              };
-            };
-          };
-          display-wayland-session = {
-            type = "display-wayland.d2bus.org.WaylandSession";
-            metadata.ownerRef = "Guest/corp-vm";
-            spec = {
-              guestRef = "Guest/corp-vm";
-              hostRef = "Host/host-system";
-              userRef = "User/alice";
-              policyRef =
-                "display-wayland.d2bus.org.WaylandPolicy/display-wayland-policy";
-              identity = {
-                label = "acceptance";
-                activeColor = "#00ff00";
-                inactiveColor = "#808080";
-                urgentColor = "#ff0000";
-                borderEnabled = true;
-                borderWidth = 2;
-                labelEnabled = true;
-                labelText = "acceptance";
-                labelPosition = "top-left";
-              };
-              crossDomainTrusted = true;
-              reconnectGeneration = 1;
-              virglVideo = false;
-              filter = {
-                allowGlobals = [ ];
-                denyGlobals = [ ];
-                maxVersions = { };
-                dmabufAllow = [ ];
-                dmabufDeny = [ ];
-                debugLogging = false;
-              };
-            };
-          };
         };
       };
     };
@@ -272,74 +156,246 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     start_all()
     machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2b-broker.socket")
     machine.wait_for_file("/run/d2b/public.sock")
 
-    # The nested VM must be able to create a TAP before an inner Cloud
-    # Hypervisor process can boot. Probe that host capability explicitly and
-    # report a concrete block instead of waiting for a dead runner. This
-    # preflight is not Guest-adoption evidence when the nested posture is
-    # unavailable.
-    guest_fixture = machine.succeed(
-        "if test -d /nix/store && test -d /var/lib/d2b/vms && "
-        "runuser -u d2bd -- ip tuntap add d2b-guest-probe mode tap 2>/dev/null; "
-        "then runuser -u d2bd -- ip tuntap del d2b-guest-probe mode tap 2>/dev/null; echo ready; "
-        "else echo blocked-host; fi"
-    ).strip()
-    if guest_fixture != "ready":
-        print(
-            "BLOCKED: Cloud Hypervisor guest adoption requires nested TAP and "
-            "delegated cgroup host posture; this runNixOSTest image does not "
-            "provide it."
-        )
-        machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
-    else:
-        machine.succeed(
-            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            "d2b --zone work --json "
-            "resource reconcile Guest/corp-vm"
-        )
-        machine.wait_until_succeeds(
-            "jq -e '.entries[] | select(.vm == \"corp-vm\" and .role == \"ch-runner\")' "
-            "/var/lib/d2b/daemon-state/pidfd-table.json"
-        )
-        runner = machine.succeed(
-            "jq -r '.entries[] | select(.vm == \"corp-vm\" and .role == \"ch-runner\") "
-            "| \"\\(.pid) \\(.startTimeTicks)\"' "
-            "/var/lib/d2b/daemon-state/pidfd-table.json"
-        ).strip()
-        runner_pid, runner_start = runner.split()
-        machine.succeed(f"test -d /proc/{runner_pid}")
-        machine.succeed(
-            f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
-        )
-        machine.succeed(
-            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            "d2b --zone work --json resource list Guest "
-            "> /run/d2b-guest-before.json"
-        )
-        machine.succeed(
-            "jq -e '.resources[] | select(.type == \"Guest\" and .metadata.name == \"corp-vm\")' "
-            "/run/d2b-guest-before.json"
-        )
+    machine.succeed(
+        "test -e /dev/kvm && test -r /dev/kvm && test -w /dev/kvm || "
+        "{ echo 'required KVM capability unavailable: /dev/kvm' >&2; exit 1; }"
+    )
+    machine.succeed(
+        "test -e /dev/vhost-net && test -r /dev/vhost-net && test -w /dev/vhost-net || "
+        "{ echo 'required Cloud Hypervisor vhost capability unavailable: /dev/vhost-net' >&2; exit 1; }"
+    )
+    machine.succeed(
+        "test -r /sys/fs/cgroup/cgroup.controllers || "
+        "{ echo 'required cgroup v2 capability unavailable' >&2; exit 1; }"
+    )
+    machine.succeed(
+        "for controller in cpu memory io pids cpuset; do "
+        "grep -qw \"$controller\" /sys/fs/cgroup/cgroup.controllers || "
+        "{ echo \"required cgroup controller unavailable: $controller\" >&2; exit 1; }; "
+        "done"
+    )
+    machine.succeed(
+        "test -d /sys/fs/cgroup/d2b.slice && "
+        "grep -qw 'cpu' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control && "
+        "grep -qw 'memory' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control && "
+        "grep -qw 'pids' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control || "
+        "{ echo 'required delegated d2b.slice cgroup posture unavailable' >&2; exit 1; }"
+    )
 
-        machine.succeed("systemctl restart d2bd.service")
-        machine.wait_for_unit("d2bd.service")
-        machine.wait_for_file("/run/d2b/public.sock")
-        machine.succeed(
-            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            "d2b --zone work --json "
-            "resource reconcile Guest/corp-vm | jq -e "
-            "'.effect == \"cloud-hypervisor-adopted\"'"
-        )
-        machine.succeed(f"test -d /proc/{runner_pid}")
-        machine.succeed(
-            f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
-        )
-        machine.wait_until_succeeds(
-            f"jq -e '.entries[] | select(.vm == \"corp-vm\" and .role == \"ch-runner\" "
-            f"and .pid == ({runner_pid}|tonumber) and "
-            f".startTimeTicks == ({runner_start}|tonumber))' "
-            "/var/lib/d2b/daemon-state/pidfd-table.json"
-        )
+    machine.succeed(
+        "test -r /etc/d2b/artifact-catalog.json && "
+        "jq -e '"
+        "(.guestSetupDescriptors | any(.[]; "
+        ".zone == \"work\" and .guest == \"acceptance-guest\" and "
+        ".providerArtifactId == \"runtime-cloud-hypervisor\" and "
+        ".descriptor.providerRef == \"Provider/runtime-cloud-hypervisor\" and "
+        ".descriptor.systemArtifactId == \"acceptance-system\" and "
+        ".descriptor.childRoles == [\"vmm\", \"ch-api\", \"guest-control\", \"system\"])) and "
+        "(.guestClosures | any(.[]; "
+        ".zone == \"work\" and .guest == \"acceptance-guest\" and "
+        ".artifactId == \"acceptance-system\" and (.closurePaths | length > 0) and "
+        "(. as $guest | ($guest.closurePaths | index($guest.toplevel)) != null) and "
+        ".storeView.mountPoint == \"/nix/store\" and "
+        "(.storeView.root | endswith(\"/zones/work/guests/acceptance-guest/store-view\")) and "
+        "(.vmm.binaryPath | endswith(\"/bin/cloud-hypervisor\"))))' "
+        "/etc/d2b/artifact-catalog.json"
+    )
+    machine.succeed(
+        "test -r /etc/d2b/closures/zones/work/acceptance-guest.json && "
+        "jq -e '"
+        ".schemaVersion == \"v3\" and .artifactId == \"acceptance-system\" and "
+        "(.closurePaths | length > 0) and "
+        "(. as $guest | ($guest.closurePaths | index($guest.toplevel)) != null) and "
+        ".storeView.mountPoint == \"/nix/store\" and "
+        ".storeView.sync == \"broker-store-sync\" and "
+        "(.vmm.argv | index(\"--api-socket\")) != null' "
+        "/etc/d2b/closures/zones/work/acceptance-guest.json"
+    )
+    machine.succeed(
+        "jq -e '"
+        ".resources | any(.[]; .type == \"Guest\" and "
+        ".metadata.name == \"acceptance-guest\" and "
+        ".spec.providerRef == \"Provider/runtime-cloud-hypervisor\" and "
+        ".spec.systemArtifactId == \"acceptance-system\") and "
+        "all(.[]; (tostring | contains(\"/nix/store/\") | not) and "
+        "(tostring | contains(\"\\\"argv\\\"\") | not))' "
+        "/etc/d2b/zones/work/resource-bundle.json"
+    )
+
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Guest "
+        ">/run/d2b-guest-ready.json && "
+        "jq -e '"
+        "(.resources | map(select(.type == \"Guest\" and "
+        ".metadata.name == \"acceptance-guest\"))) as $guests | "
+        "($guests | length) == 1 and "
+        "$guests[0].status.phase == \"Ready\" and "
+        "$guests[0].status.observedGeneration == $guests[0].metadata.generation and "
+        "$guests[0].status.resource.runtimeReady == true and "
+        "$guests[0].status.resource.bootstrapReady == true and "
+        "$guests[0].status.resource.activeProcessCount == 1' "
+        "/run/d2b-guest-ready.json",
+        timeout=180,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Process "
+        ">/run/d2b-process-ready.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.name == \"acceptance-guest-vmm\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\" and "
+        ".spec.providerRef == \"Provider/system-minijail\" and "
+        ".spec.executionRef == \"Host/host-system\" and "
+        ".spec.processClass == \"worker\" and "
+        ".spec.template == \"cloud-hypervisor-runner\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation and "
+        ".status.resource.adopted == false)] | length == 1) and "
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/runtime-cloud-hypervisor\" and "
+        ".spec.providerRef == \"Provider/system-minijail\" and "
+        ".spec.executionRef == \"Host/host-system\" and "
+        ".spec.processClass == \"controller\" and "
+        ".spec.template == \"cloud-hypervisor-controller\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length == 1)' "
+        "/run/d2b-process-ready.json",
+        timeout=180,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Endpoint "
+        ">/run/d2b-endpoint-ready.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Endpoint\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length == 2)' "
+        "/run/d2b-endpoint-ready.json",
+        timeout=180,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Volume "
+        ">/run/d2b-volume-ready.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Volume\" and "
+        ".metadata.name == \"acceptance-guest-system\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\" and "
+        ".spec.source.settings.kind == \"nix-closure\" and "
+        ".spec.source.settings.systemArtifactId == \"acceptance-system\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length == 1)' "
+        "/run/d2b-volume-ready.json",
+        timeout=180,
+    )
+    machine.wait_for_file(
+        "/var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock"
+    )
+    machine.succeed(
+        "test -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock && "
+        "test -d /var/lib/d2b/zones/work/guests/acceptance-guest/store-view"
+    )
+
+    runner = machine.succeed(
+        "set -- $(for proc in /proc/[0-9]*; do "
+        "exe=$(readlink \"$proc/exe\" 2>/dev/null || true); "
+        "case \"$exe\" in */bin/cloud-hypervisor) "
+        "cmd=$(tr '\\0' ' ' < \"$proc/cmdline\"); "
+        "case \"$cmd\" in *--api-socket*acceptance-guest*) "
+        "pid=''${proc#/proc/}; "
+        "printf '%s %s ' \"$pid\" \"$(awk '{print $22}' \"$proc/stat\")\";; "
+        "esac;; esac; done); "
+        "test \"$#\" -eq 2; printf '%s %s' \"$1\" \"$2\""
+    ).strip()
+    runner_pid, runner_start = runner.split()
+    machine.succeed(f"test -d /proc/{runner_pid}")
+    machine.succeed(
+        f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
+    )
+    machine.succeed(
+        f"tr '\\0' ' ' < /proc/{runner_pid}/cmdline | "
+        "grep -F -- '--api-socket' | grep -F -- 'acceptance-guest'"
+    )
+
+    machine.succeed("systemctl restart d2bd.service")
+    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_file("/run/d2b/public.sock")
+    machine.succeed(f"test -d /proc/{runner_pid}")
+    machine.succeed(
+        f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Process "
+        ">/run/d2b-process-adopted.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.name == \"acceptance-guest-vmm\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.resource.adopted == true)] | length == 1)' "
+        "/run/d2b-process-adopted.json",
+        timeout=180,
+    )
+    machine.succeed(
+        "set -- $(for proc in /proc/[0-9]*; do "
+        "exe=$(readlink \"$proc/exe\" 2>/dev/null || true); "
+        "case \"$exe\" in */bin/cloud-hypervisor) "
+        "cmd=$(tr '\\0' ' ' < \"$proc/cmdline\"); "
+        "case \"$cmd\" in *--api-socket*acceptance-guest*) "
+        "pid=''${proc#/proc/}; "
+        "printf '%s %s ' \"$pid\" \"$(awk '{print $22}' \"$proc/stat\")\";; "
+        "esac;; esac; done); "
+        f"test \"$#\" -eq 2 && test \"$1\" = {runner_pid} && "
+        f"test \"$2\" = {runner_start}"
+    )
+
+    guest_revision = machine.succeed(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Guest "
+        "| jq -er '.resources[] | select(.type == \"Guest\" and "
+        ".metadata.name == \"acceptance-guest\") | .metadata.revision'"
+    ).strip()
+    machine.succeed(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        f"d2b --zone work --json resource delete Guest/acceptance-guest "
+        f"--revision {guest_revision} "
+        ">/run/d2b-guest-delete.json"
+    )
+    machine.succeed(
+        "jq -e '.resource.metadata.deletionRequestedAt != null' "
+        "/run/d2b-guest-delete.json"
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Guest "
+        ">/run/d2b-guest-draining.json && "
+        "jq -e 'any(.resources[]; .type == \"Guest\" and "
+        ".metadata.name == \"acceptance-guest\" and "
+        ".metadata.deletionRequestedAt != null)' "
+        "/run/d2b-guest-draining.json",
+        timeout=30,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Guest "
+        "| jq -e 'all(.resources[]; .metadata.name != \"acceptance-guest\")'",
+        timeout=180,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Process "
+        "| jq -e 'all(.resources[]; .metadata.name != \"acceptance-guest-vmm\")'",
+        timeout=180,
+    )
+    machine.succeed(
+        "test ! -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock"
+    )
   '';
 }

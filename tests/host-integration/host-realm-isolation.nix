@@ -7,6 +7,9 @@ let
     inherit self;
     inherit (pkgs) lib;
   };
+  cloudHypervisorArtifact =
+    d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
+  volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
   acceptancePublisherKey = ''
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEAu3/qwmKeWeFP7U5Z71uQOw/Zm5lBk4ZDbPVA2O7QlHg=
@@ -111,7 +114,7 @@ let
       "$out/share/d2b/provider/provider-manifest.json"
     install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
       "$out/share/d2b/provider/config-schema.json"
-    install -Dm755 ${pkgs.coreutils}/bin/true "$out/bin/acceptance-controller"
+    install -Dm755 ${pkgs.coreutils}/bin/coreutils "$out/bin/acceptance-controller"
     base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
       >"$out/share/d2b/provider/provider-manifest.json.sig"
   '';
@@ -147,23 +150,22 @@ let
     type = "provider";
     catalog = providerCatalog;
   };
-  acceptanceArtifactCatalogDigest =
-    "sha256:${lib.concatStringsSep "" (lib.replicate 64 "a")}";
-  acceptanceArtifactCatalog = pkgs.writeText "d2b-zone-artifact-catalog.json"
-    (builtins.toJSON {
-      schemaVersion = 3;
-      catalogDigest = acceptanceArtifactCatalogDigest;
-      entries = [
-        {
-          artifactId = "acceptance-provider";
-          type = "provider";
-          storePath = "${providerPackage}";
-          packageDigest = providerCatalog.packageDigest;
-          closureDigest = acceptanceArtifactCatalogDigest;
-          closureSize = 0;
-        }
-      ];
-    });
+  gatewayNetSystem = d2bLib.mkGuestSystem {
+    inherit pkgs;
+    name = "gateway-net-vm";
+  };
+  cloudHypervisorConfig = {
+    controllerExecutionRef = "Host/host";
+    defaultVcpus = 2;
+    defaultMemoryMb = 512;
+    defaultMachineType = "microvm";
+    watchdog = true;
+    adoptionWindowMs = 30000;
+    healthCheckIntervalMs = 5000;
+    healthCheckTimeoutMs = 1000;
+    healthCheckFailureThreshold = 3;
+    startupDeadlineMs = 120000;
+  };
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-host-zone-gateway-isolation";
@@ -175,9 +177,8 @@ pkgs.testers.runNixOSTest {
         pkgs.jq
       ];
 
-      d2b.site.usePrebuiltHostTools = false;
-      d2b.gateways = lib.mkForce { };
-      system.activationScripts.d2bGatewayCanaryObservation = {
+    d2b.site.usePrebuiltHostTools = false;
+    system.activationScripts.d2bGatewayCanaryObservation = {
         deps = [ "users" ];
         text = ''
           install -d -m 0700 -o d2bd -g d2bd \
@@ -192,45 +193,42 @@ pkgs.testers.runNixOSTest {
           type = "nixos-system";
         };
         net-vm-base = {
-          package = pkgs.writeText "d2b-zone-net-vm" "net-vm";
+          package = gatewayNetSystem.config.system.build.toplevel;
           type = "nixos-system";
         };
         acceptance-provider = {
           inherit (providerArtifact) package type catalog;
+        };
+        runtime-cloud-hypervisor = {
+          inherit (cloudHypervisorArtifact) package type catalog;
+        };
+        volume-acceptance-provider = {
+          inherit (volumeProviderArtifact) package type catalog;
         };
       };
       d2b.providerCatalog = {
         acceptance-provider = {
           artifactId = "acceptance-provider";
         };
-      };
-      d2b._resourceCompiler.providerProjectionRuntimeCloudHypervisor.resourcesByZone.work.system-minijail = {
-        type = "Provider";
-        spec = {
-          artifactId = "acceptance-provider";
-          config = { };
+        runtime-cloud-hypervisor = {
+          artifactId = "runtime-cloud-hypervisor";
         };
-      };
-      d2b._artifactCatalogV3 = lib.mkForce {
-        catalogDigest = acceptanceArtifactCatalogDigest;
-        path = acceptanceArtifactCatalog;
-      };
-      d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
-        data = {
-          schemaVersion = 3;
-          catalogDigest = acceptanceArtifactCatalogDigest;
-          entries = [ ];
+        volume-acceptance-provider = {
+          artifactId = "volume-acceptance-provider";
         };
-        jsonText = builtins.readFile acceptanceArtifactCatalog;
-        path = lib.mkForce acceptanceArtifactCatalog;
-        installFileName = "artifact-catalog.json";
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
       };
       d2b.zones.local-root.trustedPublishers.d2b-acceptance.signingKey =
         acceptancePublisherKey;
+      d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
+      d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
       d2b.zones.work.trustedPublishers.d2b-acceptance.signingKey =
         acceptancePublisherKey;
+      d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
+      d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
       d2b.guestSystems.work.gateway = gatewayGuest;
       d2b.zones.local-root.resources.host = {
         type = "Host";
@@ -263,6 +261,29 @@ pkgs.testers.runNixOSTest {
               config.controllerExecutionRef = "Host/host";
             };
           };
+          volume-local = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config = {
+                controllerExecutionRef = "Host/host";
+                sourcePolicies = [
+                  {
+                    id = "default-state";
+                    class = "local-path";
+                    volumeKinds = [ "durable" "state" "cache" ];
+                  }
+                ];
+              };
+            };
+          };
+          volume-virtiofs = {
+            type = "Provider";
+            spec = {
+              artifactId = "volume-acceptance-provider";
+              config.controllerExecutionRef = "Host/host";
+            };
+          };
           relay-egress = {
             type = "Network";
             spec = {
@@ -275,8 +296,8 @@ pkgs.testers.runNixOSTest {
           runtime-cloud-hypervisor = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
-              config.controllerExecutionRef = "Host/host";
+              artifactId = "runtime-cloud-hypervisor";
+              config = cloudHypervisorConfig;
             };
           };
           transport-azure-relay = {

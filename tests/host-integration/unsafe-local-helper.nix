@@ -19,7 +19,7 @@ let
     install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
       "$out/share/d2b/provider/config-schema.json"
     install -d -m755 "$out/share/d2b/provider"
-    install -Dm755 ${pkgs.coreutils}/bin/true \
+    install -Dm755 ${pkgs.coreutils}/bin/coreutils \
       "$out/bin/acceptance-controller"
     base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
       >"$out/share/d2b/provider/provider-manifest.json.sig"

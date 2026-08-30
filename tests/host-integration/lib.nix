@@ -12,13 +12,10 @@
 { self, lib }:
 
 let
-  # The minimal, hermetic d2b site/env/VM declaration every daemon-host
-  # node shares. Mirrors the consumer-style config the smoke evals use: one
-  # isolated env with RFC1918 / RFC5737 ranges and a single headless workload
-  # VM. No graphics / TPM / USBIP (those are device-bearing G-hw concerns).
-  # This is the framework-owned unit census for these acceptance fixtures. It
-  # is deliberately narrower than every d2b-prefixed unit an operator host
-  # might have from optional or managed infrastructure.
+  # The minimal, hermetic d2b site declaration every daemon-host node shares.
+  # Zone and Guest resources belong to the acceptance fixture that exercises
+  # them; keeping this base free of legacy VM/env authoring prevents unrelated
+  # host checks from silently materializing a second lifecycle graph.
   daemonAcceptanceUnits = [
     "d2bd.service"
     "d2b-broker.socket"
@@ -32,32 +29,281 @@ let
       yubikey.enable = false;
       usePrebuiltHostTools = false;
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    d2b.vms.corp-vm = {
-      enable = true;
-      env = "work";
-      index = 10;
-      ssh.user = "alice";
-      config = { lib, ... }: {
-        networking.hostName = lib.mkDefault "corp-vm";
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
-        };
-      };
-    };
     # The full daemon + broker systemd surface under test.
     d2b.daemonExperimental.enable = true;
   };
+
+  mkGuestSystem =
+    { pkgs, name, zone ? "work", modules ? [ ] }:
+    self.lib.evalGuest {
+      system = pkgs.stdenv.hostPlatform.system;
+      inherit name zone;
+      modules = [
+        ({ lib, ... }: {
+          boot.loader.grub.enable = lib.mkForce false;
+          boot.loader.systemd-boot.enable = lib.mkForce false;
+          boot.initrd.includeDefaultModules = false;
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+          environment.etc."machine-id".text =
+            "00000000000000000000000000000000";
+          networking.hostName = name;
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
+          system.stateVersion = "25.11";
+        })
+      ] ++ modules;
+    };
+
+  mkRuntimeCloudHypervisorArtifact = pkgs:
+    let
+      rustPackagesSrc = pkgs.runCommand "d2b-u20-rust-src" { } ''
+        mkdir -p "$out/packages"
+        cp ${../../Cargo.toml} "$out/Cargo.toml"
+        cp ${../../Cargo.lock} "$out/Cargo.lock"
+        cp ${../../deny.toml} "$out/deny.toml"
+        cp -r ${../../packages}/. "$out/packages/"
+        mkdir -p "$out/docs/reference/schemas/v3/providers"
+        cp ${../../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+          "$out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
+        cp ${../../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+          "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
+      '';
+      controller = pkgs.rustPlatform.buildRustPackage {
+        pname = "d2b-u20-cloud-hypervisor-controller";
+        version = "0.0.0";
+        src = rustPackagesSrc;
+        sourceRoot = "d2b-u20-rust-src";
+        cargoLock = {
+          lockFile = ../../Cargo.lock;
+          outputHashes."wl-proxy-0.1.2" =
+            "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+        };
+        cargoBuildFlags = [
+          "--package"
+          "d2b-provider-runtime-cloud-hypervisor"
+          "--bin"
+          "d2b-cloud-hypervisor-controller"
+        ];
+        doCheck = false;
+        RUSTC_WRAPPER = "";
+        SCCACHE_DIR = "";
+        installPhase = ''
+          runHook preInstall
+          binary=$(find target -type f \
+            -name d2b-cloud-hypervisor-controller -print -quit)
+          if [ -z "$binary" ]; then
+            find target -maxdepth 4 -type f -print >&2
+            exit 1
+          fi
+          install -Dm755 "$binary" \
+            "$out/bin/d2b-cloud-hypervisor-controller"
+          runHook postInstall
+        '';
+      };
+      signer = pkgs.python3.withPackages
+        (pythonPackages: [ pythonPackages.cryptography ]);
+      manifest = ../../packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
+      schema = ../../packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
+      package = pkgs.runCommand "d2b-u20-runtime-cloud-hypervisor" {
+        nativeBuildInputs = [ pkgs.coreutils signer ];
+      } ''
+        ${signer}/bin/python3 - "${manifest}" \
+          "${controller}/bin/d2b-cloud-hypervisor-controller" "$out" <<'PY'
+        import hashlib
+        import json
+        import pathlib
+        import sys
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        manifest_path, controller_path, output_path = sys.argv[1:]
+        manifest = json.loads(pathlib.Path(manifest_path).read_text())
+        raw_digest = "sha256:" + hashlib.sha256(
+            pathlib.Path(controller_path).read_bytes()
+        ).hexdigest()
+        executable_map = json.dumps(
+            {"d2b-cloud-hypervisor-controller": raw_digest},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        first = hashlib.sha256(
+            b"d2b:v3:provider-executable-set\0" + executable_map
+        ).digest()
+        executable_digest = "sha256:" + hashlib.sha256(first).hexdigest()
+        manifest["digests"]["executable"] = executable_digest
+        manifest_bytes = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        seed = hashlib.sha256(
+            b"d2b-u20-runtime-cloud-hypervisor-signing-key-v1"
+            + raw_digest.encode()
+        ).digest()
+        private_key = Ed25519PrivateKey.from_private_bytes(seed)
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        signature = private_key.sign(manifest_bytes)
+        output = pathlib.Path(output_path)
+        (output / "bin").mkdir(parents=True)
+        (output / "share/d2b/provider").mkdir(parents=True)
+        (output / "bin/d2b-cloud-hypervisor-controller").write_bytes(
+            pathlib.Path(controller_path).read_bytes()
+        )
+        (output / "share/d2b/provider/provider-manifest.json").write_bytes(
+            manifest_bytes
+        )
+        (output / "share/d2b/provider/provider-manifest.json.sig").write_bytes(
+            signature
+        )
+        (output / "share/d2b/provider/config-schema.json").write_bytes(
+            pathlib.Path("${schema}").read_bytes()
+        )
+        (output / "publisher-public-key.pem").write_bytes(public_key)
+        (output / "executable-set-digest").write_text(executable_digest)
+        (output / "manifest-digest").write_text(
+            "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        )
+        PY
+      '';
+      packageDigestPath = pkgs.runCommand
+        "d2b-u20-runtime-cloud-hypervisor-nar-digest" {
+          nativeBuildInputs = [ pkgs.nix ];
+        } ''
+          printf 'sha256:%s' \
+            "$(${pkgs.nix}/bin/nix --extra-experimental-features nix-command \
+              hash path --type sha256 --base16 "${package}")" > "$out"
+        '';
+      manifestData = builtins.fromJSON (builtins.readFile manifest);
+      component = lib.head manifestData.components;
+      apiBinding = lib.head manifestData.apiBindings;
+      runtime = lib.head manifestData.runtimeArtifacts;
+      catalog = {
+        providerName = manifestData.trust.publisher;
+        packageName = "d2b-provider-runtime-cloud-hypervisor";
+        version = "0.0.0";
+        systems = [ pkgs.stdenv.hostPlatform.system ];
+        platform = pkgs.stdenv.hostPlatform.system;
+        apiCompatibility = "d2b.zone.v3";
+        serviceCompatibility = "d2bd.resource";
+        signature = { signatureId = "default"; };
+        rootEpoch = manifestData.trust.rootEpoch;
+        revocationStatus = manifestData.trust.revocation;
+        denyStatus = "clear";
+        provenanceEvidence = manifestData.trust.provenance;
+        sbomEvidence = manifestData.trust.sbom;
+        licenseEvidence = manifestData.trust.license;
+        vulnerabilityEvidence = manifestData.trust.vulnerability;
+        conformanceAttestation = manifestData.trust.conformance;
+        supportChannel = manifestData.trust.supportChannel;
+        supportContact = "d2b-acceptance@localhost";
+        publisher = manifestData.trust.publisher;
+        packageDigest = lib.removeSuffix "\n"
+          (builtins.readFile packageDigestPath);
+        executableDigest = lib.removeSuffix "\n"
+          (builtins.readFile "${package}/executable-set-digest");
+        manifestDigest = lib.removeSuffix "\n"
+          (builtins.readFile "${package}/manifest-digest");
+        componentDigest = "sha256:${builtins.hashString
+          "sha256" (builtins.toJSON manifestData.components)}";
+        descriptorDigest = "sha256:${builtins.hashString
+          "sha256" (builtins.toJSON manifestData.apiBindings)}";
+        configDigest = manifestData.digests.config;
+        d2bdDigest = runtime.d2bdDigest;
+        brokerDigest = runtime.brokerDigest;
+        instanceScope = component.instanceScope;
+        supportedTargetKinds = component.supportedTargetKinds;
+        targetCapabilities = component.targetCapabilities;
+        placementAnchor = apiBinding.placementAnchor;
+      };
+    in {
+      inherit package catalog;
+      type = "provider";
+      trustedPublisher = {
+        publisherRef = manifestData.trust.publisher;
+        signingKey = builtins.readFile "${package}/publisher-public-key.pem";
+      };
+    };
+
+  mkVolumeProviderArtifact = pkgs:
+    let
+      manifest = ../../tests/fixtures/provider-volume-acceptance/provider-manifest.json;
+      schema = ../../tests/fixtures/provider-volume-acceptance/config-schema.json;
+      signature = ../../tests/fixtures/provider-volume-acceptance/provider-manifest.json.sig;
+      publicKey = ../../tests/fixtures/provider-volume-acceptance/publisher-public-key.pem;
+      package = pkgs.runCommand "d2b-volume-acceptance-provider" {
+        nativeBuildInputs = [ pkgs.coreutils ];
+      } ''
+        install -Dm755 ${pkgs.coreutils}/bin/coreutils \
+          "$out/bin/acceptance-controller"
+        install -Dm644 ${manifest} \
+          "$out/share/d2b/provider/provider-manifest.json"
+        install -Dm644 ${signature} \
+          "$out/share/d2b/provider/provider-manifest.json.sig"
+        install -Dm644 ${schema} \
+          "$out/share/d2b/provider/config-schema.json"
+      '';
+      packageDigestPath = pkgs.runCommand
+        "d2b-volume-acceptance-provider-nar-digest" {
+          nativeBuildInputs = [ pkgs.nix ];
+        } ''
+          printf 'sha256:%s' \
+            "$(${pkgs.nix}/bin/nix --extra-experimental-features nix-command \
+              hash path --type sha256 --base16 "${package}")" > "$out"
+        '';
+      catalog = {
+        providerName = "volume-acceptance-provider";
+        packageName = "d2b-volume-acceptance-provider";
+        version = "0.0.0";
+        systems = [ "x86_64-linux" ];
+        platform = "x86_64-linux";
+        apiCompatibility = "d2b.zone.v3";
+        serviceCompatibility = "d2bd.resource";
+        signature = { signatureId = "default"; };
+        rootEpoch = 1;
+        revocationStatus = "clear";
+        denyStatus = "clear";
+        provenanceEvidence = "accepted";
+        sbomEvidence = "accepted";
+        licenseEvidence = "accepted";
+        vulnerabilityEvidence = "accepted";
+        conformanceAttestation = "accepted";
+        supportChannel = "stable";
+        supportContact = "d2b-acceptance@localhost";
+        publisher = "d2b-volume-acceptance";
+        packageDigest = lib.removeSuffix "\n"
+          (builtins.readFile packageDigestPath);
+        executableDigest = "sha256:f84125779653dba770042fd2af2bd01299b05ae892c039c497e6b5ce45029d9c";
+        manifestDigest = "sha256:3c772c723cc2d508502132e10c325a2194c7683025d0c1e8ea9e125d163a10c3";
+        componentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        descriptorDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        configDigest = "sha256:ccb5a9d66e068ea8f4e205788589675a48e9e3754a840d8ac10120d14238e914";
+      };
+    in {
+      inherit package catalog;
+      type = "provider";
+      trustedPublisher = {
+        publisherRef = "d2b-volume-acceptance";
+        signingKey = builtins.readFile publicKey;
+      };
+    };
 in
 {
   # A NixOS module for a runNixOSTest node that boots the d2b daemon host.
   # `extra` is merged as an additional module so individual tests can add
-  # per-test config (extra VMs, tampering helpers, a larger disk, etc.). The
-  # node provisions the `alice` workload user the base config references.
+  # per-test Zone/Guest resources, tampering helpers, or a larger disk. The
+  # node provisions the `alice` operator user the base config references.
   #
   # Structured as an attrset-module with everything in `imports` (an attrset is
   # a valid module): `imports` must be top-level, NOT wrapped in `lib.mkMerge`,
@@ -83,15 +329,12 @@ in
             uid = 1000;
           };
 
-          environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
-          environment.systemPackages = [ config.d2b._manifestPkg ];
           environment.etc."d2b/daemon-acceptance-units".text =
             lib.concatStringsSep "\n" daemonAcceptanceUnits + "\n";
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
-          # materialized the d2b state tree. Pre-create the key directory so
-          # d2bGenerateKeys can open its flock during the initrd activation
-          # path without relying on tmpfiles ordering.
+          # materialized the d2b state tree. Pre-create the state directory so
+          # daemon-owned startup can rely on the same path ordering.
           system.activationScripts.d2bTestStateDirs = {
             deps = [ "users" ];
             text = ''
@@ -102,10 +345,6 @@ in
               chmod 0600 /var/lib/d2b/keys/.lock
             '';
           };
-          system.activationScripts.d2bGenerateKeys.deps = [
-            "d2bTestStateDirs"
-          ];
-
           system.stateVersion = "25.11";
         }
         # Opt-in writable same-fs store. ONLY needed by tests that drive the
@@ -125,5 +364,6 @@ in
     };
 
   # Re-exported so tests can assert against the shared declaration.
-  inherit baseD2bConfig;
+  inherit baseD2bConfig mkGuestSystem mkRuntimeCloudHypervisorArtifact
+    mkVolumeProviderArtifact;
 }

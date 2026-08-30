@@ -232,11 +232,11 @@ let
         "defaultMemoryMb"
         "defaultMachineType"
         "watchdog"
-        "adoptionWindow"
-        "healthCheckInterval"
-        "healthCheckTimeout"
+        "adoptionWindowMs"
+        "healthCheckIntervalMs"
+        "healthCheckTimeoutMs"
         "healthCheckFailureThreshold"
-        "startupDeadline"
+        "startupDeadlineMs"
       ];
       controller = c.controllerExecutionRef or null;
       parts = if builtins.isString controller

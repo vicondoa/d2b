@@ -28,7 +28,7 @@ pkgs.testers.runNixOSTest {
           uid = 1000;
         };
 
-        # host.nix derives d2b.vms.<vm>.ssh.user into this guest field.
+        # The host consumer supplies the target user through this guest field.
         d2b.sshUser = "alice";
         d2b.componentSession = {
           enable = lib.mkForce true;

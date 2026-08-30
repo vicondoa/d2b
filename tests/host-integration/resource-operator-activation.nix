@@ -13,6 +13,20 @@ let
     inherit self;
     inherit lib;
   };
+  cloudHypervisorArtifact =
+    d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
+  cloudHypervisorConfig = {
+    controllerExecutionRef = "Host/host-system";
+    defaultVcpus = 2;
+    defaultMemoryMb = 512;
+    defaultMachineType = "microvm";
+    watchdog = true;
+    adoptionWindowMs = 30000;
+    healthCheckIntervalMs = 5000;
+    healthCheckTimeoutMs = 1000;
+    healthCheckFailureThreshold = 3;
+    startupDeadlineMs = 120000;
+  };
   acceptancePublisherKey = ''
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEAu3/qwmKeWeFP7U5Z71uQOw/Zm5lBk4ZDbPVA2O7QlHg=
@@ -26,7 +40,7 @@ let
     install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
       "$out/share/d2b/provider/config-schema.json"
     install -d -m755 "$out/share/d2b/provider"
-    install -Dm755 ${pkgs.coreutils}/bin/true \
+    install -Dm755 ${pkgs.coreutils}/bin/coreutils \
       "$out/bin/acceptance-controller"
     base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
       >"$out/share/d2b/provider/provider-manifest.json.sig"
@@ -63,31 +77,29 @@ let
     type = "provider";
     catalog = providerCatalog;
   };
-  acceptanceArtifactCatalogDigest =
-    "sha256:${lib.concatStringsSep "" (lib.replicate 64 "a")}";
-  acceptanceArtifactCatalog = pkgs.writeText "d2b-acceptance-artifact-catalog.json"
-    (builtins.toJSON {
-      schemaVersion = 3;
-      catalogDigest = acceptanceArtifactCatalogDigest;
-      entries = [
-        {
-          artifactId = "acceptance-provider";
-          type = "provider";
-          storePath = "${providerPackage}";
-          packageDigest = providerCatalog.packageDigest;
-          closureDigest = acceptanceArtifactCatalogDigest;
-          closureSize = 0;
-        }
-      ];
-    });
+  volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
+  acceptanceGuestSystem = d2bLib.mkGuestSystem {
+    inherit pkgs;
+    name = "acceptance-guest";
+  };
+  netVmSystem = d2bLib.mkGuestSystem {
+    inherit pkgs;
+    name = "acceptance-net-vm";
+  };
   artifacts = {
     acceptance-provider = providerArtifact;
+    runtime-cloud-hypervisor = {
+      inherit (cloudHypervisorArtifact) package type catalog;
+    };
+    volume-acceptance-provider = {
+      inherit (volumeProviderArtifact) package type catalog;
+    };
     acceptance-system = {
-      package = pkgs.writeText "d2b-acceptance-system" "acceptance-system";
+      package = acceptanceGuestSystem.config.system.build.toplevel;
       type = "nixos-system";
     };
     net-vm-base = {
-      package = pkgs.writeText "d2b-acceptance-net-vm" "net-vm-base";
+      package = netVmSystem.config.system.build.toplevel;
       type = "nixos-system";
     };
   };
@@ -104,7 +116,7 @@ pkgs.testers.runNixOSTest {
 
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
-      extra = { pkgs, ... }: {
+      extra = { ... }: {
         boot.kernelModules = [ "br_netfilter" "tpm_vtpm_proxy" ];
         networking.nftables.enable = true;
         networking.nftables.ruleset = lib.mkAfter ''
@@ -138,41 +150,18 @@ pkgs.testers.runNixOSTest {
             fi
           ''}"
         ];
-        d2b.vms.corp-vm = lib.mkForce { enable = false; };
-        d2b.vms.acceptance-guest = {
-          enable = true;
-          autostart = false;
-          env = "work";
-          index = 10;
-          tpm.enable = true;
-          ssh.user = "alice";
-          config = { lib, ... }: {
-            networking.hostName = lib.mkDefault "acceptance-guest";
-            users.users.alice = {
-              isNormalUser = true;
-              uid = 1000;
-            };
-          };
-        };
         users.users.bob = {
           isNormalUser = true;
           uid = 1001;
         };
         d2b.artifacts = artifacts;
-      d2b._artifactCatalogV3 = lib.mkForce {
-        catalogDigest = acceptanceArtifactCatalogDigest;
-        path = acceptanceArtifactCatalog;
-      };
-      d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
-        data = { schemaVersion = 3; catalogDigest = acceptanceArtifactCatalogDigest; entries = [ ]; };
-        jsonText = builtins.readFile acceptanceArtifactCatalog;
-        path = lib.mkForce acceptanceArtifactCatalog;
-        installFileName = "artifact-catalog.json";
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
+      d2b.guestSystems.work.acceptance-guest = acceptanceGuestSystem;
       d2b.zones.local-root.trustedPublishers.d2b-acceptance.signingKey =
         acceptancePublisherKey;
+      d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
+      d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
       d2b.zones.local-root.resources.host-system = {
         type = "Host";
         spec = {
@@ -188,6 +177,10 @@ pkgs.testers.runNixOSTest {
       d2b.zones.work.parentZone = "local-root";
       d2b.zones.work.trustedPublishers.d2b-acceptance.signingKey =
         acceptancePublisherKey;
+      d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
+        volumeProviderArtifact.trustedPublisher.signingKey;
+      d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
+        cloudHypervisorArtifact.trustedPublisher.signingKey;
       d2b.zones.work.resources = {
         alice = {
           type = "User";
@@ -227,7 +220,7 @@ pkgs.testers.runNixOSTest {
           volume-local = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
+              artifactId = "volume-acceptance-provider";
               config = {
                 controllerExecutionRef = "Host/host-system";
                 sourcePolicies = [
@@ -243,7 +236,7 @@ pkgs.testers.runNixOSTest {
           volume-virtiofs = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
+              artifactId = "volume-acceptance-provider";
               config = {
                 controllerExecutionRef = "Host/host-system";
               };
@@ -269,8 +262,8 @@ pkgs.testers.runNixOSTest {
           runtime-cloud-hypervisor = {
             type = "Provider";
             spec = {
-              artifactId = "acceptance-provider";
-              config.controllerExecutionRef = "Host/host-system";
+              artifactId = "runtime-cloud-hypervisor";
+              config = cloudHypervisorConfig;
             };
           };
           display-wayland = {
