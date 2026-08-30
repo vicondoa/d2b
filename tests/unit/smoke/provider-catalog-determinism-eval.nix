@@ -58,10 +58,6 @@ let
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
   };
 
   entryFor = name:
