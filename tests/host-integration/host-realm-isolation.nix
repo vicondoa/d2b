@@ -259,6 +259,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host";
                 executionRef = "Guest/gateway";
                 networkRef = "Network/relay-egress";
               };
@@ -269,6 +270,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host";
                 credentialDomains = [ "system" ];
                 supportedOperations = [ "acquire-token" ];
               };

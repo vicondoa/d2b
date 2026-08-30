@@ -81,7 +81,10 @@ pkgs.testers.runNixOSTest {
             type = "Provider";
             spec = {
               artifactId = "acceptance-provider";
-              config.runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
+              config = {
+                controllerExecutionRef = "Host/host-system";
+                runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
+              };
             };
           };
           clipboard-wayland = {
@@ -89,6 +92,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host-system";
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
                 displayWaylandRef = "Provider/display-wayland";
@@ -101,6 +105,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host-system";
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
                 displayWaylandRef = "Provider/display-wayland";
@@ -169,14 +174,14 @@ pkgs.testers.runNixOSTest {
             type = "Provider";
             spec = {
               artifactId = "volume-acceptance-provider";
-              config = { };
+              config.controllerExecutionRef = "Host/host-system";
             };
           };
           volume-virtiofs = {
             type = "Provider";
             spec = {
               artifactId = "volume-acceptance-provider";
-              config = { };
+              config.controllerExecutionRef = "Host/host-system";
             };
           };
           };
@@ -202,14 +207,14 @@ pkgs.testers.runNixOSTest {
               type = "Provider";
               spec = {
                 artifactId = "volume-acceptance-provider";
-                config = { };
+                config.controllerExecutionRef = "Host/host-system";
               };
             };
             volume-virtiofs = {
               type = "Provider";
               spec = {
                 artifactId = "volume-acceptance-provider";
-                config = { };
+                config.controllerExecutionRef = "Host/host-system";
               };
             };
           };

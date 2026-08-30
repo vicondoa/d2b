@@ -152,13 +152,6 @@ pkgs.testers.runNixOSTest {
             osUsername = "d2bd";
           };
         };
-        acceptance-host = {
-          type = "Provider";
-          spec = {
-            artifactId = "acceptance-provider";
-            config = { };
-          };
-        };
         host-system = {
             type = "Host";
             spec = {
@@ -203,16 +196,6 @@ pkgs.testers.runNixOSTest {
               config.controllerExecutionRef = "Host/host-system";
             };
           };
-          device-tpm = {
-            type = "Provider";
-            spec = {
-              artifactId = "acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-                logLevel = 20;
-              };
-            };
-          };
           runtime-cloud-hypervisor = {
             type = "Provider";
             spec = {
@@ -225,6 +208,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host-system";
                 principalPoolSize = 4;
                 runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
               };
@@ -235,6 +219,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host-system";
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
                 displayWaylandRef = "Provider/display-wayland";
@@ -247,6 +232,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
+                controllerExecutionRef = "Host/host-system";
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
                 displayWaylandRef = "Provider/display-wayland";
