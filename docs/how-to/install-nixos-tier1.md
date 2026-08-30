@@ -47,8 +47,8 @@ d2b guest start <name> --zone <zone> --dry-run
 d2b guest start <name> --zone <zone> --apply
 ```
 
-The Guest controller creates and reconciles child Resources. Cloud Hypervisor
-boot, restart adoption, deletion, and real-host cleanup are host-lane
+The Guest controller creates and reconciles child Resources. The `/etc/nixos`
+switch, d2b startup, and Cloud Hypervisor Guest boot are U20 host-lane
 acceptance work; U19 does not claim that evidence.
 
 ## Clean-break cleanup

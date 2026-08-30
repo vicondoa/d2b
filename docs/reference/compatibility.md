@@ -27,8 +27,7 @@ consumer configuration. The acceptance sequence is owned by the host lane:
 2. run `nixos-rebuild dry-activate`;
 3. switch the host generation;
 4. start d2bd and the broker;
-5. boot a Cloud Hypervisor Guest; and
-6. verify readiness, restart adoption, deletion, and cleanup.
+5. boot a Cloud Hypervisor Guest.
 
 U19 does not claim that host acceptance or any remote Provider acceptance has
 passed. ACA testing is deferred until after the U20 host switch and

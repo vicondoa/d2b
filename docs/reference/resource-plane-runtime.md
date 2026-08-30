@@ -86,8 +86,9 @@ tests without mocking the layers they exercise:
 These adapters persist or inspect fixture state; they are not call-recording
 mocks. This table is Layer-1 contract evidence only. It is not evidence of a
 real `/etc/nixos` switch, d2b startup, Cloud Hypervisor boot, or ACA behavior.
-Those host and remote acceptance lanes are separate; U20 owns the local host
-lane and ACA testing is deferred until after it.
+Those host and remote acceptance lanes are separate; U20 owns only the
+`/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot. ACA testing
+is deferred until after U20.
 
 The daemon composition loads the semantic Guest setup descriptor from the
 integrity-pinned artifact catalog and binds the controller to an authenticated
