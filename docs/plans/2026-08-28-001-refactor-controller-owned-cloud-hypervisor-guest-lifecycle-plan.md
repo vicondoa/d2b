@@ -1108,14 +1108,15 @@ flowchart TB
 - **Files:** `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, `tests/host-integration/host-realm-isolation.nix`, `tests/host-integration/resource-operator-activation.nix`, the host's `/etc/nixos` configuration outside the repository, targeted v1/v2 host-path cleanup, and final review/PR evidence.
 - **Approach:**
   1. Own all booted-VM acceptance moved from U14 and U19: final child graph, Gateway canary, credential custody, reconnect and revocation, forged route claims, restart adoption, blocked finalization, deletion order, and rollback.
-  2. Run focused owner suites, all required static gates, and the complete host-integration lane on the exact committed head.
-  3. Use the real `/etc/nixos` flake and selected `nixosConfiguration`; deep host configuration changes are allowed because this is a clean break from v1/v2, not an in-place compatibility migration.
-  4. Evaluate and build the configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
-  5. Remove only explicitly identified, d2b-owned v1/v2 host paths after the switch. No data migration or retention is required, but foreign ownership markers and unrelated host state remain untouched.
-  6. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify the controller and VMM Process Resources, authenticated Guest readiness, and successful Cloud Hypervisor Guest boot.
-  7. Restart `d2bd`, verify adoption without duplicate processes or resources, delete and recreate the test Guest without requiring retained v1/v2 data, then verify rollback to the known-good NixOS generation.
-  8. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
-  9. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
+  2. Run focused owner suites and all required static gates on the exact committed head.
+  3. Run `make test-host-integration` and `make test-integration` as mandatory acceptance lanes in parallel with real-host testing when their execution environments and heavy-gate ownership are independent; otherwise let the repository semaphore serialize them.
+  4. Use the real `/etc/nixos` flake and selected `nixosConfiguration`; deep host configuration changes are allowed because this is a clean break from v1/v2, not an in-place compatibility migration.
+  5. Evaluate and build the configuration, run `nixos-rebuild dry-activate`, then run the operator-approved `nixos-rebuild switch`.
+  6. Remove only explicitly identified, d2b-owned v1/v2 host paths after the switch. No data migration or retention is required, but foreign ownership markers and unrelated host state remain untouched.
+  7. Verify `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service`; verify the controller and VMM Process Resources, authenticated Guest readiness, and successful Cloud Hypervisor Guest boot.
+  8. Restart `d2bd`, verify adoption without duplicate processes or resources, delete and recreate the test Guest without requiring retained v1/v2 data, then verify rollback to the known-good NixOS generation.
+  9. Any fix, generated update, lock change, docs change, test change, CI fix, base update, or push invalidates readiness and requires affected gates, fresh review, and host acceptance again.
+  10. Push one reviewed branch, open one PR, babysit checks and feedback, refresh reviewed-head evidence, and merge with the repository's guarded normal squash flow.
 - **Execution note:** The real-host switch and rollback are operator-authorized manual acceptance. Do not add a new live-host evidence script or treat an environment/advisory skip as success.
 - **Test scenarios:**
   - Covers AE1-AE8. The KVM lane proves atomic pre-UID child batch creation, uncertain-response relist, returned UID fencing, Process/Endpoint/Volume readiness, guest-local seeding, Ready-to-Degraded session loss, reconnect, same-name cross-Zone isolation, same-Zone Guest reincarnation fencing, interrupted Provider generation recycle, blocked finalization, and deletion order.
@@ -1125,6 +1126,7 @@ flowchart TB
   - Foreign nftables, NetworkManager, and cgroup ownership markers remain byte-for-byte unchanged; a missing or replaced previously provisioned TPM directory fails closed; forged route, target, verb, capability, generation, cursor, and relay identity are denied.
   - Real host deletion keeps `FinalizationBlocked` while any owned transitive worker, host-backed Guest Volume, unavailable-session uncertainty, or foreign leftover prevents proof of complete drain; the Guest finalizer clears only after owned descendants are absent.
   - Host rollback leaves new-generation Processes and owned Resources absent or quarantined, restores the known-good generation, starts a Guest successfully, and leaves the healthy three-unit control plane.
+  - The complete `make test-host-integration` and `make test-integration` lanes pass on the same reviewed head used for real-host testing.
 - **Scope boundary:** ACA and other Provider acceptance are follow-up work after U20 and do not block this Cloud Hypervisor host cutover.
 - **Verification:** VM and real-host acceptance pass on the same reviewed head, final `make check` passes, CI is green, no actionable review finding remains, and the guarded squash merge succeeds.
 
@@ -1146,7 +1148,7 @@ Each unit runs the smallest owner-local Bazel target that proves its changed sur
 | `make test-drift` | Any schema, manifest, CLI, documentation, or generated change | Every generated surface matches its owning source. |
 | `make test-flake` | U15, U19 | Current examples and flake evaluations succeed without legacy option imports. |
 | `make test-changelog` | Every committed code unit and U19 | Every code change has valid release notes with no internal planning markers. |
-| `make test-integration` | U13, U14, U19 | Conditional foreign-userland and cross-process integration passes where applicable. |
+| `make test-integration` | U13, U14, U19, U20 | Conditional foreign-userland and cross-process integration passes where applicable; U20 requires a passing result on the final reviewed head. |
 | `D2B_VM_CHECK=runtime-cloud-hypervisor-guest-preflight make test-host-integration` | U20 | Real KVM/broker Guest child graph, atomic batch/relist, launch, session loss/reconnect, reincarnation fencing, interrupted recycle, adoption, blocked finalization, and deletion proof passes on the final converged head. |
 | `D2B_VM_CHECK=host-realm-isolation make test-host-integration` | U20 | Gateway Guest, ZoneLink, sealed credential canary, and host custody proof pass on the final converged head. |
 | Package-local compile and import checks | U17 and U18 | Retired owners have no current source consumer, package export, fixture import, or package-local build edge before U19 removes shared graph edges. |
