@@ -1,21 +1,21 @@
 # Store + virtiofs share reference
 
-This reference documents the current daemon-owned per-VM virtiofs share
-set. Historical microvm.nix runner evidence lives in
-[runner-shape audit](runner-shape-audit.md); current argv comes from
-`nixos-modules/processes-json.nix`.
+The Volume Provider exposes the closure-only Guest store view through
+broker-owned virtiofs endpoints. Historical microvm.nix runner evidence lives
+in [runner-shape audit](runner-shape-audit.md); current launch intent is
+derived from the Zone Resource graph.
 
 ## Framework-managed shares
 
-For a headless `corp-vm`, d2b emits these baseline shares. ComponentSession
-enrollment keys are not delivered through virtiofs.
+For a headless Guest, d2b emits baseline closure and metadata shares.
+ComponentSession enrollment keys are never delivered through virtiofs.
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `/run/d2b/vms/corp-vm/ro-store.sock` | `/var/lib/d2b/vms/corp-vm/store-view/live`       | RO   |
-| `d2b-meta`     | `/run/d2b/vms/corp-vm/d2b-meta.sock`  | `/var/lib/d2b/vms/corp-vm/store-view/meta`       | RO   |
-| `d2b-hkeys`    | `/run/d2b/vms/corp-vm/d2b-hkeys.sock` | `/var/lib/d2b/vms/corp-vm/host-keys`             | RW   |
-| `d2b-ssh-host` | `/run/d2b/vms/corp-vm/d2b-ssh-host.sock` | `/var/lib/d2b/vms/corp-vm/sshd-host-keys`      | RW   |
+| `ro-store`    | broker-resolved private Endpoint | closure-only Guest store view | RO |
+| `d2b-meta`    | broker-resolved private Endpoint | Guest-safe generation metadata | RO |
+| `d2b-hkeys`   | broker-resolved private Endpoint | Guest activation key projection | RW |
+| `d2b-ssh-host` | broker-resolved private Endpoint | Guest host-key projection | RW |
 
 The Cloud Hypervisor Process receives these broker-resolved share descriptors
 through its sealed Process Provider launch ticket. The Guest controller does
@@ -23,11 +23,11 @@ not construct VMM argv or receive host socket paths.
 
 ## virtiofsd argv shape
 
-Each share renders to one virtiofsd process:
+Each share renders to one broker-spawned virtiofsd process:
 
 ```text
 virtiofsd \
-  --socket-path=/run/d2b/vms/<vm>/<tag>.sock \
+  --socket-path=<private-endpoint> \
   [--socket-group=<group>] \
   --shared-dir=<host-path> \
   --thread-pool-size=<N> \
@@ -39,12 +39,12 @@ virtiofsd \
 
 Flag semantics:
 
-- `--socket-path` - UDS the CH runner connects to. Daemon-owned;
-  the broker places normal share sockets under
-  `/run/d2b/vms/<vm>/<tag>.sock`.
+- `--socket-path` - private Endpoint resolved by the broker. It is never a
+  public Resource or CLI argument.
 - `--socket-group=<group>` - optional UDS group ownership. It is emitted
   only when `microvm.virtiofsd.group` is non-null.
-- `--shared-dir` - host path the guest sees through the tag.
+- `--shared-dir` - anchored host path the Guest sees through the tag; it is
+  resolved from the private bundle.
 - `--thread-pool-size` - integer resolved from
   `microvm.virtiofsd.threadPoolSize`, falling back to the VM vCPU count
   (or `1` when vCPU is unset/zero).
@@ -66,17 +66,15 @@ Flag semantics:
 
 ## Daemon-owned uid/gid
 
-Per ADR 0021 each virtiofsd instance runs fake-root inside a
-broker-pre-established single-entry user namespace and has zero host
-capabilities. Normal VM shares map namespace UID/GID 0 to the
-`d2b-<vm>-runner` stable principal.
+Each virtiofsd instance runs inside its broker-established user namespace with
+zero host capabilities. Namespace identity and uid/gid mapping are private
+Provider details, not public Guest names.
 
 The CH runner's `--fs socket=<path>` line trusts the broker to have set
 the socket's group ownership/ACLs so Cloud Hypervisor can connect.
 
-The daemon never names the uid/gid on the wire; the broker resolves
-the per-role uid from the trusted bundle when it serves the
-`SpawnRunner` request.
+The daemon never names the uid/gid or endpoint path on the public wire; the
+broker resolves them from the trusted bundle for the `SpawnRunner` request.
 
 ## Cross-references
 

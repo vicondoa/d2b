@@ -30,6 +30,12 @@ document disagrees with committed, passing code, keep the code and document
 the drift. If a load-bearing behavior described here changes, update this file
 with the same change.
 
+The active workspace and aggregate Bazel graph contain only current Zone
+controllers, Providers, and Guest resources. Retired gateway, gateway-runtime,
+and realm-core owners are absent from the shared Cargo, copied-Guest, policy,
+and aggregate Bazel edges; standalone prototype or historical documentation
+matches are not current product surfaces.
+
 Contributor orchestration is owned by the standalone
 [`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) repository, and NixOS
 host distribution and installation are owned by
@@ -47,7 +53,7 @@ Use this index, then open the focused document instead of expanding this file.
 | Worktrees, review, PRs, merge, and disk hygiene | [`docs/contributing/workflow.md`](./docs/contributing/workflow.md), especially the [reviewed-head lifecycle](./docs/contributing/workflow.md#reviewed-head-pr-lifecycle) |
 | Changelog or commit grammar | [`docs/contributing/changelog-and-commits.md`](./docs/contributing/changelog-and-commits.md) |
 | Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
-| Architecture and per-VM features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
+| Architecture and per-Guest/provider features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
 | Contributor orchestration and host distribution | [`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) for orchestration and [`gascity.nix`](https://github.com/vicondoa/gascity.nix) for NixOS distribution and installation |
 
@@ -178,11 +184,11 @@ Read the relevant section before changing any of these:
 
 - Do not remove the net VM's `lib.mkForce` neutralizer for `10-eth-dhcp`;
   validate `net.nix` against `tests/unit/nix/cases/net-vm-network.nix`.
-- Do not relax VM-name validation or reserved `sys-*` and `launcher` prefixes.
+- Do not relax Guest-name validation or reserved `sys-*` and `launcher` prefixes.
 - Do not silently break the manifest: update schema, prose, emitter,
   `manifestVersion`, and changelog together. Do not hide a failing assertion
   by deleting it; fix its predicate or message.
-- Do not reintroduce per-VM systemd units, host-singleton framework services,
+- Do not reintroduce per-Guest systemd units, host-singleton framework services,
   or the retired bash CLI fallback. Lifecycle stays in `d2bd` and privileged
   mutation uses typed broker operations. Retired knobs
   `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`, and `D2B_NATIVE_ONLY` are no-ops.
@@ -212,7 +218,7 @@ Read the relevant section before changing any of these:
   NetworkManager. systemd-networkd is detection-only. Foreign markers fail
   closed and never authorize overwrite.
 - Do not mutate d2b cgroups outside delegation: use
-  `/sys/fs/cgroup/d2b.slice/<vm>/<role>/` leaves, no threaded groups,
+  `/sys/fs/cgroup/d2b.slice/<zone>/<resource>/<role>/` leaves, no threaded groups,
   partition roots, `cpuset.cpus.partition`, parent `cgroup.kill`, or root
   chown; only the broker owns delegated root mutation after privilege drop.
 - Do not commit or attach unredacted screenshots. Remove secrets, credentials,

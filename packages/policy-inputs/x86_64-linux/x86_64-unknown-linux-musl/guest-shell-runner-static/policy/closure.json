@@ -12,7 +12,7 @@
   ],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "41e475156afb5b35c3689e14cf72d4ebe15a82b9ff4b4346e2bf9f45fb42f1fb",
+  "lock_sha256": "1171ece98aa8c63fa0a5290863ed7dcd0a4334e96e0322ac2b521da71a140892",
   "packages": [
     {
       "id": "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -652,14 +652,6 @@
       "version": "0.7.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09",
-      "target": "x86_64-unknown-linux-musl"
-    },
-    {
-      "id": "rand_core@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "rand_core",
-      "version": "0.10.1",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69",
       "target": "x86_64-unknown-linux-musl"
     },
     {
@@ -1499,12 +1491,6 @@
       "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": "cfg(all(any(target_os = \"linux\", target_os = \"android\"), not(any(all(target_os = \"linux\", target_env = \"\"), getrandom_backend = \"custom\", getrandom_backend = \"linux_raw\", getrandom_backend = \"rdrand\", getrandom_backend = \"rndr\"))))"
-    },
-    {
-      "from": "getrandom@0.4.3#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "rand_core@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
     },
     {
       "from": "indexmap@2.14.0#registry+https://github.com/rust-lang/crates.io-index",

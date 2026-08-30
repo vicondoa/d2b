@@ -1,3 +1,5 @@
+> **Historical migration material.** This page preserves an older d2b option or lifecycle shape for upgrade context. New configurations use Zone-owned Resources, typed ResourceRefs, and the controller-owned Guest lifecycle documented in [`../reference/zone-control-nix.md`](../reference/zone-control-nix.md).
+
 # Migrate d2b v1.2 to v1.3
 
 ## TL;DR - required steps for operators

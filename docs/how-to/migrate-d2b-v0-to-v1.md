@@ -1,3 +1,5 @@
+> **Historical migration material.** This page preserves an older d2b option or lifecycle shape for upgrade context. New configurations use Zone-owned Resources, typed ResourceRefs, and the controller-owned Guest lifecycle documented in [`../reference/zone-control-nix.md`](../reference/zone-control-nix.md).
+
 # How to migrate a d2b host from v0.4.x to v1.0
 
 This guide is for **operators** running d2b v0.4.x (the last pre-1.0

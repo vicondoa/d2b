@@ -1,5 +1,9 @@
 # ACA + Wayland forwarding POC (ADR 0032)
 
+> **Historical prototype.** This directory is not part of the current
+> Zone/Guest product graph. Its Gateway and relay names are retained only for
+> ADR feasibility evidence; do not use them as d2b lifecycle instructions.
+>
 > **Status: proof-of-concept.** This directory is the hard vertical slice
 > behind ADR 0032 - it proves a Wayland-native app can run inside an
 > **Azure Container Apps sandbox** and be rendered on the operator's

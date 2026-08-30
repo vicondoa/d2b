@@ -1,245 +1,86 @@
 # d2b documentation
 
-Organised as a [Diataxis] structure with four quadrants - tutorials,
-how-to, reference, explanation. Today: **reference**, **how-to**, and
-**explanation** docs ship in this tree, and **tutorials/examples**
-live one level up under
-[`../examples/`](../examples/) and [`../templates/default/`](../templates/default/).
+d2b documentation follows the [Diataxis] structure. Current product
+documentation describes the Zone resource plane and controller-owned Guest
+lifecycle. Historical migration and ADR pages remain available for context but
+are not current configuration or command instructions.
 
-## Tutorials / Examples
+## Tutorials and examples
 
-- [`../templates/default/`](../templates/default/) - `nix flake init`
-  scaffold with sentinel TODOs and eval-time assertions. The
-  fastest path to a working host.
-- [`../examples/minimal/`](../examples/minimal/) -
-  checked headless starter; VM name `personal-dev`.
-- [`../examples/graphics-workstation/`](../examples/graphics-workstation/) -
-  desktop VM with Wayland + audio + USBIP YubiKey.
-- [`../examples/multi-env/`](../examples/multi-env/) - two
-  isolated envs side-by-side; demonstrates per-env isolation.
-- [`../examples/with-entra-id/`](../examples/with-entra-id/) -
-  checked Entra-ID composition; VM name `work-entra`.
+- [`../templates/default/`](../templates/default/) - `nix flake init` scaffold.
+- [`../examples/`](../examples/) - current Zone and Guest consumer flakes.
+- [`../README.md`](../README.md) - product overview and quick start.
 
-[entrablau]: https://github.com/vicondoa/entrablau.nix
+## Current references
 
-The examples are intentionally small enough to read end-to-end;
-each example's README explains the pattern.
-
-## Reference
-
-The contracts. Stable interfaces a consumer can depend on.
-
-- [`reference/manifest-schema.md`](./reference/manifest-schema.md) -
-  the per-VM JSON manifest the framework emits at
-  `/run/current-system/sw/share/d2b/vms.json`. Field-by-field
-  prose walkthrough + compatibility policy + example payloads.
-- [`reference/manifest-schema.json`](./reference/manifest-schema.json) -
-  the same contract as a JSON Schema (Draft 2020-12). The canonical
-  type spec when the prose and the schema disagree.
-- [`reference/compatibility.md`](./reference/compatibility.md) -
-  release-by-release mapping of d2b tags to the bundled `nixpkgs`
-  and `microvm.nix` pins, plus the support policy for downstreams.
-- [`reference/cli-contract.md`](./reference/cli-contract.md) -
-  the behavioural contract for any `d2b` CLI implementation
-  (lifecycle FSM, signal semantics, exit codes, JSON vs human output).
-- [`reference/companion-contracts.md`](./reference/companion-contracts.md) -
-  complete desktop-companion inventory, consumed surfaces, and verification
-  status.
-- [`reference/zone-cli-contract.md`](./reference/zone-cli-contract.md) -
-  actionable v3 replacement contracts for desktop clients, including the
-  public socket, shell, launcher, UI, audio, security-key, and picker
-  boundaries.
-- [`reference/error-codes.md`](./reference/error-codes.md) - the
-  stable public error/refusal catalog for daemon, broker, and CLI
-  surfaces.
-- [`reference/store-lifecycle.md`](./reference/store-lifecycle.md) -
-  per-VM hardlink-farm lifecycle, retention rules, crash-safety, and
-  destructive-operation guardrails.
-- [`reference/key-lifecycle.md`](./reference/key-lifecycle.md) -
-  framework-managed SSH identity, trust-state, and audit behavior.
-- [`reference/qemu-media.md`](./reference/qemu-media.md) -
-  qemu-media runtime, media-source, CLI, and security contract.
-- [`reference/runtime-provider-selection.md`](./reference/runtime-provider-selection.md) -
-  Cloud Hypervisor default runtime selection, reserved provider ids,
-  capability gating, and why crosvm/QEMU/Firecracker do not silently
-  replace the default VM runtime.
-- [`reference/security-runbook.md`](./reference/security-runbook.md) -
-  security-response contract, incident classes, USBIP emergency
-  containment boundaries, and compromise-recovery invariants.
-- [`reference/error-envelope-guidance.md`](./reference/error-envelope-guidance.md) -
-  daemon/broker/CLI envelope alignment, including broker-error
-  remediation rules.
-- [`reference/provider-managed-sandboxes.md`](./reference/provider-managed-sandboxes.md) -
-  capability matrix, absent capabilities, rate-limit/backoff/circuit
-  behavior, credential boundary, diagnostics redaction, and error shapes
-  for provider-managed sandbox nodes (ACA adapter).
-- [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) -
-  display, clipboard, audio, USB/HID, GPU, video, and provider display
-  lifecycle capability boundaries.
-- [`explanation/clipboard-architecture.md`](./explanation/clipboard-architecture.md) -
-  trusted clipboard authority, picker split, Niri integration, and bridge
-  runtime path contract.
-- [`reference/clipboard-picker-protocol.md`](./reference/clipboard-picker-protocol.md) -
-  versioned socketpair JSON protocol between `d2b-clipd` and the picker.
-- [`reference/clipboard-policy.md`](./reference/clipboard-policy.md) -
-  MIME allowlist, caps, retention, audit, metrics, and failure posture.
-- [`reference/realm-policy.md`](./reference/realm-policy.md) -
-  host-resident vs gateway-backed realm policy, default-deny cross-realm
-  behavior, authorization, audit, and network isolation boundaries.
-- [`reference/realm-core.md`](./reference/realm-core.md) -
-  codec-neutral realm target, identifier, capability, audit, frame, routing,
-  identity, and allocator schema roots.
-  metadata-only realm identity, enrollment, controller-generation, rotation,
-  revocation, teardown, recovery, and future enforcement boundary contract.
-- [`reference/realm-options.md`](./reference/realm-options.md) -
-  current `d2b.realms.<realm>` Nix option shape and transition boundary:
-  host-local realm scaffolding is materialized while access-layer routing,
-  identity, and realm networking remain future work over the active `d2b.envs`
-  substrate.
-- [`reference/local-root-allocator.md`](./reference/local-root-allocator.md) -
-  typed host-resource lease contract for future local-root allocation,
-  reconciliation, quarantine, reclaim, and realm-broker boundaries.
-- [`reference/realm-controller-config.md`](./reference/realm-controller-config.md) -
-  private `realm-controllers.json` metadata for deterministic host-local
-  realm controller naming, sockets, allocator bindings, state, and audit
-  boundaries.
-- [`reference/constellation-observability.md`](./reference/constellation-observability.md) -
-  bounded `d2b op inspect`, TraceContext propagation, degraded partial
-  results, and telemetry redaction/cardinality constraints.
-- [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) -
-  gateway-managed remote d2b hosts: registration, capability gating,
-  operation routing, idempotency, and the non-tunneling boundary.
-- **Per-component references** - one file per
-  `nixos-modules/components/*.nix` toggle. Options, host-side
-  resources created, runtime invariants, hardening notes, and the
-  failure modes worth knowing about.
-  - [`reference/components-graphics.md`](./reference/components-graphics.md) -
-    `d2b.vms.<vm>.graphics.*` (virtio-gpu + Wayland cross-domain).
-  - [`reference/components-video.md`](./reference/components-video.md) -
-    optional graphics VM H264 decode via patched CH `--vhost-user-media`
-    and patched crosvm `device video-decoder`.
-  - [`reference/components-tpm.md`](./reference/components-tpm.md) -
-    `d2b.vms.<vm>.tpm.*` (per-VM swtpm 2.0).
-  - [`reference/components-usbip.md`](./reference/components-usbip.md) -
-    `d2b.vms.<vm>.usbip.*` (YubiKey USBIP passthrough) plus the
-    per-env host-side backend/proxy runners.
-  - [`reference/components-usb-security-key.md`](./reference/components-usb-security-key.md) -
-    `d2b.host.usb.securityKey.*` and
-    `d2b.vms.<vm>.usb.securityKey.*` (CTAPHID/WebAuthn proxy).
-  - [`reference/components-audio.md`](./reference/components-audio.md) -
-    `d2b.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
-    the `d2b audio` CLI surface.
-  - [`reference/components-shell.md`](./reference/components-shell.md) -
-    `d2b.vms.<vm>.guest.shell.*` (persistent named guest shells).
-  - [`reference/components-home-manager.md`](./reference/components-home-manager.md) -
-    `d2b.vms.<vm>.homeManager.*` (Home Manager as a NixOS
-    module inside the VM).
+- [`reference/zone-control-nix.md`](./reference/zone-control-nix.md) - Nix
+  authoring for Zones, Guests, Providers, and immutable artifacts.
+- [`reference/zone-cli-contract.md`](./reference/zone-cli-contract.md) - public
+  daemon and CLI replacement contract.
+- [`reference/cli-contract.md`](./reference/cli-contract.md) - current Rust
+  CLI verbs, ResourceRefs, lifecycle, errors, and JSON behavior.
+- [`reference/daemon-api.md`](./reference/daemon-api.md) - daemon protocol and
+  controller lifecycle.
+- [`reference/manifest-bundle.md`](./reference/manifest-bundle.md) - private
+  bundle and artifact boundary.
+- [`reference/manifest-schema.md`](./reference/manifest-schema.md) - versioned
+  manifest compatibility contract.
+- [`reference/error-codes.md`](./reference/error-codes.md) - typed refusal and
+  remediation catalog.
+- [`reference/store-lifecycle.md`](./reference/store-lifecycle.md) - Guest
+  store views, restart adoption, locks, and cleanup.
+- [`reference/key-lifecycle.md`](./reference/key-lifecycle.md) - managed
+  identity and trust-state handling.
+- [`reference/provider-capability-matrix.md`](./reference/provider-capability-matrix.md)
+  - Provider capability and placement contracts.
+- [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md)
+  - mediated display, audio, clipboard, USB, and graphics boundaries.
+- [`reference/components-graphics.md`](./reference/components-graphics.md),
+  [`components-video.md`](./reference/components-video.md),
+  [`components-audio.md`](./reference/components-audio.md),
+  [`components-tpm.md`](./reference/components-tpm.md),
+  [`components-usbip.md`](./reference/components-usbip.md), and
+  [`components-shell.md`](./reference/components-shell.md) - Provider-specific
+  effect contracts.
+- [`reference/cli-output/`](./reference/cli-output/) - generated stable JSON
+  schemas and prose companions.
 
 ## How-to
 
-Task-oriented recipes. Prescriptive, copy-and-adapt.
-
-- [`how-to/create-provider.md`](./how-to/create-provider.md) -
-  Provider crate layout, schema and Nix configuration, toolkit usage, and
-  hermetic or declared heavy-test lanes.
-- [`how-to/install-nixos-tier1.md`](./how-to/install-nixos-tier1.md) -
-  module-first Tier-1 install path for NixOS hosts.
-- [`how-to/install-ubuntu-2404.md`](./how-to/install-ubuntu-2404.md) -
-  current Ubuntu 24.04 manual/scaffold install path.
-- [`how-to/install-fedora.md`](./how-to/install-fedora.md) -
-  current Fedora manual/scaffold install path.
-- [`how-to/host-prepare.md`](./how-to/host-prepare.md) -
-  generic Linux Tier-1 onboarding and prerequisite reconciliation
-  before daemon-managed VM lifecycle.
-- [`how-to/migrate-nixos-to-daemon.md`](./how-to/migrate-nixos-to-daemon.md) -
-  move a NixOS host from legacy systemd-owned VM lifecycle to
-  `d2bd`-owned lifecycle.
-- [`how-to/migrate-d2b-v0-to-v1.md`](./how-to/migrate-d2b-v0-to-v1.md) -
-  **primary v0.x → v1.0 operator runbook**. Manifest schema bump,
-  bash CLI removal, per-VM systemd template retirement, host singleton
-  retirement, polkit allowlist removal, default-switch auto-flip,
-  whole-migration rollback. Also documents v1.1 deferred verbs and daemon-down
-  rendering pointers (`audit` / `console` / `audio` / `keys`).
-- [`how-to/migrate-d2b-v1-0-to-v1-1.md`](./how-to/migrate-d2b-v1-0-to-v1-1.md) -
-  consumer migration guide for v1.0 to v1.1.
-- [`how-to/migrate-d2b-v1-1-to-v1-2.md`](./how-to/migrate-d2b-v1-1-to-v1-2.md) -
-  consumer migration guide for v1.1 to v1.2, including the canonical
-  `d2b` lifecycle group rename.
-- [`how-to/uninstall-d2b.md`](./how-to/uninstall-d2b.md) -
-  rollback and uninstall runbook for both NixOS and host-install
-  scaffold paths.
-- [`how-to/hardware-smoke-walkthrough.md`](./how-to/hardware-smoke-walkthrough.md) -
-  operator procedure for the manual hardware/platform smokes.
-- [`how-to/qemu-media.md`](./how-to/qemu-media.md) -
-  configure, enroll, start, hotplug, and validate a qemu-media VM.
-- [`how-to/troubleshoot-usbip.md`](./how-to/troubleshoot-usbip.md) -
-  configure USBIP prerequisites, interpret degraded probe/status rows, and
-  recover claimed YubiKeys after VM restart.
-- [`how-to/use-usb-security-key.md`](./how-to/use-usb-security-key.md) -
-  configure the CTAPHID/WebAuthn security-key proxy for Firefox/browser logins.
-- [`how-to/migrate-usbip-yubikey-to-security-key.md`](./how-to/migrate-usbip-yubikey-to-security-key.md) -
-  move browser WebAuthn usage from YubiKey USBIP passthrough to the proxy.
-- [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) -
-  port an existing `microvm.nix` deployment onto `d2b`: option
-  mapping, step-by-step procedure, troubleshooting.
-- [`how-to/write-a-d2b-addon.md`](./how-to/write-a-d2b-addon.md) -
-  write a sibling flake that composes with `d2b` per VM, including
-  the `nixpkgs` follow policy and eval-only test pattern.
-- [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) -
-  declare a work/provider realm gateway and verify default-deny isolation.
-- [`how-to/configure-clipboard-picker.md`](./how-to/configure-clipboard-picker.md) -
-  install the separate picker package and wire it into `d2b.site.clipboard`.
-- [`how-to/realm-gateway.md`](./how-to/realm-gateway.md) -
-  configure, enter, and recover realm gateway guests.
+- [`how-to/install-nixos-tier1.md`](./how-to/install-nixos-tier1.md) - install
+  d2b into a NixOS host.
+- [`how-to/host-prepare.md`](./how-to/host-prepare.md) - prepare host
+  prerequisites and ownership markers.
+- [`how-to/create-provider.md`](./how-to/create-provider.md) - add a Provider
+  crate and its declared artifacts.
 - [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) -
-  enable, attach, detach, reattach, list, and kill persistent named guest shells.
-- [`how-to/configure-desktop-terminal-integration.md`](./how-to/configure-desktop-terminal-integration.md) -
-  wire the sibling toolkit, launcher, and terminal flakes to d2b's public shell
-  surface with aligned flake inputs.
-- [`how-to/migrate-d2b-v1-2-to-v2.md`](./how-to/migrate-d2b-v1-2-to-v2.md) -
-  migrate from v1.x local-only host metadata to v2 realm-native controller,
-  provider, remote-host, and desktop metadata.
+  open and manage Zone-scoped Guest shells.
+- [`how-to/use-usb-security-key.md`](./how-to/use-usb-security-key.md) and
+  [`how-to/troubleshoot-usbip.md`](./how-to/troubleshoot-usbip.md) - mediated
+  device workflows.
+- [`how-to/enable-observability.md`](./how-to/enable-observability.md) -
+  Provider-backed telemetry.
+- [`how-to/qemu-media.md`](./how-to/qemu-media.md) - QEMU media Provider
+  integration.
+- [`how-to/configure-desktop-terminal-integration.md`](./how-to/configure-desktop-terminal-integration.md)
+  - desktop companion integration.
 
-## Explanation
+## Contributor and architecture guidance
 
-Understanding-oriented prose. The "why" behind the design choices.
+- [`contributing/architecture.md`](./contributing/architecture.md) - current
+  crate and control-plane ownership.
+- [`contributing/critical-subsystems.md`](./contributing/critical-subsystems.md)
+  - load-bearing invariants.
+- [`contributing/gates-and-lints.md`](./contributing/gates-and-lints.md) -
+  Bazel, Make, policy, fixture, drift, and Nix gates.
+- [`../tests/AGENTS.md`](../tests/AGENTS.md) - test placement and retirement.
 
-- [`explanation/design.md`](./explanation/design.md) - threat
-  model, trust boundaries, component architecture, defense-in-
-  depth controls, known gaps, and a *Why not X* rationale FAQ.
-  Read this before opening a security-sensitive issue or
-  proposing a structural refactor.
-- [`explanation/storage-lifecycle.md`](./explanation/storage-lifecycle.md) -
-  why d2b treats host paths, restart adoption, locks, cleanup, and
-  degraded-state reporting as explicit control-plane contracts.
-- [`explanation/realm-controller-boundaries.md`](./explanation/realm-controller-boundaries.md) -
-  why host-local realm controller metadata keeps direct socket authorization,
-  local-root resolution, state, and audit boundaries separate.
-- [`explanation/realm-tree-routing.md`](./explanation/realm-tree-routing.md) -
-  conceptual boundaries for route discovery, namespace delegation, shortcuts,
-  and why the contract does not imply live relay, VPN, overlay, SSH, or raw
-  tunnel routing.
-- [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) -
-  persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and
-  non-goals for persistent named guest shells.
-- [`explanation/clipboard-architecture.md`](./explanation/clipboard-architecture.md) -
-  trusted clipboard authority, picker split, Niri integration, and bridge
-  runtime path contract.
-- [`adr/README.md`](./adr/README.md) - architecture decision
-  records for load-bearing design choices that complement the
-  explanation narrative.
+## Historical references
 
-Operator runbooks and troubleshooting procedures live under How-to.
-Reference pages should describe contracts, schemas, and invariants, then
-link to the relevant how-to for day-2 procedures.
-
-## Contributing
-
-Process documentation for changing d2b itself, rather than consuming it,
-lives outside the Diataxis quadrants in
-[`contributing/`](./contributing/README.md): workflow, changelog and commit
-conventions, gates and lints, critical subsystems, and architecture
-conventions. Start from [`../AGENTS.md`](../AGENTS.md), which indexes them and
-carries the binding rules.
+ADR 0015, ADR 0043, and the migration pages under `how-to/migrate-*` preserve
+the rationale and upgrade history for retired lifecycle owners. Pages named
+`realm-*`, `per-vm-*`, or `gateway-*` are historical unless explicitly linked
+from the current references above. Do not copy their option paths or command
+forms into a new configuration.
 
 [Diataxis]: https://diataxis.fr/

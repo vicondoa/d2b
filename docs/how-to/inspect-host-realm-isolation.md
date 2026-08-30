@@ -1,33 +1,20 @@
-# Inspect host realm isolation
+# Historical host isolation inspection
 
-**Diataxis category:** how-to.
+**Diataxis category:** historical reference.
 
-Use these checks on a deployed host when investigating a gateway-backed
-realm. They should show that the host is local-only and credentials live in
-the gateway guest.
+This page preserves the predecessor host/Realm isolation workflow. It is not
+a current command or configuration surface.
 
-1. Confirm the host has no gateway credential config:
+Use the current Zone and broker inspection commands instead:
 
-   ```bash
-   test ! -e /etc/d2b/gateway.json
-   ```
+```bash
+d2b host check --json
+d2b host doctor --read-only
+d2b zone list
+d2b guest list --zone local-root
+d2b audit --json
+```
 
-2. Inspect the static host policy:
-
-   ```bash
-   jq . /etc/d2b/host-realm-relay-egress-policy.json
-   ```
-
-3. Check host daemon and broker process environment/cmdline for accidental
-   relay credential variables:
-
-   ```bash
-   for pid in $(pgrep -x d2bd; systemctl show -p MainPID --value d2b-priv-broker.service); do
-     tr '\0' '\n' < /proc/$pid/environ | grep -F D2B_RELAY_ && exit 1
-     tr '\0' ' ' < /proc/$pid/cmdline | grep -F D2B_RELAY_ && exit 1
-   done
-   ```
-
-4. If any check fails, remove host-readable relay credentials from the host
-   config and enroll them inside the gateway guest with
-   `d2b-gateway-enroll`.
+The current control plane has exactly `d2bd.service`,
+`d2b-broker.socket`, and `d2b-broker.service`. It does not use a
+Gateway daemon or a name-only host lookup.

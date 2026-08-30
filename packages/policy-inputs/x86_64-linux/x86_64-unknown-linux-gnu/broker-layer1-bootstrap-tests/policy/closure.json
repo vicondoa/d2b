@@ -12,7 +12,7 @@
   ],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "41e475156afb5b35c3689e14cf72d4ebe15a82b9ff4b4346e2bf9f45fb42f1fb",
+  "lock_sha256": "1171ece98aa8c63fa0a5290863ed7dcd0a4334e96e0322ac2b521da71a140892",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -839,14 +839,6 @@
       "target": "x86_64-unknown-linux-gnu"
     },
     {
-      "id": "rand_core@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "rand_core",
-      "version": "0.10.1",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69",
-      "target": "x86_64-unknown-linux-gnu"
-    },
-    {
       "id": "rand_core@0.6.4#registry+https://github.com/rust-lang/crates.io-index",
       "name": "rand_core",
       "version": "0.6.4",
@@ -988,14 +980,6 @@
       "version": "1.4.8",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b",
-      "target": "x86_64-unknown-linux-gnu"
-    },
-    {
-      "id": "simd-adler32@0.3.10#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "simd-adler32",
-      "version": "0.3.10",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -2689,12 +2673,6 @@
       "target": "cfg(all(any(target_os = \"linux\", target_os = \"android\"), not(any(all(target_os = \"linux\", target_env = \"\"), getrandom_backend = \"custom\", getrandom_backend = \"linux_raw\", getrandom_backend = \"rdrand\", getrandom_backend = \"rndr\"))))"
     },
     {
-      "from": "getrandom@0.4.3#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "rand_core@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
       "from": "hmac@0.12.1#registry+https://github.com/rust-lang/crates.io-index",
       "to": "digest@0.10.7#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -2733,12 +2711,6 @@
     {
       "from": "miniz_oxide@0.8.9#registry+https://github.com/rust-lang/crates.io-index",
       "to": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "miniz_oxide@0.8.9#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "simd-adler32@0.3.10#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

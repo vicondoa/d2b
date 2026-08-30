@@ -226,7 +226,6 @@ rust_test(
         "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-volume-local:BUILD.bazel",
         "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
-        "//packages/d2b-realm-core:BUILD.bazel",
         "//packages/d2b-resource-api:BUILD.bazel",
         "//packages/d2b-resource-client:BUILD.bazel",
         "//packages/d2b-resource-compiler:BUILD.bazel",

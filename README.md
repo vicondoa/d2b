@@ -2,486 +2,171 @@
 
 **Multiple worlds, one desktop.**
 
-d2b, short for Double Dutch Bus, is a Wayland-first desktop for people
-who live and work across multiple trust boundaries: work, personal
-life, autonomous agents, experimental development, risky browsing, and
-other separate environments. Instead of mixing everything together or
-carrying separate devices, you get on the bus.
+d2b is an opinionated NixOS framework for one trusted Wayland host and
+untrusted, isolated workloads. **Zone** and **Zone-owned resources** are the
+only active product and control-plane hierarchy. A Zone owns its Guests,
+Processes, Providers, Networks, Devices, Volumes, identities, policy, state,
+and audit boundary.
 
-Zone and Zone-owned resources are d2b's only active product and
-control-plane model. Each Zone is an isolation, policy, routing, state,
-and audit boundary for the resources it owns, including workload
-Guests, networks, identities, devices, and processes. Each Zone runs
-with isolated runtime state while its workloads remain integrated with
-one Wayland desktop.
+The daemon-only control plane is `d2bd` plus `d2b-broker`. Nix declares
+semantic resources and immutable artifacts; the Guest controller derives its
+owned child Resources; specialized controllers perform effects through the
+broker. No public API carries raw host paths, credentials, executable
+arguments, or private runtime identifiers.
 
-Generic environment names such as work or personal remain useful
-descriptions of workload context, but they are not a second d2b
-product hierarchy.
+## Why d2b
 
-If Qubes OS is about reasonable security through compartments, d2b's
-narrower promise is **reasonable isolation for a single-user NixOS
-Wayland desktop**. It is not a new OS and not a Qubes replacement: it
-composes into your existing NixOS host. Workloads run as Linux microVMs
-with their own kernels, accelerated through `/dev/kvm` by
-[Cloud Hypervisor] today. [crosvm] backs GPU/device sidecars today, and
-the runner contract is shaped so additional VMM backends can fit later.
+d2b gives a single-user NixOS Wayland desktop VM-grade workload boundaries
+without separate desktop sessions:
 
-d2b gives you boundaries without device juggling:
+- **Zone-owned resources** define trust, routing, identity, files, devices, and
+  process placement.
+- **Controller-owned Guest lifecycle** creates and reconciles the complete
+  child Resource graph through the authenticated Resource API.
+- **Isolated Guest stores** expose only each Guest's declared closure.
+- **Mediated I/O** keeps TPM, USB, audio, graphics, security-key, and virtiofs
+  effects behind typed Providers and broker operations.
+- **One operator surface** is the Rust `d2b` CLI over the daemon public socket.
 
-- **Zone-owned resources:** Zones are the user-facing trust boundaries.
-  Workload identity, network policy, files, devices, process placement,
-  and risk posture are described by resources owned by the relevant Zone.
-- **Isolated store views:** each guest sees a per-VM `/nix/store`
-  hardlink farm containing only its own closure.
-- **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
-  CTAPHID security-key proxying, and virtiofs file sharing are
-  broker-supervised per-VM sidecars instead of ad-hoc host services.
-- **One Wayland desktop:** graphical workloads from each Zone
-  integrate with the host compositor without asking you to live in a
-  separate desktop.
-- **Shared Zone UI identity:** d2b emits compositor-agnostic JSON and
-  GTK-compatible CSS so niri, Waybar, wlcontrol, wlterm, clip-picker, and
-  Wayland rails use the same host/Zone/workload/state colors.
-- **One operator surface:** the Rust `d2b` CLI talks to `d2bd`
-  and the privileged broker for lifecycle, keys, USB, and host prep.
-- **Persistent Guest shells:** `d2b shell open` opens or reconnects to a
-  named interactive Guest shell.
+Generic words such as work or personal can describe workload context, but they
+are not another d2b hierarchy.
 
-Get on the bus: separate sides, shared experience.
-
-At a high level:
+## Current architecture
 
 ```mermaid
 flowchart TB
-    subgraph host["NixOS host"]
-        direction TB
-        subgraph human["human-facing host session"]
-            direction LR
-            cli["d2b CLI"]
-            desktop["Wayland desktop"]
-        end
-
-        devices["devices<br/>TPM / USB / audio / graphics / files"]
-
-        subgraph d2b_box["d2b"]
-            direction TB
-            d2bd["d2bd"]
-            broker["privileged broker"]
-            vhost["vhost-user sidecars"]
-            wayland["Wayland mediation"]
-        end
-
-        subgraph vm["microVM"]
-            direction TB
-            kernel["guest Linux kernel"]
-            apps["workspace apps"]
-        end
-    end
-
-    cli --> d2bd
-    desktop --> wayland
-    vhost --> devices
-    d2b_box --- vm
+    nix["NixOS configuration"] --> zone["Zone resource bundle"]
+    zone --> controller["Guest controller"]
+    controller --> children["Process / Endpoint / Volume children"]
+    children --> effects["Specialized controllers"]
+    effects --> broker["d2b-broker"]
+    cli["d2b CLI"] --> daemon["d2bd"]
+    daemon --> controller
+    broker --> host["Host effects"]
+    controller --> guest["Authenticated Guest session"]
 ```
 
-**Quick start** (full walkthroughs under
-[Quick start (Rust CLI / examples)](#quick-start-rust-cli--examples) and
-[Quick start (template path)](#quick-start-template-path) below):
+The Guest controller observes child status and owns lifecycle state. It does
+not spawn processes, mount storage, bind sockets, provision devices, or call
+the broker directly. A Guest becomes Ready only when its current-generation
+dependencies and authenticated Guest session are ready.
+
+## Quick start
+
+Start with [`examples/minimal`](./examples/minimal), or copy
+[`templates/default`](./templates/default) into a host flake:
 
 ```bash
-# after switching the host config from examples/personal-dev
-sudo d2b guest start personal-dev --apply
-```
-
-Other entry points: see [Where to start](#where-to-start) below for a
-table of the doc-friendly example aliases (`personal-dev`,
-`graphics-workstation`, `multi-env`) plus the manual integration path.
-For reconnectable interactive shells, see
-[Use persistent shells](./docs/how-to/use-persistent-shells.md).
-For Waybar/terminal launcher integration around those shells, see
-[Configure desktop terminal integration](./docs/how-to/configure-desktop-terminal-integration.md).
-For the staged generic host-user provider contract, see
-[Configure generic unsafe-local launcher items](./docs/how-to/configure-unsafe-local-launchers.md).
-For browser WebAuthn with a host-attached YubiKey/security key, see
-[Use the USB security-key proxy](./docs/how-to/use-usb-security-key.md).
-
-## Who this is for
-
-D2b targets the **single-user NixOS desktop** where the host is
-trusted, but some workloads are not. It is for people who want to run
-things on their computer that they do not completely trust - AI agents,
-large dependency trees, risky browsing/dev environments, or work-required
-software such as Intune - while keeping those workloads away from the
-host OS and from each other.
-
-Concretely:
-
-- You want VM-grade workload boundaries without turning your daily
-  desktop into a collection of separate VM consoles.
-- You want to use untrusted or employer-required software on the same
-  Wayland desktop while keeping the host OS as the trusted place where
-  your real credentials, SSH keys, browser profile, and personal files
-  live.
-- You want the boring parts owned together: network topology,
-  firewalling, per-VM store views, SSH keys, sidecar users, and the
-  lifecycle CLI.
-- You like the idea of Qubes-style compartmentalization, but you want a
-  NixOS module that composes into your existing host instead of a new OS
-  and Xen stack.
-- You could build the pieces with raw microVMs, but you would rather
-  declare "work" and "personal" Zones with owned resources and let the
-  framework keep the host/guest boundary consistent.
-- One human, one host. Multi-tenant trust boundaries are out of scope.
-- Wayland-native. There is no X11 fallback for graphics VMs.
-- Headless workloads also work. Runtime choices may be headless or graphical;
-  the active product model remains Zone-owned
-  resources and isolated per-Zone runtime state.
-
-## What d2b is NOT
-
-- **Not magic security for an insecure host.** D2b is only as secure
-  as the host OS it composes into. If the host kernel, compositor, user
-  session, or `d2b` launcher account is compromised, the VM boundary
-  is no longer the main thing protecting you.
-- **Not a multi-tenant trust boundary.** D2b assumes one human on one
-  trusted host. It is not designed to isolate mutually suspicious local
-  users from each other.
-- **Not a Qubes replacement.** The "reasonably isolated" framing is a
-  nod to Qubes, not an equivalence claim. Qubes is a security-oriented OS
-  with Xen-based virtualization and a much larger security model; d2b
-  is a NixOS module for trusted-host desktop compartmentalization.
-- **Not a general VM, container, or app-sandbox manager.** Use
-  [microvm.nix], [virt-manager], [GNOME Boxes], [Distrobox], [Flatpak],
-  or NixOS containers when you want those shapes. D2b is the
-  opinionated path for desktop workspaces with Zone-scoped networking,
-  per-Guest stores, mediated I/O, and one CLI.
-- **Not officially supported.** Best-effort hobby project, one
-  maintainer, no SLA. Pin to tagged releases.
-
-## Project status
-
-- **Maintainer:** one person
-- **Tested on:** NixOS unstable. Runtime tested on `x86_64-linux`
-  desktop; eval-tested for headless `aarch64-linux` (the cloud-
-  hypervisor + crosvm runtime path is still x86_64-linux-only, but
-  the headless eval graph is multi-arch clean).
-- **CI:** flake-eval only; full E2E tests run on a private runtime
-  host (the original development environment).
-
-See [CHANGELOG.md](./CHANGELOG.md).
-
-## Where to start
-
-Pick the entry point that matches your situation. The checked flakes
-and the doc-friendly alias READMEs all live in this repo; the manual
-integration path below ("Manual integration") is for plugging
-d2b into an existing host config.
-
-| Path | Audience | Notes |
-| --- | --- | --- |
-| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` - sentinel TODOs + assertion gates |
-| [`examples/minimal`](./examples/minimal) | Read-and-copy headless starter | Canonical headless example; VM name `personal-dev`. |
-| [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
-| [`examples/multi-env`](./examples/multi-env) | Two isolated runtime environments (work + personal) | Demonstrates separate network boundaries on one host. |
-| [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs` VM (native SigNoz + ClickHouse) and wires host/guest OTel collectors over virtio-vsock. |
-
-## Quick start (Rust CLI / examples)
-
-The Rust CLI is now the primary documented operator surface. If you
-want the exact names used throughout the migration docs, start from
-one of these checked example layouts and use the native `guest start`
-path:
-
-```bash
-# headless personal workspace (examples/minimal)
-sudo d2b guest start personal-dev --apply
-```
-
-## Quick start (template path)
-
-The fastest way to a working d2b host:
-
-```bash
-mkdir my-d2b-host && cd my-d2b-host
 nix flake init -t github:vicondoa/d2b
-# Edit configuration.nix - fill in the 7 numbered TODOs.
-# TODOs 2-3 are eval-enforced via assertions (hostname, user,
-# SSH key). TODOs 1, 5-7 (hardware, network CIDRs) ship with
-# plausible defaults you must still review before activation -
-# see templates/default/README.md for the full table.
-sudo nixos-rebuild build  --flake .#desktop
+# edit configuration.nix, then:
 sudo nixos-rebuild switch --flake .#desktop
-d2b guest list                     # typed Guest resource inventory
-d2b host doctor --read-only        # host and bridge readiness
-d2b guest start corp-vm --apply
+d2b guest list --zone local-root
+d2b guest start personal-dev --zone local-root --apply
 ```
 
-For v2-ready configs, add `d2b.realms.<realm>.workloads.<workload>` metadata
-with `legacyVmName = "<existing-vm>"` so desktop tools and CLI output expose
-canonical targets such as `corp-vm.work.d2b` without moving state. The
-scaffold is ~150 lines and is documented inline. See
-[`templates/default/README.md`](./templates/default/README.md) for
-the full TODO walk-through.
-
-## Manual integration (without the template)
-
-If you're plugging d2b into an existing NixOS host config
-rather than starting fresh, this is the minimum surface area.
-
-**1. Add the flake input.** In your `flake.nix`:
+The smallest current resource declaration looks like this:
 
 ```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    d2b.url = "github:vicondoa/d2b";
-    d2b.inputs.nixpkgs.follows = "nixpkgs";
-  };
-
-  outputs = { self, nixpkgs, d2b, ... }: {
-    nixosConfigurations.desktop = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        d2b.nixosModules.default
-        ./configuration.nix
-      ];
+{ inputs, ... }:
+let
+  guestSystem = inputs.guestSystem;
+  cloudHypervisorProvider = inputs.cloudHypervisorProvider;
+in {
+  d2b.artifacts = {
+    guest-system = {
+      package = guestSystem;
+      type = "nixos-system";
+    };
+    cloud-hypervisor-provider = {
+      package = cloudHypervisorProvider;
+      type = "provider";
     };
   };
-}
-```
 
-**2. Drop in a `configuration.nix` block.** This is the minimum
-d2b needs from you - pick a Wayland user (alice here) plus
-one env + one VM. Everything else (sidecar users, SSH-key
-generation, dnsmasq, NAT, firewall, the auto-declared
-net VM) is materialised by the framework.
-
-```nix
-# configuration.nix
-{ pkgs, ... }: {
-  # Alice is your Plasma / Sway / Hyprland user.
-  users.users.alice = {
-    isNormalUser = true;
-    uid = 1000;
-    extraGroups = [ "wheel" "video" "audio" ];
-  };
-
-  # Tell d2b about Alice + add her to the d2b
-  # system group. The broker uses SO_PEERCRED at accept time to
-  # classify peers; nothing else (no polkit, no setuid).
-  # 'd2b guest start <name> --apply' works without sudo for
-  # users in the d2b group.
-  d2b.site = {
-    waylandUser = "alice";
-    launcherUsers = [ "alice" ];
-    # Set true if you have a Yubikey and want USBIP passthrough.
-    yubikey.enable = false;
-  };
-
-  # One env. Two CIDRs: a /30 for the host↔net-VM uplink,
-  # a /24 for workload VMs on the LAN. RFC 5737 documentation
-  # ranges are safe defaults for the uplink; pick whatever
-  # 10.x or 192.168.x LAN you want for the workloads.
-  d2b.envs.work = {
-    lanSubnet    = "10.20.0.0/24";
-    uplinkSubnet = "192.0.2.0/30";
-  };
-
-  # One workload VM in the env. ssh.keyPath is left null, so the
-  # framework-managed key under d2b.site.keysDir is used.
-  d2b.vms.corp-vm = {
-    enable = true;
-    env = "work";
-    index = 10;                    # workload IP = 10.20.0.10
-    ssh.user = "alice";
-    config = { ... }: {
-      networking.hostName = "corp-vm";
-      users.users.alice = {
-        isNormalUser = true;
-        uid = 1000;
-        # Inside the VM, give Alice a normal shell. The framework
-        # injects the authorized SSH key automatically.
+  d2b.zones.local-root.resources = {
+    host = {
+      type = "Host";
+      spec.providerRef = "Provider/system-core";
+    };
+    runtime-cloud-hypervisor = {
+      type = "Provider";
+      spec = {
+        artifactId = "cloud-hypervisor-provider";
+        config.controllerExecutionRef = "Host/host";
+      };
+    };
+    personal-dev = {
+      type = "Guest";
+      spec = {
+        providerRef = "Provider/runtime-cloud-hypervisor";
+        systemArtifactId = "guest-system";
       };
     };
   };
 
-  # Optional: declare your host's primary LAN so d2b's CIDR-
-  # overlap assertion catches collisions at eval time.
-  d2b.hostLanCidrs = [ "192.168.1.0/24" ];
-
-  system.stateVersion = "25.11";
+  # The evaluator is consumer-owned; the child graph is controller-owned.
+  d2b.guestSystems.local-root.personal-dev = {
+    config.system.build.toplevel = guestSystem;
+  };
 }
 ```
 
-**3. Build it.**
+`system-core` and `system-minijail` are bootstrap Providers projected by d2b;
+consumers do not hand-author them. A Guest's direct children are not duplicated
+in Nix configuration.
+
+## CLI
+
+The Rust CLI is the only supported operator interface:
 
 ```bash
-sudo nixos-rebuild build --flake .#desktop
-sudo nixos-rebuild switch --flake .#desktop
+d2b zone list
+d2b guest list --zone work
+d2b guest status gateway --zone work
+d2b guest start gateway --zone work --apply
+d2b process list --zone work
+d2b exec run Guest/gateway -- /bin/sh
+d2b host doctor --read-only
+d2b audit --json
 ```
 
-The activation creates `/var/lib/d2b/keys/corp-vm_ed25519`
-(the framework-managed SSH key), spawns the `sys-work-net` net
-VM, materialises `br-work-up` + `br-work-lan` bridges, and
-installs the `d2b` CLI on your `$PATH`.
+Lifecycle operations require an explicit `--dry-run` or `--apply`. The daemon
+checks Zone admission, Resource identity, Provider generation, revision, and
+capability before mutation. Retries are idempotent and restart-safe.
 
-Guest configuration is still built on the host, but guest activation
-stays inside the guest. The host build produces the VM's NixOS
-`system.build.toplevel`; d2b's broker/store-view path publishes
-that closure into the per-VM live store pool; virtiofs serves that pool
-as the guest's `/nix/store`; and the target-local activation Process applies
-the prepared toplevel inside the running VM for `switch`, `test`, and live
-`rollback`.
-Stopped VMs do not run live activation from the host: use `d2b boot
-<vm> --apply` to stage the declared toplevel for the next start.
+## Security boundaries
 
-**4. Verify and use.**
+The host is trusted; workloads are not. d2b is not a multi-tenant operating
+system and does not make a compromised host safe. Gateway-backed isolation
+keeps Gateway Guest credentials, remote registries, Provider configuration,
+and Zone audit inside the relevant Guest execution context. Separate Zones do
+not share a Gateway Guest or L2 bridge.
 
-```bash
-d2b guest list                     # typed Guest resource inventory
-d2b host doctor --read-only        # host and bridge readiness
-d2b guest start corp-vm --apply    # preferred Rust CLI path
-ssh -i /var/lib/d2b/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-d2b guest stop corp-vm --apply     # clean shutdown
-```
+Host-mutable paths remain owned by their named single repair owner. Foreign
+nftables, NetworkManager, systemd-networkd, cgroup, lock, and TPM state fails
+closed rather than being overwritten.
 
-That's it. Add a second env or a second VM by repeating the
-`d2b.envs.<env>` / `d2b.vms.<name>` blocks; the framework
-deals with bridges, broker-spawned sidecars, SSH-key generation,
-and dnsmasq in lockstep.
+## Repository map
 
-## Common gotchas
+- [`STRATEGY.md`](./STRATEGY.md) - product direction.
+- [`docs/explanation/design.md`](./docs/explanation/design.md) - threat model
+  and architecture.
+- [`docs/reference/zone-control-nix.md`](./docs/reference/zone-control-nix.md)
+  - current Nix resource authoring.
+- [`docs/reference/daemon-api.md`](./docs/reference/daemon-api.md) - daemon
+  protocol and lifecycle contracts.
+- [`docs/reference/manifest-schema.md`](./docs/reference/manifest-schema.md)
+  - versioned artifact manifest.
+- [`docs/reference/cli-contract.md`](./docs/reference/cli-contract.md) - CLI
+  JSON, errors, and lifecycle semantics.
+- [`tests/AGENTS.md`](./tests/AGENTS.md) - test placement and gates.
+- [`examples/`](./examples/) and [`templates/default`](./templates/default) -
+  current consumer layouts.
 
-A handful of things consistently bite first-time users.
-
-- **Same filesystem.** `/var/lib/d2b` must live on the same
-  filesystem as `/nix/store`. The per-VM `/nix/store` hardlink
-  farm refuses to start otherwise and there is no graceful
-  fallback.
-- **Wayland-only.** A graphics VM with `d2b.site.waylandUser
-  = null` is an eval error. There is no X11 path; the GPU
-  sidecar binds the host compositor's `/run/user/<uid>/wayland-0`
-  socket directly.
-- **`ssh.keyPath` default.** Leave it null and the framework-
-  managed key under `${cfg.site.keysDir}/<vm>_ed25519` is used.
-  Override only if you supply your own per-VM key. The CLI's
-  `d2b activation keys rotate Guest/<name>` only rotates the framework-managed
-  key; consumer-supplied keys are untouched.
-- **CIDR overlap is detected.** Two envs whose `lanSubnet` or
-  `uplinkSubnet` overlap (including containment like
-  `10.0.0.0/16` ⊃ `10.0.1.0/24`) is a hard eval error. Same
-  for env-vs-host overlap. Pick non-overlapping ranges.
-- **No autostart for graphics VMs.** `autostart = true` on a
-  graphics VM is rejected - there is no Wayland session
-  available at multi-user.target. Use `autostart = false` (the
-  default) and `d2b guest start <name> --apply` from a Plasma
-  terminal.
-- **D2b state is secret material.** `/var/lib/d2b/`
-  contains per-VM SSH private keys and (for TPM-enabled VMs)
-  swtpm state. Treat d2b state directories as secret
-  material; back them up only to encrypted, access-controlled
-  media.
-
-## CLI overview
-
-The Rust `d2b` CLI is the only operator surface. Run
-`d2b --help` for the full command list and `d2b <COMMAND>
---help` for per-verb usage. Highlights:
-
-- **Lifecycle**: `vm start`, `vm stop`, `vm restart`, `vm list`,
-  plus the `up` / `down` / `restart` aliases.
-- **Read-only**: `list`, `status`, `audit`, `auth status`,
-  `host check`, `host doctor`, `keys list`, `keys show`.
-- **Mutating** (require `--apply`): `switch`, `boot`, `test`,
-  `rollback`, `gc`, `migrate`, `keys rotate`, `trust`,
-  `rotate-known-host`, `host install`, `host prepare`,
-  `host destroy`, `host reconcile`, `usb attach`, `usb detach`.
-  `switch`, `test`, and live `rollback` require a running VM with the
-  guest activation capability; `boot` is the offline staging verb.
-- **Not yet implemented**: `console`, `audio status|mic|speaker|off`
-  return a typed exit-78 envelope until the daemon-native surface
-  ships. Argument parsing and shell completions still work.
-- **Guest Process execution** (admin-only): `vm exec` runs a command inside a
-  VM through the authenticated ComponentSession - no SSH -
-  (`d2b exec run Guest/<name> -- <cmd…>`). It is restricted
-  to callers in `d2b.site.adminUsers`, the role gate enforced via
-  `SO_PEERCRED` at the daemon socket.
-
-To enable the Guest target agent on a VM, set
-`d2b.vms.<vm>.guest.componentSession.enable = true`; add your operator
-account to `d2b.site.adminUsers`, then rebuild and restart the VM. Exec
-requests are admitted as target-local `Process` resources and executed only
-from signed Provider templates; no caller-supplied SSH transport or host
-process is involved.
-
-Run-state ships in `/var/lib/d2b/`; per-host config emitted by
-the NixOS module ships in `/etc/d2b/` (bundle + privileges +
-processes JSON files consumed by `d2bd` / `d2b-broker`).
-
-For typed exit codes and JSON envelopes, see
-[`docs/reference/cli-contract.md`](docs/reference/cli-contract.md).
-
-## Documentation
-
-Organised as a [Diataxis] tree under [`docs/`](docs/):
-
-- **Tutorials / Examples** - [`examples/`](examples/) and
-  [`templates/default/`](templates/default/).
-- **How-to** - [`docs/how-to/`](docs/how-to/):
-  [`install-nixos-tier1.md`](docs/how-to/install-nixos-tier1.md),
-  [`host-prepare.md`](docs/how-to/host-prepare.md),
-  [`migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md),
-  [`enable-observability.md`](docs/how-to/enable-observability.md).
-- **Reference** - [`docs/reference/`](docs/reference/): manifest
-  schema, CLI contract, security runbook, error-envelope guidance,
-  and per-component docs (graphics, tpm, usbip, audio,
-  home-manager, observability).
-- **Explanation** - [`docs/explanation/design.md`](docs/explanation/design.md):
-  threat model + design rationale + *Why not X* FAQ.
-
-For security disclosure, see [`SECURITY.md`](SECURITY.md).
-
-### Which doc do I need?
-
-| Goal                                  | Read                                                            |
-|---------------------------------------|-----------------------------------------------------------------|
-| New user, fastest start               | [`templates/default/`](templates/default/) → [`examples/minimal/`](examples/minimal/) |
-| Migrating from `microvm.nix`          | [`docs/how-to/migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md) |
-| Is this secure?                       | [`docs/explanation/design.md`](docs/explanation/design.md) → [`SECURITY.md`](SECURITY.md) |
-| Security incident / USBIP emergency   | [`docs/reference/security-runbook.md`](docs/reference/security-runbook.md) |
-| How does `<component>` work?          | [`docs/reference/components-<name>.md`](docs/reference/)        |
-| Adding observability to an existing host | [`docs/how-to/enable-observability.md`](docs/how-to/enable-observability.md) → [`docs/reference/components-observability.md`](docs/reference/components-observability.md) |
-| Manifest contract                     | [`docs/reference/manifest-schema.md`](docs/reference/manifest-schema.md) + [`manifest-schema.json`](docs/reference/manifest-schema.json) |
-| CLI behaviour (exit codes, JSON)      | [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md) |
-
-[Diataxis]: https://diataxis.fr
-
-## Acknowledgements
-
-D2b's desktop-compartmentalization framing owes a debt to
-[Spectrum OS], and to its lead Alyssa Ross, @alyssais.
+The repository retains ADRs and migration notes for historical context. They
+are not current product instructions; current code and the Zone references
+above are authoritative.
 
 ## License
 
 [Apache-2.0](./LICENSE).
-
-## Further reading
-
-- [CHANGELOG.md](./CHANGELOG.md) - release notes and known gaps.
-- [SECURITY.md](./SECURITY.md) - threat model summary and reporting
-  channel.
-
-If you are an AI agent or human contributor working on this repo,
-the operational manual lives in [`AGENTS.md`](./AGENTS.md) at the
-repo root.
-
-[microvm.nix]: https://github.com/microvm-nix/microvm.nix
-[Cloud Hypervisor]: https://github.com/cloud-hypervisor/cloud-hypervisor
-[crosvm]: https://github.com/google/crosvm
-[Distrobox]: https://distrobox.it/
-[Flatpak]: https://flatpak.org/
-[virt-manager]: https://virt-manager.org/
-[GNOME Boxes]: https://apps.gnome.org/Boxes/
-[Spectrum OS]: https://spectrum-os.org/
-[docs/explanation/design.md]: ./docs/explanation/design.md

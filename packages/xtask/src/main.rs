@@ -13,11 +13,8 @@ use clap_complete::{
 use clap_mangen::Man;
 use d2b_contracts_broker::broker_wire;
 use d2b_contracts_control::cli_output::{
-    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
-    OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2,
-    StoreVerifyOutputV2, UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1,
-    VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
-    VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
+    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
+    StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
 };
 use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
@@ -685,10 +682,9 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 20] = [
+    let schemas: [(&str, RootSchema); 8] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
-        ("launch.schema.json", schemars::schema_for!(LaunchOutputV1)),
         (
             "usb-probe.schema.json",
             schemars::schema_for!(UsbProbeOutputV1),
@@ -696,42 +692,6 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         (
             "op-inspect.schema.json",
             schemars::schema_for!(OpInspectOutputV1),
-        ),
-        (
-            "realm-list.schema.json",
-            schemars::schema_for!(RealmListOutputV1),
-        ),
-        (
-            "realm-inspect.schema.json",
-            schemars::schema_for!(RealmInspectOutputV1),
-        ),
-        (
-            "vm-display-list.schema.json",
-            schemars::schema_for!(VmDisplayListOutputV1),
-        ),
-        (
-            "vm-display-close.schema.json",
-            schemars::schema_for!(VmDisplayCloseOutputV1),
-        ),
-        (
-            "vm-exec-create.schema.json",
-            schemars::schema_for!(VmExecCreateOutputV1),
-        ),
-        (
-            "vm-exec-list.schema.json",
-            schemars::schema_for!(VmExecListOutputV1),
-        ),
-        (
-            "vm-exec-status.schema.json",
-            schemars::schema_for!(VmExecStatusOutputV1),
-        ),
-        (
-            "vm-exec-logs.schema.json",
-            schemars::schema_for!(VmExecLogsOutputV1),
-        ),
-        (
-            "vm-exec-kill.schema.json",
-            schemars::schema_for!(VmExecKillOutputV1),
         ),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
         (
@@ -745,14 +705,6 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         (
             "store-verify.schema.json",
             schemars::schema_for!(StoreVerifyOutputV2),
-        ),
-        (
-            "vm-audio-status.schema.json",
-            schemars::schema_for!(VmAudioStatusOutputV1),
-        ),
-        (
-            "vm-audio-set.schema.json",
-            schemars::schema_for!(VmAudioSetOutputV1),
         ),
     ];
 

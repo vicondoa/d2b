@@ -2,112 +2,72 @@
 
 **Diataxis category:** reference.
 
-The manifest bundle is the private, daemon-facing contract. It lives
-beside the existing public `vms.json` manifest and carries
-host intent, process topology, privilege policy, closure metadata, and
-sandbox profile metadata that must not be exposed through the
-world-readable system profile.
+The private bundle is a daemon-facing compatibility contract. It carries
+typed, generated inputs for `d2bd`, the Guest controller, specialized
+Providers, and `d2b-broker`. It is not a public lifecycle API.
 
 ## Artifact set
 
-| Artifact | Visibility | Mode | Purpose |
-| --- | --- | --- | --- |
-| `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
-| `bundle.json` | private bundle index | root:`d2bd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
-| `host.json` | private host intent | root:`d2bd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
-| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
-| `storage.json` | private storage lifecycle contract | root:`d2bd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
-| `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
-| `allocator.json` | private allocator metadata | root:`d2bd` `0640` | Metadata-only local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, and env bridges. |
-| `realm-controllers.json` | private realm controller metadata | root:`d2bd` `0640` | Metadata-only per-realm daemon, broker, socket, state, audit, allocator binding, provider placement, and direct-access plan rooted in `d2b.realms`. |
-| `realm-identity.json` | private realm identity metadata | root:`d2bd` `0640` | Realm identity, provider binding, policy, and capability metadata consumed by the daemon. |
-| `realm-workloads-launcher-v2.json` | public launcher metadata in the private bundle | root:`d2bd` `0640` | Argv-free provider, posture, realm color, and generic launcher-item metadata served to authorized clients through the public daemon API. |
-| `unsafe-local-workloads.json` | private configured launcher intent | root:`d2bd` `0640` | Normalized configured argv and default items for unsafe-local and local-VM workloads, plus unsafe-local persistent-shell policy, resolved only by `d2bd`. |
-| `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
-| `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
-| `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
-
-`vms.json` is the only world-readable artifact. All other artifacts are
-daemon-owned bundle inputs, including public-safe launcher metadata that
-`d2bd` exposes through its authorized API. The privileged boundary is described by
-[ADR 0002](../adr/0002-non-root-daemon-and-privileged-broker.md).
-
-## Versioning policy
-
-| Version field | Scope | Bump rule |
+| Artifact | Visibility | Purpose |
 | --- | --- | --- |
-| `bundleVersion` | Entire private bundle | Bump for any breaking change that affects daemon or broker compatibility across the artifact set. |
-| `schemaVersion` | One artifact schema | Bump for artifact-local schema evolution, including additive optional fields. |
-| `_manifest.manifestVersion` | Public `vms.json` only | Bump for breaking public-manifest changes; private bundle versioning does not replace this public compatibility gate. |
+| `vms.json` | public compatibility projection | Bounded legacy inventory data for diagnostics and migration tooling. |
+| `bundle.json` | private | Bundle version, artifact paths, digests, and compatibility metadata. |
+| `host.json` | private | Host capabilities, Provider catalog, Network/Device requirements, and support tier. |
+| `processes.json` | private | Controller and runner intent, readiness predicates, and delegated sandbox metadata. |
+| `storage.json` | private | Anchored managed paths, restart adoption, cleanup, repair, and degraded states. |
+| `sync.json` | private | OFD lock and fd-transfer policy, acquisition order, and stale-owner handling. |
+| `allocator.json` | private | Zone-scoped resource allocation metadata and opaque host-resource leases. |
+| `realm-controllers.json` | private compatibility artifact | Transitional metadata read by the current daemon bridge; it is not a product hierarchy or lifecycle owner. |
+| `realm-identity.json` | private compatibility artifact | Transitional identity metadata; credential and session authority remains in Zone Resources. |
+| `realm-workloads-launcher-v2.json` | private, daemon-served | Argv-free launcher metadata exposed only through the authorized daemon API. |
+| `unsafe-local-workloads.json` | private | Validated unsafe-local Provider intent resolved by `d2bd`. |
+| `privileges.json` | private | Public API and broker authorization policy. |
+| `closures/<Guest>.json` | private | Per-Guest system closure and generation metadata. |
+| `minijail-profile.json` | private | Typed sandbox profile metadata used by approved Providers. |
 
-The policy is defined by
-[ADR 0006](../adr/0006-manifest-bundle-versioning.md). The current
-schema directory is `docs/reference/schemas/v2/`; the bundle and
-per-artifact schemas were bumped from `v1` to `v2` to land the
-host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 11`
-for provider-neutral configured launcher execution.
-Each artifact now carries a
-matching v2 markdown companion beside the committed JSON schema.
-`bazel run //packages/xtask:xtask -- gen-schemas` regenerates the JSON files under
-`schemas/v2/` from the Rust DTOs in `d2b-core` and
-`d2b-contracts`; keep the markdown companions in sync in the same
-commit whenever the schema changes.
+The daemon and broker own access to private artifacts. Secret bytes,
+credentials, raw host paths, executable arguments, and private runtime
+locators do not cross the public API boundary.
 
-## Drift policy
+## Current ownership
 
-The committed schema files are derived from Rust DTOs in `d2b-core`
-and `d2b-contracts`. The drift gate is:
+Nix declares Zone resources and immutable artifacts. The Guest controller owns
+the direct child Resource graph and lifecycle status. Specialized controllers
+own Process, Endpoint, Volume, Network, Device, Credential, and Provider
+effects. `d2b-broker` performs only approved typed host mutations.
+
+The compatibility documents with `realm-` filenames may remain during host
+migration, but they cannot create, discover, or authorize a Guest lifecycle.
+The current authority is the Zone Resource store and authenticated session.
+
+## Versioning
+
+| Field | Scope | Rule |
+| --- | --- | --- |
+| `bundleVersion` | Private bundle | Bump for a breaking daemon/broker contract change. |
+| `schemaVersion` | One artifact | Bump for artifact-local schema evolution. |
+| `manifestVersion` | Public compatibility projection | Bump for a breaking public reader change. |
+
+Update the Rust DTO, Nix emitter, generated schema, prose, fixture, and
+changelog together. Do not hand-edit generated JSON.
+
+## Generation and drift
 
 ```bash
 bazel run //packages/xtask:xtask -- gen-schemas
 make test-drift
 ```
 
-Any diff is a contract drift. A valid schema change updates the Rust
-DTOs, generated JSON Schemas, Nix emitters, prose docs, and tests in the
-same wave integration.
+Generated schemas live under [`schemas/v2/`](./schemas/v2/). The current
+Zone-specific resource schemas live under [`schemas/v3/`](./schemas/v3/).
 
-## Public/private boundary
+## Related references
 
-The public boundary is intentionally narrow:
-
-- `vms.json` may contain VM names, public capability bits, public socket
-  locations already required by the bash CLI, and non-secret topology
-  metadata.
-- `realm-workloads-launcher-v2.json` contains public-safe, argv-free metadata
-  but remains daemon-owned `0640`; unprivileged consumers receive it through
-  the authorized public daemon API.
-- Private artifacts may contain command argv, broker-only paths,
-  cgroup/device/fd requirements, sandbox profile internals, closure
-  paths, qemu-media direct image-file paths authored in Nix config, and
-  authorization policy.
-- Secret material is never embedded in either boundary. Secret and key
-  references use opaque key IDs only; path-bearing private-key fields are
-  rejected by static gates.
-
-Consumers that only need the compatibility manifest must read
-[`manifest-schema.md`](./manifest-schema.md). Daemon and broker
-implementations consume this bundle reference and the per-artifact schema
-references below.
-
-## Per-artifact and wire references
-
-| Artifact | Prose reference | JSON Schema (current `v2` baseline) |
-| --- | --- | --- |
-| `bundle.json` | [`schemas/v2/bundle.md`](./schemas/v2/bundle.md) | `schemas/v2/bundle.json` |
-| `host.json` | [`schemas/v2/host.md`](./schemas/v2/host.md) | `schemas/v2/host.json` |
-| `processes.json` | [`schemas/v2/processes.md`](./schemas/v2/processes.md) | `schemas/v2/processes.json` |
-| `storage.json` | [`schemas/v2/storage.md`](./schemas/v2/storage.md) | `schemas/v2/storage.json` |
-| `sync.json` | [`schemas/v2/sync.md`](./schemas/v2/sync.md) | `schemas/v2/sync.json` |
-| `allocator.json` | [`schemas/v2/allocator.md`](./schemas/v2/allocator.md) | `schemas/v2/allocator.json` |
-| `realm-controllers.json` | [`schemas/v2/realm-controllers.md`](./schemas/v2/realm-controllers.md) | `schemas/v2/realm-controllers.json` |
-| `realm-identity.json` | [`schemas/v2/realm-identity.md`](./schemas/v2/realm-identity.md) | `schemas/v2/realm-identity.json` |
-| `realm-workloads-launcher-v2.json` | [`schemas/v2/realm-workloads-launcher-v2.md`](./schemas/v2/realm-workloads-launcher-v2.md) | `schemas/v2/realm-workloads-launcher-v2.json` |
-| `unsafe-local-workloads.json` | [`schemas/v2/unsafe-local-workloads.md`](./schemas/v2/unsafe-local-workloads.md) | `schemas/v2/unsafe-local-workloads.json` |
-| `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
-| `closures/<vm>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
-| `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
-| `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
-| `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
-| unsafe-local helper protocol | [`schemas/v2/unsafe-local-helper-wire.md`](./schemas/v2/unsafe-local-helper-wire.md) | `schemas/v2/unsafe-local-helper-wire.json` |
+- [`manifest-schema.md`](./manifest-schema.md) - public compatibility schema.
+- [`zone-control-nix.md`](./zone-control-nix.md) - current Nix authoring.
+- [`daemon-api.md`](./daemon-api.md) - daemon and session contract.
+- [`schemas/v2/bundle.md`](./schemas/v2/bundle.md) - bundle DTO details.
+- [`schemas/v2/host.md`](./schemas/v2/host.md) - host DTO details.
+- [`schemas/v2/processes.md`](./schemas/v2/processes.md) - process intent.
+- [`schemas/v2/storage.md`](./schemas/v2/storage.md) - storage lifecycle.
+- [`schemas/v2/sync.md`](./schemas/v2/sync.md) - synchronization.

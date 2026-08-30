@@ -1,134 +1,59 @@
-# How to migrate a NixOS host from systemd-owned to daemon-owned VM lifecycle
+# Migrate a host to the Zone daemon
 
-> **v1.0 status:** This guide documents the v0.x → v1.0 transition.
-> In v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md))
-> the legacy `d2b@<vm>.service` wrapper was retired entirely;
-> there is no longer a coexistence period. New hosts deploy
-> straight to v1.0 daemon-owned lifecycle. Existing v0.x hosts
-> upgrading to v1.0 should follow
-> [`migrate-d2b-v0-to-v1.md`](./migrate-d2b-v0-to-v1.md)
-> instead of this guide; this file is preserved as historical
-> record of how the per-VM migration worked during the
-> incremental v0.x → v1.0 development sequence.
+New deployments use the daemon-only Zone control plane. This guide is a
+short migration checklist for hosts that still carry older lifecycle
+configuration.
 
-This guide moves a NixOS host from the legacy per-VM `d2b@<vm>.service`
-ownership model to `d2bd`-owned per-VM lifecycle.
+## 1. Back up and inspect
 
-The safest pattern is **one VM at a time**.
-
-## 1. Confirm the host is ready
-
-Before switching any VM, make sure all of these are true:
-
-- the host already boots the VM successfully under the legacy `systemd`
-  supervisor path;
-- you know which users belong in `d2b.site.launcherUsers` and
-  `d2b.site.adminUsers`;
-- you have a rollback path (`nixos-rebuild --rollback` or a known-good boot
-  generation).
-
-## 2. Enable the daemon control plane
-
-Add the daemon gate and user lists first:
-
-```nix
-{
-  d2b = {
-    daemonExperimental.enable = true;
-    site.launcherUsers = [ "alice" ];
-    site.adminUsers = [ "alice" ];
-  };
-}
-```
-
-`supervisor = "d2bd"` is rejected unless `daemonExperimental.enable = true`.
-
-## 3. Move one VM to the daemon-owned supervisor
-
-For the VM you want to migrate first:
-
-```nix
-{
-  d2b.vms.work = {
-    enable = true;
-    supervisor = "d2bd";
-  };
-}
-```
-
-The default is `supervisor = "systemd"`, so this is the per-VM switch that
-changes ownership.
-
-## 4. Rebuild the host
+Keep a known-good NixOS generation and back up d2b state. Then inspect the
+current host without mutation:
 
 ```bash
-sudo nixos-rebuild switch
-```
-
-Then verify the daemon surface itself:
-
-```bash
+d2b host check --json
 d2b auth status --json
-systemctl status d2bd.service --no-pager
+d2b zone list
 ```
 
-## 5. Stop the old instance if it is still running
+## 2. Declare current resources
 
-After the rebuild, the old `d2b@<vm>.service` instance is no longer the
-owner for that VM, but a previously started instance may still be alive. Stop it
-before the first daemon-owned start:
-
-```bash
-sudo systemctl stop d2b@work.service microvm@work.service
-```
-
-## 6. Dry-run, then start through the daemon
-
-```bash
-d2b vm start work --dry-run --json
-sudo d2b vm start work --apply
-```
-
-For the first migration boot, prefer explicit `d2b vm start` / `restart`
-commands over relying on the old `d2b@<vm>.service` autostart path.
-
-## 7. Validate the migrated VM
-
-Use per-VM checks rather than assuming the still-stubbed inventory surfaces are
-complete:
-
-```bash
-d2b status work
-d2b trust work
-```
-
-If a verb is daemon-deferred or the daemon is unreachable, you will
-see a typed envelope (`not-yet-implemented` exit 78 / `daemon-down`
-exit 1) rather than any silent bash invocation; the historical
-`D2B_NATIVE_ONLY=1` knob is now a no-op (always-on default).
-
-## 8. Roll back if needed
-
-To hand the VM back to the legacy owner:
+Replace legacy hierarchy declarations with Zone-owned Resources and immutable
+artifacts. A Guest's evaluator belongs under
+`d2b.guestSystems.<zone>.<guest>`; the Guest controller owns its child graph.
 
 ```nix
-{
-  d2b.vms.work.supervisor = "systemd";
-}
+d2b.zones.work.resources.work-app = {
+  type = "Guest";
+  spec = {
+    providerRef = "Provider/runtime-cloud-hypervisor";
+    systemArtifactId = "work-guest-system";
+  };
+};
 ```
 
-Then rebuild again:
+Remove old owner configuration only after the corresponding Zone resources
+and Provider assignments are present. Do not preserve a compatibility service
+as a second lifecycle authority.
+
+## 3. Switch and verify
 
 ```bash
-sudo nixos-rebuild switch
+nixos-rebuild switch --flake .#desktop
+d2b guest status work-app --zone work
+d2b guest start work-app --zone work --dry-run
+d2b guest start work-app --zone work --apply
+d2b host doctor --read-only
 ```
 
-If you want to unwind the daemon rollout completely, also set
-`d2b.daemonExperimental.enable = false` once every migrated VM is back on
-`systemd`.
+The only framework root units are `d2bd.service`,
+`d2b-broker.socket`, and `d2b-broker.service`. A daemon restart adopts
+matching current runners; stale identity is quarantined.
 
-## See also
+## 4. Roll back
 
-- [`uninstall-d2b.md`](./uninstall-d2b.md)
-- [`headless-alpha-walkthrough.md`](./headless-alpha-walkthrough.md)
-- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
+If the new generation is unhealthy, boot or activate the known-good NixOS
+generation and keep the old d2b state intact. Do not delete TPM, lock, cgroup,
+or Guest store state as a shortcut. Re-run read-only checks before retrying.
+
+Historical v0/v1/v2 migration pages retain detailed old option names for
+archival context. They are not current configuration instructions.

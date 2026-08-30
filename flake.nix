@@ -112,7 +112,6 @@
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
           cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
           cp -r ${./packages/d2b-resource-store} $out/packages/d2b-resource-store
           cp -r ${./packages/d2b-resource-store-redb} $out/packages/d2b-resource-store-redb
@@ -131,8 +130,6 @@
           chmod -R u+w $out/packages
           cp ${./tests/fixtures/guest-rust-workspace/d2b-contracts.Cargo.toml} \
             $out/packages/d2b-contracts/Cargo.toml
-          cp ${./tests/fixtures/guest-rust-workspace/d2b-realm-core.Cargo.toml} \
-            $out/packages/d2b-realm-core/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/d2b-core.Cargo.toml} \
             $out/packages/d2b-core/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \

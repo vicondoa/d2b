@@ -14,6 +14,13 @@ isolated runtime for its store, controllers, and Provider sessions. Generic
 environment names remain useful descriptions of workload context, but they
 are not a competing product hierarchy.
 
+The Cloud Hypervisor Guest controller owns the complete direct child Resource
+graph and Guest lifecycle. Nix supplies the semantic Guest declaration,
+immutable system artifact, and consumer-owned Guest evaluator; specialized
+controllers own Process, Endpoint, Volume, Network, Device, Credential, and
+Provider effects. The daemon and broker reconcile by Zone/Guest identity,
+generation, and revision rather than by a static manifest or name-only lookup.
+
 ## Target user and outcome
 
 The target user runs work, personal, agent, development, or risky browsing

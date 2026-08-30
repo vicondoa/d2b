@@ -23,34 +23,20 @@ let
     font-monospace-warn=no
   '';
 
-  # The handshake-gated relay endpoint binary, built from the main workspace.
-  # The gateway-generated in-sandbox command runs `d2b-gateway-relay
-  # sender` with relay auth supplied by the gateway (P0: a short-lived Send
-  # bearer, never the rule key) and sends the d2b per-session display
-  # credential as the relay prologue before any Waypipe byte flows.
-  d2bRelaySrc = builtins.path {
-    name = "d2b-packages-src";
-    path = ../../../packages;
-    filter =
-      path: _type:
-      let
-        base = builtins.baseNameOf path;
-      in
-      base != "target" && base != ".cargo";
-  };
-  d2bGatewayRelay = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-gateway-relay";
-    version = "0.0.0-bootstrap";
-    src = d2bRelaySrc;
+  # The POC relay bridge is standalone and intentionally outside the
+  # production Zone workspace.
+  d2bRelayBridge = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-relay-bridge";
+    version = "0.0.0-poc";
+    src = ../relay-bridge;
     cargoLock = {
-      lockFile = ../../../Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+      lockFile = ../relay-bridge/Cargo.lock;
     };
     cargoBuildFlags = [
       "-p"
-      "d2b-gateway-runtime"
+      "d2b-relay-bridge"
       "--bin"
-      "d2b-gateway-relay"
+      "d2b-relay-bridge"
     ];
     env.CARGO_BUILD_RUSTC_WRAPPER = "";
     doCheck = false;
@@ -91,16 +77,14 @@ let
     '';
   };
 
-  # The in-sandbox legacy entrypoint remains available for manual probes; the
-  # gateway-generated command uses `d2b-gateway-relay` and `d2b-msi-token`
-  # directly.
+  # The in-sandbox POC entrypoint remains available for manual probes.
   agent = pkgs.writeShellApplication {
     name = "d2b-sandbox-agent";
     runtimeInputs = [
       pkgs.waypipe
       pkgs.foot
       pkgs.coreutils
-      d2bGatewayRelay
+      d2bRelayBridge
       msiTokenHelper
     ];
     text = builtins.readFile ./bridge/d2b-sandbox-agent.sh;
@@ -119,7 +103,7 @@ pkgs.dockerTools.buildLayeredImage {
     pkgs.fontconfig
     pkgs.cacert
     agent
-    d2bGatewayRelay
+    d2bRelayBridge
     msiTokenHelper
     footConfig
     pkgs.dockerTools.fakeNss # minimal /etc/passwd + /etc/group + nobody

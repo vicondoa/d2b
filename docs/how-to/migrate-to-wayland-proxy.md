@@ -1,3 +1,5 @@
+> **Historical migration material.** This page preserves an older d2b option or lifecycle shape for upgrade context. New configurations use Zone-owned Resources, typed ResourceRefs, and the controller-owned Guest lifecycle documented in [`../reference/zone-control-nix.md`](../reference/zone-control-nix.md).
+
 # Migrate to the host-side Wayland proxy
 
 This guide covers the changes you need to make when a graphics VM

@@ -17,7 +17,6 @@ exports_files([
     "cases/net-vm-network.nix",
     "cases/interaction-providers.nix",
     "cases/per-vm-state-ownership.nix",
-    "cases/principal-uid-collision.nix",
     "cases/provider-catalog.nix",
     "cases/provider-elf-shim.nix",
     "cases/provider-projection-exportability.nix",

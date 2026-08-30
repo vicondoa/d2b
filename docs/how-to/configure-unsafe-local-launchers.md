@@ -1,80 +1,44 @@
-# Configure generic unsafe-local launcher items
+# Configure an unsafe-local launcher
 
-**Diataxis category:** how-to.
+Use unsafe-local only for applications trusted to run as the requesting host
+user. It is a Provider-backed `Host` Resource with no VM isolation.
 
-Use unsafe-local only for software you already trust to run as your host user.
-It is useful for presenting configured host applications and persistent host
-shells through the same realm/workload UI as other providers.
+## Declare the Host resource
 
-1. Opt the realm in and identify eligible users:
+```nix
+d2b.zones.local-root.resources.tools = {
+  type = "Host";
+  spec = {
+    providerRef = "Provider/system-core";
+    isolationPosture = "none";
+  };
+};
+```
 
-   ```nix
-   d2b.realms.host = {
-     allowedUsers = [ "alice" ];
-     policy.allowUnsafeLocal = true;
-   };
-   ```
+The current launcher contract carries a typed Host target, item ID, and
+operation ID. Private Provider configuration resolves the executable and
+environment; public Resource specs and status never carry configured argv,
+credentials, host paths, or unit names.
 
-2. Declare a workload and generic launcher items:
+## Use the launcher and shell
 
-   ```nix
-   d2b.realms.host.workloads.tools = {
-     kind = "unsafe-local";
+```bash
+d2b launch Host/tools --item browser
+d2b shell open Host/tools --name terminal
+d2b shell attach ShellSession/terminal
+```
 
-     shell = {
-       enable = true;
-       defaultName = "host";
-       maxSessions = 8;
-     };
+The helper verifies the requester UID at every session boundary and accepts
+only the exact terminal fd and bounded output cursor for that session.
 
-     launcher = {
-       enable = true;
-       label = "Local tools";
-       defaultItem = "browser";
+## Verify
 
-       items = {
-         browser = {
-           type = "exec";
-           name = "Firefox";
-           icon.name = "firefox";
-           argv = [ "firefox" ];
-           graphical = true;
-         };
+```bash
+d2b resource status Host/tools --zone local-root
+d2b shell list --zone local-root
+d2b audit --json
+```
 
-         observability = {
-           type = "exec";
-           name = "OpenObserve";
-           icon.name = "monitoring";
-           argv = [ "firefox" "https://observe.example.test/" ];
-           graphical = true;
-         };
-
-         terminal = {
-           type = "shell";
-           name = "Terminal";
-           icon.name = "terminal";
-         };
-       };
-     };
-   };
-   ```
-
-   The item name and icon describe the action; they are not derived from
-   `argv[0]`. Firefox and OpenObserve are therefore two ordinary exec items,
-   even though both execute Firefox.
-
-3. Rebuild after the runtime features are available. Then launch a configured
-   item with:
-
-   ```console
-   d2b launch tools.host.d2b --item observability
-   ```
-
-   Omitting `--item` uses `defaultItem`, or the only item when exactly one is
-   declared. Multiple items without a default produce a list of valid choices.
-
-Do not put secrets in argv. Configured argv is private daemon bundle data, but
-Nix derivations are not a secret store. Graphical items require the d2b Wayland
-proxy and fail visibly if it is unavailable; they never fall back to the direct
-compositor.
-
+Unsafe-local status must visibly report the `none` isolation posture. Missing
+Provider capability, stale identity, or an unavailable helper is a typed
+failure; the CLI does not fall back to a Guest or SSH.
