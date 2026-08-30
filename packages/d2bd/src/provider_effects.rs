@@ -644,6 +644,16 @@ struct LifecycleMutation {
     quarantine_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LifecycleIdentityKey {
+    zone_uid: ResourceUid,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    guest_generation: ResourceGeneration,
+    provider_assignment_generation: ResourceGeneration,
+    policy_revision: u64,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum LifecycleMutationStatus {
@@ -1172,10 +1182,39 @@ impl ProviderLifecycleDispatch {
 
     fn retain_live(&self, mutations: &mut BTreeMap<String, LifecycleMutation>) {
         let now = now_ms();
+        let durable_latest = mutations
+            .iter()
+            .filter_map(|(key, mutation)| {
+                if mutation.quarantined || mutation.status != LifecycleMutationStatus::Applied {
+                    return None;
+                }
+                let identity = lifecycle_identity_key(mutation)?;
+                Some((identity, (mutation.desired_generation, key.clone())))
+            })
+            .fold(
+                BTreeMap::<LifecycleIdentityKey, (u64, String)>::new(),
+                |mut latest, (identity, candidate)| {
+                    if latest
+                        .get(&identity)
+                        .is_none_or(|current| candidate.0 > current.0)
+                    {
+                        latest.insert(identity, candidate);
+                    }
+                    latest
+                },
+            );
         mutations.retain(|_, mutation| {
             // An executing row is live until its effect returns. Pending and
-            // settled history gets bounded recovery/retention.
-            mutation.quarantined
+            // settled history gets bounded recovery/retention. The latest
+            // applied row for each exact Guest identity is also retained as
+            // durable desired lifecycle state.
+            let durable = lifecycle_identity_key(mutation).and_then(|identity| {
+                durable_latest
+                    .get(&identity)
+                    .filter(|(generation, _)| *generation == mutation.desired_generation)
+            });
+            durable.is_some()
+                || mutation.quarantined
                 || mutation.executing
                 || now.saturating_sub(mutation.admitted_at_ms)
                     < LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64
@@ -1237,6 +1276,18 @@ impl ProviderLifecycleDispatch {
         }
         Ok(())
     }
+}
+
+fn lifecycle_identity_key(mutation: &LifecycleMutation) -> Option<LifecycleIdentityKey> {
+    let authorization = mutation.authorization.as_ref()?;
+    Some(LifecycleIdentityKey {
+        zone_uid: authorization.zone_uid().clone(),
+        guest_ref: authorization.guest_ref().clone(),
+        guest_uid: authorization.guest_uid().clone(),
+        guest_generation: authorization.guest_generation(),
+        provider_assignment_generation: authorization.provider_assignment_generation(),
+        policy_revision: authorization.policy_revision(),
+    })
 }
 
 fn validate_authorization(
@@ -1857,6 +1908,67 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).expect("read lifecycle state"))
                 .expect("parse lifecycle state");
         assert_eq!(persisted[0]["status"], "applied");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn applied_stop_intent_survives_idempotency_ttl_and_restart() {
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-stop-intent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("lifecycle.json");
+        let zone = ZoneId::parse("work").expect("Zone");
+        let caller = BrokerCallerRole::AdminUid { uid: 1000 };
+        let request = request(&zone, GuestLifecycleOperation::Stop, "durable-stop");
+        let effect = RecordingEffect {
+            calls: Arc::new(AtomicUsize::new(0)),
+            reject: AtomicBool::new(false),
+        };
+        let dispatch =
+            ProviderLifecycleDispatch::new_persistent(zone.clone(), &path).expect("open state");
+        assert_eq!(
+            dispatch.dispatch(&caller, &request, &effect),
+            Ok(EffectDispatch::Dispatched(1))
+        );
+        {
+            let mut mutations = dispatch.mutations.lock().expect("mutation lock");
+            mutations
+                .get_mut("durable-stop")
+                .expect("applied stop")
+                .admitted_at_ms = now_ms()
+                .saturating_sub(LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64 + 1);
+        }
+        assert_eq!(
+            dispatch
+                .latest_operation_for_identity(
+                    request.authorization().zone_uid(),
+                    request.authorization().guest_ref(),
+                    request.authorization().guest_uid(),
+                    request.authorization().guest_generation(),
+                    request.authorization().provider_assignment_generation(),
+                    request.authorization().policy_revision(),
+                )
+                .expect("latest durable intent"),
+            Some(GuestLifecycleOperation::Stop)
+        );
+        drop(dispatch);
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(zone, &path).expect("restart state");
+        assert_eq!(
+            restarted
+                .latest_operation_for_identity(
+                    request.authorization().zone_uid(),
+                    request.authorization().guest_ref(),
+                    request.authorization().guest_uid(),
+                    request.authorization().guest_generation(),
+                    request.authorization().provider_assignment_generation(),
+                    request.authorization().policy_revision(),
+                )
+                .expect("latest durable intent after restart"),
+            Some(GuestLifecycleOperation::Stop)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
