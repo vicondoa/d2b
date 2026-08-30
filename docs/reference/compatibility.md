@@ -29,10 +29,11 @@ consumer configuration. The acceptance sequence is owned by the host lane:
 4. start d2bd and the broker;
 5. boot a Cloud Hypervisor Guest.
 
-The U20 host lane builds the d2b host-tool set with local Bazel, stages it as
-`D2B_HOST_TOOL_BUNDLE`, and injects it into the selected NixOS `vmChecks`.
-Nix must realize the test harness around those binaries rather than rebuild
-`d2b`, `d2bd`, `d2b-broker`, or the injected helper tools.
+The U20 `make test-host-integration` lane builds the d2b host-tool set with
+local Bazel, stages it as `D2B_HOST_TOOL_BUNDLE`, and injects it into the
+selected NixOS `vmChecks`. Nix must realize the test harness around those
+binaries rather than rebuild `d2b`, `d2bd`, `d2b-broker`, or the injected
+helper tools.
 
 U19 does not claim that host acceptance or any remote Provider acceptance has
 passed. U20 must run both `make test-host-integration` and
