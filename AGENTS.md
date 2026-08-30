@@ -144,9 +144,10 @@ settings or claim atomic base binding.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
 - U20 final acceptance must run both `make test-integration` and
-  `make test-host-integration` alongside the `/etc/nixos` real-host switch,
-  d2b startup, and Cloud Hypervisor Guest boot. U19 converges their
-  declarations and current inputs but does not run host acceptance.
+  `make test-host-integration`. They may run alongside the `/etc/nixos`
+  real-host switch, d2b startup, and Cloud Hypervisor Guest boot. U19
+  converges their declarations and current inputs but does not run host
+  acceptance.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
 - The retired repository-local contributor runtime has no ordinary-work

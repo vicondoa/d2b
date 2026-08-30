@@ -31,8 +31,9 @@ consumer configuration. The acceptance sequence is owned by the host lane:
 
 U19 does not claim that host acceptance or any remote Provider acceptance has
 passed. U20 must run both `make test-host-integration` and
-`make test-integration` alongside the real-host sequence. ACA testing is
-deferred until after the U20 host switch and Cloud Hypervisor Guest boot.
+`make test-integration`; they may run alongside the real-host sequence. ACA
+testing is deferred until after the U20 host switch and Cloud Hypervisor Guest
+boot.
 U19 only leaves those declarations and current inputs converged; it does not
 run host acceptance.
 
