@@ -68,9 +68,7 @@ pub(crate) const BUILTIN_COMMANDS: &[&str] = &[
     "complete",
 ];
 
-/// The clean-break CLI parser. Legacy parser definitions remain in `legacy.rs`
-/// only for their existing pure unit fixtures; this parser is the sole runtime
-/// entry point.
+/// The clean-break CLI parser is the sole runtime entry point.
 #[derive(Debug, Parser)]
 #[command(
     name = "d2b",
