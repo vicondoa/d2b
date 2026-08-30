@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use d2b_realm_core::{Capability, ConstellationError, ErrorKind};
+use d2b_contracts::{Capability, ConstellationError, ErrorKind};
 
 const MAX_PROVIDER_FIELD_LEN: usize = 128;
 const MAX_PROVIDER_MESSAGE_LEN: usize = 240;

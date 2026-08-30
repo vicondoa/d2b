@@ -1,6 +1,6 @@
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_control::public_wire;
-use d2b_realm_core::PrincipalId;
+use d2b_contracts::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
 use uzers::get_group_by_name;

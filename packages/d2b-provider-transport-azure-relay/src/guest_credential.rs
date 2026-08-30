@@ -17,10 +17,10 @@ use async_trait::async_trait;
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use d2b_provider_transport_azure_relay::auth::{
+use crate::auth::{
     MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas,
 };
-use d2b_provider_transport_azure_relay::{
+use crate::{
     MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_LEASE_TTL_MS, RelayCredentialBinding, RelayCredentialError,
     RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole,
     RelaySecret,

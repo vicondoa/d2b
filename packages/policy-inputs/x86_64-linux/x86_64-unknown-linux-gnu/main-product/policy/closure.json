@@ -70,7 +70,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "37926dc7e0295d6955f0f5855a02200c61032d6a45f0f00e9cc95d8918671dac",
+  "lock_sha256": "41e475156afb5b35c3689e14cf72d4ebe15a82b9ff4b4346e2bf9f45fb42f1fb",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -5146,12 +5146,6 @@
     },
     {
       "from": "d2b-core@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-core@0.0.0-bootstrap#path",
       "to": "nix@0.29.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "dev",
       "target": null
@@ -5230,18 +5224,6 @@
     },
     {
       "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
-      "to": "chacha20poly1305@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
       "to": "d2b-gateway@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -5267,12 +5249,6 @@
     {
       "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
       "to": "futures-util@0.3.34#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
-      "to": "getrandom@0.2.17#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6316,7 +6292,7 @@
     },
     {
       "from": "d2b-provider-runtime-azure-container-apps@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6826,6 +6802,18 @@
     },
     {
       "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "chacha20poly1305@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
       "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6850,7 +6838,19 @@
     },
     {
       "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "getrandom@0.2.17#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
       "to": "hmac@0.12.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
+      "to": "libc@0.2.189#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7809,12 +7809,6 @@
       "target": null
     },
     {
-      "from": "d2b-zone-routing@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
       "from": "d2b@0.0.0-bootstrap#path",
       "to": "clap@4.6.6#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -7859,12 +7853,6 @@
     {
       "from": "d2b@0.0.0-bootstrap#path",
       "to": "d2b-provider-config-nixos@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

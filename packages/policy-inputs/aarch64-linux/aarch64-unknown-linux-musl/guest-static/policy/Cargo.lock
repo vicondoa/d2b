@@ -1017,7 +1017,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-realm-core",
  "rustix 0.38.44",
  "schemars",
  "semver",
@@ -1042,51 +1041,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
-]
-
-
-[[package]]
-name = "d2b-gateway"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
-]
-
-
-[[package]]
-name = "d2b-gateway-runtime"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "azure_core",
- "base64",
- "chacha20poly1305",
- "d2b-contracts-resource",
- "d2b-gateway",
- "d2b-provider-runtime-azure-container-apps",
- "d2b-provider-transport-azure-relay",
- "d2b-realm-core",
- "futures-util",
- "getrandom 0.2.17",
- "libc",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-subscriber",
- "webpki-roots 0.26.11",
- "zeroize",
 ]
 
 
@@ -1335,9 +1289,9 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
+ "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-realm-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1459,11 +1413,15 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
+ "chacha20poly1305",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-session",
  "futures-util",
+ "getrandom 0.2.17",
  "hmac",
+ "libc",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -1490,16 +1448,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-
-[[package]]
-name = "d2b-realm-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "schemars",
- "serde",
 ]
 
 
@@ -1617,7 +1565,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-realm-core",
 ]
 
 
@@ -1637,8 +1584,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
- "d2b-gateway",
- "d2b-gateway-runtime",
  "d2b-host",
  "d2b-process",
  "d2b-process-conformance",
@@ -1663,7 +1608,6 @@ dependencies = [
  "d2b-provider-system-systemd",
  "d2b-provider-transport-azure-relay",
  "d2b-provider-volume-local",
- "d2b-realm-core",
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",
@@ -1707,7 +1651,6 @@ dependencies = [
  "d2b-core",
  "d2b-core-controller",
  "d2b-host",
- "d2b-realm-core",
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",

@@ -4,8 +4,8 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "37926dc7e0295d6955f0f5855a02200c61032d6a45f0f00e9cc95d8918671dac",
-  "policyPackageCount": 164,
+  "lockSha256": "41e475156afb5b35c3689e14cf72d4ebe15a82b9ff4b4346e2bf9f45fb42f1fb",
+  "policyPackageCount": 163,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -50,7 +50,6 @@
     "d2b-contracts@0.0.0-bootstrap#path",
     "d2b-core@0.0.0-bootstrap#path",
     "d2b-host@0.0.0-bootstrap#path",
-    "d2b-realm-core@0.0.0-bootstrap#path",
     "d2b-telemetry@0.0.0-bootstrap#path",
     "digest@0.10.7#registry+https://github.com/rust-lang/crates.io-index",
     "dyn-clone@1.0.20#registry+https://github.com/rust-lang/crates.io-index",
@@ -172,7 +171,7 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 133,
+  "productionPackageCount": 132,
   "resolveNodeCount": 454,
   "roots": [
     "d2b-broker"

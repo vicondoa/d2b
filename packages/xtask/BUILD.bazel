@@ -39,7 +39,6 @@ rust_binary(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
-        "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

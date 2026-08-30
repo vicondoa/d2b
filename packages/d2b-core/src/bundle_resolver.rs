@@ -81,8 +81,6 @@ use crate::processes::{
     ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
     ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
 };
-use crate::realm_controller_config::RealmControllersJson;
-use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
@@ -98,7 +96,11 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::{
     ARTIFACT_CATALOG_DOMAIN_TAG, ProcessTemplateBinding, ResourceBundle,
 };
-use d2b_realm_core::RealmIdentityConfigJson;
+use d2b_contracts::{
+    RealmIdentityConfigJson,
+    controller_config::RealmControllersJson,
+    launcher::RealmWorkloadsLauncherV2Json,
+};
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

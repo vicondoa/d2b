@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": false,
   "features": [],
-  "lockSha256": "6182b146246837a8f01bd7a16f0fc26443ae8e9976fd95b1a03b994aafa98a8c",
-  "policyPackageCount": 498,
+  "lockSha256": "0bd50c1bb2de8fa1946853b6d036144287d104fdc4b5a446b4731a4a55a7ff7c",
+  "policyPackageCount": 495,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -92,8 +92,6 @@
     "d2b-controller-toolkit@0.0.0-bootstrap#path",
     "d2b-core-controller@0.0.0-bootstrap#path",
     "d2b-core@0.0.0-bootstrap#path",
-    "d2b-gateway-runtime@0.0.0-bootstrap#path",
-    "d2b-gateway@0.0.0-bootstrap#path",
     "d2b-host@0.0.0-bootstrap#path",
     "d2b-process-conformance@0.0.0-bootstrap#path",
     "d2b-process@0.0.0-bootstrap#path",
@@ -119,7 +117,6 @@
     "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
     "d2b-provider-volume-local@0.0.0-bootstrap#path",
     "d2b-provider@0.0.0-bootstrap#path",
-    "d2b-realm-core@0.0.0-bootstrap#path",
     "d2b-resource-api@0.0.0-bootstrap#path",
     "d2b-resource-store-redb@0.0.0-bootstrap#path",
     "d2b-resource-store@0.0.0-bootstrap#path",
@@ -504,7 +501,7 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 498,
+  "productionPackageCount": 495,
   "resolveNodeCount": 0,
   "roots": [
     "d2bd",

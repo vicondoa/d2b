@@ -10,10 +10,15 @@ pub mod auth_wire;
 pub mod capability;
 pub mod configured_argv;
 pub mod contract_id;
+pub mod constellation_error;
+pub mod controller_config;
 pub mod error;
 pub mod foundation_effects;
 pub mod identity;
+pub mod identity_config;
 pub mod ids;
+pub mod launcher;
+pub mod opaque_payload;
 pub mod privileges_w3;
 pub mod provider_effects;
 pub mod realm;
@@ -30,6 +35,13 @@ pub mod workload;
 pub mod workload_identity;
 
 pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
+pub use constellation_error::{ConstellationError, ErrorKind};
+pub use identity_config::{
+    KeyFingerprint, RealmIdentityConfigEntry, RealmIdentityConfigError,
+    RealmIdentityConfigInvariants, RealmIdentityConfigJson, RealmIdentityConfigRuntimeState,
+    RealmIdentityConfigSummary, RealmIdentityFingerprint,
+};
+pub use opaque_payload::OpaquePayload;
 pub use error::{Error, SemverRange, Version};
 pub use foundation_effects::{
     CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,

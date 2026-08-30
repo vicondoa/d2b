@@ -12,10 +12,14 @@ workspace = true
 async-trait = "0.1"
 base64 = "0.22"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+chacha20poly1305 = "0.10"
 futures-util = "0.3"
+getrandom = "0.2"
 hmac = "0.12"
+libc = "0.2"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 serde = { workspace = true }

@@ -346,7 +346,7 @@ impl HelperRegistry {
     pub fn last_failure(
         &self,
         uid: u32,
-        target: &d2b_core::workload_identity::WorkloadTarget,
+        target: &d2b_contracts::workload_identity::WorkloadTarget,
     ) -> Option<HelperFailureCode> {
         self.state
             .lock()
@@ -2203,8 +2203,8 @@ mod tests {
     fn helper_failures_are_scoped_to_workload_target() {
         let registry = HelperRegistry::new(999, [1000]);
         let browser =
-            d2b_core::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
-        let editor = d2b_core::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
+            d2b_contracts::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
+        let editor =         d2b_contracts::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
         registry.state.lock().last_failures.insert(
             (1000, browser.to_canonical()),
             HelperFailureCode::ProxyUnavailable,

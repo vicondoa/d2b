@@ -363,7 +363,7 @@ fn state_label(state: CircuitState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_realm_core::ErrorKind;
+    use d2b_contracts::ErrorKind;
 
     #[test]
     fn circuit_breaker_is_send_sync() {

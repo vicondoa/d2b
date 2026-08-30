@@ -32,7 +32,7 @@
 //! exercised by an `D2B_ACA_LIVE`-gated smoke test.
 //!
 //! ```no_run
-//! # use d2b_realm_core::NodeId;
+//! # use d2b_contracts::ids::NodeId;
 //! # use d2b_provider_runtime_azure_container_apps::gateway::{
 //! #     AcaConfig, AcaWorkloadProvider,
 //! # };
@@ -47,7 +47,7 @@
 //! [`AcaWorkloadProvider::new`] uses managed/workload identity only.
 //!
 //! ```no_run
-//! # use d2b_realm_core::NodeId;
+//! # use d2b_contracts::ids::NodeId;
 //! # use d2b_provider_runtime_azure_container_apps::gateway::{
 //! #     AcaConfig, AcaWorkloadProvider, ReqwestTransport,
 //! # };
@@ -72,11 +72,12 @@ use azure_core::time::{Duration as AzureDuration, OffsetDateTime};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use d2b_realm_core::{
-    Capability, CapabilitySet, ErrorKind, ExecutionId, NodeId, OpaquePayload, ProviderId,
-    WorkloadId,
+use d2b_contracts::{Capability, CapabilitySet, ErrorKind, OpaquePayload, WorkloadState};
+use d2b_contracts::{
+    ids::{ExecutionId, NodeId, ProviderId, RealmId, WorkloadId},
+    realm::RealmPath,
+    workload::WorkloadSummary,
 };
-use d2b_realm_core::{RealmId, RealmPath, WorkloadSummary};
 use crate::error::{ProviderDiagnostic, ProviderError, ProviderResult, RetryHint};
 use crate::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
 
@@ -1713,17 +1714,17 @@ fn sandbox_lifecycle(sandbox: &AcaSandbox) -> SandboxLifecycle {
     }
 }
 
-fn sandbox_state(sandbox: &AcaSandbox) -> d2b_realm_core::WorkloadState {
+fn sandbox_state(sandbox: &AcaSandbox) -> WorkloadState {
     match sandbox.state.as_deref().map(str::to_ascii_lowercase) {
         Some(state) if state == "running" || state == "ready" => {
-            d2b_realm_core::WorkloadState::Running
+            WorkloadState::Running
         }
-        Some(state) if state == "stopping" => d2b_realm_core::WorkloadState::Stopping,
+        Some(state) if state == "stopping" => WorkloadState::Stopping,
         Some(state) if state == "starting" || state == "creating" => {
-            d2b_realm_core::WorkloadState::Starting
+            WorkloadState::Starting
         }
-        Some(state) if state == "failed" => d2b_realm_core::WorkloadState::Failed,
-        _ => d2b_realm_core::WorkloadState::Stopped,
+        Some(state) if state == "failed" => WorkloadState::Failed,
+        _ => WorkloadState::Stopped,
     }
 }
 
@@ -2130,7 +2131,7 @@ mod tests {
         let req = ExecStartRequest {
             workload: WorkloadId::parse("sbx-1").unwrap(),
             tty: false,
-            command: d2b_realm_core::OpaquePayload::new(b"false".to_vec()).unwrap(),
+            command: OpaquePayload::new(b"false".to_vec()).unwrap(),
         };
         let err = p.exec(req).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::ProviderAllocationFailed);
@@ -2142,7 +2143,7 @@ mod tests {
         let req = ExecStartRequest {
             workload: WorkloadId::parse("sbx-1").unwrap(),
             tty: true,
-            command: d2b_realm_core::OpaquePayload::new(b"sh".to_vec()).unwrap(),
+            command: OpaquePayload::new(b"sh".to_vec()).unwrap(),
         };
         let err = p.exec(req).await.unwrap_err();
         assert_eq!(err.missing_capability(), Some(Capability::Pty));
@@ -2163,7 +2164,7 @@ mod tests {
         let req = ExecStartRequest {
             workload: WorkloadId::parse("demo").unwrap(),
             tty: false,
-            command: d2b_realm_core::OpaquePayload::new(b"true".to_vec()).unwrap(),
+            command: OpaquePayload::new(b"true".to_vec()).unwrap(),
         };
         let _id = p.exec(req).await.unwrap();
         let calls = http.calls.lock().unwrap();
@@ -2186,7 +2187,7 @@ mod tests {
         let req = ExecStartRequest {
             workload: WorkloadId::parse("sbx-1").unwrap(),
             tty: false,
-            command: d2b_realm_core::OpaquePayload::new(b"echo hi".to_vec()).unwrap(),
+            command: OpaquePayload::new(b"echo hi".to_vec()).unwrap(),
         };
         let id1 = p1.exec(req.clone()).await.unwrap();
 
@@ -2202,7 +2203,7 @@ mod tests {
             r#"{"exitCode":0,"stdout":"","stderr":"","executionTimeMs":1}"#,
         );
         let mut changed = req;
-        changed.command = d2b_realm_core::OpaquePayload::new(b"echo bye".to_vec()).unwrap();
+        changed.command = OpaquePayload::new(b"echo bye".to_vec()).unwrap();
         let id3 = p3.exec(changed).await.unwrap();
         assert_ne!(id1, id3);
     }
@@ -2957,7 +2958,7 @@ mod tests {
         let list = p.list(ListSelector::All).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id.as_str(), "demo");
-        assert_eq!(list[0].state, d2b_realm_core::WorkloadState::Running);
+        assert_eq!(list[0].state, WorkloadState::Running);
     }
 
     #[test]

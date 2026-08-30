@@ -7,6 +7,8 @@ pub mod audit;
 pub mod auth;
 pub mod backpressure;
 pub mod credential_client;
+pub mod guest_credential;
+pub mod guest_zone_link;
 pub mod metrics;
 pub mod reconnect;
 pub mod relay_transport;
@@ -19,6 +21,13 @@ pub use credential_client::{
     RelayCredentialBinding, RelayCredentialError, RelayCredentialLease, RelayCredentialMaterial,
     RelayCredentialPort, RelayCredentialRequest, RelayCredentialRole, RelaySecret,
 };
+pub use guest_credential::{
+    CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
+    GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
+    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort,
+    MintedRelaySendToken, SealingKey,
+};
+pub use guest_zone_link::{GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime};
 pub use metrics::{RelayMetricEvent, RelayMetricOutcome};
 pub use reconnect::{ReconnectBackoff, ReconnectDecision};
 pub use relay_transport::{

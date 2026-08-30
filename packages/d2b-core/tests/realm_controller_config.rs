@@ -1,4 +1,4 @@
-use d2b_core::realm_controller_config::RealmControllersJson;
+use d2b_contracts::controller_config::RealmControllersJson;
 use serde_json::json;
 
 fn realm_controllers_fixture() -> serde_json::Value {

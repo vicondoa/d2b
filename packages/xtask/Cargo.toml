@@ -18,7 +18,6 @@ d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version =
 clap_complete = "=4.6.5"
 clap_mangen = "0.2"
 d2b = { path = "../d2b", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }

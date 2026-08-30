@@ -110,7 +110,7 @@ use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
+use d2b_contracts::workload_identity::{WorkloadIdentity, WorkloadTarget};
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use d2b_core_controller::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
@@ -118,13 +118,6 @@ use d2b_core_controller::zone_links::{
 };
 use d2b_core_controller::zonelink::{
     ZoneLinkController, ZoneLinkOwnerProof,
-};
-#[cfg(test)]
-use d2b_gateway::{
-    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
-    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
-    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
-    SessionBinding, SessionSecret, TargetKey,
 };
 use d2b_host::ssh_keygen;
 use d2b_provider_network_local::{
@@ -150,7 +143,7 @@ use d2b_zone_routing::resolver::{SealedZoneTopology, ZoneEntrypointResolver};
 use d2b_zone_routing::engine::ZoneRouteRequest;
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 #[cfg(test)]
-use d2b_realm_core::TargetName;
+use d2b_contracts::target::TargetName;
 use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 use d2b_core::allocator_config::AllocatorZoneTopology;
 pub(crate) use d2bd_runtime::broker_transport::{
@@ -3613,6 +3606,141 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewaySessionState {
+    Running,
+    Closed,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct GatewaySessionHandle(String);
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct GatewayOpenSession {
+    session_id: String,
+    agent: GatewaySessionHandle,
+    listener: GatewaySessionHandle,
+    operation_id: String,
+    peer_principal: String,
+    state: GatewaySessionState,
+    request_hash: u64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct GatewaySessionSummary {
+    session_id: String,
+    operation_id: String,
+    peer_principal: String,
+    state: GatewaySessionState,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayError {
+    ProviderAllocationFailed,
+}
+
+#[cfg(test)]
+impl GatewayError {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::ProviderAllocationFailed => "provider-allocation-failed",
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Display for GatewayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.slug())
+    }
+}
+
+#[cfg(test)]
+impl std::error::Error for GatewayError {}
+
+#[cfg(test)]
+struct GatewayOrchestrator {
+    available: bool,
+    sessions: Mutex<HashMap<String, GatewayOpenSession>>,
+}
+
+#[cfg(test)]
+impl GatewayOrchestrator {
+    fn new(available: bool) -> Self {
+        Self {
+            available,
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn open(
+        &self,
+        target: &str,
+        operation_id: &str,
+        peer_principal: &str,
+        request_hash: u64,
+    ) -> Result<GatewayOpenSession, GatewayError> {
+        if !self.available {
+            return Err(GatewayError::ProviderAllocationFailed);
+        }
+        let session_id = format!("gw-{operation_id}");
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+        if let Some(existing) = sessions.get(&session_id)
+            && existing.request_hash == request_hash
+            && existing.operation_id == operation_id
+            && existing.peer_principal == peer_principal
+        {
+            return Ok(existing.clone());
+        }
+        let session = GatewayOpenSession {
+            session_id: session_id.clone(),
+            agent: GatewaySessionHandle(format!("agent-{target}")),
+            listener: GatewaySessionHandle(format!("listener-{target}")),
+            operation_id: operation_id.to_owned(),
+            peer_principal: peer_principal.to_owned(),
+            state: GatewaySessionState::Running,
+            request_hash,
+        };
+        sessions.insert(session_id, session.clone());
+        Ok(session)
+    }
+
+    async fn close(&self, session: &GatewayOpenSession) -> Result<(), GatewayError> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+        if let Some(existing) = sessions.get_mut(&session.session_id) {
+            existing.state = GatewaySessionState::Closed;
+        }
+        Ok(())
+    }
+
+    fn list_sessions(&self) -> Result<Vec<GatewaySessionSummary>, GatewayError> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| GatewayError::ProviderAllocationFailed)?;
+        Ok(sessions
+            .values()
+            .map(|session| GatewaySessionSummary {
+                session_id: session.session_id.clone(),
+                operation_id: session.operation_id.clone(),
+                peer_principal: session.peer_principal.clone(),
+                state: session.state,
+            })
+            .collect())
+    }
+}
+
+#[cfg(test)]
 struct GatewayDisplayRuntime {
     orchestrator: GatewayOrchestrator,
     sessions: Mutex<HashMap<String, GatewayDisplaySession>>,
@@ -3632,7 +3760,7 @@ impl std::fmt::Debug for GatewayDisplayRuntime {
 struct GatewayDisplaySession {
     target: String,
     principal: String,
-    open: OpenSession,
+    open: GatewayOpenSession,
     opened_at: Instant,
 }
 
@@ -3655,13 +3783,39 @@ trait GatewayLifecycle: Send + Sync {
 }
 
 #[cfg(test)]
+struct UnavailableGatewayLifecycle;
+
+#[cfg(test)]
+#[async_trait]
+impl GatewayLifecycle for UnavailableGatewayLifecycle {
+    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
+        Err(GatewayError::ProviderAllocationFailed)
+    }
+
+    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
+        Err(GatewayError::ProviderAllocationFailed)
+    }
+}
+
+#[cfg(test)]
+struct DaemonGatewayLifecycle;
+
+#[cfg(test)]
+#[async_trait]
+impl GatewayLifecycle for DaemonGatewayLifecycle {
+    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
+        Ok("ready".to_owned())
+    }
+
+    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
+        Ok("stopped".to_owned())
+    }
+}
+
+#[cfg(test)]
 fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
     Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(
-            unavailable_gateway_deps(),
-            1,
-            LedgerLimits::default(),
-        ),
+        orchestrator: GatewayOrchestrator::new(false),
         sessions: Mutex::new(HashMap::new()),
         lifecycle: Box::new(UnavailableGatewayLifecycle),
         preflight: None,
@@ -3671,7 +3825,7 @@ fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
 #[cfg(test)]
 fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
     Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(daemon_gateway_deps(), 1, LedgerLimits::default()),
+        orchestrator: GatewayOrchestrator::new(true),
         sessions: Mutex::new(HashMap::new()),
         lifecycle: Box::new(DaemonGatewayLifecycle),
         preflight: None,
@@ -4704,7 +4858,8 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     )?
     .map(|config| {
         let observation_path = config.observation_path;
-        let runtime = d2b_gateway_runtime::GatewayGuestZoneLinkRuntime::from_sealed(
+        let runtime =
+            d2b_provider_transport_azure_relay::GatewayGuestZoneLinkRuntime::from_sealed(
             config.credential_path,
             config.seal_key_path,
             config.execution_ref,
@@ -4712,7 +4867,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             config.settings,
             config.max_concurrent_sessions,
             config.connect_timeout_seconds,
-            &d2b_gateway_runtime::CredentialFilePolicy::default(),
+            &d2b_provider_transport_azure_relay::CredentialFilePolicy::default(),
         )
         .map_err(|error| TypedError::InternalConfig {
             detail: error.code().to_owned(),
@@ -9866,7 +10021,7 @@ fn prepare_workload_launch(
 
 struct ObservedWorkload<'a> {
     entry: &'a workload_dispatch::CatalogEntry,
-    state: d2b_realm_core::WorkloadState,
+    state: d2b_contracts::WorkloadState,
     availability: public_wire::WorkloadAvailability,
 }
 
@@ -9894,11 +10049,11 @@ fn workload_runtime_status(
     requester_uid: u32,
     entry: &workload_dispatch::CatalogEntry,
 ) -> (
-    d2b_realm_core::WorkloadState,
+    d2b_contracts::WorkloadState,
     public_wire::WorkloadAvailability,
 ) {
     use d2b_contracts_control::unsafe_local_wire::HelperScopeState;
-    use d2b_realm_core::WorkloadState;
+    use d2b_contracts::WorkloadState;
     use workload_dispatch::WorkloadRoute;
 
     match &entry.route {
@@ -9959,7 +10114,7 @@ fn workload_runtime_status(
 fn dispatch_unsafe_local_launcher(
     state: &ServerState,
     requester_uid: u32,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts_control::unsafe_local_wire::{
@@ -10002,7 +10157,7 @@ fn dispatch_local_vm_launcher(
     state: &ServerState,
     requester_uid: u32,
     vm: &str,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
@@ -10063,11 +10218,11 @@ fn dispatch_local_vm_launcher(
     ))
 }
 
-const WORKLOAD_PROVIDERS: [d2b_realm_core::WorkloadProviderKind; 4] = [
-    d2b_realm_core::WorkloadProviderKind::LocalVm,
-    d2b_realm_core::WorkloadProviderKind::QemuMedia,
-    d2b_realm_core::WorkloadProviderKind::ProviderManaged,
-    d2b_realm_core::WorkloadProviderKind::UnsafeLocal,
+const WORKLOAD_PROVIDERS: [d2b_contracts::WorkloadProviderKind; 4] = [
+    d2b_contracts::WorkloadProviderKind::LocalVm,
+    d2b_contracts::WorkloadProviderKind::QemuMedia,
+    d2b_contracts::WorkloadProviderKind::ProviderManaged,
+    d2b_contracts::WorkloadProviderKind::UnsafeLocal,
 ];
 const WORKLOAD_COMPONENTS: [&str; 5] = ["helper", "scope", "proxy", "launcher", "shell"];
 const WORKLOAD_AVAILABILITY_STATES: [&str; 9] = [
@@ -10102,7 +10257,7 @@ fn record_workload_availability_metrics(
             let applicable = match component {
                 "shell" => items
                     .iter()
-                    .any(|item| item.kind == d2b_realm_core::LauncherItemKind::Shell),
+                    .any(|item| item.kind == d2b_contracts::LauncherItemKind::Shell),
                 "helper" | "scope" | "proxy" => provider == "unsafe-local",
                 _ => true,
             };
@@ -10154,7 +10309,7 @@ struct WorkloadLaunchAuditContext {
 impl WorkloadLaunchAuditContext {
     fn from_entry(
         entry: &workload_dispatch::CatalogEntry,
-        requested_item: &d2b_realm_core::ProtocolToken,
+        requested_item: &d2b_contracts::ProtocolToken,
     ) -> Self {
         let (provider_label, audit_provider) = match entry.route {
             workload_dispatch::WorkloadRoute::LocalVm { .. } => (
@@ -10196,7 +10351,7 @@ fn record_workload_launch_result(
     state: &ServerState,
     peer_uid: u32,
     context: &WorkloadLaunchAuditContext,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     exec_id: Option<&str>,
     result: WorkloadLaunchResult,
 ) -> Result<(), TypedError> {
@@ -10325,20 +10480,20 @@ mod workload_observability_tests {
     use d2b_core::{
         configured_argv::ConfiguredArgv,
         contract_id::ContractId,
-        realm_workloads_launcher::LauncherWorkloadSummary,
         unsafe_local_workloads::{
             LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
             UnsafeLocalLauncherItem, UnsafeLocalWorkload, UnsafeLocalWorkloadsJson,
         },
-        workload_identity::{WorkloadIdentity, WorkloadTarget},
     };
-    use d2b_realm_core::{
+    use d2b_contracts::{
         CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
         IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, OperationId,
         ProtocolToken, SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind,
         WorkloadState,
         ids::{RealmId, WorkloadId},
+        launcher::LauncherWorkloadSummary,
         realm::RealmPath,
+        workload_identity::{WorkloadIdentity, WorkloadTarget},
     };
 
     fn test_state() -> (ServerState, tempfile::TempDir) {
@@ -11203,16 +11358,16 @@ fn dispatch_gateway_display(
         }
         public_wire::GatewayDisplayOp::Open(args) => {
             let target_text = args.target.clone();
-            let target =
+            let _target =
                 TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
                 })?;
-            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id.clone())
+            let operation_id = d2b_contracts::OperationId::parse(args.operation_id.clone())
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
                 })?;
             let correlation_id =
-                d2b_realm_core::CorrelationId::parse(args.operation_id).map_err(|err| {
+                d2b_contracts::CorrelationId::parse(args.operation_id).map_err(|err| {
                     TypedError::WireInvalidFrame {
                         detail: format!(
                             "gatewayDisplay operation_id cannot be used as correlation_id: {err}"
@@ -11220,31 +11375,21 @@ fn dispatch_gateway_display(
                     }
                 })?;
             let principal = gateway_display_peer_principal(peer);
-            let app =
-                AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
+            if args.app_argv.is_empty() || args.app_argv.iter().any(String::is_empty) {
+                return Err(TypedError::WireInvalidFrame {
                     detail:
                         "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
                             .to_owned(),
-                })?;
+                });
+            }
             validate_gateway_display_open_preflight(state)?;
-            let target_key = TargetKey {
-                realm: target.realm.target_form(),
-                workload: target.workload.as_str().to_owned(),
-            };
-            let seed = ContextSeed {
-                realm: target.realm.clone(),
-                operation_id,
-                correlation_id,
-                principal,
-                node: target.node.clone(),
-                workload: target.workload.clone(),
-            };
-            let owner_principal = seed.principal.to_string();
+            let _correlation_id = correlation_id;
+            let owner_principal = principal.to_string();
             gateway_display_gc(state);
             let open = block_on_future(state.gateway_display.orchestrator.open(
-                target_key,
-                seed,
-                app,
+                &target_text,
+                &operation_id.to_string(),
+                &owner_principal,
                 args.request_hash,
             ))
             .map_err(gateway_error_to_typed)?;
@@ -11420,12 +11565,12 @@ fn parse_gateway_display_lifecycle_target(
     let target = TargetName::parse(target).map_err(|err| TypedError::WireInvalidFrame {
         detail: format!("gatewayDisplay target parse failed: {err}"),
     })?;
-    let _operation_id = d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
+    let _operation_id = d2b_contracts::OperationId::parse(operation_id).map_err(|err| {
         TypedError::WireInvalidFrame {
             detail: format!("gatewayDisplay operation_id invalid: {err}"),
         }
     })?;
-    let _principal = d2b_realm_core::PrincipalId::parse(principal).map_err(|err| {
+    let _principal = d2b_contracts::PrincipalId::parse(principal).map_err(|err| {
         TypedError::WireInvalidFrame {
             detail: format!("gatewayDisplay principal invalid: {err}"),
         }
@@ -11501,171 +11646,6 @@ fn gateway_display_gc(state: &ServerState) {
         }
     }
 }
-
-#[cfg(test)]
-fn unavailable_gateway_deps() -> GatewayDeps {
-    GatewayDeps {
-        workload: Box::new(UnavailableGatewayWorkload),
-        listener: Box::new(UnavailableDisplayListener),
-        clock: Box::new(DaemonGatewayClock),
-        ids: Box::new(DaemonGatewayIds),
-        audit: Box::new(NoopGatewayAudit),
-    }
-}
-
-#[cfg(test)]
-fn daemon_gateway_deps() -> GatewayDeps {
-    GatewayDeps {
-        workload: Box::new(DaemonGatewayWorkload),
-        listener: Box::new(DaemonDisplayListener),
-        clock: Box::new(DaemonGatewayClock),
-        ids: Box::new(DaemonGatewayIds),
-        audit: Box::new(NoopGatewayAudit),
-    }
-}
-
-#[cfg(test)]
-struct UnavailableGatewayLifecycle;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for UnavailableGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-}
-
-#[cfg(test)]
-struct UnavailableGatewayWorkload;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayWorkload for UnavailableGatewayWorkload {
-    async fn spawn_agent(&self, _req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct UnavailableDisplayListener;
-
-#[cfg(test)]
-#[async_trait]
-impl DisplayListener for UnavailableDisplayListener {
-    async fn arm(
-        &self,
-        _ctx: &DisplaySessionContext,
-        _binding: &SessionBinding,
-        _secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayLifecycle;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for DaemonGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("ready".to_owned())
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("stopped".to_owned())
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayWorkload;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayWorkload for DaemonGatewayWorkload {
-    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        Ok(AgentHandle(format!("daemon-agent-{}", req.ctx.session_id)))
-    }
-
-    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct DaemonDisplayListener;
-
-#[cfg(test)]
-#[async_trait]
-impl DisplayListener for DaemonDisplayListener {
-    async fn arm(
-        &self,
-        ctx: &DisplaySessionContext,
-        _binding: &SessionBinding,
-        _secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        Ok(ListenerHandle(format!(
-            "daemon-listener-{}",
-            ctx.session_id
-        )))
-    }
-
-    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-
-    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayClock;
-
-#[cfg(test)]
-impl Clock for DaemonGatewayClock {
-    fn now_unix(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayIds;
-
-#[cfg(test)]
-impl IdSource for DaemonGatewayIds {
-    fn new_session_id(&self) -> d2b_gateway::DisplaySessionId {
-        let mut raw = [0u8; 16];
-        getrandom::getrandom(&mut raw).unwrap_or(());
-        d2b_gateway::DisplaySessionId::new(format!("gw-{}", hex_bytes(&raw)))
-    }
-
-    fn new_secret(&self) -> SessionSecret {
-        let mut raw = [0u8; SECRET_LEN];
-        getrandom::getrandom(&mut raw).unwrap_or(());
-        SessionSecret::from_bytes(raw)
-    }
-}
-
 
 fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
     let bundle: Bundle = load_json(&state.config.artifacts.bundle_path)?;
@@ -15063,7 +15043,7 @@ fn dispatch_unsafe_shell_management(
 
 fn shell_route_capability_error(
     target: &str,
-    provider: d2b_realm_core::WorkloadProviderKind,
+    provider: d2b_contracts::WorkloadProviderKind,
 ) -> TypedError {
     TypedError::RuntimeCapabilityUnsupported {
         vm: target.to_owned(),
@@ -15147,7 +15127,7 @@ fn record_resolved_shell_failure(
             vm.clone(),
         ),
         WorkloadRoute::CapabilityUnavailable { provider } => (
-            if *provider == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
+            if *provider == d2b_contracts::WorkloadProviderKind::UnsafeLocal {
                 d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
             } else {
                 d2bd_runtime::shell_backend::ShellProvider::ComponentSession
@@ -16701,14 +16681,14 @@ fn next_internal_shell_request_id() -> u64 {
     next_internal_helper_request_id()
 }
 
-fn new_internal_shell_operation_id() -> Result<d2b_realm_core::OperationId, TypedError> {
+fn new_internal_shell_operation_id() -> Result<d2b_contracts::OperationId, TypedError> {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).map_err(|_| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
         )
     })?;
-    d2b_realm_core::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
+    d2b_contracts::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
         )
@@ -25587,11 +25567,7 @@ mod public_status_tests {
         let dir = tempfile::tempdir().expect("waypipe dispatch dir");
         let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
         state.gateway_display = Arc::new(GatewayDisplayRuntime {
-            orchestrator: GatewayOrchestrator::new(
-                daemon_gateway_deps(),
-                1,
-                LedgerLimits::default(),
-            ),
+            orchestrator: GatewayOrchestrator::new(true),
             sessions: Mutex::new(HashMap::new()),
             lifecycle: Box::new(DaemonGatewayLifecycle),
             preflight: Some(GatewayDisplayPreflight {

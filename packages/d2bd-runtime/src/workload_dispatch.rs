@@ -11,14 +11,16 @@ use d2b_contracts_control::{
 use d2b_core::{
     bundle_resolver::BundleResolver,
     configured_argv::ConfiguredArgv,
-    realm_controller_config::RealmControllerPlacement,
-    realm_workloads_launcher::LauncherWorkloadSummary,
     unsafe_local_workloads::{
         UnsafeLocalLauncherItem, UnsafeLocalShellPolicy, UnsafeLocalWorkloadsJson,
     },
+};
+use d2b_contracts::{
+    LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState,
+    controller_config::RealmControllerPlacement,
+    launcher::LauncherWorkloadSummary,
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
-use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState};
 
 use crate::typed_error::{TypedError, WorkloadLaunchErrorKind};
 use crate::unsafe_local_helper::{HelperAvailability, HelperRegistryError};
@@ -630,7 +632,7 @@ mod tests {
             UnsafeLocalWorkloadsJson,
         },
     };
-    use d2b_realm_core::{
+    use d2b_contracts::{
         CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
         IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
         WorkloadExecutionPosture,

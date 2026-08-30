@@ -628,7 +628,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-realm-core",
  "nix 0.29.0",
  "regex",
  "rustix 0.38.44",
@@ -660,17 +659,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "ttrpc",
-]
-
-
-[[package]]
-name = "d2b-realm-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 
