@@ -2029,7 +2029,7 @@ impl BundleResolver {
             && intent.execution_ref == execution_ref
             && intent.execution_domain == execution_domain
             && intent.user_ref.is_none()
-            && process_template_name_matches(intent, template))
+            && guest_vmm_template_matches(intent, template))
         .then_some(intent)
     }
 
@@ -2054,7 +2054,7 @@ impl BundleResolver {
             && intent.execution_ref == execution_ref
             && intent.execution_domain == execution_domain
             && intent.user_ref.is_none()
-            && process_template_name_matches(intent, template))
+            && guest_vmm_template_matches(intent, template))
         .then_some(intent)
     }
 
@@ -4235,6 +4235,12 @@ fn process_template_name_matches(intent: &ResolvedRunnerIntent, template: &str) 
         };
     }
     false
+}
+
+fn guest_vmm_template_matches(intent: &ResolvedRunnerIntent, template: &str) -> bool {
+    intent.role_id == template
+        || intent.profile_id == template
+        || process_template_name_matches(intent, template)
 }
 
 fn cloud_hypervisor_intent_is_complete(intent: &ResolvedRunnerIntent) -> bool {

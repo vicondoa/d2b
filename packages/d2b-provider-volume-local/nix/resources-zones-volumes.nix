@@ -248,7 +248,7 @@ let
         message = "${row.path}.spec.source kind is invalid.";
       }
       {
-        assertion = kind == "nix-closure" || sourcePolicyId == null;
+        assertion = kind != "nix-closure" || sourcePolicyId == null;
         message = "${row.path}.spec.source.settings.sourcePolicyId is valid only for local-path or block-image sources.";
       }
       {

@@ -589,7 +589,7 @@ let
         message = "${path}.source.settings.systemArtifactId must name a nixos-system artifact for a nix-closure source.";
       }
       {
-        assertion = kind != "nix-closure" || systemArtifactId == null;
+        assertion = kind == "nix-closure" || systemArtifactId == null;
         message = "${path}.source.settings.systemArtifactId is accepted only for a nix-closure source.";
       }
       {
