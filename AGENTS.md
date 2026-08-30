@@ -147,7 +147,10 @@ settings or claim atomic base binding.
   `make test-host-integration`. They may run alongside the `/etc/nixos`
   real-host switch, d2b startup, and Cloud Hypervisor Guest boot. U19
   converges their declarations and current inputs but does not run host
-  acceptance.
+  acceptance. The host-integration lane must inject its Bazel-built
+  `d2b`, `d2bd`, `d2b-broker`, activation/helper, resource-compiler, and
+  Wayland-proxy binaries through `D2B_HOST_TOOL_BUNDLE`; it must not rebuild
+  those binaries through Nix.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
 - The retired repository-local contributor runtime has no ordinary-work

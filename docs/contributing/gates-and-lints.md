@@ -195,12 +195,15 @@ make test-integration
 make test-host-integration
 ```
 
-`make test-host-integration` builds the fixed set of nine host tools with
-local Bazel, stages them as one bundle, and injects that bundle into the
-selected NixOS `vmChecks`. After every selected check succeeds, the lane
+`make test-host-integration` builds the fixed host-tool set with local Bazel,
+stages them as one `D2B_HOST_TOOL_BUNDLE`, and injects that bundle into the
+selected NixOS `vmChecks`. Nix realizes the VM check around those binaries; it
+must not rebuild d2b binaries through Nix. After every selected check succeeds, the lane
 uploads the built dependency closures to the configured Attic cache in one
 operation. It excludes the `vmCheck` result paths so a capability `SKIP` or
 `BLOCKED` result cannot be substituted as a passing test on another host.
+The handoff implementation is in the `test-host-integration` Make recipe and
+[`nix/test-support/bazel-host-tools.nix`](../../nix/test-support/bazel-host-tools.nix).
 
 Attic is optional for this lane. When the Attic client or its configuration is
 unavailable, the lane reports an explicit skip and continues with the Bazel

@@ -209,7 +209,9 @@ For U20 final acceptance, both public integration targets,
 `make test-integration` and `make test-host-integration`, are mandatory and
 may be scheduled alongside the `/etc/nixos` real-host switch, d2b startup, and
 Cloud Hypervisor Guest boot. U19 only keeps their declarations and current
-inputs converged and does not run host acceptance.
+inputs converged and does not run host acceptance. The host lane uses the
+existing Bazel-built host-tool bundle handoff; Nix realizes the VM check
+around those injected binaries and must not rebuild d2b binaries.
 
 ### Standalone Rust workspaces
 

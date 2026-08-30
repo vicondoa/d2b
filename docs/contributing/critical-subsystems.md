@@ -147,4 +147,5 @@ the `/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot; an
 advisory skip is not evidence for those checks. U20 must also run both
 `make test-host-integration` and `make test-integration`, which may be
 scheduled alongside real-host testing. U19 only converges their declarations
-and current inputs.
+and current inputs. The host lane injects the Bazel-built d2b binary bundle
+through `D2B_HOST_TOOL_BUNDLE`; it does not rebuild d2b binaries through Nix.
