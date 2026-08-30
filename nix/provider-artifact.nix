@@ -78,10 +78,11 @@ let
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    first = hashlib.sha256(
+        b"d2b:v3:provider-executable-set\0" + executable_map
+    ).digest()
     pathlib.Path(output_path).write_text(
-        "sha256:" + hashlib.sha256(
-            b"d2b:v3:provider-executable-set\0" + executable_map
-        ).hexdigest(),
+        "sha256:" + hashlib.sha256(first).hexdigest(),
         encoding="ascii",
     )
     PY
