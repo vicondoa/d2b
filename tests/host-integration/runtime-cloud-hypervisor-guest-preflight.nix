@@ -158,6 +158,11 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_unit("d2b-broker.socket")
     machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_until_succeeds(
+        "journalctl -u d2bd.service --no-pager -b 2>/dev/null "
+        "| grep -Eq 'interaction_runtime_ready[=: ]+true'",
+        timeout=30,
+    )
 
     machine.succeed(
         "test -e /dev/kvm && test -r /dev/kvm && test -w /dev/kvm || "
