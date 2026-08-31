@@ -552,42 +552,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   command, field, fallback, or production route. Pending-audit recovery MUST either conform to
   accepted `ADR-046-cli-and-operations` Version 1. Retained Version 2 recovery details are
   historical context; current behavior follows the owning product contract and focused checks.
-- **FR-075**: The pre-ADR-046 operator lifecycle MUST remain functional until the explicit
-  cutover. The implementation MUST enumerate and successfully build
-  `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
-  `make test-host-integration` target with no skip. The case MUST use the public `d2b vm`
-  surface to start the configured VM, observe the explicit `Ready` state and guest
-  reachability, restart `d2bd.service`, prove the same runner PID/start-time identity was
-  adopted through a newly acquired pidfd and remained reachable, stop the VM, and observe the
-  explicit `Stopped` state. Enumeration MUST query the complete loaded `d2b*` and
-  `microvm*` namespace with `systemctl list-units --all`, extract every returned unit name,
-  exclude exactly the canonical `d2b.slice`, sort the remainder, and require exactly these
-  three lifecycle units: `d2bd.service`, `d2b-priv-broker.socket`, and
-  `d2b-priv-broker.service`. No additional unit may remain after that sole exclusion.
-  Code canon makes the raw matched set four entries on a conforming host: committed
-  `d2b.slice` plus those three service/socket units. Therefore "exactly three" in this
-  requirement always means the sorted post-exclusion comparison, never the raw
-  `systemctl` count asserted by the stale AGENTS.md exit-criterion prose. This feature records
-  that external drift but does not edit AGENTS.md.
-  A nonzero `systemctl list-units --all` result MUST refuse before filtering;
-  a later pipeline stage may not turn failed enumeration into an empty or successful census.
-  No other slice, target, service, socket, timer, path, or template is excluded. Querying only
-  those three names is not enumeration and cannot detect an unexpected lifecycle unit. The
-  negative matrix MUST inject an unexpected loaded
-  `d2b-unexpected.slice` and, separately, an unexpected loaded
-  `d2b-unexpected.service`; both survive the sole `d2b.slice` exclusion and MUST fail exact
-  equality. PID reuse, pidfd/start-identity mismatch, and multiple-plausible-runner
-  cases MUST quarantine without adoption, cleanup, or signal. The focused acceptance owner
-  runs both host cases once and records the result in the applicable validation evidence.
-  Passing evidence MUST name the enumerated and successfully built attr, command success,
-  and no `SKIP` result. Missing, empty, skipped, stale, wrong-candidate, status-only,
-  private-hook, incomplete unit enumeration, missing Ready/Stopped, or non-fresh-pidfd
-  evidence fails the acceptance. The continuity check remains required until the explicit
-  cutover; a fail-closed continuity check is not permission to weaken any security or
-  resource-lifecycle requirement.
-
-#### Provider model
-
+- **FR-075**: The final operator lifecycle MUST use the Zone-native control plane. The
+  implementation MUST enumerate and successfully build
+  `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight` through the existing
+  heavy-gated `make test-host-integration` target with no skip. The case MUST use a nested
+  Zone/Guest declaration, signed runtime and storage Provider artifacts, a bootable
+  evaluated Guest closure, controller-owned child Resources, Guest Ready status, daemon
+  restart adoption with the same runner PID/start-time identity, and ordered Guest deletion
+  with descendant drain before finalizer completion. The host tool bundle and activation
+  handoff remain the acceptance inputs; legacy VM commands and `processes.json` are not
+  acceptance authorities.
 - **FR-010**: Every host capability in scope MUST be supplied by a Provider that the
   control plane installs, supervises, and holds accountable for the state it owns.
 - **FR-011**: An operator MUST be able to obtain, inspect, and retire a capability purely by
@@ -1120,10 +1094,10 @@ is an authority for architecture or release eligibility.
   matrix, every unrelated Zone is visited and remains operable, and every affected Zone
   reports a specific actionable refusal.
 - **SC-035**: The final acceptance source contains one passing result for
-  `vmChecks.x86_64-linux.daemon-restart-vm-survival`, with the exact attr enumerated and built
-  and no skip. The result names the candidate source, command, Ready/Stopped observations,
-  and pidfd continuity evidence.
-
+  `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight`, with the exact attr
+  enumerated and built and no skip. The result names the candidate source, command,
+  controller/VMM and Guest Ready observations, ordered deletion, and pidfd continuity
+  evidence.
 - **SC-011**: The resource plane sustains a 10,000-resource working set and 100 concurrent
   watchers while continuing to meet its readiness, latency, and footprint targets.
 - **SC-012**: The Zone runtime whole-process resident memory stays at or below 24,576 KiB with
