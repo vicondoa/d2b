@@ -174,6 +174,7 @@ let
             pathlib.Path("${schema}").read_bytes()
         )
         (output / "publisher-public-key.pem").write_bytes(public_key)
+        (output / "raw-executable-digest").write_text(raw_digest)
         (output / "executable-set-digest").write_text(executable_digest)
         (output / "manifest-digest").write_text(
             "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
@@ -227,7 +228,12 @@ let
         brokerDigest = runtime.brokerDigest;
         instanceScope = component.instanceScope;
         supportedTargetKinds = component.supportedTargetKinds;
-        targetCapabilities = component.targetCapabilities;
+        targetCapabilities = map
+          (capability: capability // {
+            artifactDigest = lib.removeSuffix "\n"
+              (builtins.readFile "${package}/raw-executable-digest");
+          })
+          component.targetCapabilities;
         placementAnchor = apiBinding.placementAnchor;
       };
     in {
