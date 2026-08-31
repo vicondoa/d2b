@@ -113,7 +113,7 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 ## BuildBuddy `remote`; PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
 D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)
+D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) --test_env=D2B_REPO_ROOT="$(CURDIR)"
 export D2B_BAZEL_PROFILE
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
