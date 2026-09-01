@@ -599,7 +599,10 @@ fn resolve_runner_cgroup_leaf(
         let Some(intent) = resolver.find_runner_intent(intent_id) else {
             continue;
         };
-        if intent.vm_name == req.vm_id.as_str() && intent.role_id == req.role_id.as_str() {
+        if intent.vm_name == req.vm_id.as_str()
+            && runner_role_matches(&intent.role_id, req.role_id.as_str())
+            && runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str()).is_some()
+        {
             if matching_intent.is_some() {
                 return Err(super::OpError::InvalidInput {
                     detail: "ambiguous trusted runner cgroup intent".to_owned(),
@@ -613,17 +616,28 @@ fn resolve_runner_cgroup_leaf(
         subject: format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str()),
     })?;
 
-    // Runner placements are trusted bundle data, but still require the
-    // broker's leaf-only shape before any destructive write. The VM interior
-    // remains process-free and only the third segment may receive cgroup.kill.
     let components = Path::new(&intent.cgroup_placement.subtree)
         .components()
         .collect::<Vec<_>>();
-    if components.len() != 3
-        || !matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
-        || !matches!(components[1], std::path::Component::Normal(value) if value == req.vm_id.as_str())
-        || !matches!(components[2], std::path::Component::Normal(_))
-    {
+    let segment = |index: usize| {
+        components.get(index).and_then(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+    };
+    let Some(role_index) =
+        runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str())
+    else {
+        return Err(super::OpError::Refused {
+            operation: "CgroupKill",
+            reason: "runner-cgroup-leaf-invalid".to_owned(),
+        });
+    };
+    let role_matches_path = segment(role_index) == Some(intent.role_id.as_str())
+        || (req.role_id.as_str() == "ch-runner"
+            && intent.role_id == "cloud-hypervisor"
+            && segment(role_index) == Some("cloud-hypervisor"));
+    if !role_matches_path {
         return Err(super::OpError::Refused {
             operation: "CgroupKill",
             reason: "runner-cgroup-leaf-invalid".to_owned(),
@@ -632,11 +646,36 @@ fn resolve_runner_cgroup_leaf(
     Ok(Path::new("/sys/fs/cgroup").join(&intent.cgroup_placement.subtree))
 }
 
+fn runner_role_matches(intent_role: &str, requested_role: &str) -> bool {
+    intent_role == requested_role
+        || (requested_role == "ch-runner" && intent_role == "cloud-hypervisor")
+}
+
+fn runner_cgroup_shape(subtree: &str, vm_id: &str) -> Option<usize> {
+    let components = Path::new(subtree).components().collect::<Vec<_>>();
+    if components.len() == 4
+        && matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
+        && matches!(components[2], std::path::Component::Normal(value) if value == vm_id)
+    {
+        Some(3)
+    } else if components.len() == 3
+        && matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
+        && matches!(components[1], std::path::Component::Normal(value) if value == vm_id)
+        && matches!(components[2], std::path::Component::Normal(_))
+    {
+        Some(2)
+    } else {
+        None
+    }
+}
+
 /// Kill one trusted runner leaf during intentional teardown.
 ///
-/// The request carries only `(vm_id, role_id)`. The broker resolves the
-/// cgroup placement from its bundle copy and refuses anything other than the
-/// canonical `d2b.slice/<vm>/<role>` leaf shape.
+/// The request carries `(vm_id, role_id)`. The broker resolves the cgroup
+/// placement from its bundle copy and refuses anything other than a
+/// canonical `d2b.slice/<zone>/<guest>/<role>` or legacy
+/// `d2b.slice/<vm>/<role>` leaf shape. A same-named Zone-qualified Guest
+/// collision is refused as ambiguous rather than selecting a cgroup.
 pub fn live_kill_runner_cgroup(
     resolver: &BundleResolver,
     req: &CgroupKillRequest,

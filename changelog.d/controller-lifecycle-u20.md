@@ -15,3 +15,7 @@
   foreground store garbage collection.
 - Keep inherited controller-session descriptors and bootstrap readiness probes
   compatible with the static Guest build's safe-Rust policy.
+- Bound Cloud Hypervisor runner ACL grants to the broker-owned state root and
+  avoid mutating world-traversable ancestors.
+- Qualify Guest store-view intents, runner identities, and cgroup leaves by
+  Zone so same-named Guests remain isolated.

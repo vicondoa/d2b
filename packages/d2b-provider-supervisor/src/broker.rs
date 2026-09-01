@@ -17,7 +17,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::ExecutionDomain};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
-use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
+use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
@@ -426,7 +426,7 @@ impl BundleBackedLaunchResolver {
             _ => return Err(ProcessEffectError::IdentityChanged),
         };
         let process_role_id = ticket.process_ref().name().as_str();
-        let intent_id = intent_id_runner(vm_name, process_role_id);
+        let intent_id = intent_id_legacy_runner(vm_name, process_role_id);
         let expected_execution_ref = ticket.execution_ref().to_canonical_string();
         let expected_execution_domain = match ticket.domain() {
             ExecutionDomain::System => d2b_core::processes::ProcessExecutionDomain::System,

@@ -85,9 +85,9 @@ Hard invariants:
    never required.
 3. **Single slice name; per-VM-interior + per-role-leaf
    hierarchy.** The slice is `d2b.slice` literally - not
-   configurable. Per-VM **intermediate** directories live at
-   `d2b.slice/<vm-id>/` (process-free) with **per-role leaves**
-   at `d2b.slice/<vm-id>/<role>/`. Host-scoped roles split
+   configurable. Zone/Guest **intermediate** directories live at
+   `d2b.slice/<zone>/<guest>/` (process-free) with **per-role leaves**
+   at `d2b.slice/<zone>/<guest>/<role>/`. Host-scoped roles split
    into two patterns, both `path_class: host-scoped-leaf`:
    per-env (e.g., USBIP) at `d2b.slice/sys-<env>/<role>/`
    with `sys-<env>/` process-free interior; host singletons

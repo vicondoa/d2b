@@ -42,7 +42,7 @@ use d2b_contracts_broker::broker_wire::{
     PipeWireAudioRequest,
 };
 use d2b_contracts_control::public_wire::AudioChannel;
-use d2b_core::bundle_resolver::intent_id_runner;
+use d2b_core::bundle_resolver::intent_id_legacy_runner;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
 use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
 #[cfg(test)]
@@ -114,7 +114,7 @@ impl PipeWireHostController {
             caller_role,
             vm_id: VmId::new(vm_name),
             role_id: RoleId::new(node.id.0.clone()),
-            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner(vm_name, &node.id.0)),
+            bundle_runner_intent_ref: BundleOpId::new(intent_id_legacy_runner(vm_name, &node.id.0)),
         }
     }
 
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(ctrl.role_id.as_str(), "audio");
         assert_eq!(
             ctrl.bundle_runner_intent_ref.as_str(),
-            intent_id_runner("corp-vm", "audio")
+            intent_id_legacy_runner("corp-vm", "audio")
         );
     }
 

@@ -38,8 +38,9 @@
 //! | NM unmanaged    | `nm-unmanaged:host`                                       | [`crate::host::NetworkManagerUnmanaged`]                          |
 //! | USBIP firewall  | `usbip-fw:env:<env>:bus:<bus_id>`                         | [`crate::host::UsbipBusidLock`] + nft chain template              |
 //! | USBIP bind      | `usbip-bind:env:<env>:vm:<vm>:bus:<bus_id>`               | [`crate::host::UsbipBusidLock`]                                   |
-//! | runner          | `runner:vm:<vm>:role:<role_id>`                           | legacy [`crate::processes::ProcessNode`] + [`crate::processes::RoleProfile`] |
-//! | Guest VMM       | `runner:vm:<guest>:role:cloud-hypervisor`                | descriptor-bound private artifact-catalog intent |
+//! | runner          | `runner:zone:<zone>:vm:<vm>:role:<role_id>`               | descriptor-bound private artifact-catalog intent |
+//! | Guest VMM       | `runner:zone:<zone>:vm:<guest>:role:cloud-hypervisor`    | descriptor-bound private artifact-catalog intent |
+//! | legacy runner   | `runner:vm:<vm>:role:<role_id>`                           | compatibility [`crate::processes::ProcessNode`] intent |
 //! | role socket     | `socket:vm:<vm>:role:<role_id>`                           | [`crate::processes::ProcessNode`] (derived `/run/d2b/vms/...`)|
 //!
 //! The encoding is **deterministic**: callers (the daemon, integrators
@@ -525,7 +526,7 @@ impl ResolvedRunnerIntent {
             umask,
         } = &node.profile;
         Some(Self {
-            intent_id: intent_id_runner(vm_name, &node.id.0),
+            intent_id: intent_id_legacy_runner(vm_name, &node.id.0),
             vm_name: vm_name.to_owned(),
             execution_ref,
             owner_ref: None,
@@ -2345,8 +2346,25 @@ impl BundleResolver {
         self.activation_intents.get(id)
     }
 
-    pub fn find_store_view_intent(&self, vm: &str) -> Option<&ResolvedStoreViewIntent> {
-        self.store_view_intents.get(&intent_id_store_view(vm))
+    /// Find a store-view intent by its exact opaque bundle key.
+    ///
+    /// Zone-native callers must pass the Zone-qualified
+    /// [`intent_id_store_view`] result; the legacy VM-only key is accepted
+    /// only through [`Self::find_legacy_store_view_intent`].
+    pub fn find_store_view_intent(&self, intent_id: &str) -> Option<&ResolvedStoreViewIntent> {
+        self.store_view_intents.get(intent_id)
+    }
+
+    pub fn find_store_view_intent_for_zone(
+        &self,
+        zone: &ZoneId,
+        vm: &str,
+    ) -> Option<&ResolvedStoreViewIntent> {
+        self.find_store_view_intent(&intent_id_store_view(zone, vm))
+    }
+
+    pub fn find_legacy_store_view_intent(&self, vm: &str) -> Option<&ResolvedStoreViewIntent> {
+        self.find_store_view_intent(&intent_id_legacy_store_view(vm))
     }
 
     pub fn find_guest_closure_out_path(&self, vm: &str) -> Option<&str> {
@@ -2476,7 +2494,7 @@ impl BundleResolver {
                 }
             }
             ProcessRole::StoreVirtiofsPreflight => {
-                if let Some(intent) = self.find_store_view_intent(vm_id).cloned() {
+                if let Some(intent) = self.find_legacy_store_view_intent(vm_id).cloned() {
                     actions.push(ResolvedVmStartAction::PrepareStoreView(intent));
                 }
             }
@@ -3121,7 +3139,11 @@ pub fn intent_id_activation(vm: &str) -> String {
     format!("activation:vm:{vm}")
 }
 
-pub fn intent_id_store_view(vm: &str) -> String {
+pub fn intent_id_store_view(zone: &ZoneId, vm: &str) -> String {
+    format!("store-view:zone:{}:vm:{vm}", zone.as_str())
+}
+
+pub fn intent_id_legacy_store_view(vm: &str) -> String {
     format!("store-view:vm:{vm}")
 }
 
@@ -3436,7 +3458,11 @@ fn network_firewall_chain_name(network_uid: &d2b_contracts_resource::v3::Resourc
     format!("forward-{}", &compact[..8])
 }
 
-pub fn intent_id_runner(vm: &str, role_id: &str) -> String {
+pub fn intent_id_runner(zone: &ZoneId, vm: &str, role_id: &str) -> String {
+    format!("runner:zone:{}:vm:{vm}:role:{role_id}", zone.as_str())
+}
+
+pub fn intent_id_legacy_runner(vm: &str, role_id: &str) -> String {
     format!("runner:vm:{vm}:role:{role_id}")
 }
 
@@ -4328,7 +4354,7 @@ fn build_provider_controller_intents(
             ) & 0x00ff_ffff,
         );
         let intent = ResolvedRunnerIntent {
-            intent_id: intent_id_runner(&vm_name, &role_id),
+            intent_id: intent_id_legacy_runner(&vm_name, &role_id),
             vm_name,
             execution_ref: binding.execution_ref().to_canonical_string(),
             owner_ref: Some(binding.owner_ref().to_canonical_string()),
@@ -4655,7 +4681,7 @@ fn build_store_view_intents(
         if !closure_paths.iter().any(|path| path == &toplevel_path) {
             closure_paths.push(toplevel_path);
         }
-        let intent_id = intent_id_store_view(&closure.vm);
+        let intent_id = intent_id_legacy_store_view(&closure.vm);
         out.insert(
             intent_id.clone(),
             ResolvedStoreViewIntent {
@@ -5043,6 +5069,17 @@ fn load_guest_store_view_intents(
     };
     let mut intents = BTreeMap::new();
     for row in rows {
+        let zone = row
+            .get("zone")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure Zone is invalid",
+                )
+            })?;
         let guest = row
             .get("guest")
             .and_then(serde_json::Value::as_str)
@@ -5117,7 +5154,7 @@ fn load_guest_store_view_intents(
                 "Guest closure toplevel has no basename",
             )
         })?;
-        let intent_id = intent_id_store_view(guest);
+        let intent_id = intent_id_store_view(&zone, guest);
         let intent = ResolvedStoreViewIntent {
             intent_id: intent_id.clone(),
             vm: guest.to_owned(),
@@ -5160,6 +5197,7 @@ fn load_guest_vmm_intents(
             .get("zone")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.is_empty())
+            .and_then(|value| ZoneId::parse(value.to_owned()).ok())
             .ok_or_else(|| {
                 Error::manifest_parse_error(
                     "artifact-catalog.json",
@@ -5199,7 +5237,7 @@ fn load_guest_vmm_intents(
                 )
             })?;
         let descriptor = descriptors
-            .get(&(zone.to_owned(), guest.to_owned()))
+            .get(&(zone.as_str().to_owned(), guest.to_owned()))
             .ok_or_else(|| {
                 Error::manifest_parse_error(
                     "artifact-catalog.json",
@@ -5374,9 +5412,14 @@ fn load_guest_vmm_intents(
                 )
             })?;
         let cgroup_segments = cgroup_subtree.split('/').collect::<Vec<_>>();
-        if cgroup_segments.len() < 3
+        if cgroup_segments.len() != 4
             || cgroup_segments[0] != "d2b.slice"
-            || cgroup_segments[1] != guest
+            || cgroup_segments[1] != zone.as_str()
+            || cgroup_segments[2] != guest
+            || cgroup_segments[3] != "cloud-hypervisor"
+            || cgroup_segments
+                .iter()
+                .any(|segment| segment.is_empty() || matches!(*segment, "." | ".."))
         {
             return Err(Error::manifest_parse_error(
                 "artifact-catalog.json",
@@ -5407,7 +5450,7 @@ fn load_guest_vmm_intents(
                 "Guest VMM intent does not carry a complete Cloud Hypervisor argv",
             ));
         }
-        let key = (zone.to_owned(), guest.to_owned());
+        let key = (zone.as_str().to_owned(), guest.to_owned());
         if intents.contains_key(&key) {
             return Err(Error::manifest_parse_error(
                 "artifact-catalog.json",
@@ -5415,7 +5458,7 @@ fn load_guest_vmm_intents(
             ));
         }
         let intent = ResolvedRunnerIntent {
-            intent_id: intent_id_runner(guest, "cloud-hypervisor"),
+            intent_id: intent_id_runner(&zone, guest, "cloud-hypervisor"),
             vm_name: guest.to_owned(),
             execution_ref: execution_ref.to_canonical_string(),
             owner_ref: None,
@@ -6995,7 +7038,7 @@ mod tests {
     #[test]
     fn closure_identity_uses_toplevel_basename() {
         let intent = ResolvedStoreViewIntent {
-            intent_id: intent_id_store_view("corp-vm"),
+            intent_id: intent_id_legacy_store_view("corp-vm"),
             vm: "corp-vm".to_owned(),
             generation: 42,
             hardlink_farm_path: PathBuf::from("/var/lib/d2b/vms/corp-vm/store-view"),
@@ -7958,7 +8001,7 @@ mod tests {
                     "stateDir": "/var/lib/d2b/zones/work/guests/guest",
                     "deviceBinds": ["/dev/kvm", "/dev/vhost-net"],
                     "profileId": "ch-guest",
-                    "cgroupSubtree": "d2b.slice/guest/cloud-hypervisor"
+                    "cgroupSubtree": "d2b.slice/work/guest/cloud-hypervisor"
                 }
             }]
         });
@@ -7984,7 +8027,10 @@ mod tests {
         assert!(!process_template_name_matches(intent, "cloud-hypervisor"));
         let store_intents = load_guest_store_view_intents(&catalog).expect("store-view intent");
         let store_intent = store_intents
-            .get(&intent_id_store_view("guest"))
+            .get(&intent_id_store_view(
+                &ZoneId::parse("work").unwrap(),
+                "guest",
+            ))
             .expect("Guest store-view intent");
         assert_eq!(
             store_intent.hardlink_farm_path,
@@ -7994,6 +8040,116 @@ mod tests {
             store_intent.target_view_path,
             PathBuf::from("/var/lib/d2b/zones/work/guests/guest/store-view/live/guest-system")
         );
+    }
+
+    #[test]
+    fn catalog_same_named_guests_keep_store_views_runners_and_cgroups_distinct() {
+        let descriptor_digest =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let descriptors = BTreeMap::from([
+            (
+                ("work".to_owned(), "desktop".to_owned()),
+                serde_json::to_vec(&serde_json::json!({
+                    "descriptorDigest": descriptor_digest,
+                    "systemArtifactId": "desktop-system"
+                }))
+                .expect("work descriptor"),
+            ),
+            (
+                ("personal".to_owned(), "desktop".to_owned()),
+                serde_json::to_vec(&serde_json::json!({
+                    "descriptorDigest": descriptor_digest,
+                    "systemArtifactId": "desktop-system"
+                }))
+                .expect("personal descriptor"),
+            ),
+        ]);
+        let guest_closure = |zone: &str, zone_uid: &str| {
+            serde_json::json!({
+                "zone": zone,
+                "guest": "desktop",
+                "artifactId": "desktop-system",
+                "toplevel": format!("/nix/store/{zone}-desktop-system"),
+                "closurePaths": [format!("/nix/store/{zone}-desktop-system")],
+                "dbDumpPath": format!("/nix/store/{zone}-desktop-registration"),
+                "storeView": {
+                    "root": format!("/var/lib/d2b/zones/{zone}/guests/desktop/store-view")
+                },
+                "vmm": {
+                    "zoneUid": zone_uid,
+                    "descriptorDigest": descriptor_digest,
+                    "executionRef": "Host/host-system",
+                    "binaryPath": "/nix/store/cloud-hypervisor/bin/cloud-hypervisor",
+                    "argv": [
+                        "microvm@desktop",
+                        "--kernel", format!("/nix/store/{zone}-desktop-system/kernel"),
+                        "--initramfs", format!("/nix/store/{zone}-desktop-system/initrd"),
+                        "--cmdline", format!("init=/nix/store/{zone}-desktop-system/init"),
+                        "--api-socket",
+                        format!("/var/lib/d2b/zones/{zone}/guests/desktop/desktop.sock")
+                    ],
+                    "uid": 50001,
+                    "gid": 50001,
+                    "stateDir": format!("/var/lib/d2b/zones/{zone}/guests/desktop"),
+                    "deviceBinds": ["/dev/kvm", "/dev/vhost-net"],
+                    "profileId": format!("ch-{zone}-desktop"),
+                    "cgroupSubtree": format!("d2b.slice/{zone}/desktop/cloud-hypervisor")
+                }
+            })
+        };
+        let catalog = serde_json::json!({
+            "guestClosures": [
+                guest_closure("work", "123e4567-e89b-42d3-a456-426614174000"),
+                guest_closure("personal", "223e4567-e89b-42d3-a456-426614174001")
+            ]
+        });
+
+        let store_intents =
+            load_guest_store_view_intents(&catalog).expect("zone-qualified store-view intents");
+        let work_zone = ZoneId::parse("work").expect("work Zone");
+        let personal_zone = ZoneId::parse("personal").expect("personal Zone");
+        let work_store = store_intents
+            .get(&intent_id_store_view(&work_zone, "desktop"))
+            .expect("work desktop store view");
+        let personal_store = store_intents
+            .get(&intent_id_store_view(&personal_zone, "desktop"))
+            .expect("personal desktop store view");
+        assert_ne!(work_store.intent_id, personal_store.intent_id);
+        assert_ne!(
+            work_store.hardlink_farm_path,
+            personal_store.hardlink_farm_path
+        );
+
+        let (runner_intents, zone_uids) =
+            load_guest_vmm_intents(&catalog, &descriptors).expect("zone-qualified VMM intents");
+        let work_key = ("work".to_owned(), "desktop".to_owned());
+        let personal_key = ("personal".to_owned(), "desktop".to_owned());
+        let work_runner = runner_intents.get(&work_key).expect("work desktop runner");
+        let personal_runner = runner_intents
+            .get(&personal_key)
+            .expect("personal desktop runner");
+        assert_eq!(
+            work_runner.intent_id,
+            intent_id_runner(&work_zone, "desktop", "cloud-hypervisor")
+        );
+        assert_eq!(
+            personal_runner.intent_id,
+            intent_id_runner(&personal_zone, "desktop", "cloud-hypervisor")
+        );
+        assert_ne!(work_runner.intent_id, personal_runner.intent_id);
+        assert_eq!(
+            work_runner.cgroup_placement.subtree,
+            "d2b.slice/work/desktop/cloud-hypervisor"
+        );
+        assert_eq!(
+            personal_runner.cgroup_placement.subtree,
+            "d2b.slice/personal/desktop/cloud-hypervisor"
+        );
+        assert_ne!(
+            work_runner.cgroup_placement.subtree,
+            personal_runner.cgroup_placement.subtree
+        );
+        assert_ne!(zone_uids.get(&work_key), zone_uids.get(&personal_key));
     }
 
     // v1.2 swtpm broker-pre-NS extension.

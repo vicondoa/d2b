@@ -4723,7 +4723,7 @@ impl ZoneResourceRuntime {
             ResourceRuntimeError::ProviderPathUnavailable
         })?;
         let intent = resolver
-            .find_store_view_intent(guest_ref.name().as_str())
+            .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
             .ok_or_else(|| {
                 tracing::warn!("Cloud Hypervisor setup Volume store-view intent is unavailable");
                 ResourceRuntimeError::ProviderPathUnavailable

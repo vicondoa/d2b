@@ -102,8 +102,8 @@ it from one place:
   enumerated in `d2b-host::DeviceClass`; otherwise it runs with
   the empty capability bounding set).
 - No threaded cgroups, no partition roots, and no internal processes
-  in the slice's interior nodes. Per-VM
-  `d2b.slice/<vm>/<role>` leaves are the only fork/exec
+  in the slice's interior nodes. Zone/Guest-qualified
+  `d2b.slice/<zone>/<guest>/<role>` leaves are the only fork/exec
   destinations.
 - Teardown uses **broker-mediated `CgroupKill`** (v1.1-P10 op
   per [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)

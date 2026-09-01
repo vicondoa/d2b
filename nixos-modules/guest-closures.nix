@@ -179,7 +179,7 @@ let
       gid = d2bLib.stablePrincipalId principal;
       profileId = "ch-${builtins.substring 0 16 profileHash}";
       cgroupSubtree =
-        "d2b.slice/${row.guestName}/cloud-hypervisor";
+        "d2b.slice/${row.zoneName}/${row.guestName}/cloud-hypervisor";
     };
 
   closureArtifact = row:

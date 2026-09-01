@@ -18,8 +18,8 @@
 //!    any caller passes the partition-root key into the writer; releases
 //!    fail closed by returning [`CgroupError::CgroupPartitionRootForbidden`].
 //! 6. Threaded cgroups are forbidden - `cgroup.type=threaded` is refused.
-//! 7. `d2b.slice` and intermediate VM cgroup directories must be
-//!    process-free; only leaf role cgroups carry processes.
+//! 7. `d2b.slice` and intermediate Zone/Guest cgroup directories must
+//!    be process-free; only leaf role cgroups carry processes.
 //! 8. `cgroup.kill` is allowed only on broker/daemon-owned VM or role leaves;
 //!    ancestor `cgroup.kill` is refused with
 //!    [`CgroupError::CgroupKillOnAncestorRefused`].
@@ -638,23 +638,61 @@ pub fn create_vm_subtree<B: CgroupBackend>(
     d2bd_uid: u32,
     d2bd_gid: u32,
 ) -> Result<PathBuf, CgroupError> {
-    if vm_id.is_empty() || vm_id.contains('/') || vm_id.contains('\0') {
+    create_cgroup_path(backend, slice, &[vm_id], d2bd_uid, d2bd_gid, false)
+}
+
+/// Create a process-free hierarchy of cgroup interiors below `slice` and
+/// return its final directory. The last segment is the process-bearing leaf;
+/// every preceding segment enables the delegated controllers and must remain
+/// process-free.
+pub fn create_nested_subtree<B: CgroupBackend>(
+    backend: &B,
+    slice: &Path,
+    segments: &[&str],
+    d2bd_uid: u32,
+    d2bd_gid: u32,
+) -> Result<PathBuf, CgroupError> {
+    create_cgroup_path(backend, slice, segments, d2bd_uid, d2bd_gid, true)
+}
+
+fn create_cgroup_path<B: CgroupBackend>(
+    backend: &B,
+    slice: &Path,
+    segments: &[&str],
+    d2bd_uid: u32,
+    d2bd_gid: u32,
+    final_is_leaf: bool,
+) -> Result<PathBuf, CgroupError> {
+    if segments.is_empty()
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || segment.contains('/')
+                || segment.contains('\0')
+                || matches!(*segment, "." | "..")
+        })
+    {
         return Err(CgroupError::Io {
-            detail: format!("invalid vm_id: {vm_id:?}"),
+            detail: "invalid cgroup subtree segment".to_owned(),
         });
     }
-    // v1.1.1: per-VM intermediate is `<slice>/<vm_id>/`, NOT
-    // `<slice>/<vm_id>.scope`. The intermediate stays
-    // process-free; per-role leaves under it hold the processes.
-    let vm = slice.join(vm_id);
-    if !backend.exists(&vm) {
-        backend.mkdir(&vm)?;
+
+    let mut cursor = slice.to_path_buf();
+    for (index, segment) in segments.iter().enumerate() {
+        cursor.push(segment);
+        if !backend.exists(&cursor) {
+            backend.mkdir(&cursor)?;
+        }
+        assert_not_threaded(backend, &cursor)?;
+        let is_leaf = final_is_leaf && index + 1 == segments.len();
+        if !is_leaf {
+            enable_subtree_controllers(backend, &cursor, Controller::ENABLE_ORDER)?;
+        }
+        chown_subtree_to_d2bd(backend, &cursor, d2bd_uid, d2bd_gid)?;
+        if !is_leaf {
+            assert_no_internal_processes(backend, &cursor)?;
+        }
     }
-    assert_not_threaded(backend, &vm)?;
-    enable_subtree_controllers(backend, &vm, Controller::ENABLE_ORDER)?;
-    chown_subtree_to_d2bd(backend, &vm, d2bd_uid, d2bd_gid)?;
-    assert_no_internal_processes(backend, &vm)?;
-    Ok(vm)
+    Ok(cursor)
 }
 
 /// v1.1.1 per-role leaf cgroup creation. Creates
@@ -669,23 +707,7 @@ pub fn create_vm_role_leaf<B: CgroupBackend>(
     d2bd_uid: u32,
     d2bd_gid: u32,
 ) -> Result<PathBuf, CgroupError> {
-    if role_id.is_empty() || role_id.contains('/') || role_id.contains('\0') {
-        return Err(CgroupError::Io {
-            detail: format!("invalid role_id: {role_id:?}"),
-        });
-    }
-    let vm_dir = create_vm_subtree(backend, slice, vm_id, d2bd_uid, d2bd_gid)?;
-    let leaf = vm_dir.join(role_id);
-    if !backend.exists(&leaf) {
-        backend.mkdir(&leaf)?;
-    }
-    assert_not_threaded(backend, &leaf)?;
-    // Per-role leaves DON'T enable subtree_controllers further
-    // (they're the leaf - no descendants need controllers
-    // enabled at this layer); chown so d2bd can write
-    // cgroup.procs / cgroup.kill.
-    chown_subtree_to_d2bd(backend, &leaf, d2bd_uid, d2bd_gid)?;
-    Ok(leaf)
+    create_nested_subtree(backend, slice, &[vm_id, role_id], d2bd_uid, d2bd_gid)
 }
 
 // ---------------------------------------------------------------------------

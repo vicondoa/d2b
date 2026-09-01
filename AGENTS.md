@@ -226,7 +226,7 @@ Read the relevant section before changing any of these:
   NetworkManager. systemd-networkd is detection-only. Foreign markers fail
   closed and never authorize overwrite.
 - Do not mutate d2b cgroups outside delegation: use
-  `/sys/fs/cgroup/d2b.slice/<vm>/<role>/` leaves, no threaded groups,
+  `/sys/fs/cgroup/d2b.slice/<zone>/<guest>/<role>/` leaves, no threaded groups,
   partition roots, `cpuset.cpus.partition`, parent `cgroup.kill`, or root
   chown; only the broker owns delegated root mutation after privilege drop.
 - Do not commit or attach unredacted screenshots. Remove secrets, credentials,

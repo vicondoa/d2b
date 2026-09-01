@@ -95,10 +95,11 @@ opaque_id! {
 opaque_id! {
     /// Opaque identifier for a per-VM store-view closure intent row
     /// (resolved against `BundleResolver::find_store_view_intent`
-    /// keyed by VM).
+    /// keyed by Zone and VM).
     /// The daemon never names raw `/nix/store` closure paths on
     /// the wire - only this reference. Canonical form is the
-    /// `intent_id_store_view(vm)` string (`"store-view:vm:<vm>"`).
+    /// `intent_id_store_view(zone, vm)` string
+    /// (`"store-view:zone:<zone>:vm:<vm>"`).
     BundleClosureRef
 }
 

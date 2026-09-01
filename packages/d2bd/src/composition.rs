@@ -91,11 +91,11 @@ use d2b_core::allocator_config::AllocatorZoneTopology;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_installer_host,
-    intent_id_keys_rotate, intent_id_migrate_host, intent_id_network_bridge_uids,
-    intent_id_network_hosts_uids, intent_id_network_projection_uids, intent_id_network_route_uids,
-    intent_id_network_sysctl_uids, intent_id_nft_host, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_runner, intent_id_trust, intent_id_usbip_bind,
-    intent_id_usbip_firewall,
+    intent_id_keys_rotate, intent_id_legacy_runner, intent_id_migrate_host,
+    intent_id_network_bridge_uids, intent_id_network_hosts_uids, intent_id_network_projection_uids,
+    intent_id_network_route_uids, intent_id_network_sysctl_uids, intent_id_nft_host,
+    intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_trust,
+    intent_id_usbip_bind, intent_id_usbip_firewall,
 };
 use d2b_core::closures::ClosureMetadata;
 use d2b_core::error::BundleError;
@@ -11555,7 +11555,7 @@ fn ensure_usbipd_env_ready_for_attach(
         vm,
         env,
         intent_id_usbip_bind(env, vm, bus_id),
-        intent_id_runner(vm, "usbip"),
+        intent_id_legacy_runner(vm, "usbip"),
         format!("{env}:{bus_id}").as_bytes(),
     )
     .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
@@ -17545,7 +17545,7 @@ impl VmStartRunner<'_> {
         if node.role == ProcessRole::CloudHypervisorRunner {
             return Ok(VmRunnerLaunch::ControllerOwned);
         }
-        let intent_id = intent_id_runner(vm, &node.id.0);
+        let intent_id = intent_id_legacy_runner(vm, &node.id.0);
         let intent = self
             .resolver
             .find_runner_intent(&intent_id)
@@ -27953,13 +27953,12 @@ mod broker_dispatch_tests {
             .expect("bare VM name resolves store-view intent");
         assert_eq!(
             intent.intent_id,
-            d2b_core::bundle_resolver::intent_id_store_view("vm-a")
+            d2b_core::bundle_resolver::intent_id_legacy_store_view("vm-a")
         );
-        assert!(
-            resolver
-                .find_store_view_intent(&d2b_core::bundle_resolver::intent_id_store_view("vm-a"))
-                .is_none(),
-            "passing a pre-wrapped store-view id double-wraps and must not be used"
+        assert_eq!(
+            resolver.find_store_view_intent(&intent.intent_id),
+            Some(intent),
+            "store-view lookup accepts the already-qualified intent id"
         );
 
         let _ = fs::remove_dir_all(&root);

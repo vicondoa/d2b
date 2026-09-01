@@ -186,8 +186,8 @@ pub enum BrokerRequest {
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
     PrepareStoreView(PrepareStoreViewRequest),
-    /// Typed broker op that hardlink-farms a VM's resolved closure into
-    /// `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the
+    /// Typed broker op that hardlink-farms a Guest's resolved closure into
+    /// its Zone-qualified store view and atomically swaps the
     /// `current` symlink. Replaces the retired per-VM
     /// `d2b-<vm>-store-sync.service` bash oneshot. The daemon names
     /// only the opaque `bundle_closure_ref` + `vm_id` + expected
@@ -730,7 +730,7 @@ impl BrokerRequest {
                 format!("{}:{}", self.op_name(), request.vm_id),
             ),
             Self::StoreSync(request) => (
-                request.vm_id.to_string(),
+                request.bundle_closure_ref.to_string(),
                 format!(
                     "{}:{}:{}:{}",
                     self.op_name(),
@@ -2681,8 +2681,9 @@ pub struct PrepareStoreViewRequest {
 }
 
 /// Store-sync request. The broker resolves the closure intent row from
-/// the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref`
-/// does not match. The broker also
+/// the opaque `bundle_closure_ref`, verifies that it belongs to the
+/// plain `vm_id`, and refuses the op if either identity does not match.
+/// The broker also
 /// refuses if the wire-supplied `generation_token` does not match the
 /// bundle's resolved generation. The token is a content-derived stable
 /// equality value (see `closures-json.nix`), not a monotonic counter:

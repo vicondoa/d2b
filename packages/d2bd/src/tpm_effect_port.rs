@@ -161,7 +161,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
     }
 
     fn runner_intent(&self, role: &str) -> Result<BundleOpId, TpmEffectError> {
-        let intent_id = crate::intent_id_runner(self.vm_id.as_str(), role);
+        let intent_id = crate::intent_id_legacy_runner(self.vm_id.as_str(), role);
         self.resolver
             .find_runner_intent(&intent_id)
             .map(|intent| BundleOpId::new(intent.intent_id.clone()))

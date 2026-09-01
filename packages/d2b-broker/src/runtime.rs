@@ -2377,6 +2377,7 @@ fn dispatch_request_with_request_fds(
     let backend = LiveDispatchBackend {
         daemon_uid: config.d2bd_uid,
         daemon_gid: config.d2bd_gid,
+        state_dir: config.state_dir.clone(),
     };
     dispatch_request_with_backend_and_request_fds(
         request,
@@ -2434,7 +2435,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
     mut request_fds: Vec<OwnedFd>,
 ) -> Result<DispatchResult, BrokerError> {
     use d2b_contracts_broker::broker_wire::BrokerRequest as RealBrokerRequest;
-    use d2b_core::bundle_resolver::intent_id_runner;
+    use d2b_core::bundle_resolver::intent_id_legacy_runner;
     let bundle_metadata = audit_bundle_metadata(resolver.map(std::sync::Arc::as_ref));
     macro_rules! write_decision_op_record {
         ($($args:tt)*) => {
@@ -4200,7 +4201,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     console_fd_index,
                 },
             );
-            let _ = intent_id_runner;
+            let _ = intent_id_legacy_runner;
             let mut response_fds = Vec::with_capacity(1 + outcome.extra_response_fds.len());
             response_fds.push(outcome.pidfd);
             response_fds.extend(outcome.extra_response_fds);
@@ -5205,12 +5206,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::PrepareStoreView(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent = resolver.find_store_view_intent(&vm_name).ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
+            let intent = resolver
+                .find_legacy_store_view_intent(&vm_name)
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
                     kind: "store-view",
                     intent_id: vm_name.clone(),
-                }
-            })?;
+                })?;
             let outcome = backend.prepare_store_view(intent)?;
             write_success_op_record!(
                 audit_log,
@@ -5241,18 +5242,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::StoreSync(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent = resolver.find_store_view_intent(&vm_name).ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
-                    kind: "store-sync-closure",
-                    intent_id: vm_name.clone(),
-                }
-            })?;
-            if intent.intent_id != req.bundle_closure_ref.as_str() {
-                return Err(BrokerError::BundleIntentMissing {
+            let intent = resolver
+                .find_store_view_intent(req.bundle_closure_ref.as_str())
+                .filter(|intent| intent.vm == vm_name)
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
                     kind: "store-sync-closure",
                     intent_id: req.bundle_closure_ref.as_str().to_owned(),
-                });
-            }
+                })?;
             let started = std::time::Instant::now();
             let result =
                 crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token);
@@ -5387,7 +5383,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::StoreVerify(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let response = if let Some(intent) = resolver.find_store_view_intent(&vm_name) {
+            let response = if let Some(intent) = resolver.find_legacy_store_view_intent(&vm_name) {
                 let initial =
                     crate::ops::store_verify::run_store_verify_read_only(intent, req.repair);
                 if req.repair
@@ -5661,12 +5657,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     req.vm, intent.vm,
                 )));
             }
-            let store_view_intent = resolver.find_store_view_intent(&req.vm).ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
-                    kind: "store-view",
-                    intent_id: req.vm.clone(),
-                }
-            })?;
+            let store_view_intent =
+                resolver
+                    .find_legacy_store_view_intent(&req.vm)
+                    .ok_or_else(|| BrokerError::BundleIntentMissing {
+                        kind: "store-view",
+                        intent_id: req.vm.clone(),
+                    })?;
             let outcome = backend.run_activation(intent, store_view_intent, req.phase, req.mode)?;
             write_success_op_record!(
                 audit_log,
@@ -5896,14 +5893,14 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::SetupMountNamespace(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let store_view_intent = resolver.find_store_view_intent(&vm_name).ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
+            let store_view_intent = resolver
+                .find_legacy_store_view_intent(&vm_name)
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
                     kind: "store-view",
                     intent_id: vm_name.clone(),
-                }
-            })?;
+                })?;
             let runner_intent_id =
-                d2b_core::bundle_resolver::intent_id_runner(&vm_name, req.role_id.as_str());
+                d2b_core::bundle_resolver::intent_id_legacy_runner(&vm_name, req.role_id.as_str());
             resolver
                 .find_runner_intent(&runner_intent_id)
                 .ok_or_else(|| BrokerError::BundleIntentMissing {
@@ -6209,11 +6206,19 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         RealBrokerRequest::BindMountFromHardlinkFarm(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent = resolver.find_store_view_intent(&vm_name).ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
-                    kind: "store-view",
-                    intent_id: vm_name.clone(),
-                }
+            let intent = if let Some(intent_ref) = req.bundle_store_view_intent_ref.as_ref() {
+                resolver
+                    .find_store_view_intent(intent_ref.as_str())
+                    .filter(|intent| intent.vm == vm_name)
+            } else {
+                resolver.find_legacy_store_view_intent(&vm_name)
+            }
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "store-view",
+                intent_id: req
+                    .bundle_store_view_intent_ref
+                    .as_ref()
+                    .map_or_else(|| vm_name.clone(), |id| id.as_str().to_owned()),
             })?;
             write_success_op_record!(
                 audit_log,
@@ -7068,7 +7073,7 @@ fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
         "ch-runner" => "cloud-hypervisor",
         other => other,
     };
-    d2b_core::bundle_resolver::intent_id_runner(vm_id, process_role_id)
+    d2b_core::bundle_resolver::intent_id_legacy_runner(vm_id, process_role_id)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8018,6 +8023,7 @@ trait DispatchBackend {
 struct LiveDispatchBackend {
     daemon_uid: u32,
     daemon_gid: u32,
+    state_dir: PathBuf,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8460,6 +8466,7 @@ impl DispatchBackend for LiveDispatchBackend {
             preopened.child_fds,
             request_fds,
             req.activation_input.as_ref(),
+            &self.state_dir,
         )
         .map_err(|err| {
             // Log the actual LiveHandlerError detail before wrapping it
@@ -9909,7 +9916,7 @@ fn usbip_backend_runner_intent<'a>(
     resolver: &'a Arc<BundleResolver>,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
 ) -> Result<&'a d2b_core::bundle_resolver::ResolvedRunnerIntent, BrokerError> {
-    let runner_id = d2b_core::bundle_resolver::intent_id_runner(
+    let runner_id = d2b_core::bundle_resolver::intent_id_legacy_runner(
         &format!("sys-{}-usbipd", intent.env),
         "backend",
     );
@@ -9930,7 +9937,7 @@ fn explicit_usbip_backend_uid(
     env: &str,
 ) -> Result<u32, BrokerError> {
     let runner_id =
-        d2b_core::bundle_resolver::intent_id_runner(&format!("sys-{env}-usbipd"), "backend");
+        d2b_core::bundle_resolver::intent_id_legacy_runner(&format!("sys-{env}-usbipd"), "backend");
     resolver
         .find_runner_intent(&runner_id)
         .map(|r| r.uid)
@@ -10907,20 +10914,38 @@ fn private_cgroup_placement(
     let components = Path::new(&placement.subtree)
         .components()
         .collect::<Vec<_>>();
-    if components.len() < 3
-        || !matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
-        || !matches!(components[1], std::path::Component::Normal(value) if value == vm_name)
-        || components
-            .iter()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    if components
+        .iter()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        || !matches!(
+            components.first(),
+            Some(std::path::Component::Normal(value)) if *value == "d2b.slice"
+        )
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "cgroup_commitment",
             requested: placement.subtree.clone(),
-            resolved: "d2b.slice/vm/role".to_owned(),
+            resolved: "d2b.slice/<zone>/<guest>/<role>".to_owned(),
         });
     }
-    let role_path = components[2..]
+    let segment = |index: usize| {
+        components.get(index).and_then(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+    };
+    let role_start = if components.len() >= 4 && segment(2) == Some(vm_name) {
+        3
+    } else if components.len() >= 3 && segment(1) == Some(vm_name) {
+        2
+    } else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "cgroup_commitment",
+            requested: placement.subtree.clone(),
+            resolved: "d2b.slice/<zone>/<guest>/<role>".to_owned(),
+        });
+    };
+    let role_path = components[role_start..]
         .iter()
         .filter_map(|component| match component {
             std::path::Component::Normal(value) => value.to_str(),
@@ -10932,7 +10957,7 @@ fn private_cgroup_placement(
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "cgroup_commitment",
             requested: placement.subtree.clone(),
-            resolved: "d2b.slice/vm/role".to_owned(),
+            resolved: "d2b.slice/<zone>/<guest>/<role>".to_owned(),
         });
     }
     let mut private = placement.clone();
@@ -14481,7 +14506,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn broker_bundle_load_sees_rewritten_processes_without_restart() {
-        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
+        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_legacy_runner};
         use d2b_core::minijail_profile::{CgroupPlacement, WritablePath};
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
         use d2b_core::test_support::RoleProfileBuilder;
@@ -14494,7 +14519,7 @@ mod tests {
             BundleSlot::Loaded(resolver) => resolver,
             other => panic!("initial bundle should load, got {other:?}"),
         };
-        let video_intent = intent_id_runner("corp-vm", "video");
+        let video_intent = intent_id_legacy_runner("corp-vm", "video");
         assert!(
             first.find_runner_intent(&video_intent).is_none(),
             "fixture starts without a video runner"
@@ -14757,6 +14782,25 @@ mod tests {
             .expect("private cgroup placement");
         assert_ne!(first.subtree, second.subtree);
         assert!(!first.subtree.contains("corp-vm"));
+        assert!(first.subtree.starts_with("d2b.slice/process-"));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn typed_zone_guest_cgroup_scope_is_private_and_collision_safe() {
+        let placement = d2b_core::minijail_profile::CgroupPlacement {
+            subtree: "d2b.slice/work/desktop/cloud-hypervisor".to_owned(),
+            controllers: vec!["cpu".to_owned()],
+            delegated: false,
+        };
+        let first = private_cgroup_placement(&placement, "desktop", Some([1; 32]), true)
+            .expect("private Zone/Guest cgroup placement");
+        let second = private_cgroup_placement(&placement, "desktop", Some([2; 32]), true)
+            .expect("private Zone/Guest cgroup placement");
+        assert_ne!(first.subtree, second.subtree);
+        assert!(!first.subtree.contains("work"));
+        assert!(!first.subtree.contains("desktop"));
+        assert!(first.subtree.ends_with("/cloud-hypervisor"));
         assert!(first.subtree.starts_with("d2b.slice/process-"));
     }
 
@@ -15714,9 +15758,9 @@ mod tests {
         };
         use d2b_core::bundle_resolver::{
             intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-            intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
-            intent_id_nft_host, intent_id_nm_unmanaged_host, intent_id_rotate_known_host,
-            intent_id_route_env, intent_id_runner, intent_id_sysctl, intent_id_trust,
+            intent_id_installer_host, intent_id_keys_rotate, intent_id_legacy_runner,
+            intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
+            intent_id_rotate_known_host, intent_id_route_env, intent_id_sysctl, intent_id_trust,
             intent_id_usbip_firewall,
         };
 
@@ -16190,7 +16234,10 @@ mod tests {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
-                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_legacy_runner(
+                    "corp-vm",
+                    "ch-runner",
+                )),
                 runtime_allocations: vec![RunnerAllocation {
                     kind: RunnerAllocationKind::VsockCid,
                     opaque_ref: "cid:42".to_owned(),
@@ -16200,7 +16247,7 @@ mod tests {
             }),
             "SpawnRunner",
             OperationFields::SpawnRunner {
-                bundle_runner_intent_ref: intent_id_runner("corp-vm", "ch-runner"),
+                bundle_runner_intent_ref: intent_id_legacy_runner("corp-vm", "ch-runner"),
                 vm_id: "corp-vm".to_owned(),
                 role_id: "ch-runner".to_owned(),
                 role: RunnerRole::CloudHypervisor.as_str().to_owned(),
@@ -16642,7 +16689,7 @@ mod tests {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_core::bundle_resolver::intent_id_runner;
+        use d2b_core::bundle_resolver::intent_id_legacy_runner;
 
         let root = test_audit_dir("spawn-runner-invalid-minijail");
         let bundle = build_invalid_minijail_test_bundle(&root);
@@ -16681,7 +16728,10 @@ mod tests {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
-                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_legacy_runner(
+                    "corp-vm",
+                    "ch-runner",
+                )),
                 runtime_allocations: vec![RunnerAllocation {
                     kind: RunnerAllocationKind::VsockCid,
                     opaque_ref: "cid:42".to_owned(),
@@ -16730,7 +16780,7 @@ mod tests {
         assert_eq!(
             fields,
             OperationFields::SpawnRunner {
-                bundle_runner_intent_ref: intent_id_runner("corp-vm", "ch-runner"),
+                bundle_runner_intent_ref: intent_id_legacy_runner("corp-vm", "ch-runner"),
                 vm_id: "corp-vm".to_owned(),
                 role_id: "ch-runner".to_owned(),
                 role: RunnerRole::CloudHypervisor.as_str().to_owned(),
@@ -16817,11 +16867,11 @@ mod tests {
     ) -> d2b_contracts_broker::broker_wire::BrokerRequest {
         use d2b_contracts::types::{BundleClosureRef, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{BrokerRequest, StoreSyncRequest};
-        use d2b_core::bundle_resolver::intent_id_store_view;
+        use d2b_core::bundle_resolver::intent_id_legacy_store_view;
 
         BrokerRequest::StoreSync(StoreSyncRequest {
             vm_id: VmId::new("corp-vm"),
-            bundle_closure_ref: BundleClosureRef::new(intent_id_store_view("corp-vm")),
+            bundle_closure_ref: BundleClosureRef::new(intent_id_legacy_store_view("corp-vm")),
             generation_token,
             tracing_span_id: Some(TracingSpanId::new("span-store-sync")),
         })
@@ -17357,7 +17407,7 @@ mod tests {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_core::bundle_resolver::intent_id_runner;
+        use d2b_core::bundle_resolver::intent_id_legacy_runner;
 
         let root = test_audit_dir("spawn-runner-otel-host-bridge-wrong-vm");
         let bundle = build_test_bundle(&root);
@@ -17399,7 +17449,10 @@ mod tests {
                 // it as an OtelHostBridge spawn - closed-set
                 // validation must refuse because corp-vm != "obs".
                 role: RunnerRole::OtelHostBridge,
-                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_legacy_runner(
+                    "corp-vm",
+                    "ch-runner",
+                )),
                 runtime_allocations: vec![RunnerAllocation {
                     kind: RunnerAllocationKind::VsockCid,
                     opaque_ref: "cid:42".to_owned(),
@@ -17452,7 +17505,7 @@ mod tests {
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
+        use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_legacy_runner};
         use d2b_core::minijail_profile::{CgroupPlacement, WritablePath};
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
         use d2b_core::test_support::RoleProfileBuilder;
@@ -17519,7 +17572,7 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
+        let intent_ref = intent_id_legacy_runner("corp-vm", "otel-host-bridge");
         let request =
             BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
                 execution_ref: None,
