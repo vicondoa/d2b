@@ -4613,6 +4613,7 @@ mod tests {
             resource_uid: None,
             zone_uid: None,
             owner_ref: None,
+            owner_uid: None,
             provider_ref: None,
             bundle_content_identity: None,
             provider_identity: None,
