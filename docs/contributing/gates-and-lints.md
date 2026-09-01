@@ -134,9 +134,15 @@ make test-nix-unit
 make test-policy
 make test-drift
 make test-fixture-contracts
+make generate
 make test-unit
 make check
 ```
+
+Use `make generate` before committing changes to generated schemas, docs,
+completions, protocol bindings, Nix resource outputs, or policy inputs. The
+target runs `//packages/xtask:generate` with the explicit local Bazel profile;
+ordinary `make check` remains on the repository-default remote profile.
 
 Bare developer Bazel commands and public Make aliases use the BuildBuddy
 `remote` profile by default through `.bazelrc`; Make passes an explicit

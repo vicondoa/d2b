@@ -68,5 +68,6 @@ test_suite(
         ":drift",
         ":policy",
         "//packages/xtask:pr_workflow",
+        "//packages/xtask:repository_contract",
     ],
 )

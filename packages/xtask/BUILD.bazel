@@ -4,7 +4,11 @@ load(
     "rust_binary",
     "rust_test",
 )
-load(":generated_artifact_check.bzl", "generated_artifact_check")
+load(
+    ":generated_artifact_check.bzl",
+    "generated_artifact_check",
+    "generated_artifact_generator",
+)
 
 exports_files(
     ["BUILD.bazel"],
@@ -130,6 +134,16 @@ generated_artifact_check(
     name = "gen_semantic_service_schemas_drift",
     command = "gen-semantic-service-schemas",
     data = ["//:generated_semantic_service_schemas"],
+)
+
+generated_artifact_generator(
+    name = "generate",
+    data = [
+        "//:docs_workspace_sources",
+        "//:nixos_modules_workspace_sources",
+        "//:packages_workspace_sources",
+        "//:policy_inputs_workspace_sources",
+    ],
 )
 
 test_suite(
@@ -296,6 +310,20 @@ rust_test(
     name = "pr_workflow",
     srcs = ["tests/pr_workflow.rs"],
     data = ["//:.github/workflows/pr-l1-static-fast.yml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "repository_contract",
+    srcs = ["tests/repository_contract.rs"],
+    data = [
+        "//:BUILD.bazel",
+        "//:Makefile",
+        "//:.github/PULL_REQUEST_TEMPLATE.md",
+        "//packages/xtask:BUILD.bazel",
+        "//packages/xtask:generated_artifact_check.bzl",
+        "//packages/xtask:src/main.rs",
+    ],
     visibility = ["//visibility:public"],
 )
 

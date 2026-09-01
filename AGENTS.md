@@ -126,7 +126,8 @@ settings or claim atomic base binding.
   the required gates when the owning workflow calls for them. Read
   [`tests/AGENTS.md`](./tests/AGENTS.md) before changing test coverage.
 - Use the top-level Makefile and existing gates: `make check` is the aggregate,
-  `make test-unit` is the Layer-1 development umbrella, and
+  `make test-unit` is the Layer-1 development umbrella, and `make generate`
+  regenerates committed artifacts through the local Bazel profile.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
@@ -151,6 +152,11 @@ runs the same suite graph through the explicit local profile with no BuildBuddy
 credential. Make aliases are thin facade entry points, while Cargo manifests
 and lockfiles remain rules_rs metadata authority rather than contributor
 workflow entry points.
+
+`make generate` is the sole aggregate entrypoint for committed schemas, docs,
+completions, protocol bindings, Nix resource outputs, and policy inputs. It
+invokes `//packages/xtask:generate` with `--config=local`; ordinary `make check`
+and `make test-*` aliases retain the repository-default remote profile.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

@@ -12,6 +12,17 @@ The normal entry point is:
 make check
 ```
 
+To update committed generated artifacts, use the local-only aggregate:
+
+```bash
+make generate
+```
+
+This runs `bazel run --config=local //packages/xtask:generate` for schemas,
+docs, completions, protocol bindings, Nix resource outputs, and policy inputs.
+It is intentionally separate from `make check`, whose default profile remains
+the BuildBuddy `remote` profile.
+
 Run any public `make check*` or `make test*` alias directly from a
 Nix-enabled host. The Makefile detects the pinned d2b shell contract and
 re-enters `nix develop --no-write-lock-file .#bazel` exactly once when the

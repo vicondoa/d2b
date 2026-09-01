@@ -78,30 +78,17 @@ Generated CLI/API reference artifacts must be regenerated locally
 before committing whenever you touch the corresponding Rust types,
 `clap` surface, or prose companion docs.
 
-**xtask subcommands** (run them through the focused shell):
-
-- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-schemas`
-- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-error-codes`
-- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts`
-- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-daemon-api`
-
-**Drift gates**
-
-- `bash tests/cli-json-drift.sh`
-- `bash tests/error-codes-drift.sh`
-- `bash tests/manpage-completion-drift.sh`
-- `bash tests/daemon-api-drift.sh`
-- `bash tests/cli-contract-coverage.sh`
-
-A typical regeneration loop is:
+Use the single aggregate, which runs every committed-artifact generator with
+the explicit local Bazel profile:
 
 ```bash
-nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-schemas
-nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-error-codes
-nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts
-nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-daemon-api
-make test-drift
+make generate
 ```
+
+The aggregate covers schemas, generated docs, CLI shell artifacts, protocol
+bindings, Nix resource outputs, and package policy inputs. `make test-drift`
+remains the read-only stale-artifact check; individual `bazel run
+//packages/xtask:xtask -- gen-*` commands are reserved for focused debugging.
 
 ## Submitting a pull request
 

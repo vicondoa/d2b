@@ -100,9 +100,10 @@ fails while walking on-disk scripts and the Makefile.
    type 4, a contract test in the owning crate's `packages/<crate>/tests/`
    (driven by `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
-   already covered by a **drift gate**; regenerate with the matching
-   `bazel run //packages/xtask:xtask -- gen-*` and commit - do **not** add a
-   new gate.
+   already covered by a **drift gate**; regenerate with `make generate` and
+   commit - do **not** add a new gate. The aggregate is the only write path;
+   individual `bazel run //packages/xtask:xtask -- gen-*` commands are for
+   focused debugging.
 6. **Genuinely needs a foreign userland / real systemd boot / live host?** →
    the matching Layer-2 tier (9-11). Justify why Layer 1 cannot cover it and
    reach for the lowest tier that works. Physical-device validation is manual
