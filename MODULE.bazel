@@ -18,6 +18,10 @@ bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4")
 archive_override(
     module_name = "rules_rs",
     integrity = "sha256-KE4xcf3WAoxT+UjzUNtEUDEuYcnk/2VBd3ytms8f5gE=",
+    patch_strip = 1,
+    # rules_rs 0.0.105 hard-codes a retired Ubuntu mirror URL for the
+    # x86_64 zlib package. Keep its upstream hash and patch only the URL.
+    patches = ["//:rules_rs-x86_64-zlib-url.patch"],
     strip_prefix = "rules_rs-0.0.105",
     urls = ["https://github.com/hermeticbuild/rules_rs/releases/download/v0.0.105/rules_rs-v0.0.105.tar.gz"],
 )

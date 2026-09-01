@@ -54,6 +54,7 @@ exports_files([
     "STRATEGY.md",
     "Cargo.lock",
     "Cargo.toml",
+    "rules_rs-x86_64-zlib-url.patch",
     "packages/Cargo.guest.lock",
     "flake.lock",
     "flake.nix",
