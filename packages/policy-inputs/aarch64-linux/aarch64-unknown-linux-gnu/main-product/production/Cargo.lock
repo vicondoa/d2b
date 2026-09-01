@@ -1661,6 +1661,7 @@ dependencies = [
  "rustix 0.38.44",
  "tokio",
  "tokio-vsock",
+ "uapi",
 ]
 
 

@@ -616,6 +616,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: true,
             reconcile_deadline_ms: Some(12),
+            configuration_generation: None,
             assignment: None,
         };
         let admitted_target = AdmittedAuthorizationTarget {
