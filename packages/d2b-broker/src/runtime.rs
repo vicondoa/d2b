@@ -11327,6 +11327,7 @@ fn bind_cloud_hypervisor_guest_uid(
     Ok(bound)
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn cleanup_video_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
