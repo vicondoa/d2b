@@ -115,6 +115,7 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 resource_uid: None,
                 zone_uid: None,
                 owner_ref: None,
+                owner_uid: None,
                 provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
