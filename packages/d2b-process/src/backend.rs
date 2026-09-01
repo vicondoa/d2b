@@ -49,7 +49,9 @@ impl ProcessLaunchRequest {
     ) -> Result<Self, ProcessConformanceError> {
         let count = u16::try_from(inherited_fds.len())
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
-        if count > MAX_INHERITED_FDS || count != request.ticket().inherited_fd_table().count() {
+        let expected = request.ticket().inherited_fd_table().count();
+        let broker_escrowed_controller = count == 2 && expected == 1;
+        if count > MAX_INHERITED_FDS || (count != expected && !broker_escrowed_controller) {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         Ok(Self {
@@ -60,7 +62,10 @@ impl ProcessLaunchRequest {
 
     /// Build an ordinary descriptor-free launch request.
     pub fn empty(request: ProcessRequest) -> Result<Self, ProcessConformanceError> {
-        Self::new(request, Vec::new())
+        Ok(Self {
+            request,
+            inherited_fds: Vec::new(),
+        })
     }
 
     /// Consume this launch-only request into its ordinary request and owned
@@ -291,6 +296,14 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         &self,
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError>;
+
+    /// Take a broker-retained Provider-controller bootstrap endpoint.
+    fn take_controller_bootstrap(
+        &self,
+        _handle: &Self::Handle,
+    ) -> Result<Option<OwnedFd>, ProcessEffectError> {
+        Ok(None)
+    }
 
     /// Stop only the exact process represented by `handle`.
     ///

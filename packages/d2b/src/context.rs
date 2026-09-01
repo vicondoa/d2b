@@ -18,24 +18,21 @@ use std::{
 };
 
 use d2b_contracts::{
-    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected,
-    KnownFeatureFlag, SemverRange,
+    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
+    SemverRange,
 };
 use d2b_contracts_control::public_wire::{
     ExecReadOutputResult, ExecStream, ExecWriteStdinResult, NamedProcessStreamErrorKind,
     NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
     NamedProcessStreamResponseFrame,
 };
-use d2b_core::{
-    bundle::Bundle,
-    bundle_resolver::HostRuntime,
-    closures::ClosureMetadata,
-    host::HostJson,
-    processes::ProcessesJson,
-};
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
+};
+use d2b_core::{
+    bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata, host::HostJson,
+    processes::ProcessesJson,
 };
 use d2b_resource_client::{
     AssignmentIdentity, CallOptions, CancellationToken, ClientError, ConnectedSession,
@@ -46,14 +43,14 @@ use d2b_resource_client::{
     ZoneClient, ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin,
     ZoneSocketConnector, resource_verb_is_mutating,
 };
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use serde::{Deserialize, Serialize};
 use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, send, socket,
 };
 use rustix::net::sockopt::{Timeout as SocketTimeout, set_socket_timeout};
 use rustix::net::{RecvAncillaryBuffer, RecvFlags, recvmsg};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::terminal_client::TerminalHostIo;
 use crate::{CliFailure, MAX_FRAME_BYTES, print_stdout};
@@ -1661,8 +1658,7 @@ impl CliZoneConnector {
         socket
             .set_io_timeout(self.handshake_timeout)
             .map_err(classify_client_io_error)?;
-        let hello =
-            daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
+        let hello = daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
         socket
             .send_frame(&hello)
             .map_err(classify_client_io_error)?;
@@ -2207,11 +2203,11 @@ fn validate_operation(
         (
             ZoneServiceKind::ConfigNixos,
             "ConfigNixosService/ReadGuestConfig"
-                | "ConfigNixosService/Stage"
-                | "ConfigNixosService/Diff"
-                | "ConfigNixosService/Approve"
-                | "ConfigNixosService/Reject"
-                | "ConfigNixosService/Status",
+            | "ConfigNixosService/Stage"
+            | "ConfigNixosService/Diff"
+            | "ConfigNixosService/Approve"
+            | "ConfigNixosService/Reject"
+            | "ConfigNixosService/Status",
             Some("invoke"),
         ) => Ok(operation.to_owned()),
         (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
@@ -2752,7 +2748,8 @@ mod tests {
             let payload_len = MAX_FRAME_BYTES + 1;
             let mut frame = Vec::with_capacity(4);
             frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
-            send(server.as_raw_fd(), &frame, MsgFlags::empty()).expect("send oversized declaration");
+            send(server.as_raw_fd(), &frame, MsgFlags::empty())
+                .expect("send oversized declaration");
             let error = socket
                 .recv_frame()
                 .expect_err("oversized declaration must fail closed");
@@ -2884,8 +2881,7 @@ mod tests {
             response: br#"{"items":[]}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone())
-                .unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone()).unwrap();
         let response = context
             .invoke(
                 "List",
@@ -2935,8 +2931,7 @@ mod tests {
             response: br#"{"ok":true}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone())
-                .unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone()).unwrap();
         let response = context
             .attach_process(
                 ResourceRef::parse("EphemeralProcess/command").unwrap(),
@@ -3187,8 +3182,7 @@ mod tests {
                 br#"{"ok":false,"errorClass":"authorization-denied","message":"secret-subject"}"#
                     .to_vec(),
         });
-        let context =
-            ZoneContext::with_client("dev", "/run/d2b/public.sock", client).unwrap();
+        let context = ZoneContext::with_client("dev", "/run/d2b/public.sock", client).unwrap();
         let error = context
             .attach_process(
                 ResourceRef::parse("EphemeralProcess/command").unwrap(),

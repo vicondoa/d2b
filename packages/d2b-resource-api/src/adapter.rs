@@ -470,9 +470,7 @@ mod tests {
         ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
         canonical_digest,
     };
-    use d2b_core_controller::controller_assignment::{
-        ScopedCommitTransport, ScopedResourceScope,
-    };
+    use d2b_core_controller::controller_assignment::{ScopedCommitTransport, ScopedResourceScope};
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
@@ -609,18 +607,19 @@ mod tests {
             "123e4567-e89b-42d3-a456-426614174000"
         );
         assert_eq!(scope.owner_revision(), ZoneRevision::new(7));
-        assert_eq!(scope.owner_generation(), ResourceGeneration::new(1).unwrap());
+        assert_eq!(
+            scope.owner_generation(),
+            ResourceGeneration::new(1).unwrap()
+        );
     }
 
     #[test]
     fn scoped_query_frame_rewrites_list_and_watch_selectors() {
-        let resource_types =
-            vec![ResourceTypeName::parse(
-                d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE,
-            )
-            .unwrap()];
-        let owner_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let resource_types = vec![
+            ResourceTypeName::parse(d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE)
+                .unwrap(),
+        ];
+        let owner_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let filters = vec![StoreFilter {
             field: "owner.resourceUid".to_owned(),
             values: vec![owner_uid.as_str().to_owned()],
@@ -658,40 +657,33 @@ mod tests {
             frame.extend_from_slice(&Vec::from(header));
             frame.extend_from_slice(&body);
 
-            let rewritten = attach_scoped_query_frame(
-                &frame,
-                &resource_types,
-                &[],
-                &filters,
-                watch,
-            )
-            .unwrap();
-            let rpc = TtrpcRequest::parse_from_bytes(
-                &rewritten[MESSAGE_HEADER_LENGTH..],
-            )
-            .unwrap();
+            let rewritten =
+                attach_scoped_query_frame(&frame, &resource_types, &[], &filters, watch).unwrap();
+            let rpc = TtrpcRequest::parse_from_bytes(&rewritten[MESSAGE_HEADER_LENGTH..]).unwrap();
             if watch {
                 let request = wire::WatchRequest::parse_from_bytes(&rpc.payload).unwrap();
                 assert_eq!(
                     request.resource_types,
-                    vec![
-                        d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()
-                    ]
+                    vec![d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()]
                 );
                 assert_eq!(request.filters.len(), 1);
                 assert_eq!(request.filters[0].field, "owner.resourceUid");
-                assert_eq!(request.filters[0].values, vec![owner_uid.as_str().to_owned()]);
+                assert_eq!(
+                    request.filters[0].values,
+                    vec![owner_uid.as_str().to_owned()]
+                );
             } else {
                 let request = wire::ListRequest::parse_from_bytes(&rpc.payload).unwrap();
                 assert_eq!(
                     request.resource_types,
-                    vec![
-                        d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()
-                    ]
+                    vec![d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()]
                 );
                 assert_eq!(request.filters.len(), 1);
                 assert_eq!(request.filters[0].field, "owner.resourceUid");
-                assert_eq!(request.filters[0].values, vec![owner_uid.as_str().to_owned()]);
+                assert_eq!(
+                    request.filters[0].values,
+                    vec![owner_uid.as_str().to_owned()]
+                );
             }
         }
     }

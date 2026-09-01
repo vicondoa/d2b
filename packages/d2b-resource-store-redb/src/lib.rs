@@ -30,8 +30,8 @@ use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
     canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
-use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::MutationSealBody;
+use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
     PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
     StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
@@ -131,12 +131,19 @@ impl BrokerEvidenceIndex {
             .entries
             .write()
             .map_err(|_| transaction::durability_failure("broker-evidence-index-poisoned"))?;
-        if let Some(existing) = entries.get(&evidence.key)
-            && existing != &evidence
-        {
-            return Err(transaction::durability_failure(
-                "audit-broker-evidence-conflict",
-            ));
+        if let Some(existing) = entries.get(&evidence.key) {
+            if existing == &evidence {
+                return Ok(());
+            }
+            if !(existing.outcome == d2b_audit::DurabilityOutcome::Failure
+                && !existing.effect_durable
+                && evidence.outcome == d2b_audit::DurabilityOutcome::Success
+                && evidence.effect_durable)
+            {
+                return Err(transaction::durability_failure(
+                    "audit-broker-evidence-conflict",
+                ));
+            }
         }
         entries.insert(evidence.key.clone(), evidence);
         Ok(())
@@ -1317,9 +1324,7 @@ fn validate_acceptor(
     acceptor: &MutationSealAcceptor,
 ) -> Result<(), StoreError> {
     if identity.store_epoch == 0 {
-        return Err(
-            transaction::integrity("store-epoch-invalid").with_store_slot(identity.slot())
-        );
+        return Err(transaction::integrity("store-epoch-invalid").with_store_slot(identity.slot()));
     }
     if let Err(mismatch) = acceptor.diagnose(&identity.seal_identity()) {
         return Err(transaction::integrity(mismatch.reason_code()).with_store_slot(identity.slot()));

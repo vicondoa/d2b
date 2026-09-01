@@ -2,6 +2,4 @@
 
 #![allow(missing_docs)]
 
-pub use crate::observe::{
-    HostNetworkObservationError, HostNetworkOccupancy, observe_host_network,
-};
+pub use crate::observe::{HostNetworkObservationError, HostNetworkOccupancy, observe_host_network};

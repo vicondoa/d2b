@@ -237,7 +237,11 @@ impl GuestComponentSessionClient {
         .map_err(|_| GuestComponentSessionClientError::Transport)?;
         let connected = match connected {
             ComponentSessionTransportProbeResult::Connected(stream) => stream,
-            ComponentSessionTransportProbeResult::Failed(_) => {
+            ComponentSessionTransportProbeResult::Failed(failure) => {
+                tracing::warn!(
+                    failure = ?failure,
+                    "Guest ComponentSession transport connection failed",
+                );
                 return Err(GuestComponentSessionClientError::Transport);
             }
         };
@@ -253,6 +257,12 @@ impl GuestComponentSessionClient {
             std::time::Instant::now(),
         )
         .await
+        .inspect_err(|error| {
+            tracing::warn!(
+                error = ?error,
+                "Guest ComponentSession Noise handshake failed",
+            );
+        })
         .map_err(|_| GuestComponentSessionClientError::Session)?;
         let generation = engine.generation();
         if generation < identity.reconnect_generation().get() {
@@ -303,11 +313,8 @@ impl GuestComponentSessionClient {
         .map_err(|_| GuestComponentSessionClientError::Session)?;
         let evidence = TransportEvidence::new(
             EvidenceClass::EnrolledKk,
-            BindingDigest::parse(format!(
-                "sha256:{}",
-                hex_digest(identity.channel_binding())
-            ))
-            .map_err(|_| GuestComponentSessionClientError::Session)?,
+            BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
+                .map_err(|_| GuestComponentSessionClientError::Session)?,
         );
         let session = authenticated
             .admit(engine, evidence, monotonic_tick())
@@ -317,11 +324,9 @@ impl GuestComponentSessionClient {
         let driver: Arc<dyn d2b_session::ComponentSessionDriver> =
             Arc::new(session.into_authenticated_driver());
         let transport = SessionTtrpcClient::new(Arc::clone(&driver));
-        let peer_key_fingerprint = ZoneSigningKeyFingerprint::parse(format!(
-            "sha256.{}",
-            hex_digest(guest_public)
-        ))
-        .map_err(|_| GuestComponentSessionClientError::Session)?;
+        let peer_key_fingerprint =
+            ZoneSigningKeyFingerprint::parse(format!("sha256.{}", hex_digest(guest_public)))
+                .map_err(|_| GuestComponentSessionClientError::Session)?;
         Ok(Self {
             identity,
             session_generation: generation,
@@ -399,11 +404,8 @@ fn authenticate_guest_peer(
         || binding.transport_class() != policy.transport_binding.transport
         || binding.transport_binding().locality() != Locality::Local
         || binding.transport_binding().binding_digest()
-            != &BindingDigest::parse(format!(
-                "sha256:{}",
-                hex_digest(identity.channel_binding())
-            ))
-            .map_err(|_| {
+            != &BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
+                .map_err(|_| {
                 d2b_session::SessionError::new(
                     d2b_session::contract::SessionErrorCode::PolicyDenied,
                 )
@@ -442,21 +444,21 @@ fn authenticate_guest_peer(
             })?,
     )
     .with_controller_generation(
-        d2b_contracts_resource::v3::ControllerGeneration::new(
-            identity.controller_generation(),
-        )
-        .map_err(|_| {
-            d2b_session::SessionError::new(
-                d2b_session::contract::SessionErrorCode::PolicyDenied,
-            )
-        })?,
+        d2b_contracts_resource::v3::ControllerGeneration::new(identity.controller_generation())
+            .map_err(|_| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::PolicyDenied,
+                )
+            })?,
     );
     let expiry = now_tick.checked_add(60_000).ok_or_else(|| {
         d2b_session::SessionError::new(d2b_session::contract::SessionErrorCode::PolicyDenied)
     })?;
-    AuthorizationLease::new(1, expiry).map_err(|_| {
-        d2b_session::SessionError::new(d2b_session::contract::SessionErrorCode::PolicyDenied)
-    }).map(|lease| (context, lease))
+    AuthorizationLease::new(1, expiry)
+        .map_err(|_| {
+            d2b_session::SessionError::new(d2b_session::contract::SessionErrorCode::PolicyDenied)
+        })
+        .map(|lease| (context, lease))
 }
 
 fn authorize_guest_peer(

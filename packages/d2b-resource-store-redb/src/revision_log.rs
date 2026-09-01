@@ -690,9 +690,7 @@ mod tests {
             [],
             [StoreFilter {
                 field: "assignment.resourceUid".to_owned(),
-                values: vec![
-                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
-                ],
+                values: vec!["123e4567-e89b-42d3-a456-426614174000".to_owned()],
             }],
         );
         let entry = crate::transaction::ChangeEntry::new(
@@ -715,8 +713,7 @@ mod tests {
 
     #[test]
     fn replay_selector_keeps_owner_uid_fence() {
-        let owner_uid =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let owner_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
         let selector = WatchSelector::new(
             [ResourceTypeName::parse("Process").unwrap()],
             [],
@@ -734,8 +731,7 @@ mod tests {
             Some(ResourceGeneration::new(1).unwrap()),
             Some(ResourceGeneration::new(1).unwrap()),
             Some(owner_uid.clone()),
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .to_owned(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
             None,
             "operation".to_owned(),
             "correlation".to_owned(),
@@ -751,8 +747,7 @@ mod tests {
             Some(ResourceGeneration::new(1).unwrap()),
             Some(ResourceGeneration::new(1).unwrap()),
             None,
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .to_owned(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
             None,
             "operation".to_owned(),
             "correlation".to_owned(),
@@ -880,9 +875,7 @@ mod tests {
             [],
             [StoreFilter {
                 field: "assignment.resourceUid".to_owned(),
-                values: vec![
-                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
-                ],
+                values: vec!["123e4567-e89b-42d3-a456-426614174000".to_owned()],
             }],
         );
         let expired = coordinator

@@ -9,9 +9,7 @@ use serde::Serialize;
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{AttachmentAccess, VolumeKind},
-};
+use d2b_contracts_resource::v3::volume::{AttachmentAccess, VolumeKind};
 
 use crate::layout::EntryCondition;
 

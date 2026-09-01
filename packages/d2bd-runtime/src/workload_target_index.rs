@@ -19,10 +19,7 @@
 
 use std::collections::HashMap;
 
-use d2b_contracts::{
-    controller_config::RealmControllersJson,
-    workload_identity::WorkloadIdentity,
-};
+use d2b_contracts::{controller_config::RealmControllersJson, workload_identity::WorkloadIdentity};
 
 /// Result of resolving an incoming target string to a legacy VM name.
 #[derive(Debug, Clone, PartialEq, Eq)]

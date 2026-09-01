@@ -11,10 +11,29 @@ use std::{
 };
 
 use crate::resource_api::{ParsedListRequest, ResourceRuntimeError};
+use crate::target_runtime::{
+    AdmissionError, AdmissionLimits, AssignmentLease, ControllerAssignmentKey, DaemonMode,
+    DeploymentError, ProviderDeployment,
+};
 use crate::zone_authority::ZoneAuthorityIdentity;
 use d2b_bus::{BusIngress, ZoneRegistrar};
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality as IdentityLocality,
+    ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+    TransportBinding,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration, MAX_PAGE_CURSOR_BYTES,
+    MAX_RESPONSE_CANONICAL_BYTES, ManagedBy, ResourceEnvelope, ResourceError, ResourceErrorKind,
+    ResourceErrorReason, ResourceGeneration, ResourceName, ResourcePhase, ResourceRef,
+    ResourceTypeName, ResourceUid, RetryClass, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
+    host::HOST_PROVIDER_REF, user::UserSpec,
+};
+pub use d2b_contracts_resource::v3::{
+    RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX, SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID,
+};
 use d2b_contracts_zone_session::v3::{
     component_session::{EndpointPolicy, EndpointRole},
     resource_bundle::ResourceBundle,
@@ -22,59 +41,15 @@ use d2b_contracts_zone_session::v3::{
     role_binding::RoleBindingSpec,
     zone::validate_self_resource,
 };
-pub use d2b_contracts_resource::v3::{
-    RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX, SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID,
-};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    MAX_PAGE_CURSOR_BYTES,
-    MAX_RESPONSE_CANONICAL_BYTES,
-    ResourceEnvelope,
-    ResourceError,
-    ResourceErrorKind,
-    ResourceGeneration,
-    ResourceErrorReason,
-    ResourceName,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    RetryClass,
-    SchemaFingerprint,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
-    ManagedBy,
-    host::HOST_PROVIDER_REF,
-    user::UserSpec,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality as IdentityLocality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
 use d2b_core_controller::{
-    controller_assignment::ControllerAssignmentRegistry,
     authority::HostGlobalAuthorityIndex,
+    controller_assignment::ControllerAssignmentRegistry,
     controllers::{CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus},
     main::{
         CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupError,
         StartupStage,
     },
     zone_status::ZoneRuntimeMetadata,
-};
-use crate::target_runtime::{
-    AdmissionError, AdmissionLimits, AssignmentLease, ControllerAssignmentKey, DaemonMode,
-    DeploymentError, ProviderDeployment,
 };
 
 /// Provider-neutral Core assignment registry shared by Resource API and bus
@@ -135,7 +110,6 @@ use d2b_resource_store::{
     StoreSlot, StoredResource,
 };
 use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, StoreRuntimeMetadata};
-use nix::unistd::{Uid, User};
 use d2b_session::{
     HandshakeCredentials, SessionEngine, SessionServerError, TransportEvidence,
     serve_ttrpc_services,
@@ -144,6 +118,7 @@ use d2b_session_unix::{
     CreditPool, CreditScopeSet, DescriptorPolicyResolver, PeerIdentityPolicy, SeqpacketSocket,
     UnixSeqpacketTransport, UnixSessionError, VerifiedUnixPeer, prearmed_seqpacket_pair,
 };
+use nix::unistd::{Uid, User};
 use protobuf;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -638,13 +613,8 @@ pub fn compile_committed_policy_with_subjects(
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
         );
     }
-    let policy = PolicySet::new(
-        &catalog,
-        snapshot.policy_revision,
-        roles,
-        bindings,
-    )
-    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let policy = PolicySet::new(&catalog, snapshot.policy_revision, roles, bindings)
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let state = AuthorizationState {
         snapshot,
         zone_policy_revision: current_revision,
@@ -982,10 +952,9 @@ pub(crate) fn resolve_zone_user_from_resources(
         {
             return Err(ResourceRuntimeError::IdentityUnbound);
         }
-        let user_spec = serde_json::from_slice::<UserSpec>(
-            &envelope.spec().base().to_canonical_bytes(),
-        )
-        .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+        let user_spec =
+            serde_json::from_slice::<UserSpec>(&envelope.spec().base().to_canonical_bytes())
+                .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
         if nss_uid(user_spec.os_username().as_str()) != Some(peer_uid) {
             continue;
         }
@@ -1004,9 +973,7 @@ pub(crate) fn resolve_zone_user_from_resources(
         });
     }
     if matches.len() == 1 {
-        return Ok(matches
-            .pop()
-            .expect("one resolved User match is present"));
+        return Ok(matches.pop().expect("one resolved User match is present"));
     }
     Err(ResourceRuntimeError::IdentityUnbound)
 }
@@ -1156,10 +1123,7 @@ pub fn policy_subject_fingerprint_allows_refresh(
 /// its grant can be installed again.
 pub fn committed_policy_subject_fingerprints(
     resources: &[StoredResource],
-) -> Result<
-    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
-    ResourceRuntimeError,
-> {
+) -> Result<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>, ResourceRuntimeError> {
     committed_policy_subject_fingerprints_with_retained(resources, &BTreeMap::new())
 }
 
@@ -1173,10 +1137,7 @@ pub fn committed_policy_subject_fingerprints(
 pub fn committed_policy_subject_fingerprints_with_retained(
     resources: &[StoredResource],
     previous: &BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
-) -> Result<
-    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
-    ResourceRuntimeError,
-> {
+) -> Result<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>, ResourceRuntimeError> {
     let mut by_ref = BTreeMap::new();
     for resource in resources {
         if by_ref
@@ -1188,9 +1149,10 @@ pub fn committed_policy_subject_fingerprints_with_retained(
     }
     let mut authored_subjects = BTreeMap::new();
     let mut current_fingerprints = BTreeMap::new();
-    for binding in resources.iter().filter(|resource| {
-        resource.resource_ref.resource_type().as_str() == "RoleBinding"
-    }) {
+    for binding in resources
+        .iter()
+        .filter(|resource| resource.resource_ref.resource_type().as_str() == "RoleBinding")
+    {
         let envelope = validated_stored_resource_envelope(binding, &binding.zone)?;
         if matches!(
             envelope.status().phase(),
@@ -1198,18 +1160,14 @@ pub fn committed_policy_subject_fingerprints_with_retained(
         ) {
             continue;
         }
-        let spec = serde_json::from_slice::<RoleBindingSpec>(
-            &envelope.spec().base().to_canonical_bytes(),
-        )
-        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        let spec =
+            serde_json::from_slice::<RoleBindingSpec>(&envelope.spec().base().to_canonical_bytes())
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
         spec.validate_zone(envelope.metadata().zone())
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
         for subject_ref in spec.subjects() {
             let key = (binding.resource_ref.clone(), subject_ref.clone());
-            authored_subjects.insert(
-                key.clone(),
-                (binding.uid.clone(), binding.generation),
-            );
+            authored_subjects.insert(key.clone(), (binding.uid.clone(), binding.generation));
             let Some(subject) = by_ref.get(subject_ref) else {
                 continue;
             };
@@ -1234,8 +1192,7 @@ pub fn committed_policy_subject_fingerprints_with_retained(
         if let Some(current) = current_fingerprints.remove(&key) {
             fingerprints.insert(key, current);
         } else if let Some(previous) = previous.get(&key).filter(|previous| {
-            previous.binding_uid == binding_uid
-                && previous.binding_generation == binding_generation
+            previous.binding_uid == binding_uid && previous.binding_generation == binding_generation
         }) {
             fingerprints.insert(key, previous.clone());
         }
@@ -1248,10 +1205,7 @@ pub fn committed_policy_subject_fingerprints_with_retained(
 pub fn refreshed_policy_subject_fingerprints(
     resources: &[StoredResource],
     previous: &BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
-) -> Result<
-    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
-    ResourceRuntimeError,
-> {
+) -> Result<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>, ResourceRuntimeError> {
     let fingerprints = committed_policy_subject_fingerprints_with_retained(resources, previous)?;
     for (key, current) in &fingerprints {
         if !policy_subject_fingerprint_allows_refresh(previous.get(key), current) {
@@ -1470,19 +1424,14 @@ pub async fn ensure_bootstrap_zone_resource(
         .await
         .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
     if !page.resources.is_empty() {
-        return validate_zone_self_resource_rows(
-            zone,
-            zone_uid,
-            &page.resources,
-        );
+        return validate_zone_self_resource_rows(zone, zone_uid, &page.resources);
     }
 
     let payload = bootstrap_zone_resource_payload(zone)?;
     let identity = resource_identity(
         zone,
         &zone_type,
-        &ResourceName::parse(zone.as_str())
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+        &ResourceName::parse(zone.as_str()).map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
         None,
     );
     let mut body = wire::ResourceEnvelopeBytes::new();
@@ -1545,7 +1494,15 @@ pub async fn materialize_zone_resource_bundle(
     meta.correlation_id = operation_id;
     request.meta = protobuf::MessageField::some(meta);
     request.mutations = mutations;
-    let response = client.commit_batch(request).await;
+    let configuration_generation = store
+        .runtime_metadata()
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?
+        .policy_snapshot
+        .active_configuration_revision;
+    let response = client
+        .commit_configuration_batch(request, configuration_generation)
+        .await;
     if let Some(error) = response.error.as_ref() {
         tracing::error!(
             zone = %zone.as_str(),
@@ -1578,16 +1535,14 @@ async fn plan_zone_resource_bundle(
     bundle: &ResourceBundle,
     store: &RedbResourceStore,
 ) -> Result<Vec<wire::Mutation>, ResourceRuntimeError> {
-    bundle
-        .verify()
-        .map_err(|error| {
-            tracing::error!(
-                zone = %zone,
-                error = ?error,
-                "resource bundle verification failed",
-            );
-            ResourceRuntimeError::HandlerNotReady
-        })?;
+    bundle.verify().map_err(|error| {
+        tracing::error!(
+            zone = %zone,
+            error = ?error,
+            "resource bundle verification failed",
+        );
+        ResourceRuntimeError::HandlerNotReady
+    })?;
     let bundle_zone_uid = bundle
         .zone_uid()
         .ok_or(ResourceRuntimeError::IdentityUnbound)?;
@@ -1673,9 +1628,24 @@ async fn plan_zone_resource_bundle(
                     .configuration_generation()
                     .is_none()
             {
+                tracing::error!(
+                    zone = %zone,
+                    resource_type = %resource_ref.resource_type().as_str(),
+                    resource_name = %resource_ref.name().as_str(),
+                    managed_by = ?current_envelope.metadata().managed_by(),
+                    configuration_generation = ?current_envelope.metadata().configuration_generation(),
+                    "existing configured resource lost configuration ownership",
+                );
                 return Err(ResourceRuntimeError::HandlerNotReady);
             }
             if current_envelope.metadata().owner_ref() != resource.metadata().owner_ref() {
+                tracing::error!(
+                    zone = %zone,
+                    resource_ref = %resource_ref,
+                    current_owner = ?current_envelope.metadata().owner_ref(),
+                    desired_owner = ?resource.metadata().owner_ref(),
+                    "existing configured resource owner changed",
+                );
                 return Err(ResourceRuntimeError::HandlerNotReady);
             }
             let desired_spec = resource.spec().to_canonical_bytes();
@@ -1716,10 +1686,8 @@ fn reject_stale_guest_network_rows(
         })
         .collect::<BTreeSet<_>>();
     if existing.keys().any(|resource_ref| {
-        matches!(
-            resource_ref.resource_type().as_str(),
-            "Guest" | "Network"
-        ) && !desired.contains(resource_ref)
+        matches!(resource_ref.resource_type().as_str(), "Guest" | "Network")
+            && !desired.contains(resource_ref)
     }) {
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
@@ -2016,17 +1984,15 @@ pub fn store_identity_for_authority(
         .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
     let mut revisions = initial_policy_snapshot()?;
     revisions.policy_revision = 0;
-    Ok(
-        StoreIdentity::new(
-            StoreSlot::new(0).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
-            authority.store_uid().clone(),
-            zone.clone(),
-            authority.zone_uid().clone(),
-            created_at,
-            revisions,
-        )
-        .with_store_epoch(authority.store_epoch()),
+    Ok(StoreIdentity::new(
+        StoreSlot::new(0).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
+        authority.store_uid().clone(),
+        zone.clone(),
+        authority.zone_uid().clone(),
+        created_at,
+        revisions,
     )
+    .with_store_epoch(authority.store_epoch()))
 }
 
 pub fn stable_uid(domain: &str, value: &str) -> ResourceUid {
@@ -2664,10 +2630,7 @@ pub async fn persist_resource_status_with_projection(
     Ok(())
 }
 
-fn status_semantically_equal(
-    current: &CanonicalJsonValue,
-    candidate: &CanonicalJsonValue,
-) -> bool {
+fn status_semantically_equal(current: &CanonicalJsonValue, candidate: &CanonicalJsonValue) -> bool {
     fn without_reconciliation_timestamps(mut value: CanonicalJsonValue) -> CanonicalJsonValue {
         if let CanonicalJsonValue::Object(root) = &mut value {
             root.remove("lastReconciledAt");
@@ -2700,10 +2663,10 @@ fn select_resource_projection(
 mod tests {
     use super::*;
     use crate::resource_api::parse_list_request;
+    use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_resource_api::authz::{
         ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationTarget,
     };
-    use d2b_contracts_resource::v3::ResourceGeneration;
 
     #[test]
     fn bootstrap_zone_create_body_is_complete_after_uid_placeholder() {
@@ -2739,12 +2702,7 @@ mod tests {
         assert_eq!(envelope.metadata().managed_by(), ManagedBy::Controller);
     }
 
-    fn user_resource(
-        name: &str,
-        uid: &str,
-        os_username: &str,
-        phase: &str,
-    ) -> StoredResource {
+    fn user_resource(name: &str, uid: &str, os_username: &str, phase: &str) -> StoredResource {
         let zone = ZoneId::parse("work").unwrap();
         let value = json!({
             "apiVersion": "resources.d2bus.org/v3",
@@ -2804,12 +2762,7 @@ mod tests {
         }
     }
 
-    fn policy_resource(
-        resource_type: &str,
-        name: &str,
-        uid: &str,
-        spec: Value,
-    ) -> StoredResource {
+    fn policy_resource(resource_type: &str, name: &str, uid: &str, spec: Value) -> StoredResource {
         let zone = ZoneId::parse("work").unwrap();
         let value = json!({
             "apiVersion": "resources.d2bus.org/v3",
@@ -2870,8 +2823,7 @@ mod tests {
         value["status"]["phase"] = json!(phase);
         value["status"]["observedGeneration"] = json!(observed_generation);
         value["status"]["update"]["observedGeneration"] = json!(observed_generation);
-        resource.canonical_json =
-            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
         resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
             .unwrap()
             .digest()
@@ -2886,8 +2838,7 @@ mod tests {
         value["status"]["update"]["observedGeneration"] = json!(generation);
         resource.uid = ResourceUid::parse(uid).unwrap();
         resource.generation = ResourceGeneration::new(generation).unwrap();
-        resource.canonical_json =
-            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
         resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
             .unwrap()
             .digest()
@@ -2897,8 +2848,7 @@ mod tests {
     fn set_binding_subjects(resource: &mut StoredResource, subjects: &[&str]) {
         let mut value: Value = serde_json::from_slice(&resource.canonical_json).unwrap();
         value["spec"]["subjects"] = json!(subjects);
-        resource.canonical_json =
-            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
         resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
             .unwrap()
             .digest()
@@ -2971,10 +2921,11 @@ mod tests {
             &[],
         )
         .unwrap();
-        let authorizer =
-            NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
-        let system_core =
-            subject_context("Provider/system-core", "11111111-1111-4111-8111-111111111111");
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let system_core = subject_context(
+            "Provider/system-core",
+            "11111111-1111-4111-8111-111111111111",
+        );
         let target = |resource_type: &str,
                       resource_name: &str,
                       verb: ResourceVerb,
@@ -3011,11 +2962,7 @@ mod tests {
                 ),
             ],
         };
-        assert!(
-            authorizer
-                .authorize(&system_core, &request, &state)
-                .is_ok()
-        );
+        assert!(authorizer.authorize(&system_core, &request, &state).is_ok());
 
         let mut wrong_subresource = request.clone();
         wrong_subresource.targets[1].subresource = Some("read".to_owned());
@@ -3045,11 +2992,10 @@ mod tests {
             "alice",
             "Ready",
         );
-        let resolved =
-            resolve_zone_user_from_resources(&zone, 1000, &[user], |name| {
-                (name == "alice").then_some(1000)
-            })
-            .unwrap();
+        let resolved = resolve_zone_user_from_resources(&zone, 1000, &[user], |name| {
+            (name == "alice").then_some(1000)
+        })
+        .unwrap();
         assert_eq!(resolved.subject_ref().to_canonical_string(), "User/alice");
         assert_eq!(
             resolved.subject_uid().as_str(),
@@ -3075,12 +3021,9 @@ mod tests {
             "Ready",
         );
         assert!(
-            resolve_zone_user_from_resources(
-                &zone,
-                1000,
-                &[first.clone(), second],
-                |name| (name == "alice").then_some(1000),
-            )
+            resolve_zone_user_from_resources(&zone, 1000, &[first.clone(), second], |name| (name
+                == "alice")
+                .then_some(1000),)
             .is_err()
         );
         assert!(
@@ -3111,8 +3054,8 @@ mod tests {
         );
         let mut stale_value: Value = serde_json::from_slice(&stale.canonical_json).unwrap();
         stale_value["status"]["observedGeneration"] = json!(0);
-        stale.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&stale_value)
-            .unwrap();
+        stale.canonical_json =
+            d2b_contracts_resource::v3::canonical_json_bytes(&stale_value).unwrap();
         assert!(
             resolve_zone_user_from_resources(&zone, 1000, &[stale], |name| {
                 (name == "alice").then_some(1000)
@@ -3202,8 +3145,7 @@ mod tests {
             &resources,
         )
         .unwrap();
-        let authorizer =
-            NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
         let alice_user = resolve_zone_user_from_resources(&zone, 1000, &resources, |name| {
             (name == "alice").then_some(1000)
         })
@@ -3212,8 +3154,7 @@ mod tests {
             (name == "bob").then_some(1001)
         })
         .unwrap();
-        let alice_context =
-            local_user_subject_context(&zone, &alice_user, "alice-op").unwrap();
+        let alice_context = local_user_subject_context(&zone, &alice_user, "alice-op").unwrap();
         let bob_context = local_user_subject_context(&zone, &bob_user, "bob-op").unwrap();
         let alice_caps = authorizer
             .positive_capabilities(&alice_context, &zone, &state)
@@ -3223,19 +3164,31 @@ mod tests {
             .unwrap();
         assert!(alice_caps.resources.iter().any(|target| {
             target.resource_type.as_str() == "Guest"
-                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "workstation")
+                && target
+                    .resource_name
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == "workstation")
         }));
         assert!(!alice_caps.resources.iter().any(|target| {
             target.resource_type.as_str() == "Process"
-                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "agent")
+                && target
+                    .resource_name
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == "agent")
         }));
         assert!(bob_caps.resources.iter().any(|target| {
             target.resource_type.as_str() == "Process"
-                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "agent")
+                && target
+                    .resource_name
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == "agent")
         }));
         assert!(!bob_caps.resources.iter().any(|target| {
             target.resource_type.as_str() == "Guest"
-                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "workstation")
+                && target
+                    .resource_name
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == "workstation")
         }));
     }
 
@@ -3243,74 +3196,75 @@ mod tests {
     fn committed_policy_compiles_all_closed_role_binding_subject_types() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
-                "Role",
-                "all-subjects-reader",
-                "733e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "all-subjects-reader",
+            "733e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         let subjects = [
-                ("Zone/work", "133e4567-e89b-42d3-a456-426614174000"),
-                ("User/alice", "233e4567-e89b-42d3-a456-426614174000"),
-                ("Provider/test-provider", "333e4567-e89b-42d3-a456-426614174000"),
-                ("Host/test-host", "433e4567-e89b-42d3-a456-426614174000"),
-                ("Guest/test-guest", "533e4567-e89b-42d3-a456-426614174000"),
-                ("Process/test-process", "633e4567-e89b-42d3-a456-426614174000"),
+            ("Zone/work", "133e4567-e89b-42d3-a456-426614174000"),
+            ("User/alice", "233e4567-e89b-42d3-a456-426614174000"),
+            (
+                "Provider/test-provider",
+                "333e4567-e89b-42d3-a456-426614174000",
+            ),
+            ("Host/test-host", "433e4567-e89b-42d3-a456-426614174000"),
+            ("Guest/test-guest", "533e4567-e89b-42d3-a456-426614174000"),
+            (
+                "Process/test-process",
+                "633e4567-e89b-42d3-a456-426614174000",
+            ),
         ];
         let binding = policy_resource(
-                "RoleBinding",
-                "all-subjects-binding",
-                "833e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "roleRef": "Role/all-subjects-reader",
-                    "subjects": subjects.iter().map(|(subject, _)| *subject).collect::<Vec<_>>(),
-                    "externalPrincipalSelector": null,
-                    "scopeNarrowing": null,
-                }),
+            "RoleBinding",
+            "all-subjects-binding",
+            "833e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/all-subjects-reader",
+                "subjects": subjects.iter().map(|(subject, _)| *subject).collect::<Vec<_>>(),
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
         );
         let mut resources = vec![role, binding];
         resources.extend(subjects.iter().map(|(subject, uid)| {
-                let (resource_type, name) = subject.split_once('/').unwrap();
-                policy_resource(resource_type, name, uid, json!({}))
+            let (resource_type, name) = subject.split_once('/').unwrap();
+            policy_resource(resource_type, name, uid, json!({}))
         }));
 
         let (policy, state) = compile_committed_policy(
-                &zone,
-                initial_policy_snapshot().unwrap(),
-                ZoneRevision::new(7),
-                &[],
-                &resources,
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(7),
+            &[],
+            &resources,
         )
         .unwrap();
-        let authorizer =
-                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
         for (subject_ref, subject_uid) in subjects {
-                let capabilities = authorizer
-                    .positive_capabilities(
-                        &subject_context(subject_ref, subject_uid),
-                        &zone,
-                        &state,
-                    )
-                    .unwrap();
-                assert!(
-                    capabilities.resources.iter().any(|target| {
-                        target.resource_type.as_str() == "Guest"
-                            && target
-                                .resource_name
-                                .as_ref()
-                                .is_some_and(|name| name.as_str() == "workstation")
-                    }),
-                    "{subject_ref} should receive the RoleBinding grant"
-                );
+            let capabilities = authorizer
+                .positive_capabilities(&subject_context(subject_ref, subject_uid), &zone, &state)
+                .unwrap();
+            assert!(
+                capabilities.resources.iter().any(|target| {
+                    target.resource_type.as_str() == "Guest"
+                        && target
+                            .resource_name
+                            .as_ref()
+                            .is_some_and(|name| name.as_str() == "workstation")
+                }),
+                "{subject_ref} should receive the RoleBinding grant"
+            );
         }
     }
 
@@ -3318,239 +3272,234 @@ mod tests {
     fn missing_subject_does_not_invalidate_other_grants_or_authorize_missing_subject() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
-                "Role",
-                "mixed-reader",
-                "933e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "mixed-reader",
+            "933e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         let binding = policy_resource(
-                "RoleBinding",
-                "mixed-binding",
-                "a33e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "roleRef": "Role/mixed-reader",
-                    "subjects": ["Host/valid-host", "Host/missing-host"],
-                    "externalPrincipalSelector": null,
-                    "scopeNarrowing": null,
-                }),
+            "RoleBinding",
+            "mixed-binding",
+            "a33e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/mixed-reader",
+                "subjects": ["Host/valid-host", "Host/missing-host"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
         );
         let valid_subject = policy_resource(
-                "Host",
-                "valid-host",
-                "b33e4567-e89b-42d3-a456-426614174000",
-                json!({}),
+            "Host",
+            "valid-host",
+            "b33e4567-e89b-42d3-a456-426614174000",
+            json!({}),
         );
         let (policy, state) = compile_committed_policy(
-                &zone,
-                initial_policy_snapshot().unwrap(),
-                ZoneRevision::new(7),
-                &[],
-                &[role, binding, valid_subject],
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(7),
+            &[],
+            &[role, binding, valid_subject],
         )
         .unwrap();
-        let authorizer =
-                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
         let valid_context =
-                subject_context("Host/valid-host", "b33e4567-e89b-42d3-a456-426614174000");
+            subject_context("Host/valid-host", "b33e4567-e89b-42d3-a456-426614174000");
         assert!(
-                !authorizer
-                    .positive_capabilities(&valid_context, &zone, &state)
-                    .unwrap()
-                    .resources
-                    .is_empty()
+            !authorizer
+                .positive_capabilities(&valid_context, &zone, &state)
+                .unwrap()
+                .resources
+                .is_empty()
         );
         let missing_context =
-                subject_context("Host/missing-host", "c33e4567-e89b-42d3-a456-426614174000");
+            subject_context("Host/missing-host", "c33e4567-e89b-42d3-a456-426614174000");
         assert!(
-                authorizer
-                    .positive_capabilities(&missing_context, &zone, &state)
-                    .unwrap()
-                    .resources
-                    .is_empty()
+            authorizer
+                .positive_capabilities(&missing_context, &zone, &state)
+                .unwrap()
+                .resources
+                .is_empty()
         );
         assert_eq!(
-                authorizer
-                    .authorize(&missing_context, &policy_request(&zone), &state)
-                    .unwrap_err(),
-                AuthorizationDenial::NoMatchingGrant
+            authorizer
+                .authorize(&missing_context, &policy_request(&zone), &state)
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 
     #[test]
     fn deleted_unready_or_stale_subjects_receive_no_grant() {
         for (phase, observed_generation) in [("Deleted", 1), ("Pending", 1), ("Ready", 0)] {
-                let zone = ZoneId::parse("work").unwrap();
-                let role = policy_resource(
-                    "Role",
-                    "subject-state-reader",
-                    "d33e4567-e89b-42d3-a456-426614174000",
-                    json!({
-                        "rules": [{
-                            "resourceTypes": ["Guest"],
-                            "verbs": ["get"],
-                            "subresources": [],
-                            "resourceNames": ["workstation"],
-                            "zones": ["work"],
-                            "executionRefs": [],
-                            "sessionVerbs": ["connect", "invoke"],
-                        }],
-                    }),
-                );
-                let binding = policy_resource(
-                    "RoleBinding",
-                    "subject-state-binding",
-                    "e33e4567-e89b-42d3-a456-426614174000",
-                    json!({
-                        "roleRef": "Role/subject-state-reader",
-                        "subjects": ["Provider/stateful-subject"],
-                        "externalPrincipalSelector": null,
-                        "scopeNarrowing": null,
-                    }),
-                );
-                let mut subject = policy_resource(
-                    "Provider",
-                    "stateful-subject",
-                    "f33e4567-e89b-42d3-a456-426614174000",
-                    json!({}),
-                );
-                set_status(&mut subject, phase, observed_generation);
-                let (policy, state) = compile_committed_policy(
+            let zone = ZoneId::parse("work").unwrap();
+            let role = policy_resource(
+                "Role",
+                "subject-state-reader",
+                "d33e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+            );
+            let binding = policy_resource(
+                "RoleBinding",
+                "subject-state-binding",
+                "e33e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/subject-state-reader",
+                    "subjects": ["Provider/stateful-subject"],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+            );
+            let mut subject = policy_resource(
+                "Provider",
+                "stateful-subject",
+                "f33e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+            );
+            set_status(&mut subject, phase, observed_generation);
+            let (policy, state) = compile_committed_policy(
+                &zone,
+                initial_policy_snapshot().unwrap(),
+                ZoneRevision::new(7),
+                &[],
+                &[role, binding, subject],
+            )
+            .unwrap();
+            let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+            let capabilities = authorizer
+                .positive_capabilities(
+                    &subject_context(
+                        "Provider/stateful-subject",
+                        "f33e4567-e89b-42d3-a456-426614174000",
+                    ),
                     &zone,
-                    initial_policy_snapshot().unwrap(),
-                    ZoneRevision::new(7),
-                    &[],
-                    &[role, binding, subject],
+                    &state,
                 )
                 .unwrap();
-                let authorizer =
-                    NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
-                let capabilities = authorizer
-                    .positive_capabilities(
-                        &subject_context(
-                            "Provider/stateful-subject",
-                            "f33e4567-e89b-42d3-a456-426614174000",
-                        ),
-                        &zone,
-                        &state,
-                    )
-                    .unwrap();
-                assert!(
-                    capabilities.resources.is_empty(),
-                    "{phase} subject must not receive a grant"
-                );
+            assert!(
+                capabilities.resources.is_empty(),
+                "{phase} subject must not receive a grant"
+            );
         }
     }
 
     #[test]
     fn missing_or_unready_subjects_do_not_create_policy_fingerprints() {
         let role = policy_resource(
-                "Role",
-                "fingerprint-reader",
-                "033e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "fingerprint-reader",
+            "033e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         let binding = policy_resource(
-                "RoleBinding",
-                "fingerprint-binding",
-                "143e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "roleRef": "Role/fingerprint-reader",
-                    "subjects": ["Provider/missing-subject", "Provider/unready-subject"],
-                    "externalPrincipalSelector": null,
-                    "scopeNarrowing": null,
-                }),
+            "RoleBinding",
+            "fingerprint-binding",
+            "143e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/fingerprint-reader",
+                "subjects": ["Provider/missing-subject", "Provider/unready-subject"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
         );
         let mut unready = policy_resource(
-                "Provider",
-                "unready-subject",
-                "243e4567-e89b-42d3-a456-426614174000",
-                json!({}),
+            "Provider",
+            "unready-subject",
+            "243e4567-e89b-42d3-a456-426614174000",
+            json!({}),
         );
         set_status(&mut unready, "Pending", 1);
         assert!(
-                committed_policy_subject_fingerprints(&[role, binding, unready])
-                    .unwrap()
-                    .is_empty()
+            committed_policy_subject_fingerprints(&[role, binding, unready])
+                .unwrap()
+                .is_empty()
         );
     }
 
     #[test]
     fn recreated_subject_uid_is_fenced_until_binding_changes() {
         let binding = policy_resource(
-                "RoleBinding",
-                "provider-binding",
-                "353e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "roleRef": "Role/provider-reader",
-                    "subjects": ["Provider/system-provider"],
-                    "externalPrincipalSelector": null,
-                    "scopeNarrowing": null,
-                }),
+            "RoleBinding",
+            "provider-binding",
+            "353e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/provider-reader",
+                "subjects": ["Provider/system-provider"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
         );
         let role = policy_resource(
-                "Role",
-                "provider-reader",
-                "463e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "provider-reader",
+            "463e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         let first_subject = policy_resource(
-                "Provider",
-                "system-provider",
-                "573e4567-e89b-42d3-a456-426614174000",
-                json!({}),
+            "Provider",
+            "system-provider",
+            "573e4567-e89b-42d3-a456-426614174000",
+            json!({}),
         );
         let recreated_subject = policy_resource(
-                "Provider",
-                "system-provider",
-                "683e4567-e89b-42d3-a456-426614174000",
-                json!({}),
+            "Provider",
+            "system-provider",
+            "683e4567-e89b-42d3-a456-426614174000",
+            json!({}),
         );
-        let first = committed_policy_subject_fingerprints(&[
-                role.clone(),
-                binding.clone(),
-                first_subject,
-        ])
-        .unwrap();
+        let first =
+            committed_policy_subject_fingerprints(&[role.clone(), binding.clone(), first_subject])
+                .unwrap();
         let recreated =
-                committed_policy_subject_fingerprints(&[role, binding, recreated_subject]).unwrap();
+            committed_policy_subject_fingerprints(&[role, binding, recreated_subject]).unwrap();
         let key = (
-                ResourceRef::parse("RoleBinding/provider-binding").unwrap(),
-                ResourceRef::parse("Provider/system-provider").unwrap(),
+            ResourceRef::parse("RoleBinding/provider-binding").unwrap(),
+            ResourceRef::parse("Provider/system-provider").unwrap(),
         );
         assert_ne!(first[&key].subject_uid(), recreated[&key].subject_uid());
         assert!(!policy_subject_fingerprint_allows_refresh(
-                Some(&first[&key]),
-                &recreated[&key],
+            Some(&first[&key]),
+            &recreated[&key],
         ));
     }
 
@@ -3558,44 +3507,44 @@ mod tests {
     fn unknown_or_cross_zone_role_binding_subjects_are_refused() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
-                "Role",
-                "refusal-reader",
-                "793e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "refusal-reader",
+            "793e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         for subject in ["Quota/not-allowed", "Zone/other"] {
-                let binding = policy_resource(
-                    "RoleBinding",
-                    "refusal-binding",
-                    "8a3e4567-e89b-42d3-a456-426614174000",
-                    json!({
-                        "roleRef": "Role/refusal-reader",
-                        "subjects": [subject],
-                        "externalPrincipalSelector": null,
-                        "scopeNarrowing": null,
-                    }),
-                );
-                assert_eq!(
-                    compile_committed_policy(
-                        &zone,
-                        initial_policy_snapshot().unwrap(),
-                        ZoneRevision::new(7),
-                        &[],
-                        &[role.clone(), binding],
-                    )
-                    .unwrap_err(),
-                    ResourceRuntimeError::AuthorizationUnavailable
-                );
+            let binding = policy_resource(
+                "RoleBinding",
+                "refusal-binding",
+                "8a3e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/refusal-reader",
+                    "subjects": [subject],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+            );
+            assert_eq!(
+                compile_committed_policy(
+                    &zone,
+                    initial_policy_snapshot().unwrap(),
+                    ZoneRevision::new(7),
+                    &[],
+                    &[role.clone(), binding],
+                )
+                .unwrap_err(),
+                ResourceRuntimeError::AuthorizationUnavailable
+            );
         }
     }
 
@@ -3603,56 +3552,56 @@ mod tests {
     fn subject_store_evidence_must_match_uid_generation_and_revision() {
         let zone = ZoneId::parse("work").unwrap();
         let role = policy_resource(
-                "Role",
-                "evidence-reader",
-                "9b3e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "rules": [{
-                        "resourceTypes": ["Guest"],
-                        "verbs": ["get"],
-                        "subresources": [],
-                        "resourceNames": ["workstation"],
-                        "zones": ["work"],
-                        "executionRefs": [],
-                        "sessionVerbs": ["connect", "invoke"],
-                    }],
-                }),
+            "Role",
+            "evidence-reader",
+            "9b3e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
         );
         let binding = policy_resource(
-                "RoleBinding",
-                "evidence-binding",
-                "aa3e4567-e89b-42d3-a456-426614174000",
-                json!({
-                    "roleRef": "Role/evidence-reader",
-                    "subjects": ["Host/evidence-host"],
-                    "externalPrincipalSelector": null,
-                    "scopeNarrowing": null,
-                }),
+            "RoleBinding",
+            "evidence-binding",
+            "aa3e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/evidence-reader",
+                "subjects": ["Host/evidence-host"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
         );
         let mut subject = policy_resource(
-                "Host",
-                "evidence-host",
-                "ab3e4567-e89b-42d3-a456-426614174000",
-                json!({}),
+            "Host",
+            "evidence-host",
+            "ab3e4567-e89b-42d3-a456-426614174000",
+            json!({}),
         );
         subject.revision = ZoneRevision::new(2);
         assert_eq!(
-                compile_committed_policy(
-                    &zone,
-                    initial_policy_snapshot().unwrap(),
-                    ZoneRevision::new(7),
-                    &[],
-                    &[role, binding, subject],
-                )
-                .unwrap_err(),
-                ResourceRuntimeError::AuthorizationUnavailable
+            compile_committed_policy(
+                &zone,
+                initial_policy_snapshot().unwrap(),
+                ZoneRevision::new(7),
+                &[],
+                &[role, binding, subject],
+            )
+            .unwrap_err(),
+            ResourceRuntimeError::AuthorizationUnavailable
         );
     }
 
     #[test]
     fn role_binding_fingerprint_changes_for_same_name_user_recreation() {
         let binding = policy_resource(
-                "RoleBinding",
+            "RoleBinding",
             "alice-binding",
             "523e4567-e89b-42d3-a456-426614174000",
             json!({
@@ -3690,18 +3639,10 @@ mod tests {
             "alice",
             "Ready",
         );
-        let first = committed_policy_subject_fingerprints(&[
-            first_user,
-            role.clone(),
-            binding.clone(),
-        ])
-        .unwrap();
-        let second = committed_policy_subject_fingerprints(&[
-            second_user,
-            role,
-            binding,
-        ])
-        .unwrap();
+        let first =
+            committed_policy_subject_fingerprints(&[first_user, role.clone(), binding.clone()])
+                .unwrap();
+        let second = committed_policy_subject_fingerprints(&[second_user, role, binding]).unwrap();
         let key = (
             ResourceRef::parse("RoleBinding/alice-binding").unwrap(),
             ResourceRef::parse("User/alice").unwrap(),
@@ -3758,8 +3699,8 @@ mod tests {
             ResourceRef::parse("Provider/fenced-subject").unwrap(),
         );
         let first_resources = vec![role.clone(), binding.clone(), subject_v1.clone()];
-        let first = refreshed_policy_subject_fingerprints(&first_resources, &BTreeMap::new())
-            .unwrap();
+        let first =
+            refreshed_policy_subject_fingerprints(&first_resources, &BTreeMap::new()).unwrap();
         assert_eq!(
             first[&key].subject_uid().as_str(),
             "333e4567-e89b-42d3-a456-426614174000"
@@ -3789,8 +3730,7 @@ mod tests {
         );
 
         let missing_resources = vec![role.clone(), binding.clone()];
-        let retained =
-            refreshed_policy_subject_fingerprints(&missing_resources, &first).unwrap();
+        let retained = refreshed_policy_subject_fingerprints(&missing_resources, &first).unwrap();
         assert_eq!(retained[&key].subject_uid(), first[&key].subject_uid());
 
         for phase in ["Pending", "Deleted"] {
@@ -3807,8 +3747,7 @@ mod tests {
                 &resources,
             )
             .unwrap();
-            let authorizer =
-                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+            let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
             assert!(
                 authorizer
                     .positive_capabilities(
@@ -3933,11 +3872,7 @@ mod tests {
         ));
 
         let mut rebound = binding.clone();
-        set_identity(
-            &mut rebound,
-            "383e4567-e89b-42d3-a456-426614174000",
-            2,
-        );
+        set_identity(&mut rebound, "383e4567-e89b-42d3-a456-426614174000", 2);
         let rebound_resources = vec![role.clone(), rebound.clone(), subject_v2.clone()];
         let rebound_fingerprints =
             refreshed_policy_subject_fingerprints(&rebound_resources, &refreshed).unwrap();
@@ -4052,11 +3987,9 @@ mod tests {
         )
         .unwrap()
         .with_zone_uid(ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap());
-        let operation = resource_bundle_materialization_operation_id(
-            &ZoneId::parse("work").unwrap(),
-            &bundle,
-        )
-        .unwrap();
+        let operation =
+            resource_bundle_materialization_operation_id(&ZoneId::parse("work").unwrap(), &bundle)
+                .unwrap();
         assert!(operation.contains("resource-bundle-materialization:"));
         assert!(!operation.contains("123e4567-e89b-42d3-a456-426614174000"));
         assert_eq!(
@@ -4214,7 +4147,9 @@ mod tests {
         let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
         let verified_peer =
             VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).unwrap();
-        registrar.install_system_core_subject(&verified_peer).unwrap();
+        registrar
+            .install_system_core_subject(&verified_peer)
+            .unwrap();
         registrar
             .component_session_acceptor(system_core_endpoint_policy(), verified_peer)
             .unwrap();

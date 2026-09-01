@@ -2391,10 +2391,7 @@ impl ZoneConfigController {
                 now,
             );
         }
-        let candidate_zone_uid = candidate
-            .zone_uid
-            .as_ref()
-            .or_else(|| bundle.zone_uid());
+        let candidate_zone_uid = candidate.zone_uid.as_ref().or_else(|| bundle.zone_uid());
         if let Some(current_uid) = self.state.zone_uid()
             && candidate_zone_uid != Some(current_uid)
         {

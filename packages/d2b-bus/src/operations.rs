@@ -744,17 +744,10 @@ mod tests {
         router::{DeliveredInvocation, DeliveredStream},
     };
     use async_trait::async_trait;
+    use d2b_contracts_resource::v3::identity::{ReconnectGeneration, ServiceName};
     use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    SchemaFingerprint,
-    ZoneId,
-};
-use d2b_contracts_resource::v3::identity::{
-    ReconnectGeneration,
-    ServiceName,
-};
+        ControllerGeneration, ResourceGeneration, ResourceRef, SchemaFingerprint, ZoneId,
+    };
 
     struct TestEndpoint;
 

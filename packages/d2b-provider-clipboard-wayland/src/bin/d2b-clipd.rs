@@ -3362,9 +3362,13 @@ fn summarize_candidates(candidates: &[Candidate]) -> String {
         .join(",")
 }
 
-fn protocol_attribution(quality: crate::clipd_host::policy::AttributionQuality) -> AttributionQuality {
+fn protocol_attribution(
+    quality: crate::clipd_host::policy::AttributionQuality,
+) -> AttributionQuality {
     match quality {
-        crate::clipd_host::policy::AttributionQuality::ExactClient => AttributionQuality::ExactClient,
+        crate::clipd_host::policy::AttributionQuality::ExactClient => {
+            AttributionQuality::ExactClient
+        }
         crate::clipd_host::policy::AttributionQuality::FocusedWindowGuess => {
             AttributionQuality::FocusedWindowGuess
         }
@@ -3581,7 +3585,9 @@ impl crate::clipd_host::niri::FocusedWindowProvider for NiriQueryProvider {
         client.query_focused_window()
     }
 
-    fn query_workspaces(&mut self) -> Result<Vec<crate::clipd_host::niri::NiriWorkspace>, NiriIpcError> {
+    fn query_workspaces(
+        &mut self,
+    ) -> Result<Vec<crate::clipd_host::niri::NiriWorkspace>, NiriIpcError> {
         let Some(ref socket) = self.socket else {
             return Ok(Vec::new());
         };
@@ -4053,9 +4059,9 @@ mod tests {
     fn handle_arm_reports_typed_error_when_picker_missing() {
         let mut supervisor = PickerSupervisor::new(CommandPickerSpawner);
         let picker_command = None;
-        let mut host_clipboard = HostClipboard::new(crate::clipd_host::niri::HostClipboardAttributor::new(
-            NiriQueryProvider::new(None),
-        ));
+        let mut host_clipboard = HostClipboard::new(
+            crate::clipd_host::niri::HostClipboardAttributor::new(NiriQueryProvider::new(None)),
+        );
         let mut fallback = FallbackArming::default();
         let mut notifier = RecordingNotifier::default();
         let mut accept_diag = AcceptDiagnostics::default();
@@ -4173,9 +4179,9 @@ mod tests {
             data_by_mime: host_data,
             timestamp_unix_ms: 10,
         };
-        let host_clipboard = HostClipboard::new(crate::clipd_host::niri::HostClipboardAttributor::new(
-            NiriQueryProvider::new(None),
-        ));
+        let host_clipboard = HostClipboard::new(
+            crate::clipd_host::niri::HostClipboardAttributor::new(NiriQueryProvider::new(None)),
+        );
 
         let candidates =
             picker_candidates(&host_clipboard, Some(&current_host), &history, "text/plain");

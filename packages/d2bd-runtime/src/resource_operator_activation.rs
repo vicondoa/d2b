@@ -10,11 +10,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
 use protobuf::{EnumOrUnknown, MessageField};
 use serde_json::Value;
@@ -350,12 +346,8 @@ pub async fn select_authenticated_resource(
     }
     let resource_ref = ResourceRef::parse(&format!("{resource_type}/{}", identity.name))
         .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
-    let uid = ResourceUid::parse(
-        identity
-            .uid
-            .ok_or(Wave6BoundaryError::ResourceSelection)?,
-    )
-    .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
+    let uid = ResourceUid::parse(identity.uid.ok_or(Wave6BoundaryError::ResourceSelection)?)
+        .map_err(|_| Wave6BoundaryError::ResourceSelection)?;
     let generation = ResourceGeneration::new(
         identity
             .generation

@@ -99,10 +99,7 @@ pub fn canonical_export_id(value: &str) -> String {
     if d2b_contracts_resource::v3::is_canonical_digest(value) {
         value.to_owned()
     } else {
-        d2b_contracts_resource::v3::canonical_digest(
-            TRACE_CONTEXT_DIGEST_DOMAIN,
-            value.as_bytes(),
-        )
+        d2b_contracts_resource::v3::canonical_digest(TRACE_CONTEXT_DIGEST_DOMAIN, value.as_bytes())
     }
 }
 

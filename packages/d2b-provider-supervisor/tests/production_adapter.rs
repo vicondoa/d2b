@@ -592,6 +592,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             pid: pid.as_raw_nonzero().get(),
             start_time_ticks,
             pidfd_index: 0,
+            controller_bootstrap_fd_index: None,
             console_fd_index: None,
             execution_ref: Some(
                 d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
@@ -624,10 +625,8 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         owner_ref: None,
         runtime_scope: None,
         typed_identity: false,
-        provider_ref: d2b_contracts_resource::v3::ResourceRef::parse(
-            "Provider/system-minijail",
-        )
-        .unwrap(),
+        provider_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-minijail")
+            .unwrap(),
         execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
         domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,

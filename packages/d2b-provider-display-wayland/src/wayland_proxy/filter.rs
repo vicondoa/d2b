@@ -605,7 +605,8 @@ impl VirtualClipboardState {
         };
         match bridge.handoff_transfer_fd(&local_fd, metadata) {
             crate::wayland_proxy::bridge::HandoffStatus::Delivered => {
-                let _ = local_fd.close_after_handoff(crate::wayland_proxy::bridge::HandoffStatus::Delivered);
+                let _ = local_fd
+                    .close_after_handoff(crate::wayland_proxy::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] target={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                     self.identity_label,
@@ -622,7 +623,9 @@ impl VirtualClipboardState {
                     crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => error,
                     _ => unreachable!(),
                 };
-                let _ = local_fd.close_after_handoff(crate::wayland_proxy::bridge::HandoffStatus::Failed(error));
+                let _ = local_fd.close_after_handoff(
+                    crate::wayland_proxy::bridge::HandoffStatus::Failed(error),
+                );
                 self.mark_bridge_disconnected();
                 self.ensure_bridge_connected();
                 let identity_label = self.identity_label.clone();
@@ -2704,7 +2707,9 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
     ) {
         if eglstream_handle_is_fd(r#type) {
             if let Some(decoration) = &self.decoration {
-                id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(decoration));
+                id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+                    decoration,
+                ));
                 decoration.borrow_mut().record_buffer(id, width, height);
             }
             slf.send_create_stream(id, width, height, handle, r#type, attribs);
@@ -2745,7 +2750,9 @@ impl WlDrmHandler for FilterDrmHandler {
         stride: u32,
         format: u32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(&self.decoration));
+        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+            &self.decoration,
+        ));
         self.decoration
             .borrow_mut()
             .record_buffer(id, width, height);
@@ -2767,7 +2774,9 @@ impl WlDrmHandler for FilterDrmHandler {
         offset2: i32,
         stride2: i32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(&self.decoration));
+        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+            &self.decoration,
+        ));
         self.decoration
             .borrow_mut()
             .record_buffer(id, width, height);
@@ -2791,7 +2800,9 @@ impl WlDrmHandler for FilterDrmHandler {
         offset2: i32,
         stride2: i32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(&self.decoration));
+        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+            &self.decoration,
+        ));
         self.decoration
             .borrow_mut()
             .record_buffer(id, width, height);
@@ -2880,7 +2891,10 @@ impl ClientHandler for FilterClientHandler {
                 }
             }
         }
-        log::debug!("[d2b-wlproxy] target={} client disconnected", self.identity_label);
+        log::debug!(
+            "[d2b-wlproxy] target={} client disconnected",
+            self.identity_label
+        );
     }
 }
 
@@ -2896,10 +2910,7 @@ pub fn build_state(upstream_path: &str) -> Result<Rc<State>, wl_proxy::state::St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::{
-        workload::WorkloadProviderKind,
-        workload_identity::WorkloadTarget,
-    };
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
     use std::io::IoSliceMut;
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixListener;
@@ -3087,7 +3098,10 @@ mod tests {
         let mut iov = [IoSliceMut::new(&mut frame)];
         let mut cmsg_space = vec![0_u8; crate::wayland_proxy::bridge::SCM_RIGHTS_MIN_CONTROL_BYTES];
         const {
-            assert!(crate::wayland_proxy::bridge::SCM_RIGHTS_CONTROL_FD_SLOTS >= crate::wayland_proxy::bridge::SCM_RIGHTS_MIN_FDS)
+            assert!(
+                crate::wayland_proxy::bridge::SCM_RIGHTS_CONTROL_FD_SLOTS
+                    >= crate::wayland_proxy::bridge::SCM_RIGHTS_MIN_FDS
+            )
         };
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
@@ -3096,7 +3110,9 @@ mod tests {
             nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
-        assert!(crate::wayland_proxy::bridge::recv_flags_are_fail_closed(msg.flags));
+        assert!(crate::wayland_proxy::bridge::recv_flags_are_fail_closed(
+            msg.flags
+        ));
         assert!(msg.bytes > 0);
         for cmsg in msg.cmsgs().expect("cmsgs") {
             if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
@@ -3123,8 +3139,10 @@ mod tests {
             },
         };
 
-        let step = clipboard
-            .handle_pending_handoff_status(pending, crate::wayland_proxy::bridge::HandoffStatus::Backpressure);
+        let step = clipboard.handle_pending_handoff_status(
+            pending,
+            crate::wayland_proxy::bridge::HandoffStatus::Backpressure,
+        );
 
         assert_eq!(step, PendingHandoffStep::Stop);
         assert_eq!(clipboard.pending_handoff_count_for_tests(), 1);
@@ -3363,10 +3381,12 @@ mod tests {
     #[test]
     fn prepare_global_hides_clipboard_boundary_even_when_policy_allows_it() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let policy = Rc::new(FilterPolicy::build(crate::wayland_proxy::policy::PolicyInput {
-            allow_globals: vec!["zwp_primary_selection_device_manager_v1".to_owned()],
-            ..PolicyInput::new(local_identity())
-        }));
+        let policy = Rc::new(FilterPolicy::build(
+            crate::wayland_proxy::policy::PolicyInput {
+                allow_globals: vec!["zwp_primary_selection_device_manager_v1".to_owned()],
+                ..PolicyInput::new(local_identity())
+            },
+        ));
         let mut handler = FilterRegistryHandler::new(policy, diag, clipboard(), None);
         let (_synthetic, decision) =
             handler.prepare_global(13, ObjectInterface::ZwpPrimarySelectionDeviceManagerV1, 1);

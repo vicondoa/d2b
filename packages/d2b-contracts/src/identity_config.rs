@@ -11,7 +11,6 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-
 const FINGERPRINT_PREFIX: &str = "sha256:";
 const FINGERPRINT_HEX_LEN: usize = 64;
 const FINGERPRINT_LEN: usize = FINGERPRINT_PREFIX.len() + FINGERPRINT_HEX_LEN;

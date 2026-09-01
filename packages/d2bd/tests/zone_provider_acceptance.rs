@@ -52,8 +52,7 @@ use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, CommittedChild,
     DescriptorSignature, GuestChildCommitResponse, GuestGenerationSet, GuestSeedContract,
     GuestSessionEvidence, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm,
-    health::GuestSessionEvidenceBinding,
+    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm, health::GuestSessionEvidenceBinding,
 };
 use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
@@ -937,10 +936,7 @@ impl RealCloudHypervisorResourceSession {
         Ok(())
     }
 
-    fn set_dependencies_ready(
-        &self,
-        ready: bool,
-    ) -> Result<(), CloudHypervisorResourceApiError> {
+    fn set_dependencies_ready(&self, ready: bool) -> Result<(), CloudHypervisorResourceApiError> {
         *self
             .dependencies_ready
             .lock()
@@ -1045,14 +1041,14 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 Ok(CloudHypervisorResourceResponse::Registered)
             }
-            CloudHypervisorResourceRequest::GetGuest { .. } => Ok(
-                CloudHypervisorResourceResponse::Guest(
+            CloudHypervisorResourceRequest::GetGuest { .. } => {
+                Ok(CloudHypervisorResourceResponse::Guest(
                     self.guest
                         .lock()
                         .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                         .clone(),
-                ),
-            ),
+                ))
+            }
             CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {
                 let ready = *self
                     .dependencies_ready
@@ -1066,9 +1062,9 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                     if ready {
                         for child in children.values_mut() {
                             if child.resource_ref().resource_type().as_str() == "Process" {
-                                *child = child.clone().with_desired_lifecycle(
-                                    DesiredLifecycle::Running,
-                                );
+                                *child = child
+                                    .clone()
+                                    .with_desired_lifecycle(DesiredLifecycle::Running);
                             }
                         }
                     }
@@ -1135,10 +1131,9 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                     .lock()
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 for (index, mutation) in batch.mutations().iter().enumerate() {
-                    let uid = ResourceUid::parse(format!(
-                        "323e4567-e89b-42d3-a456-42661417{index:04}"
-                    ))
-                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                    let uid =
+                        ResourceUid::parse(format!("323e4567-e89b-42d3-a456-42661417{index:04}"))
+                            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                     let desired_lifecycle = (mutation.target().resource_type().as_str()
                         == "Process")
                         .then_some(if ready {
@@ -1273,6 +1268,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             | CloudHypervisorResourceRequest::CloseGuestSession { .. }
             | CloudHypervisorResourceRequest::DeleteChild { .. }
             | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
             | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
                 Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }
@@ -1294,9 +1290,7 @@ impl Drop for RealCloudHypervisorResourceSession {
 type CloudController =
     CloudHypervisorController<AuthenticatedResourceApiAdapter<RealCloudHypervisorResourceSession>>;
 
-fn cloud_controller(
-    session: Arc<RealCloudHypervisorResourceSession>,
-) -> CloudController {
+fn cloud_controller(session: Arc<RealCloudHypervisorResourceSession>) -> CloudController {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -1516,9 +1510,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
                 Ok(Wave6ReconcileResult::Ready)
             }
             CloudHypervisorReconcileOutcome::Ready(_)
-            | CloudHypervisorReconcileOutcome::Degraded(_) => {
-                Err(Wave6BoundaryError::Lifecycle)
-            }
+            | CloudHypervisorReconcileOutcome::Degraded(_) => Err(Wave6BoundaryError::Lifecycle),
         }
     }
 

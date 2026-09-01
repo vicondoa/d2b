@@ -1703,8 +1703,7 @@ key":1}"#,
         let generation =
             ResourceTypeName::parse("activation-nixos.d2bus.org.NixosGeneration").unwrap();
         let shell = ResourceTypeName::parse("shell-terminal.d2bus.org.ShellSession").unwrap();
-        let wayland =
-            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+        let wayland = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
 
         assert_eq!(
             PlacementAnchor::canonical_for(&process),

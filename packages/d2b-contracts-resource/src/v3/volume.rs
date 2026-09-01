@@ -109,13 +109,7 @@ impl SourceSettings {
         image_format: Option<BlockImageFormat>,
         preallocate: bool,
     ) -> Result<Self, PrimitiveSpecError> {
-        Self::new_with_artifact(
-            kind,
-            source_policy_id,
-            None,
-            image_format,
-            preallocate,
-        )
+        Self::new_with_artifact(kind, source_policy_id, None, image_format, preallocate)
     }
 
     /// Construct source settings with an artifact-bound Nix closure.
@@ -1533,15 +1527,9 @@ mod tests {
             false,
         )
         .unwrap();
-        let source = VolumeSource::new(
-            ResourceRef::parse("Host/host-system").unwrap(),
-            settings,
-        )
-        .unwrap();
-        assert_eq!(
-            source.settings().system_artifact_id(),
-            Some(&artifact)
-        );
+        let source =
+            VolumeSource::new(ResourceRef::parse("Host/host-system").unwrap(), settings).unwrap();
+        assert_eq!(source.settings().system_artifact_id(), Some(&artifact));
         let encoded = serde_json::to_value(&source).unwrap();
         assert_eq!(
             encoded,
@@ -1560,22 +1548,20 @@ mod tests {
 
     #[test]
     fn nix_closure_source_rejects_missing_or_conflicting_binding() {
-        assert!(SourceSettings::new_with_artifact(
-            SourceKind::NixClosure,
-            None,
-            None,
-            None,
-            false,
-        )
-        .is_err());
-        assert!(SourceSettings::new_with_artifact(
-            SourceKind::NixClosure,
-            Some(BoundedToken::parse("state-root").unwrap()),
-            Some(BoundedToken::parse("guest-system").unwrap()),
-            None,
-            false,
-        )
-        .is_err());
+        assert!(
+            SourceSettings::new_with_artifact(SourceKind::NixClosure, None, None, None, false,)
+                .is_err()
+        );
+        assert!(
+            SourceSettings::new_with_artifact(
+                SourceKind::NixClosure,
+                Some(BoundedToken::parse("state-root").unwrap()),
+                Some(BoundedToken::parse("guest-system").unwrap()),
+                None,
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -54,11 +54,9 @@ use std::collections::{BTreeSet, VecDeque};
 
 use d2b_bus::session::{RouteAdmissionEvidence, RouteAdmissionVerifier};
 use d2b_contracts_resource::v3::execution_policy::PrimitiveSpecError;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
     ZoneRouteFailClosedReason, ZoneTreeEdge,
-},
 };
 
 use crate::engine::{
@@ -280,11 +278,7 @@ impl ZoneTopologyRequest {
     }
 
     /// Attach the admission bound to one sealed child Zone.
-    pub fn with_admission(
-        mut self,
-        child_zone: ZonePath,
-        admission: ZoneRouteAdmission,
-    ) -> Self {
+    pub fn with_admission(mut self, child_zone: ZonePath, admission: ZoneRouteAdmission) -> Self {
         self.admissions.insert(child_zone, admission);
         self
     }
@@ -711,9 +705,8 @@ impl ZoneServiceServer {
                 admission,
             ),
             None => {
-                let entrypoint =
-                    ZoneEntrypointRequest::new(child.clone())
-                        .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET);
+                let entrypoint = ZoneEntrypointRequest::new(child.clone())
+                    .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET);
                 self.resolver.resolve(engine, &entrypoint)
             }
         };
@@ -753,20 +746,17 @@ redacted_service_debug!(ZoneServiceServer);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{
-        ResourceUid, ZoneRevision,
-        identity::ReconnectGeneration,
-    };
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision, identity::ReconnectGeneration};
     use d2b_contracts_zone_session::v3::{
-    component_session::{OperationClass, OperationId},
-    zone_routing::{
-        ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
-        ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
-        ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
-        ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
-        ZoneSigningKeyFingerprint,
-    },
-};
+        component_session::{OperationClass, OperationId},
+        zone_routing::{
+            ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
+            ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
+            ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
+            ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
+            ZoneSigningKeyFingerprint,
+        },
+    };
 
     use crate::engine::{
         ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
@@ -922,10 +912,7 @@ mod tests {
                     4_000,
                 ),
             )
-            .with_admission(
-                zone(&["k2", "k1", "k0"]),
-                admission("get", 1_500, 4_000),
-            )
+            .with_admission(zone(&["k2", "k1", "k0"]), admission("get", 1_500, 4_000))
     }
 
     fn allowed_entrypoint_request(target: ZonePath) -> ZoneEntrypointRequest {
@@ -1114,10 +1101,8 @@ mod tests {
         let server = server();
         // The seeded advertisement expires at 4000; the runtime-issued
         // admission is stamped after that window.
-        let request = ZoneTopologyRequest::new().with_admission(
-            zone(&["k2", "k1", "k0"]),
-            admission("get", 9_000, 10_000),
-        );
+        let request = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k2", "k1", "k0"]), admission("get", 9_000, 10_000));
         let row = server
             .inspect_zone(&seeded_engine(), &zone(&["k2", "k1", "k0"]), &request)
             .expect("the sealed row survives projection expiry");
@@ -1184,10 +1169,8 @@ mod tests {
         );
 
         // Expiring the projection changes every remote row's status.
-        let later = ZoneTopologyRequest::new().with_admission(
-            zone(&["k1", "k0"]),
-            admission("get", 9_000, 10_000),
-        );
+        let later = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k1", "k0"]), admission("get", 9_000, 10_000));
         let second = server
             .poll_topology_watch(&engine, &later)
             .expect("a changed projection reports");
@@ -1198,15 +1181,9 @@ mod tests {
                 .iter()
                 .any(|row| matches!(row.status, ZoneTopologyStatus::Unreachable { .. }))
         );
-        let later_again = ZoneTopologyRequest::new().with_admission(
-            zone(&["k1", "k0"]),
-            admission("get", 9_000, 10_000),
-        );
-        assert!(
-            server
-                .poll_topology_watch(&engine, &later_again)
-                .is_none()
-        );
+        let later_again = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k1", "k0"]), admission("get", 9_000, 10_000));
+        assert!(server.poll_topology_watch(&engine, &later_again).is_none());
     }
 
     #[test]
@@ -1294,8 +1271,8 @@ mod tests {
         );
 
         // Target admission only: the relay admission remains independent.
-        let target_only = ZoneRelayRequest::new(4)
-            .with_target_admission(admission("get", 1_500, 4_000));
+        let target_only =
+            ZoneRelayRequest::new(4).with_target_admission(admission("get", 1_500, 4_000));
         assert_eq!(
             server.admit_relay_hop(&target_only),
             ZoneRelayAdmission::Denied {
@@ -1304,11 +1281,10 @@ mod tests {
         );
 
         // Both independently verified admissions are required.
-        let both = ZoneRelayRequest::new(4)
-            .with_admissions(
-                admission("get", 1_500, 4_000),
-                admission_for(OperationClass::Relay, "relay", 1_500, 4_000),
-            );
+        let both = ZoneRelayRequest::new(4).with_admissions(
+            admission("get", 1_500, 4_000),
+            admission_for(OperationClass::Relay, "relay", 1_500, 4_000),
+        );
         assert_eq!(
             server.admit_relay_hop(&both),
             ZoneRelayAdmission::Admitted {
@@ -1370,10 +1346,8 @@ mod tests {
         let entrypoint = zone(&["k2", "k1", "k0"]);
 
         assert!(matches!(
-            server.authorize_zone_shortcut(
-                &engine,
-                &allowed_entrypoint_request(entrypoint.clone())
-            ),
+            server
+                .authorize_zone_shortcut(&engine, &allowed_entrypoint_request(entrypoint.clone())),
             ZoneShortcutOutcome::Authorized { .. }
         ));
         assert_eq!(
@@ -1387,10 +1361,8 @@ mod tests {
         );
 
         assert!(matches!(
-            server.authorize_zone_shortcut(
-                &engine,
-                &allowed_entrypoint_request(entrypoint.clone())
-            ),
+            server
+                .authorize_zone_shortcut(&engine, &allowed_entrypoint_request(entrypoint.clone())),
             ZoneShortcutOutcome::Authorized { .. }
         ));
         assert_eq!(

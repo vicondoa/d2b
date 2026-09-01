@@ -28,7 +28,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("multi-user.target")
+    machine.wait_for_unit("multi-user.target", timeout=180)
 
     machine.succeed("install -d -m 0700 -o alice -g users /run/d2b-wayland-proxy-test")
     machine.succeed(
@@ -77,18 +77,26 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-wayland-proxy-test/upstream.log 2>&1 & "
         "echo $! > /run/d2b-wayland-proxy-test/upstream.pid"
     )
-    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.ready")
+    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.ready", timeout=30)
 
     machine.succeed(
         "runuser -u alice -- env XDG_RUNTIME_DIR=/run/d2b-wayland-proxy-test "
         "d2b-wayland-proxy "
         "--listen /run/d2b-wayland-proxy-test/proxy.sock "
         "--connect /run/d2b-wayland-proxy-test/upstream.sock "
-        "--vm-name corp-vm "
+        "--target acceptance-guest.local.d2b "
+        "--provider-kind local-vm "
         ">/run/d2b-wayland-proxy-test/proxy.log 2>&1 & "
         "echo $! > /run/d2b-wayland-proxy-test/proxy.pid"
     )
-    machine.wait_for_file("/run/d2b-wayland-proxy-test/proxy.sock")
+    machine.succeed(
+        "for attempt in $(seq 1 300); do "
+        "test -S /run/d2b-wayland-proxy-test/proxy.sock && exit 0; "
+        "kill -0 $(cat /run/d2b-wayland-proxy-test/proxy.pid) 2>/dev/null || "
+        "{ cat /run/d2b-wayland-proxy-test/proxy.log >&2; exit 1; }; "
+        "sleep 0.1; done; "
+        "cat /run/d2b-wayland-proxy-test/proxy.log >&2; exit 1"
+    )
     machine.succeed("test -S /run/d2b-wayland-proxy-test/proxy.sock")
     machine.succeed("test \"$(stat -c %a /run/d2b-wayland-proxy-test)\" = 700")
 
@@ -107,7 +115,7 @@ pkgs.testers.runNixOSTest {
         "sock.close()\n"
         "PY"
     )
-    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.seen")
+    machine.wait_for_file("/run/d2b-wayland-proxy-test/upstream.seen", timeout=30)
     machine.succeed(
         "python3 - <<'PY'\n"
         "import pathlib, struct\n"

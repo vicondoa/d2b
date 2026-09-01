@@ -174,11 +174,7 @@ pub(crate) async fn reconcile_binding_children(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| BindingChildRuntimeError::Core(error))?;
         reconciler
-            .relist_with_owner_generation(
-                owner_target.clone(),
-                owner.resource.generation,
-                observed,
-            )
+            .relist_with_owner_generation(owner_target.clone(), owner.resource.generation, observed)
             .map_err(|error| {
                 BindingChildRuntimeError::Core(BindingChildMaterializationError::OwnerReconcile(
                     error,
@@ -245,9 +241,10 @@ pub(crate) fn binding_children_ready(
         return false;
     }
     desired.iter().all(|intent| {
-        let Some(child) = children.iter().find(|child| {
-            child_matches_intent(owner, intent, child)
-        }) else {
+        let Some(child) = children
+            .iter()
+            .find(|child| child_matches_intent(owner, intent, child))
+        else {
             return false;
         };
         child_ready(intent, child)
@@ -806,15 +803,11 @@ mod tests {
                 serde_json::Value::Null
             },
         );
-        metadata.insert(
-            "finalizers".to_owned(),
-            serde_json::json!(finalizers),
-        );
-        resource.canonical_json = CanonicalJsonValue::parse(
-            &serde_json::to_vec(&value).expect("resource serialization"),
-        )
-        .expect("canonical resource")
-        .to_canonical_bytes();
+        metadata.insert("finalizers".to_owned(), serde_json::json!(finalizers));
+        resource.canonical_json =
+            CanonicalJsonValue::parse(&serde_json::to_vec(&value).expect("resource serialization"))
+                .expect("canonical resource")
+                .to_canonical_bytes();
     }
 
     #[test]
@@ -823,10 +816,8 @@ mod tests {
         let owner = HintTarget::new(
             ZoneId::parse("dev").unwrap(),
             ResourceRef::parse("audio.d2bus.org.AudioBinding/owner").unwrap(),
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "223e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000")
+                .unwrap(),
         );
         let observe = |resource: &StoredResource| {
             observed_child_from_resource(

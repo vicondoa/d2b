@@ -1,10 +1,6 @@
 //! The fixed system-core Host/User Zone status projection.
 
-use d2b_contracts_zone_session::v3::{
-    ZoneHandlerName,
-    ZoneHandlerPhase,
-    ZoneHandlerStatus,
-};
+use d2b_contracts_zone_session::v3::{ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus};
 
 /// The exact serialized handler value for the Host controller.
 pub const SYSTEM_CORE_HOST_HANDLER: &str = "system-core-host";

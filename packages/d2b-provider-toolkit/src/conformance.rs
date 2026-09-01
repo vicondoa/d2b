@@ -20,10 +20,7 @@ use std::fmt;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::{
-    BaseSchemaBinding,
-    ResourceSchemaContract,
-    ResourceSpec,
-    ResourceTypeName,
+    BaseSchemaBinding, ResourceSchemaContract, ResourceSpec, ResourceTypeName,
 };
 
 /// The provider-neutral result code a Provider returns when it refuses an
@@ -320,12 +317,8 @@ fn resolve<'a>(
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::{
-    BaseSchemaIdentity,
-    ObjectFieldSchema,
-    ResourceSpec,
-    SchemaFingerprint,
-    SchemaVersion,
-};
+        BaseSchemaIdentity, ObjectFieldSchema, ResourceSpec, SchemaFingerprint, SchemaVersion,
+    };
 
     fn fingerprint(fill: &str) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}", fill.repeat(64))).expect("valid fingerprint")

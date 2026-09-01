@@ -53,8 +53,8 @@ pub use context::{CancellationToken, OwnedOperationContext};
 pub use descriptor::ProviderDescriptor;
 pub use error::{ProviderRuntimeError, RegistryBuildError};
 pub use forwarding::{
-    ForwardTarget, ForwardedCall, ProviderForwardRequest,
-    ZoneRouteFailClosedReason, admit_provider_forward,
+    ForwardTarget, ForwardedCall, ProviderForwardRequest, ZoneRouteFailClosedReason,
+    admit_provider_forward,
 };
 pub use identity::{
     MAX_PROVIDER_CAPABILITIES, MAX_PROVIDER_REGISTRY_ENTRIES, PROVIDER_RESOURCE_TYPE,

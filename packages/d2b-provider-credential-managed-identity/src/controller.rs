@@ -1,20 +1,16 @@
 //! Secret-free managed identity controller projections.
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialMethod,
     CredentialServiceError, CredentialServiceErrorCode, CredentialStatus,
-},
 };
-use d2b_contracts_provider::v3::{
-    credential_controller::{
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialAuditOutcome, CredentialAuditRecord, CredentialControllerDecision,
     CredentialControllerError, CredentialControllerHandlers, CredentialControllerHealth,
     CredentialObservabilityError, CredentialObserveInput, CredentialReconcileInput,
     CredentialRevocationInput, CredentialSingleFlight, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome, observe_credential,
     reconcile_credential, revoke_credential,
-},
 };
 use d2b_contracts_resource::v3::ResourceRef;
 

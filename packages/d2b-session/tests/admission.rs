@@ -8,19 +8,15 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    component_session::{AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass},
-};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
-};
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    SessionBinding,
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, SessionBinding,
+};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_zone_session::v3::component_session::{
+    AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding,
+    EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
+    Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode,
+    TransportBinding, TransportClass,
 };
 use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{
@@ -509,7 +505,8 @@ async fn invoke_permit<C>(
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+                    .unwrap(),
                 "ResourceService/Get",
                 zone.clone(),
                 None,
@@ -622,20 +619,22 @@ async fn native_rbac_connect_and_invoke_are_executed() {
 async fn authenticated_route_binding_retains_purpose_class_and_endpoint_roles() {
     let zone = ZoneId::parse("work").unwrap();
     let policy = endpoint_policy();
-    let session = session_acceptor(
-        policy.clone(),
-        zone,
-        [SessionVerb::Connect],
-    )
-    .admit(engine(&policy).await, evidence(), 1)
-    .await
-    .unwrap();
+    let session = session_acceptor(policy.clone(), zone, [SessionVerb::Connect])
+        .admit(engine(&policy).await, evidence(), 1)
+        .await
+        .unwrap();
     let binding = session.route_binding();
-    assert_eq!(binding.endpoint_locality(), policy.transport_binding.locality);
+    assert_eq!(
+        binding.endpoint_locality(),
+        policy.transport_binding.locality
+    );
     assert_eq!(binding.purpose_class(), policy.purpose_class);
     assert_eq!(binding.initiator_role(), policy.initiator_role);
     assert_eq!(binding.responder_role(), policy.responder_role);
-    assert_eq!(binding.transport_class(), policy.transport_binding.transport);
+    assert_eq!(
+        binding.transport_class(),
+        policy.transport_binding.transport
+    );
 }
 
 #[tokio::test]
@@ -660,7 +659,8 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Observe,
-                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+                    .unwrap(),
                 "ResourceService/Watch",
                 zone.clone(),
                 None,
@@ -683,7 +683,8 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+                    .unwrap(),
                 "ResourceService/Get",
                 zone.clone(),
                 None,
@@ -707,7 +708,8 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+                    .unwrap(),
                 "ResourceService/Get",
                 zone,
                 None,
@@ -871,7 +873,8 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     let local = ZoneId::parse("work").unwrap();
     let remote = ZoneId::parse("personal").unwrap();
     let next_hop = ZoneId::parse("gateway").unwrap();
-    let service = d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap();
+    let service =
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap();
     let relay = SessionAuthorizationRequest::relay(
         service.clone(),
         "ResourceService/Get",

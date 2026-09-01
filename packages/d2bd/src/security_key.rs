@@ -16,11 +16,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub use d2b_provider_device_security_key::SecurityKeyState;
 use d2b_provider_device_security_key::{
     CTAPHID_BROADCAST_CID, CTAPHID_INIT, CTAPHID_REPORT_SIZE, CtaphidPacket, CtaphidReport,
     QUEUE_WAIT_TIMEOUT, build_cancel_packet, parse_ctaphid_report,
 };
-pub use d2b_provider_device_security_key::SecurityKeyState;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd};
 use tracing::info;
 
@@ -570,9 +570,9 @@ pub(crate) async fn run_connection(
 mod tests {
     use super::*;
     use d2b_provider_device_security_key::{
-        CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERROR, CTAPHID_ERR_CHANNEL_BUSY,
-        CTAPHID_ERR_INVALID_CMD, CidTranslator, LeaseId, build_error_report, build_init_packet,
-        recv_report, relay::LeaseState as RelayLeaseState, send_report,
+        CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD,
+        CTAPHID_ERROR, CidTranslator, LeaseId, build_error_report, build_init_packet, recv_report,
+        relay::LeaseState as RelayLeaseState, send_report,
     };
     use std::fs;
     use std::io::Cursor;

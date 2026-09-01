@@ -144,7 +144,7 @@ let
       "--seccomp"
       "true"
       "--memory"
-      "size=${toString mem}M"
+      "size=${toString mem}M,shared=on"
       "--console"
       "null"
       "--serial"

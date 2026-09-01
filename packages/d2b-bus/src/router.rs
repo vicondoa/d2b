@@ -9,26 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    MAX_FILTER_VALUES,
-    MAX_LIST_FILTERS,
-    MAX_LIST_RESOURCE_TYPES,
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-};
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    EvidenceClass,
-    Locality,
-    ServiceName,
-    SessionBinding,
+    AuthenticatedSubjectContext, EvidenceClass, Locality, ServiceName, SessionBinding,
 };
 use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_RESOURCE_TYPES,
+    ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+};
 use d2b_core_controller::controller_assignment::{
     ASSIGNMENT_UID_FILTER, AssignmentIdentity, AssignmentVerb, OWNER_UID_FILTER,
     ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
@@ -319,10 +307,9 @@ impl ResourceQuery {
             };
         };
         let (bound_field, bound_value) = match scope {
-            ScopedResourceScope::Primary => (
-                ASSIGNMENT_UID_FILTER,
-                assignment.resource_uid().as_str(),
-            ),
+            ScopedResourceScope::Primary => {
+                (ASSIGNMENT_UID_FILTER, assignment.resource_uid().as_str())
+            }
             ScopedResourceScope::OwnerChild(owner) => {
                 if owner.owner_uid() != assignment.resource_uid()
                     || self.resource_types.is_empty()
@@ -1244,14 +1231,7 @@ impl ZoneBus {
         zone: ZoneId,
         authorizer: BusAuthorizer,
         config: BusConfig,
-    ) -> Result<
-        (
-            Self,
-            ZoneRegistrar,
-            CommittedInteractionSubjectIssuer,
-        ),
-        BusError,
-    > {
+    ) -> Result<(Self, ZoneRegistrar, CommittedInteractionSubjectIssuer), BusError> {
         Self::with_clock_observer_and_metrics_and_interaction_subject_issuer(
             zone,
             authorizer,
@@ -1301,13 +1281,7 @@ impl ZoneBus {
         metrics: Arc<dyn BusTelemetry>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
         let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
-            zone,
-            authorizer,
-            config,
-            clock,
-            observer,
-            metrics,
-            false,
+            zone, authorizer, config, clock, observer, metrics, false,
         )?;
         Ok((bus, registrar))
     }
@@ -1321,22 +1295,9 @@ impl ZoneBus {
         clock: Arc<dyn BusClock>,
         observer: Arc<dyn BusObserver>,
         metrics: Arc<dyn BusTelemetry>,
-    ) -> Result<
-        (
-            Self,
-            ZoneRegistrar,
-            CommittedInteractionSubjectIssuer,
-        ),
-        BusError,
-    > {
+    ) -> Result<(Self, ZoneRegistrar, CommittedInteractionSubjectIssuer), BusError> {
         let (bus, registrar, issuer) = Self::with_clock_observer_and_metrics_internal(
-            zone,
-            authorizer,
-            config,
-            clock,
-            observer,
-            metrics,
-            true,
+            zone, authorizer, config, clock, observer, metrics, true,
         )?;
         let issuer = issuer.ok_or(BusError::InvalidConfig)?;
         Ok((bus, registrar, issuer))
@@ -1423,9 +1384,8 @@ impl ZoneBus {
                     }
                 }),
             },
-            interaction_subject_authority.map(|authority| {
-                CommittedInteractionSubjectIssuer { authority }
-            }),
+            interaction_subject_authority
+                .map(|authority| CommittedInteractionSubjectIssuer { authority }),
         ))
     }
 
@@ -1801,7 +1761,9 @@ impl AuthoritativeUnixSubjectResolver {
             .enumerate()
             .filter(|(_, subject)| {
                 let peer_matches = if *service == ServicePackage::ResourceV3 {
-                    subject.expected_peer.is_some_and(|expected| expected == peer)
+                    subject
+                        .expected_peer
+                        .is_some_and(|expected| expected == peer)
                 } else {
                     subject
                         .expected_peer
@@ -1819,11 +1781,9 @@ impl AuthoritativeUnixSubjectResolver {
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if matches.len() != 1 {
-            return Err(
-                d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                ),
-            );
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+            ));
         }
         let index = matches[0];
         if subjects[index].expected_peer.is_some() {
@@ -2836,25 +2796,26 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         target: Option<&ResourceRef>,
         now_tick: u64,
     ) -> Result<(), EndpointError> {
-        let request = if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
-            SessionAuthorizationRequest::relay(
-                route.service().clone(),
-                route.member().as_str(),
-                route.zone().clone(),
-                target.cloned(),
-                verb,
-                route.zone().clone(),
-            )
-        } else {
-            SessionAuthorizationRequest::new(
-                verb,
-                route.service().clone(),
-                route.member().as_str(),
-                route.zone().clone(),
-                target.cloned(),
-            )
-        }
-        .map_err(|_| EndpointError::Rejected)?;
+        let request =
+            if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
+                SessionAuthorizationRequest::relay(
+                    route.service().clone(),
+                    route.member().as_str(),
+                    route.zone().clone(),
+                    target.cloned(),
+                    verb,
+                    route.zone().clone(),
+                )
+            } else {
+                SessionAuthorizationRequest::new(
+                    verb,
+                    route.service().clone(),
+                    route.member().as_str(),
+                    route.zone().clone(),
+                    target.cloned(),
+                )
+            }
+            .map_err(|_| EndpointError::Rejected)?;
         self.session
             .lock()
             .await
@@ -2929,10 +2890,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             outbound_frame =
                 d2b_resource_api::attach_scoped_commit_frame(&outbound_frame, &transport)
                     .map_err(|_| EndpointError::Rejected)?;
-        } else if matches!(
-            request.resource_call(),
-            Some(ResourceCall::CommitBatch(_))
-        ) {
+        } else if matches!(request.resource_call(), Some(ResourceCall::CommitBatch(_))) {
             d2b_resource_api::reject_scoped_commit_frame(&outbound_frame)
                 .map_err(|_| EndpointError::Rejected)?;
         }
@@ -4362,32 +4320,14 @@ mod tests {
 
     use crate::metrics::BusRouteOutcome;
     use async_trait::async_trait;
+    use d2b_contracts_resource::v3::identity::{
+        AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+        ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
+        CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+        RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceGeneration, ResourceRef, ResourceTypeName,
+        ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, canonical_digest,
     };
     use d2b_controller_toolkit::{
         OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason,
@@ -5131,11 +5071,7 @@ use d2b_contracts_resource::v3::identity::{
         }
     }
 
-    fn subject_issuer_bus() -> (
-        ZoneBus,
-        ZoneRegistrar,
-        CommittedInteractionSubjectIssuer,
-    ) {
+    fn subject_issuer_bus() -> (ZoneBus, ZoneRegistrar, CommittedInteractionSubjectIssuer) {
         ZoneBus::with_interaction_subject_issuer(
             ZoneId::parse("dev").unwrap(),
             BusAuthorizer::new(
@@ -5920,11 +5856,8 @@ use d2b_contracts_resource::v3::identity::{
         .unwrap();
         let owner_uid = first.assignment().resource_uid().clone();
         let owner_scope = first.mutations()[0].scope().clone();
-        let owner_filter = ResourceFilter::new(
-            OWNER_UID_FILTER,
-            vec![owner_uid.as_str().to_owned()],
-        )
-        .unwrap();
+        let owner_filter =
+            ResourceFilter::new(OWNER_UID_FILTER, vec![owner_uid.as_str().to_owned()]).unwrap();
         let zone = ZoneId::parse("dev").unwrap();
 
         let non_process = ResourceQuery {
@@ -7392,8 +7325,7 @@ use d2b_contracts_resource::v3::identity::{
 
     #[test]
     fn guest_local_seed_call_allows_only_approved_creates() {
-        let approved =
-            BTreeSet::from([ResourceTypeName::parse("Process").expect("Process type")]);
+        let approved = BTreeSet::from([ResourceTypeName::parse("Process").expect("Process type")]);
         let valid = ResourceCall::CommitBatch(vec![(
             ResourceRef::parse("Process/agent").expect("Process ref"),
             ResourceVerb::Create,

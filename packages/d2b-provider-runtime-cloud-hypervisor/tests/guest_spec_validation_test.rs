@@ -243,7 +243,10 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
     let create_batch = GuestChildCreateBatch::new(
         &guest_snapshot,
         &batch,
-        batch.mutations().iter().map(|mutation| mutation.target().clone()),
+        batch
+            .mutations()
+            .iter()
+            .map(|mutation| mutation.target().clone()),
     )
     .unwrap();
     for mutation in batch.mutations() {
@@ -256,10 +259,18 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
             .unwrap()
             .insert(
                 "uid".to_owned(),
-                serde_json::Value::String(
-                    "00000000-0000-4000-8000-000000000000".to_owned(),
-                ),
+                serde_json::Value::String("00000000-0000-4000-8000-000000000000".to_owned()),
             );
+        if mutation.target().resource_type().as_str() == "Process" {
+            assert_eq!(
+                value["spec"]["sandbox"]["namespaceClasses"],
+                serde_json::json!(["mount", "ipc"])
+            );
+            assert_eq!(value["spec"]["sandbox"]["seccompClass"], "strict");
+            assert_eq!(value["spec"]["sandbox"]["umask"], "0022");
+        } else if mutation.target().resource_type().as_str() == "Volume" {
+            assert_eq!(value["spec"]["providerRef"], "Provider/volume-local");
+        }
         d2b_contracts_resource::v3::ResourceEnvelope::from_json(
             &serde_json::to_vec(&value).unwrap(),
         )

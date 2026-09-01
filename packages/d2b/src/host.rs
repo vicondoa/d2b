@@ -4,11 +4,11 @@ use clap::{Args, Subcommand};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    CliFailure, doctor, host_validate, print_json, print_stdout,
+    CliFailure,
     context::{CliContext, OutputMode, RequestDeadline, ZoneContext},
-    dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
     dispatch::{GenericGetArgs, GenericListArgs},
-    resource,
+    dispatch::{emit_host_error, host_error_envelope, missing_mutation_flag_envelope},
+    doctor, host_validate, print_json, print_stdout, resource,
 };
 use d2b_contracts_control::cli_output::{
     HostCheckFindingV2, HostCheckOutputV2, HostCheckSeverityV2, HostCheckSummaryV2,
@@ -493,8 +493,10 @@ fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure
             .iter()
             .any(|spec| spec.wave == only_wave);
         if !known {
-            let known_list: Vec<&str> =
-                host_validate::WAVE_CATALOG.iter().map(|spec| spec.wave).collect();
+            let known_list: Vec<&str> = host_validate::WAVE_CATALOG
+                .iter()
+                .map(|spec| spec.wave)
+                .collect();
             return emit_host_error(
                 &host_error_envelope(
                     "host validate --wave value is not a known readiness wave",
@@ -561,9 +563,7 @@ fn map_host_check_finding(finding: host_check::HostCheckFinding) -> HostCheckFin
     }
 }
 
-fn map_host_check_severity(
-    severity: host_check::HostCheckSeverity,
-) -> HostCheckSeverityV2 {
+fn map_host_check_severity(severity: host_check::HostCheckSeverity) -> HostCheckSeverityV2 {
     match severity {
         host_check::HostCheckSeverity::Pass => HostCheckSeverityV2::Pass,
         host_check::HostCheckSeverity::Warn => HostCheckSeverityV2::Warn,

@@ -17,18 +17,19 @@
 //! rather than absorbed. No row asserts wall-clock behaviour; timing lives in
 //! the companion `route_decision` benchmark.
 
-use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision};
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision};
 use d2b_contracts_zone_session::v3::{
     component_session::{OperationClass, OperationId},
     zone_routing::{
-    MAX_ZONE_ROUTE_PATH_HOPS, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION,
-    ZoneDescendantRoute, ZoneLabelId, ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation,
-    ZoneLinkRouteAdvertisement, ZoneLinkRouteWithdrawal, ZonePath, ZoneRouteAuditEventKind,
-    ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRouteHopDirection,
-    ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature, ZoneRouteSignatureAlgorithm,
-    ZoneRouteSignatureRef, ZoneSigningKeyFingerprint, ZoneTreeEdge,
-},
+        MAX_ZONE_ROUTE_PATH_HOPS, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION,
+        ZoneDescendantRoute, ZoneLabelId, ZoneLinkControllerGeneration,
+        ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement, ZoneLinkRouteWithdrawal, ZonePath,
+        ZoneRouteAuditEventKind, ZoneRouteCapability, ZoneRouteCapabilitySet,
+        ZoneRouteFailClosedReason, ZoneRouteHopDirection, ZoneRouteId, ZoneRouteKeyRole,
+        ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
+        ZoneSigningKeyFingerprint, ZoneTreeEdge,
+    },
 };
 use d2b_zone_routing::engine::{
     ZoneAdvertisementAdmission, ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteAdmission,
@@ -363,9 +364,9 @@ fn routable_with_capability(
     if source == k0() && target == k0() {
         ZoneRouteRequest::new(source, target)
     } else {
-        ZoneRouteRequest::new(source.clone(), target.clone()).with_admission(
-            route_admission_for(&source, &target, capability, NOW, 4_000),
-        )
+        ZoneRouteRequest::new(source.clone(), target.clone()).with_admission(route_admission_for(
+            &source, &target, capability, NOW, 4_000,
+        ))
     }
 }
 
@@ -628,9 +629,8 @@ fn nearest_common_ancestor_vectors() {
     ];
 
     for vector in vectors {
-        let request =
-            routable(vector.source.clone(), vector.target.clone())
-                .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET);
+        let request = routable(vector.source.clone(), vector.target.clone())
+            .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET);
         let decision = engine.decide_route(&request);
         let ZoneRouteDecision::Allowed {
             path,
@@ -892,12 +892,10 @@ fn capability_ceiling_vectors() {
     ];
 
     for vector in vectors {
-        let request = vector
-            .required
-            .map_or_else(
-                || routable(k0(), vector.target.clone()),
-                |required| routable_with_capability(k0(), vector.target.clone(), required),
-            );
+        let request = vector.required.map_or_else(
+            || routable(k0(), vector.target.clone()),
+            |required| routable_with_capability(k0(), vector.target.clone(), required),
+        );
         let decision = engine.decide_route(&request);
         assert_eq!(
             decision.denial_reason(),
@@ -1157,10 +1155,7 @@ fn k0_k1_k2_topology_scenario() {
 
     // K1 forwards the frame. Both grants are independent and both are needed.
     let relay = ZoneRelayRequest::new(remaining_hops_after)
-        .with_admissions(
-            route_admission("get", NOW, 4_000),
-            relay_admission("relay"),
-        );
+        .with_admissions(route_admission("get", NOW, 4_000), relay_admission("relay"));
     let admission = ZoneRouteEngine::admit_relay_hop(&relay);
     assert_eq!(
         admission,
@@ -1213,41 +1208,30 @@ fn relay_grant_vectors() {
         RelayVector {
             name: "relay grant missing",
             request: {
-                ZoneRelayRequest::new(4).with_target_admission(route_admission(
-                    "get", NOW, 4_000,
-                ))
+                ZoneRelayRequest::new(4).with_target_admission(route_admission("get", NOW, 4_000))
             },
             expected: Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected),
         },
         RelayVector {
             name: "target verb grant missing",
-            request: {
-                ZoneRelayRequest::new(4).with_relay_admission(relay_admission("relay"))
-            },
+            request: { ZoneRelayRequest::new(4).with_relay_admission(relay_admission("relay")) },
             expected: Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected),
         },
         RelayVector {
             name: "uplink down",
-            request: {
-                ZoneRelayRequest::new(4)
-            },
+            request: { ZoneRelayRequest::new(4) },
             expected: Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected),
         },
         RelayVector {
             name: "a descriptor attachment is never relayable",
-            request: {
-                full().with_attachment_offer(true)
-            },
+            request: { full().with_attachment_offer(true) },
             expected: Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink),
         },
         RelayVector {
             name: "an exhausted budget cannot be forwarded",
             request: {
                 ZoneRelayRequest::new(0)
-                    .with_admissions(
-                        route_admission("get", NOW, 4_000),
-                        relay_admission("relay"),
-                    )
+                    .with_admissions(route_admission("get", NOW, 4_000), relay_admission("relay"))
             },
             expected: Some(ZoneRouteFailClosedReason::HopLimitExceeded),
         },
@@ -1345,8 +1329,8 @@ fn hop_count_boundary_vectors() {
     ];
 
     for vector in vectors {
-        let request = routable(k0(), vector.target.clone())
-            .with_remaining_hops(vector.remaining_hops);
+        let request =
+            routable(k0(), vector.target.clone()).with_remaining_hops(vector.remaining_hops);
         let decision = engine.decide_route(&request);
         assert_eq!(
             decision.denial_reason(),
@@ -1430,9 +1414,7 @@ fn refusal_ordering_vectors() {
         ),
         (
             "an admitted request with no budget refuses on the hop limit",
-            {
-                routable(k0(), k2()).with_remaining_hops(0)
-            },
+            { routable(k0(), k2()).with_remaining_hops(0) },
             ZoneRouteFailClosedReason::HopLimitExceeded,
         ),
         (
@@ -1461,5 +1443,8 @@ fn refusing_default_vectors() {
     assert_eq!(request.remaining_hops(), ZONE_ROUTE_INITIAL_HOP_BUDGET);
 
     let relay = ZoneRelayRequest::new(ZONE_ROUTE_INITIAL_HOP_BUDGET);
-    assert_eq!(relay.arrived_remaining_hops(), ZONE_ROUTE_INITIAL_HOP_BUDGET);
+    assert_eq!(
+        relay.arrived_remaining_hops(),
+        ZONE_ROUTE_INITIAL_HOP_BUDGET
+    );
 }

@@ -6,8 +6,8 @@ use std::fmt;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
-    ActivationRunnerInput,
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
+    ActivationRunnerInput, ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+    ZoneRevision,
 };
 use sha2::{Digest, Sha256};
 
@@ -378,6 +378,7 @@ pub struct LaunchTicket {
     process_uid: ResourceUid,
     zone_uid: Option<ResourceUid>,
     owner_ref: Option<ResourceRef>,
+    owner_uid: Option<ResourceUid>,
     runtime_scope: Option<ConfigurationDigest>,
     resource_revision: Option<ZoneRevision>,
     resource_generation: ResourceGeneration,
@@ -462,6 +463,7 @@ impl LaunchTicket {
             process_uid,
             zone_uid: None,
             owner_ref: None,
+            owner_uid: None,
             runtime_scope: None,
             resource_revision: None,
             resource_generation,
@@ -526,6 +528,18 @@ impl LaunchTicket {
         self.zone_uid = Some(zone_uid);
         self.owner_ref = owner_ref;
         self.runtime_scope = Some(runtime_scope);
+        Ok(self)
+    }
+
+    /// Bind the immutable UID of the semantic owner.
+    pub fn with_owner_uid(
+        mut self,
+        owner_uid: ResourceUid,
+    ) -> Result<Self, ProcessConformanceError> {
+        if self.owner_ref.is_none() || self.owner_uid.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.owner_uid = Some(owner_uid);
         Ok(self)
     }
 
@@ -681,9 +695,7 @@ impl LaunchTicket {
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
-        if self.execution_ref.resource_type().as_str() == "Host"
-            && self.guest_execution.is_some()
-        {
+        if self.execution_ref.resource_type().as_str() == "Host" && self.guest_execution.is_some() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         self.digests.validate()?;
@@ -796,8 +808,7 @@ impl LaunchTicket {
         mut self,
         binding: GuestExecutionBinding,
     ) -> Result<Self, ProcessConformanceError> {
-        if self.execution_ref.resource_type().as_str() != "Guest"
-            || self.guest_execution.is_some()
+        if self.execution_ref.resource_type().as_str() != "Guest" || self.guest_execution.is_some()
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
@@ -862,6 +873,11 @@ impl LaunchTicket {
     /// Borrow the exact semantic owner, when one was committed.
     pub const fn owner_ref(&self) -> Option<&ResourceRef> {
         self.owner_ref.as_ref()
+    }
+
+    /// Borrow the immutable semantic-owner UID, when bound.
+    pub const fn owner_uid(&self) -> Option<&ResourceUid> {
+        self.owner_uid.as_ref()
     }
 
     /// Borrow the private host-runtime scope commitment.
@@ -1222,20 +1238,22 @@ mod tests {
 
     #[test]
     fn runtime_scope_commitment_is_incarnation_and_zone_bound() {
-        let zone_a =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("zone uid");
-        let zone_b =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
-        let guest =
-            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("guest uid");
+        let zone_a = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("zone uid");
+        let zone_b = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let guest = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("guest uid");
         let resource =
             ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").expect("resource uid");
         let other_resource =
-            ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004")
-                .expect("resource uid");
+            ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").expect("resource uid");
         let process_ref = ResourceRef::parse("Process/cloud-hypervisor").expect("process ref");
-        let first =
-            runtime_scope_commitment(&zone_a, Some(&guest), &process_ref, &resource, "cloud-hypervisor", 1);
+        let first = runtime_scope_commitment(
+            &zone_a,
+            Some(&guest),
+            &process_ref,
+            &resource,
+            "cloud-hypervisor",
+            1,
+        );
 
         assert_eq!(
             first,

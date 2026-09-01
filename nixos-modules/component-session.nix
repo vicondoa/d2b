@@ -1,8 +1,17 @@
-{ config, lib, name, d2bInputs ? { }, d2bHostTools ? null, pkgs, ... }:
+{ config
+, lib
+, name
+, d2bInputs ? { }
+, d2bHostTools ? null
+, d2bHostToolOverrides ? null
+, pkgs
+, ...
+}:
 
 let
   cfg = config.d2b.componentSession;
   system = pkgs.stdenv.hostPlatform.system;
+  d2bLib = import ./lib.nix { inherit lib; };
   self =
     if builtins.isAttrs d2bInputs && builtins.hasAttr "self" d2bInputs
     then d2bInputs.self
@@ -22,12 +31,17 @@ let
       && builtins.getAttr name flakePackages != null
     then builtins.getAttr name flakePackages
       else throw "d2b Guest package '${name}' is unavailable for ${system}";
-  d2bdPackage =
+  d2bdSourcePackage =
     if d2bHostTools != null
       && builtins.hasAttr "d2bd" d2bHostTools
       && builtins.getAttr "d2bd" d2bHostTools != null
     then d2bHostTools.d2bd
     else packageFrom "d2bd-guest-static";
+  d2bdPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "d2bd";
+    fallback = d2bdSourcePackage;
+  };
   shellRunnerPackage = packageFrom "d2b-guest-shell-runner-static";
   guestUidDefault =
     let
@@ -191,6 +205,8 @@ in
   };
 
   config = {
+    _module.args.d2bHostToolOverrides = lib.mkDefault null;
+
     assertions = [
       {
         assertion = !cfg.shell.enable || cfg.enable;
@@ -243,9 +259,9 @@ in
     systemd.services = {
       d2bd-guest = lib.mkIf cfg.enable {
         description = "d2b Guest target agent";
-        wantedBy = [ "multi-user.target" ];
+        wantedBy = [ "basic.target" ];
         wants = [ "d2b-broker-guest.socket" ];
-        after = [ "d2b-broker-guest.socket" "network.target" ];
+        after = [ "d2b-broker-guest.socket" ];
         serviceConfig = {
           Type = "simple";
           User = "d2bd";

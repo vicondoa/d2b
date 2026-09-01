@@ -3,19 +3,18 @@ use d2b_contracts_broker::broker_wire::{
     DeletePersistentTapRequest, NftablesProjectionAction,
 };
 use d2b_contracts_resource::v3::{
-    NetworkProvenance, ResourceName,
-    ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
+    NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceName, ResourceUid,
 };
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
     admit_external_nic_claims,
     bridge_port::{BridgePortFlagSet, TapRole, validate_readback},
+    controller::{
+        NetworkAdmissionIntent, NetworkAdmissionKey, render_config, render_config_with_provenance,
+    },
     ifname::{
         IfName, IfNameMapping, NetworkIfRole, derive_ifname, derive_network_ifname,
         derive_network_route_name_for, detect_collisions,
-    },
-    controller::{
-        NetworkAdmissionIntent, NetworkAdmissionKey, render_config, render_config_with_provenance,
     },
     netlink::{LinkKind, LinkSpec, NetlinkError},
     nftables::{
@@ -229,8 +228,7 @@ fn same_named_networks_in_different_zones_have_distinct_admitted_kernel_names() 
     let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
-            .unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base").unwrap(),
     )
     .unwrap();
     let first = NetworkAdmissionIntent::new(
@@ -309,8 +307,7 @@ fn admission_intent_binds_zone_network_generations_and_bundle() {
     let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
-            .unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base").unwrap(),
     )
     .unwrap();
     let intent = NetworkAdmissionIntent::new(key.clone(), spec, Vec::new()).unwrap();
@@ -338,8 +335,7 @@ fn rendered_network_config_binds_complete_provenance() {
     let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
         d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
-            .unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base").unwrap(),
     )
     .unwrap();
     let content = render_config_with_provenance(&spec, &provenance).unwrap();
@@ -353,8 +349,8 @@ fn rendered_network_config_binds_complete_provenance() {
 
 #[test]
 fn rendered_network_config_preserves_gateway_backed_routing() {
-    let spec: d2b_contracts_resource::v3::network::NetworkSpec = serde_json::from_value(
-        serde_json::json!({
+    let spec: d2b_contracts_resource::v3::network::NetworkSpec =
+        serde_json::from_value(serde_json::json!({
             "lanCidr": "10.20.0.0/24",
             "uplinkCidr": "192.0.2.0/30",
             "netVmSystemArtifactId": "net-vm-base",
@@ -367,9 +363,8 @@ fn rendered_network_config_preserves_gateway_backed_routing() {
                     "dns": ["203.0.113.53"]
                 }
             }
-        }),
-    )
-    .unwrap();
+        }))
+        .unwrap();
     let routing = String::from_utf8(render_config(&spec).unwrap().routing).unwrap();
     assert!(routing.contains("gateway=192.0.2.2"));
     assert!(routing.contains("externalGateway=203.0.113.1"));

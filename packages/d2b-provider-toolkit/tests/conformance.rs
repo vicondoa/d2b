@@ -10,18 +10,14 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_provider::v3::{
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
-        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
-        ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest,
-        ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix,
-        TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-    },
+use d2b_contracts_provider::v3::provider::{
+    ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+    ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+    ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest, ResourceApiBinding,
+    RevocationState, SignatureState, StandardCapabilityMatrix, TargetRuntimeArtifacts,
+    TrustEvidence, UpgradeDisposition, UpgradePolicy,
 };
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ArtifactId,
     identity::{ResourceTypeName, SchemaFingerprint},
@@ -313,18 +309,10 @@ fn test_manifest() -> ProviderManifest {
     )
     .expect("valid manifest")
     .with_target_runtime_artifacts([
-        TargetRuntimeArtifacts::new(
-            ControllerTargetKind::Host,
-            digest.clone(),
-            digest.clone(),
-        )
-        .expect("valid host runtime artifacts"),
-        TargetRuntimeArtifacts::new(
-            ControllerTargetKind::Guest,
-            digest.clone(),
-            digest.clone(),
-        )
-        .expect("valid guest runtime artifacts"),
+        TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest.clone(), digest.clone())
+            .expect("valid host runtime artifacts"),
+        TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest.clone(), digest.clone())
+            .expect("valid guest runtime artifacts"),
     ])
     .expect("valid shared runtime artifacts")
 }

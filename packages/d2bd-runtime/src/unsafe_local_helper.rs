@@ -2204,7 +2204,8 @@ mod tests {
         let registry = HelperRegistry::new(999, [1000]);
         let browser =
             d2b_contracts::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
-        let editor =         d2b_contracts::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
+        let editor =
+            d2b_contracts::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
         registry.state.lock().last_failures.insert(
             (1000, browser.to_canonical()),
             HelperFailureCode::ProxyUnavailable,

@@ -1,7 +1,4 @@
-use d2b_contracts_provider::v3::{
-    ProviderManifest,
-    SemanticFamily,
-};
+use d2b_contracts_provider::v3::{ProviderManifest, SemanticFamily};
 
 #[test]
 fn provider_contract_surface_exposes_strict_schema_types() {

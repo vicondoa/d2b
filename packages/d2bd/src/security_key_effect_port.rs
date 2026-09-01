@@ -5,10 +5,7 @@ use d2b_contracts::types::VmId;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessRole, ReadinessPredicate};
 use d2b_provider_device_security_key::{

@@ -752,7 +752,7 @@ let
         settings = defaultAttachmentSettings;
       }];
       quota = null;
-    } "Guest/${guestName}";
+    } null;
 
   tpmEnabled = guest:
     let

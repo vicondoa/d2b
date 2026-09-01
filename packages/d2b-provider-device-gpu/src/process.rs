@@ -1,10 +1,7 @@
 //! GPU, render-node, and video Process declarations.
 
 use core::fmt;
-use d2b_contracts_resource::v3::{
-    ResourceUid,
-    device::DeviceArbitration,
-};
+use d2b_contracts_resource::v3::{ResourceUid, device::DeviceArbitration};
 
 use crate::settings::{GpuSettings, GpuSettingsError};
 

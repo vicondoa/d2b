@@ -926,22 +926,17 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let CanonicalJsonValue::Object(root) =
-            CanonicalJsonValue::parse(endpoint_payload).unwrap()
+        let CanonicalJsonValue::Object(root) = CanonicalJsonValue::parse(endpoint_payload).unwrap()
         else {
             unreachable!()
         };
         let endpoint_spec = root.get("spec").unwrap();
-        let endpoint_spec =
-            serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(
-                &endpoint_spec.to_canonical_bytes(),
-            )
-            .unwrap();
+        let endpoint_spec = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(
+            &endpoint_spec.to_canonical_bytes(),
+        )
+        .unwrap();
         assert_eq!(
-            endpoint_spec
-                .provider_ref()
-                .unwrap()
-                .to_canonical_string(),
+            endpoint_spec.provider_ref().unwrap().to_canonical_string(),
             "Provider/audio-pipewire"
         );
         assert!(endpoint_spec.base().get("providerRef").is_none());

@@ -1,9 +1,5 @@
 use d2b_contracts_resource::v3::{
-    CapabilityClass,
-    EnvironmentClass,
-    NamespaceClass,
-    SandboxSpec,
-    execution_policy::BoundedToken,
+    CapabilityClass, EnvironmentClass, NamespaceClass, SandboxSpec, execution_policy::BoundedToken,
 };
 use d2b_process_conformance::ProcessConformanceError;
 use d2b_provider_system_minijail::sandbox_compiler::MinijailSandboxCompiler;

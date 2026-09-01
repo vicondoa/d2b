@@ -8,11 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
+use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_contracts_resource::v3::{
     SchemaFingerprint,
     execution_policy::{BoundedText, redacted_debug},
 };
-use d2b_contracts_resource::v3::identity::ServiceName;
 
 /// Maximum methods in one service descriptor.
 pub const MAX_SERVICE_METHODS: usize = 64;

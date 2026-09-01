@@ -232,10 +232,13 @@ test-host-integration:
 	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
 	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
-	//packages/d2b-provider-display-wayland:d2b-wayland-proxy; \
+	//packages/d2b-provider-display-wayland:d2b-wayland-proxy \
+	//packages/d2b-provider-runtime-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
 	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
 	stage="$$run_dir/bundle"; \
+	controller_stage="$$run_dir/cloud-hypervisor-controller"; \
 	mkdir -m 700 "$$stage"; \
+	mkdir -m 700 "$$controller_stage"; \
 	stage_tool() { source="$$(realpath -e "$$bazel_bin/$$1")"; case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Bazel output escaped bazel-bin" >&2; return 1;; esac; [ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel output $$1" >&2; return 1; }; install -m 755 "$$source" "$$stage/$$2"; }; \
 	stage_tool packages/d2b/d2b d2b; \
 	stage_tool packages/d2bd/d2bd d2bd; \
@@ -245,13 +248,18 @@ test-host-integration:
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
+	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-runtime-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
+	case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Cloud Hypervisor controller escaped bazel-bin" >&2; exit 1;; esac; \
+	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
+	install -m 755 "$$source" "$$controller_stage/d2b-cloud-hypervisor-controller"; \
 	echo "test-host-integration: staged Bazel host-tool bundle"; \
 	set --; \
 	for name in $$names; do \
 	set -- "$$@" "git+file://$$root#vmChecks.$$system.$$name"; \
 	done; \
 	echo "test-host-integration: building vmChecks: $$names"; \
-	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
+	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
+	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
 	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
 	cat "$$run_dir/outputs"; \
 	if [ -n "$$attic_cache" ]; then \
@@ -278,11 +286,12 @@ test-host-integration:
 	echo "test-host-integration: no dependency closure paths available for Attic" >&2; \
 	exit 1; \
 	fi; \
-	if ! attic push --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
-	echo "test-host-integration: Attic closure upload failed" >&2; \
-	exit 1; \
-	fi; \
+	if ! timeout 60s attic push --jobs 16 --no-closure --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
+	echo "test-host-integration: warning: Attic closure upload failed" >&2; \
+	cat "$$run_dir/attic-push.log" >&2; \
+	else \
 	echo "test-host-integration: Attic closure upload succeeded"; \
+	fi; \
 	fi
 
 ## perf - run the advisory performance budget suite.

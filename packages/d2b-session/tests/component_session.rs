@@ -9,15 +9,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    component_session::{AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind, AttachmentPolicy, AttachmentPurpose, BootstrapIdentityBinding, BootstrapPskBinding, BoundedVec, CancelAck, CancelRequest, CancelResult, ChannelId, CloseReason, EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole, HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationId, PurposeClass, RecordKind, Remediation, RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass},
-};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
-};
 use d2b_contracts_resource::v3::identity::SessionPurpose;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_zone_session::v3::component_session::{
+    AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
+    AttachmentPolicy, AttachmentPurpose, BootstrapIdentityBinding, BootstrapPskBinding, BoundedVec,
+    CancelAck, CancelRequest, CancelResult, ChannelId, CloseReason, EndpointPolicy,
+    EndpointPolicyIdentity, EndpointPurpose, EndpointRole, HandshakeOffer,
+    IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality,
+    MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason, MetricResult,
+    NoiseProfile, OperationId, PurposeClass, RecordKind, Remediation, RequestEnvelope, RequestId,
+    ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
+};
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, BootstrapAdmission, BootstrapPsk,
     ComponentSessionDriver, DeadlineBudget, FairScheduler, Fragmenter, HandshakeCredentials,
@@ -1369,7 +1372,9 @@ fn enrolled_guest_generation_discovery_is_allowed() {
     let identity = guest_generation_identity();
     let request =
         encode_generation_discovery_request(&identity).expect("exact enrolled Guest discovery");
-    let policy = identity.with_generation(7).expect("discovery policy generation");
+    let policy = identity
+        .with_generation(7)
+        .expect("discovery policy generation");
     accept_generation_discovery_request(&request, &policy)
         .expect("exact enrolled Guest discovery accepted");
 }

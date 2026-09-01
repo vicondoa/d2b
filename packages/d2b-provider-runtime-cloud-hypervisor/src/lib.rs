@@ -27,6 +27,7 @@ pub use bootstrap_graph::{
     BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmLifecycleEligibility,
 };
 pub use config::{CloudHypervisorConfig, CloudHypervisorGuestSettings, ConsoleType};
+pub use controller::GUEST_CONTROLLER_FINALIZER;
 pub use controller::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, ChildSpecUpdate,
     CloudHypervisorController, CloudHypervisorControllerRegistration, CloudHypervisorError,
@@ -35,7 +36,6 @@ pub use controller::{
     GuestChildCreateBatch, GuestCondition, GuestDependencySnapshot, GuestSnapshot,
     GuestStatusProjection, OwnedChildSnapshot,
 };
-pub use controller::GUEST_CONTROLLER_FINALIZER;
 pub use descriptor::{
     BootstrapHandoff, DescriptorSignature, GuestSeedContract, GuestSetupDescriptor,
     GuestSetupDescriptorError, GuestSetupDescriptorVerifier, OpaqueDescriptorSignature,

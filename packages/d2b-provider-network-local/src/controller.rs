@@ -4,11 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use d2b_contracts_resource::v3::{
-    IfName,
-    NetworkProvenance,
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceRef,
+    IfName, NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
     ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
     guest::GuestSpec,
@@ -16,18 +12,26 @@ use d2b_contracts_resource::v3::{
         AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, MacvtapMode, NetworkSpec,
         SharingPolicy, cidr_overlaps,
     },
-    process::{CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
-    volume::{AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant, LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass, SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind, VolumeSource, VolumeSpec},
+    process::{
+        CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass,
+        ProcessSpec, SandboxSpec, TelemetrySpec,
+    },
+    volume::{
+        AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy,
+        EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant,
+        LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass,
+        SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind,
+        VolumeSource, VolumeSpec,
+    },
 };
 
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,
 };
-use crate::observe::{NetworkObservation, ObserveDecision, evaluate_observation};
 use crate::ifname::{
-    NetworkIfRole, derive_network_child_name, derive_network_ifname,
-    derive_network_route_name_for,
+    NetworkIfRole, derive_network_child_name, derive_network_ifname, derive_network_route_name_for,
 };
+use crate::observe::{NetworkObservation, ObserveDecision, evaluate_observation};
 use crate::plan::{ActualState, NetworkReconcilePlan, compute_plan};
 use crate::routes::RouteTuple;
 
@@ -331,10 +335,7 @@ impl NetworkAdmissionIntent {
             .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
             interface_markers.insert(
                 ifname.clone(),
-                d2b_contracts_resource::v3::derive_network_ownership_marker(
-                    &provenance,
-                    "macvtap",
-                ),
+                d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "macvtap"),
             );
             interface_names.push(ifname);
         }
@@ -348,9 +349,7 @@ impl NetworkAdmissionIntent {
         let route_count = spec.routing().host_blocklist().len().max(1);
         let uplink_gateway = network_cidr_host_address(spec.uplink_cidr().as_str(), 2);
         let route_names = (0..route_count)
-            .map(|index| {
-                derive_network_route_name_for(key.zone_uid(), key.network_uid(), index)
-            })
+            .map(|index| derive_network_route_name_for(key.zone_uid(), key.network_uid(), index))
             .collect::<Vec<_>>();
         let route_destinations = if spec.routing().host_blocklist().is_empty() {
             vec![spec.lan_cidr().clone()]
@@ -1005,10 +1004,8 @@ where
             .await
             .map_err(|_| NetworkEffectError::BridgeCreate)?;
         self.effects.apply_sysctls(&input.network_uid).await?;
-        let firewall = FirewallIntent::from_admission(
-            &input.admission,
-            input.installed_generation.clone(),
-        );
+        let firewall =
+            FirewallIntent::from_admission(&input.admission, input.installed_generation.clone());
         match self.effects.apply_host_firewall(&firewall).await {
             Err(NetworkEffectError::StaleConfigurationGeneration) => {
                 return Ok(ReconcileProgress::Requeue(
@@ -1140,10 +1137,8 @@ where
             self.resources.delete_volume().await?;
             return Ok(FinalizerStage::Volume);
         }
-        let firewall = FirewallIntent::from_admission(
-            &input.admission,
-            input.installed_generation.clone(),
-        );
+        let firewall =
+            FirewallIntent::from_admission(&input.admission, input.installed_generation.clone());
         self.effects.remove_host_firewall(&firewall).await?;
         self.effects.remove_routes(&input.network_uid).await?;
         self.effects.delete_bridges(&input.network_uid).await?;
@@ -1388,10 +1383,7 @@ fn render_config_inner(
     })
 }
 
-fn cidr_host_address(
-    cidr: &Ipv4Cidr,
-    host: u8,
-) -> Result<String, NetworkEffectError> {
+fn cidr_host_address(cidr: &Ipv4Cidr, host: u8) -> Result<String, NetworkEffectError> {
     let address = cidr
         .as_str()
         .split_once('/')
@@ -1399,14 +1391,16 @@ fn cidr_host_address(
         .ok_or(NetworkEffectError::InvalidState)?;
     let mut octets = address
         .split('.')
-        .map(|octet| octet.parse::<u8>().map_err(|_| NetworkEffectError::InvalidState))
+        .map(|octet| {
+            octet
+                .parse::<u8>()
+                .map_err(|_| NetworkEffectError::InvalidState)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if octets.len() != 4 {
         return Err(NetworkEffectError::InvalidState);
     }
-    let last = octets
-        .last_mut()
-        .ok_or(NetworkEffectError::InvalidState)?;
+    let last = octets.last_mut().ok_or(NetworkEffectError::InvalidState)?;
     *last = last
         .checked_add(host)
         .ok_or(NetworkEffectError::InvalidState)?;

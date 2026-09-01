@@ -6,14 +6,8 @@
 //! or alter the projection protocol independently of Core.
 
 use d2b_contracts_provider::v3::{
-    ExtensionSchemaRegistration,
-    ProjectionFactory,
-    ProviderContractError,
-    ResourceApiBinding,
-    SemanticContractError,
-    SemanticFamily,
-    SemanticTypeContract,
-    StandardCapabilityMatrix,
+    ExtensionSchemaRegistration, ProjectionFactory, ProviderContractError, ResourceApiBinding,
+    SemanticContractError, SemanticFamily, SemanticTypeContract, StandardCapabilityMatrix,
 };
 use d2b_contracts_resource::v3::ResourceSpec;
 use serde::{Deserialize, Deserializer, Serialize};

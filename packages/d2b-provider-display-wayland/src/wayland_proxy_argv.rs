@@ -121,10 +121,8 @@ impl WaylandProxyBorderLabelPosition {
 impl WaylandProxyArgvInput {
     /// Construct a default-shaped input for an authenticated target.
     pub fn for_target(target: WorkloadTarget, provider_kind: WorkloadProviderKind) -> Self {
-        let identity = crate::wayland_proxy::identity::ProxyIdentity::canonical(
-            target.clone(),
-            provider_kind,
-        );
+        let identity =
+            crate::wayland_proxy::identity::ProxyIdentity::canonical(target.clone(), provider_kind);
         let identity_component = identity.bridge_component();
         let listen_socket = format!("/run/d2b-wlproxy/{identity_component}/wayland-0");
         let upstream_socket = format!("/run/d2b-wlproxy/{identity_component}/upstream");

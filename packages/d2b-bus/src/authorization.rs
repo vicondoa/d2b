@@ -2,18 +2,14 @@
 
 use std::sync::{Mutex, MutexGuard};
 
+use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{ControllerGeneration, ZoneId};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    EvidenceClass,
-    Locality,
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentVerb, ControllerAssignmentRegistry,
 };
 use d2b_resource_api::authz::{
     AuthorizationDenial, AuthorizationPolicyError, AuthorizationState, NativeAuthorizer, PolicySet,
     SessionVerb,
-};
-use d2b_core_controller::controller_assignment::{
-    AssignmentError, AssignmentVerb, ControllerAssignmentRegistry,
 };
 use d2b_session::{
     OperationMember, SessionAuthorizationRequest, SessionError, SessionOperation,
@@ -191,7 +187,11 @@ impl BusAuthorizer {
             ResourceCall::List(_) => AssignmentVerb::List,
             ResourceCall::Watch(_) => AssignmentVerb::Watch,
             ResourceCall::ScopedCommitBatch { .. } => AssignmentVerb::CommitBatch,
-            _ => return Err(AuthorizationError::Assignment(AssignmentError::VerbNotAllowed)),
+            _ => {
+                return Err(AuthorizationError::Assignment(
+                    AssignmentError::VerbNotAllowed,
+                ));
+            }
         };
         if let Some(registry) = &self.assignments {
             registry
@@ -547,37 +547,24 @@ mod tests {
         ResourceApiBinding, RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence,
         UpgradeDisposition, UpgradePolicy,
     };
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::identity::{
+        BindingDigest, ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose,
+        TranscriptHash, TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-    ResourceEnvelope,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    SchemaVersion,
-    ZoneRevision,
-};
-use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::identity::{
-    BindingDigest,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
+        ConfigurationGeneration, ControllerGeneration, ResourceEnvelope, ResourceGeneration,
+        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, SchemaVersion, ZoneRevision,
+    };
+    use d2b_core_controller::controller_assignment::{
+        AssignmentIdentity, AssignmentRequest, ControllerAssignmentRegistry,
+        ControllerRoleContract, ScopedResourceMutation, ScopedResourceQuery,
+    };
     use d2b_resource_api::authz::{
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         PolicyRule, RelayGrantAuthority, ResourceVerb,
     };
     use d2b_resource_store::PolicySnapshot;
-    use d2b_core_controller::controller_assignment::{
-        AssignmentIdentity, AssignmentRequest, ControllerAssignmentRegistry, ControllerRoleContract,
-        ScopedResourceMutation, ScopedResourceQuery,
-    };
 
     use super::*;
     use crate::{
@@ -1065,12 +1052,7 @@ use d2b_contracts_resource::v3::identity::{
             mutations: vec![unsupported],
         };
         assert_eq!(
-            authorizer.authorize_dispatch(
-                &context,
-                &commit_route,
-                Some(&unsupported_call),
-                false,
-            ),
+            authorizer.authorize_dispatch(&context, &commit_route, Some(&unsupported_call), false,),
             Err(AuthorizationError::InvalidResourceCall)
         );
     }
@@ -1177,11 +1159,8 @@ use d2b_contracts_resource::v3::identity::{
         let target_mismatch = valid_context
             .clone()
             .with_execution_ref(ResourceRef::parse("Host/other").unwrap());
-        let target_authorizer = assignment_authorizer(
-            &target_mismatch,
-            registry,
-            &[ResourceVerb::Watch],
-        );
+        let target_authorizer =
+            assignment_authorizer(&target_mismatch, registry, &[ResourceVerb::Watch]);
         let route = route_with_session(
             "dev",
             "d2b.resource.v3",
@@ -1232,13 +1211,8 @@ use d2b_contracts_resource::v3::identity::{
 
         let (context, registry, identity, query, _, _) = assignment_fixture();
         let watch_call = ResourceCall::Watch(ResourceQuery::from_scoped(query).unwrap());
-        registry
-            .lock()
-            .unwrap()
-            .begin_drain(&identity)
-            .unwrap();
-        let stale_authorizer =
-            assignment_authorizer(&context, registry, &[ResourceVerb::Watch]);
+        registry.lock().unwrap().begin_drain(&identity).unwrap();
+        let stale_authorizer = assignment_authorizer(&context, registry, &[ResourceVerb::Watch]);
         let watch_route = route_with_session(
             "dev",
             "d2b.resource.v3",
@@ -1380,11 +1354,16 @@ use d2b_contracts_resource::v3::identity::{
         );
         let mut fenced_state = state(1);
         fenced_state.zone_policy_revision = ZoneRevision::new(2);
-        authorizer.replace_policy(replacement, fenced_state).unwrap();
+        authorizer
+            .replace_policy(replacement, fenced_state)
+            .unwrap();
         let error = authorizer
             .authorize_session(&claims, &request, lease, 2)
             .unwrap_err();
-        assert_eq!(error.code(), d2b_session::contract::SessionErrorCode::PolicyDenied);
+        assert_eq!(
+            error.code(),
+            d2b_session::contract::SessionErrorCode::PolicyDenied
+        );
     }
 
     #[test]

@@ -4,8 +4,8 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperScopeKind, HelperScopeState, HelperShellPolicy, HelperShellRequest,
     HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalReadOutput,
     HelperTerminalRequest, HelperTerminalResize, HelperTerminalResponse, HelperTerminalWriteStdin,
-    UnsafeLocalHelperToDaemon, ZoneResourceIdentity,
-    decode_unsafe_local_terminal_frame, encode_unsafe_local_terminal_frame,
+    UnsafeLocalHelperToDaemon, ZoneResourceIdentity, decode_unsafe_local_terminal_frame,
+    encode_unsafe_local_terminal_frame,
 };
 use d2b_contracts_control::{public_wire::ShellName, terminal_wire::TerminalSize};
 use d2b_core::base64_codec;

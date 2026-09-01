@@ -153,6 +153,7 @@ impl AuthenticatedResourceSession for RecordingSession {
             | CloudHypervisorResourceRequest::CloseGuestSession { .. }
             | CloudHypervisorResourceRequest::DeleteChild { .. }
             | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
             | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
                 Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }

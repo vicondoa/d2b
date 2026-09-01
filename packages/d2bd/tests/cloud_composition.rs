@@ -391,16 +391,14 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             CloudHypervisorResourceRequest::UpdateStatus { .. } => {
                 Ok(CloudHypervisorResourceResponse::StatusUpdated)
             }
-            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
-                Ok(CloudHypervisorResourceResponse::ProcessAdoption(
-                    match self.mode {
-                        CloudMode::ProcessAbsent => {
-                            d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
-                        }
-                        _ => d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
-                    },
-                ))
-            }
+            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => Ok(
+                CloudHypervisorResourceResponse::ProcessAdoption(match self.mode {
+                    CloudMode::ProcessAbsent => {
+                        d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                    }
+                    _ => d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                }),
+            ),
             CloudHypervisorResourceRequest::AssessUpdate { .. } => {
                 Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
             }
@@ -411,6 +409,7 @@ impl AuthenticatedResourceSession for FakeCloudSession {
             | CloudHypervisorResourceRequest::CloseGuestSession { .. }
             | CloudHypervisorResourceRequest::DeleteChild { .. }
             | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
             | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
                 Ok(CloudHypervisorResourceResponse::LifecycleApplied)
             }
@@ -524,10 +523,7 @@ async fn cloud_composition_requires_process_provider_liveness_for_ready() {
         .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
         .await
         .unwrap();
-    assert_eq!(
-        outcome.status().status().phase,
-        GuestStatusPhase::Degraded
-    );
+    assert_eq!(outcome.status().status().phase, GuestStatusPhase::Degraded);
     assert!(!matches!(
         outcome,
         CloudHypervisorReconcileOutcome::Ready(_)

@@ -4,11 +4,7 @@ use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };
-use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
@@ -61,7 +57,11 @@ fn current_only_requests() -> [BrokerRequest; 4] {
             network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
             network_generation: ResourceGeneration::new(7).unwrap(),
             attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            bundle_generation: ResourceBundleGenerationId::parse(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
             tracing_span_id: None,
         }),
         BrokerRequest::DeleteBridge(DeleteBridgeRequest {
@@ -71,7 +71,11 @@ fn current_only_requests() -> [BrokerRequest; 4] {
             network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
             network_generation: ResourceGeneration::new(7).unwrap(),
             attachment_generation: ResourceGeneration::new(11).unwrap(),
-            bundle_generation: ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            bundle_generation: ResourceBundleGenerationId::parse(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
             tracing_span_id: None,
         }),
         BrokerRequest::DeletePersistentTap(DeletePersistentTapRequest {

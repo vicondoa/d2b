@@ -24,8 +24,7 @@ use d2b_contracts_resource::v3::process::{
 };
 use d2b_contracts_resource::v3::{
     ActivationRunnerInput, ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration,
-    ResourceRef, ResourceUid,
-    execution_policy::ExecutionDomain, storage::ZoneStoreId,
+    ResourceRef, ResourceUid, execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1017,18 +1016,23 @@ impl BrokerProfile {
                         .as_ref()
                         .is_some_and(|target| target.resource_type().as_str() == "Guest")
                         && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
-                        && request.guest_execution.as_ref().is_some_and(GuestExecutionBinding::is_valid)
+                        && request
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
                 }
                 BrokerRequest::StartSystemdUnit(request)
                 | BrokerRequest::ObserveSystemdUnit(request)
-                | BrokerRequest::CheckSystemdUserManager(request) => request
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
-                        .guest_execution
+                | BrokerRequest::CheckSystemdUserManager(request) => {
+                    request
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
                 BrokerRequest::OpenPidfd(request) => request
                     .guest_execution
                     .as_ref()
@@ -1037,26 +1041,30 @@ impl BrokerProfile {
                     .guest_execution
                     .as_ref()
                     .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::OpenSystemdUnitPidfd(request) => request
-                    .unit
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
+                BrokerRequest::OpenSystemdUnitPidfd(request) => {
+                    request
                         .unit
-                        .guest_execution
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::StopSystemdUnit(request) => request
-                    .unit
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .unit
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
+                BrokerRequest::StopSystemdUnit(request) => {
+                    request
                         .unit
-                        .guest_execution
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .unit
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
                 BrokerRequest::SignalRunner(request) => request
                     .guest_execution
                     .as_ref()
@@ -1072,18 +1080,22 @@ impl BrokerProfile {
 
     fn request_targets_guest(request: &BrokerRequest) -> bool {
         match request {
-            BrokerRequest::SpawnRunner(request) => request
-                .execution_ref
-                .as_ref()
-                .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                || request.guest_execution.is_some(),
+            BrokerRequest::SpawnRunner(request) => {
+                request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    || request.guest_execution.is_some()
+            }
             BrokerRequest::StartSystemdUnit(request)
             | BrokerRequest::ObserveSystemdUnit(request)
-            | BrokerRequest::CheckSystemdUserManager(request) => request
-                .execution_ref
-                .as_ref()
-                .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                || request.guest_execution.is_some(),
+            | BrokerRequest::CheckSystemdUserManager(request) => {
+                request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    || request.guest_execution.is_some()
+            }
             BrokerRequest::OpenSystemdUnitPidfd(request) => {
                 request.unit.guest_execution.is_some()
                     || request
@@ -2192,6 +2204,9 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+    /// Broker-retained Provider-controller bootstrap endpoint, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_bootstrap_fd_index: Option<u32>,
 }
 
 /// A request whose authority is the sole attached accepted Unix socket.
@@ -3206,6 +3221,9 @@ pub struct SpawnRunnerRequest {
     /// Exact semantic owner of the Process resource, when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_ref: Option<ResourceRef>,
+    /// Immutable semantic-owner UID for owner-scoped runtime bootstrap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<ResourceUid>,
     /// Selected Process Provider reference for typed Process launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_ref: Option<ResourceRef>,
@@ -3376,6 +3394,9 @@ pub struct SpawnRunnerResponse {
     /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
+    /// Provider-controller bootstrap endpoint created and retained by the broker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_bootstrap_fd_index: Option<u32>,
     /// Optional index into the SCM_RIGHTS fd vector for a provider-specific
     /// console stream. qemu-media uses this for the daemon-owned peer of the
     /// socketpair whose other end was passed to QEMU.
@@ -4666,17 +4687,12 @@ mod tests {
 
     #[test]
     fn guest_profile_requires_a_complete_target_execution_binding() {
-        let mut request = spawn_runner_for_profile(
-            RunnerRole::ActivationNixos,
-            "Guest/guest-vm",
-        );
+        let mut request = spawn_runner_for_profile(RunnerRole::ActivationNixos, "Guest/guest-vm");
         request = match request {
             BrokerRequest::SpawnRunner(mut request) => {
                 request.guest_execution = Some(GuestExecutionBinding {
-                    target_uid: ResourceUid::parse(
-                        "123e4567-e89b-42d3-a456-426614174000",
-                    )
-                    .expect("Guest UID"),
+                    target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                        .expect("Guest UID"),
                     boot_identity_digest: [7; 32],
                     session_generation: 2,
                     assignment_epoch: 3,
@@ -4881,6 +4897,7 @@ mod tests {
             pid: 4242,
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
+            controller_bootstrap_fd_index: None,
             console_fd_index: None,
             execution_ref: None,
             execution_domain: None,

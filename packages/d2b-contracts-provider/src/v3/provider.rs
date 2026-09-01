@@ -30,21 +30,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    semantic_services::{LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion},
+use super::semantic_services::{
+    LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+    SemanticProjectionProtocolVersion,
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId,
-    ResourceRef,
-    execution_policy::{BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema},
-    ResourceTypeName,
-    SchemaFingerprint,
-    resource::ResourceEnvelope,
-    resource_schema::{
-        CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion,
+    ArtifactId, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    execution_policy::{
+        BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
     },
+    resource::ResourceEnvelope,
+    resource_schema::{CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion},
     volume::{MAX_VIEWS, ViewRight, ViewSpec},
-    volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId},
+    volume_state::{
+        MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId,
+    },
 };
 
 /// The canonical ResourceType name for this module.
@@ -1610,10 +1610,7 @@ impl ComponentDescriptor {
                     }
                 }
                 if matches!(self.execution, ComponentExecution::InProcessBootstrap)
-                    && !matches!(
-                        artifact_id.as_str(),
-                        "system-core" | "system-minijail"
-                    )
+                    && !matches!(artifact_id.as_str(), "system-core" | "system-minijail")
                 {
                     return Err(ProviderContractError::ComponentExecutionInvalid);
                 }
@@ -2462,9 +2459,10 @@ impl ProviderManifest {
                 return Err(ProviderContractError::MissingRequiredField);
             }
         }
-        if owned_types.iter().any(|resource_type| {
-            !bound_types.contains(resource_type)
-        }) {
+        if owned_types
+            .iter()
+            .any(|resource_type| !bound_types.contains(resource_type))
+        {
             return Err(ProviderContractError::MissingRequiredField);
         }
         for factory in &projection_factories {
@@ -2738,9 +2736,7 @@ impl<'de> Deserialize<'de> for ProviderManifest {
             wire.projection_factories,
             wire.upgrade_policy,
         )
-        .and_then(|manifest| {
-            manifest.with_target_runtime_artifacts(wire.runtime_artifacts)
-        })
+        .and_then(|manifest| manifest.with_target_runtime_artifacts(wire.runtime_artifacts))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -3188,7 +3184,10 @@ mod tests {
             PlacementAnchor::ExecutionRef,
         )
         .unwrap();
-        assert_eq!(valid.placement_anchor(), Some(&PlacementAnchor::ExecutionRef));
+        assert_eq!(
+            valid.placement_anchor(),
+            Some(&PlacementAnchor::ExecutionRef)
+        );
 
         assert_eq!(
             ResourceApiBinding::new_with_placement(
@@ -3267,8 +3266,7 @@ mod tests {
     #[test]
     fn per_resource_target_cannot_own_zone_resources() {
         let mut subject = manifest();
-        let wayland =
-            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+        let wayland = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
         subject.components[0].exported_resource_types = BTreeSet::from([wayland.clone()]);
         subject.api_bindings[0].resource_type = wayland;
         subject.api_bindings[0].placement_anchor = Some(PlacementAnchor::Zone);

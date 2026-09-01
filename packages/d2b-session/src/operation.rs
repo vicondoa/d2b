@@ -129,10 +129,7 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
     interaction("d2b.notification.v3", "NotificationService/Reconcile"),
     interaction("d2b.notification.v3", "NotificationService/Deliver"),
     interaction("d2b.notification.v3", "NotificationService/Drain"),
-    interaction(
-        "d2b.config-nixos.v3",
-        "ConfigNixosService/ReadGuestConfig",
-    ),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/ReadGuestConfig"),
     interaction("d2b.config-nixos.v3", "ConfigNixosService/Stage"),
     interaction("d2b.config-nixos.v3", "ConfigNixosService/Diff"),
     interaction("d2b.config-nixos.v3", "ConfigNixosService/Approve"),
@@ -372,8 +369,8 @@ mod tests {
             SessionOperation::method(service("d2b.resource.v3"), "ResourceService/CommitBatch")
                 .unwrap();
         assert!(commit.is_guest_resource_commit_batch());
-        let get = SessionOperation::method(service("d2b.resource.v3"), "ResourceService/Get")
-            .unwrap();
+        let get =
+            SessionOperation::method(service("d2b.resource.v3"), "ResourceService/Get").unwrap();
         assert!(!get.is_guest_resource_commit_batch());
     }
 }

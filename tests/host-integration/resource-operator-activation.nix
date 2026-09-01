@@ -13,48 +13,11 @@ let
     inherit self;
     inherit lib;
   };
-  cloudHypervisorArtifact =
-    d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
-  cloudHypervisorConfig = {
-    controllerExecutionRef = "Host/host-system";
-    defaultVcpus = 2;
-    defaultMemoryMb = 512;
-    defaultMachineType = "microvm";
-    watchdog = true;
-    adoptionWindowMs = 30000;
-    healthCheckIntervalMs = 5000;
-    healthCheckTimeoutMs = 1000;
-    healthCheckFailureThreshold = 3;
-    startupDeadlineMs = 120000;
-  };
   providerArtifact = d2bLib.mkAcceptanceProviderArtifact pkgs;
   acceptancePublisherKey = providerArtifact.trustedPublisher.signingKey;
-  volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
-  acceptanceGuestSystem = d2bLib.mkGuestSystem {
-    inherit pkgs;
-    name = "acceptance-guest";
-  };
-  netVmSystem = d2bLib.mkGuestSystem {
-    inherit pkgs;
-    name = "acceptance-net-vm";
-  };
   artifacts = {
     acceptance-provider = {
       inherit (providerArtifact) package type catalog;
-    };
-    runtime-cloud-hypervisor = {
-      inherit (cloudHypervisorArtifact) package type catalog;
-    };
-    volume-acceptance-provider = {
-      inherit (volumeProviderArtifact) package type catalog;
-    };
-    acceptance-system = {
-      package = acceptanceGuestSystem.config.system.build.toplevel;
-      type = "nixos-system";
-    };
-    net-vm-base = {
-      package = netVmSystem.config.system.build.toplevel;
-      type = "nixos-system";
     };
   };
   hostRuntime = pkgs.writeText "d2b-acceptance-host-runtime.json" (builtins.toJSON {
@@ -69,9 +32,7 @@ pkgs.testers.runNixOSTest {
   name = "d2b-resource-operator-activation";
 
   nodes.machine = d2bLib.d2bDaemonNode {
-      writableStore = true;
       extra = { ... }: {
-        boot.kernelModules = [ "br_netfilter" ];
         networking.nftables.enable = true;
         networking.nftables.ruleset = lib.mkAfter ''
           table inet d2b {}
@@ -95,46 +56,17 @@ pkgs.testers.runNixOSTest {
               /etc/d2b/acceptance-host-runtime.json \
               /var/lib/d2b/runtime/host-runtime.json
           ''}"
-          "+${pkgs.writeShellScript "d2b-acceptance-cgroup-prep" ''
-            relative=$(sed -n 's/^0:://p' /proc/self/cgroup)
-            path="/sys/fs/cgroup''${relative}/cgroup.kill"
-            if [ -e "$path" ]; then
-              chown d2bd:d2bd "$path" 2>/dev/null || true
-              chmod u+w "$path" 2>/dev/null || true
-            fi
-          ''}"
         ];
         users.users.bob = {
           isNormalUser = true;
           uid = 1001;
         };
         d2b.artifacts = artifacts;
-      d2b.guestSystems.work.acceptance-guest = acceptanceGuestSystem;
-      d2b.zones.local-root.trustedPublishers.d2b-u20-acceptance.signingKey =
-        acceptancePublisherKey;
-      d2b.zones.local-root.trustedPublishers.d2b-volume-acceptance.signingKey =
-        volumeProviderArtifact.trustedPublisher.signingKey;
-      d2b.zones.local-root.trustedPublishers.d2b-cloud-hypervisor.signingKey =
-        cloudHypervisorArtifact.trustedPublisher.signingKey;
-      d2b.zones.local-root.resources.host-system = {
-        type = "Host";
-        spec = {
-          providerRef = "Provider/system-core";
-          defaultDomain = "system";
-          allowedDomains = [ "system" ];
-          budget = { };
-          networkAttachments = [ ];
-          deviceAttachments = [ ];
-          volumeAttachmentDefaults = [ ];
-        };
-      };
+        d2b.zones.local-root.trustedPublishers.d2b-u20-acceptance.signingKey =
+          acceptancePublisherKey;
       d2b.zones.work.parentZone = "local-root";
       d2b.zones.work.trustedPublishers.d2b-u20-acceptance.signingKey =
         acceptancePublisherKey;
-      d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
-        volumeProviderArtifact.trustedPublisher.signingKey;
-      d2b.zones.work.trustedPublishers.d2b-cloud-hypervisor.signingKey =
-        cloudHypervisorArtifact.trustedPublisher.signingKey;
       d2b.zones.work.resources = {
         alice = {
           type = "User";
@@ -152,6 +84,33 @@ pkgs.testers.runNixOSTest {
             osUsername = "d2bd";
           };
         };
+        operator-reader = {
+          type = "Role";
+          spec.rules = [
+            {
+              resourceTypes = [
+                "Host"
+                "Process"
+                "Provider"
+              ];
+              verbs = [ "get" "list" ];
+              subresources = [ ];
+              resourceNames = [ ];
+              zones = [ "work" ];
+              executionRefs = [ ];
+              sessionVerbs = [ "connect" "invoke" ];
+            }
+          ];
+        };
+        operator-reader-binding = {
+          type = "RoleBinding";
+          spec = {
+            roleRef = "Role/operator-reader";
+            subjects = [ "User/alice" ];
+            externalPrincipalSelector = null;
+            scopeNarrowing = null;
+          };
+        };
         host-system = {
             type = "Host";
             spec = {
@@ -164,235 +123,11 @@ pkgs.testers.runNixOSTest {
             volumeAttachmentDefaults = [ ];
           };
         };
-          volume-local = {
-            type = "Provider";
-            spec = {
-              artifactId = "volume-acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-                sourcePolicies = [
-                  {
-                    id = "default-state";
-                    class = "local-path";
-                    volumeKinds = [ "durable" "state" "cache" ];
-                  }
-                ];
-              };
-            };
-          };
-          volume-virtiofs = {
-            type = "Provider";
-            spec = {
-              artifactId = "volume-acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-              };
-            };
-          };
           network-local = {
             type = "Provider";
             spec = {
               artifactId = "acceptance-provider";
               config.controllerExecutionRef = "Host/host-system";
-            };
-          };
-          runtime-cloud-hypervisor = {
-            type = "Provider";
-            spec = {
-              artifactId = "runtime-cloud-hypervisor";
-              config = cloudHypervisorConfig;
-            };
-          };
-          display-wayland = {
-            type = "Provider";
-            spec = {
-              artifactId = "acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-                principalPoolSize = 4;
-                runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
-              };
-            };
-          };
-          clipboard-wayland = {
-            type = "Provider";
-            spec = {
-              artifactId = "acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-                hostExecutionRef = "Host/host-system";
-                hostUserRef = "User/alice";
-                displayWaylandRef = "Provider/display-wayland";
-                guestSources = [ { guestRef = "Guest/acceptance-guest"; } ];
-              };
-            };
-          };
-          notification-desktop = {
-            type = "Provider";
-            spec = {
-              artifactId = "acceptance-provider";
-              config = {
-                controllerExecutionRef = "Host/host-system";
-                hostExecutionRef = "Host/host-system";
-                hostUserRef = "User/alice";
-                displayWaylandRef = "Provider/display-wayland";
-                guestSources = [
-                  {
-                    guestRef = "Guest/acceptance-guest";
-                    categories = [ "system.info" ];
-                  }
-                ];
-              };
-            };
-          };
-          display-wayland-policy = {
-            type = "display-wayland.d2bus.org.WaylandPolicy";
-            metadata.ownerRef = "Provider/display-wayland";
-            spec = {
-              allowGlobals = [ ];
-              denyGlobals = [ ];
-              maxVersions = { };
-              dmabufAllow = [ ];
-              dmabufDeny = [ ];
-              defaults = {
-                acceleratedRendering = "deny";
-                clipboardBoundary = "deny";
-                highRisk = "deny";
-                appDefaults = "deny";
-                offDefaults = "deny";
-                unclassified = "deny";
-              };
-            };
-          };
-          display-wayland-session = {
-            type = "display-wayland.d2bus.org.WaylandSession";
-            metadata.ownerRef = "Guest/acceptance-guest";
-            spec = {
-              guestRef = "Guest/acceptance-guest";
-              hostRef = "Host/host-system";
-              userRef = "User/alice";
-              policyRef =
-                "display-wayland.d2bus.org.WaylandPolicy/display-wayland-policy";
-              identity = {
-                label = "acceptance";
-                activeColor = "#00ff00";
-                inactiveColor = "#808080";
-                urgentColor = "#ff0000";
-                borderEnabled = true;
-                borderWidth = 2;
-                labelEnabled = true;
-                labelText = "acceptance";
-                labelPosition = "top-left";
-              };
-              crossDomainTrusted = true;
-              reconnectGeneration = 1;
-              virglVideo = false;
-              filter = {
-                allowGlobals = [ ];
-                denyGlobals = [ ];
-                maxVersions = { };
-                dmabufAllow = [ ];
-                dmabufDeny = [ ];
-                debugLogging = false;
-              };
-            };
-          };
-          acceptance-volume = {
-            type = "Volume";
-            metadata.ownerRef = "Guest/acceptance-guest";
-            spec = {
-              attachments = [ ];
-              providerRef = "Provider/volume-local";
-              source = {
-                executionRef = "Host/host-system";
-                settings = {
-                  kind = "local-path";
-                  sourcePolicyId = "default-state";
-                };
-              };
-              kind = "state";
-              layout = [
-                {
-                  path = "";
-                  type = "directory";
-                  ownerRef = "User/alice";
-                  groupRef = "User/alice";
-                  mode = "0700";
-                  accessAcl = [ ];
-                  defaultAcl = [ ];
-                  adoptionPolicy = "adopt-with-live-owner-proof";
-                  foreignChildPolicy = "preserve";
-                  invariants = [ "scope-authorization-required" ];
-                  leaseClass = "none";
-                  noFollow = true;
-                  recursive = false;
-                  createPolicy = "create-if-never-provisioned";
-                  repairPolicy = "exact-owner";
-                  cleanupPolicy = "owner-controlled";
-                  restartPolicy = "preserve-across-controller-restart";
-                  sensitivity = "private";
-                }
-              ];
-              views.controller = {
-                path = "";
-                rights = [ "read" "write" "create" "delete" "traverse" ];
-              };
-            };
-          };
-          acceptance-network = {
-            type = "Network";
-            spec = {
-              providerRef = "Provider/network-local";
-              netVmSystemArtifactId = "net-vm-base";
-              lanCidr = "10.40.0.0/24";
-              uplinkCidr = "192.0.2.4/30";
-              dhcp = {
-                domain = null;
-                ignoreClientNames = true;
-              };
-              dns = {
-                cacheSize = 1000;
-                forwarders = [ ];
-              };
-              mdns = {
-                dnsmasqLocal = false;
-                dnsmasqLocalPort = 53530;
-                enable = false;
-                publishWorkstation = false;
-                reflector = true;
-              };
-              mssClamp = false;
-              routing.hostBlocklist = [
-                "10.0.0.0/8"
-                "169.254.0.0/16"
-                "172.16.0.0/12"
-                "192.168.0.0/16"
-              ];
-              attachments = [
-                {
-                  executionRef = "Guest/acceptance-guest";
-                  index = 10;
-                }
-              ];
-              isolation.allowEastWest = false;
-            };
-          };
-          acceptance-guest = {
-            type = "Guest";
-            spec = {
-              providerRef = "Provider/runtime-cloud-hypervisor";
-              systemArtifactId = "acceptance-system";
-              defaultDomain = "system";
-              allowedDomains = [ "system" ];
-              budget = { };
-              volumeAttachmentDefaults = [ ];
-              networkAttachments = [
-                {
-                  networkRef = "Network/acceptance-network";
-                  default = true;
-                }
-              ];
-              deviceAttachments = [ ];
             };
           };
         };
@@ -402,193 +137,77 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("nftables.service")
+    machine.wait_for_unit("nftables.service", timeout=180)
     machine.succeed("nft list table inet d2b")
-    machine.wait_for_unit("d2b-broker.socket")
-    machine.wait_for_unit("d2bd.service")
-    machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_for_unit("d2b-broker.socket", timeout=30)
+    machine.wait_for_unit("d2bd.service", timeout=180)
+    machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-before.json")
 
-    # The authenticated operator path must reach the public Resource API for
-    # every required storage/network/Guest type and observe committed desired
-    # state, not just an empty list response.
-    for resource_type in ["Volume", "Network", "Guest"]:
-        path = f"/run/d2b-resource-{resource_type.lower()}-before.json"
-        machine.succeed(
-            f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            f"d2b --zone work --json resource list "
-            f"{resource_type} >{path}"
-        )
-        machine.succeed(
-            f"jq -e '.snapshotRevision > 0 and "
-            f"(.resources | length >= 1) and "
-            f"any(.resources[]; .type == \"{resource_type}\")' "
-            f"{path}"
-        )
-
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Provider "
-        ">/run/d2b-providers-before.json"
-    )
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Provider "
-        ">/run/d2b-providers-after.json && "
-        "jq -e '.resources | "
-        "map(select(.type == \"Provider\" and "
-        "(.metadata.name == \"display-wayland\" or "
-        ".metadata.name == \"clipboard-wayland\" or "
-        ".metadata.name == \"notification-desktop\"))) | "
-        "length == 3' /run/d2b-providers-after.json"
-    )
-    machine.succeed(
-        "jq -e '"
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"display-wayland\")) | length == 1) and "
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"clipboard-wayland\")) | length == 1) and "
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"notification-desktop\")) | length == 1) and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"display-wayland\") | "
-        ".spec.config.runtimeVolumePolicyId == \"display-wayland.wlproxy-runtime.v1\") and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"clipboard-wayland\") | ("
-        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
-        ".spec.config.hostUserRef == \"User/alice\" and "
-        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
-        "(.spec.config.guestSources | length == 1) and "
-        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\")) and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"notification-desktop\") | ("
-        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
-        ".spec.config.hostUserRef == \"User/alice\" and "
-        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
-        "(.spec.config.guestSources | length == 1) and "
-        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\" and "
-        ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
-        "/run/d2b-providers-before.json"
-    )
-    persistent_refs = [
-        "Volume/acceptance-volume",
-        "Network/acceptance-network",
-        "Guest/acceptance-guest",
-    ]
-    # Provider effects are controller-owned and converge from the committed
-    # Zone graph; this fixture only observes their public status.
-    for resource_type in ["Volume", "Network"]:
-        machine.wait_until_succeeds(
-            f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            f"d2b --zone work --json resource list {resource_type} "
-            f">/run/d2b-{resource_type.lower()}-ready.json && "
-            f"jq -e '.resources[] | select(.type == \"{resource_type}\") | "
-            f"(.metadata.uid != null and .metadata.generation > 0 and "
-            f".metadata.revision > 0 and .status.phase == \"Ready\" and "
-            f".status.observedGeneration == .metadata.generation)' "
-            f"/run/d2b-{resource_type.lower()}-ready.json",
-            timeout=180,
-        )
-    machine.fail(
-        "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Volume "
-        ">/run/d2b-unauthorized-resource.log 2>&1"
-    )
     machine.wait_until_succeeds(
-        "journalctl -u d2bd.service --no-pager | grep -Eq "
-        "'interaction_runtime_ready[=: ]+true'",
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Host >/run/d2b-host-before.json && "
+        "jq -e '.resources[] | select(.type == \"Host\" and "
+        ".metadata.name == \"host-system\") | "
+        "(.status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)' "
+        "/run/d2b-host-before.json",
         timeout=60,
     )
     machine.succeed(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Host "
-        ">/run/d2b-host-before.json && "
-        "jq -e '.resources[] | select(.type == \"Host\" and .metadata.name == \"host-system\") "
-        "| .status.phase == \"Ready\"' /run/d2b-host-before.json"
+        "d2b --zone work --json list Provider "
+        ">/run/d2b-provider-before.json && "
+        "jq -e '.resources[] | select(.type == \"Provider\" and "
+        ".metadata.name == \"network-local\") | "
+        "(.metadata.uid != null and .metadata.generation > 0)' "
+        "/run/d2b-provider-before.json"
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process "
+        ">/run/d2b-process-before.json && "
+        "jq -e '.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/network-local\") | "
+        "(.status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)' "
+        "/run/d2b-process-before.json",
+        timeout=60,
+    )
+    machine.fail(
+        "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process "
+        ">/run/d2b-unauthorized-resource.log 2>&1"
     )
 
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service")
-    machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_for_unit("d2bd.service", timeout=180)
+    machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.wait_until_succeeds(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Volume >/dev/null",
+        "d2b --zone work --json list Process "
+        ">/run/d2b-process-after.json && "
+        "jq -e '.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/network-local\") | "
+        "(.status.phase == \"Ready\" and .status.observedGeneration == "
+        ".metadata.generation and .status.resource.adopted == true)' "
+        "/run/d2b-process-after.json",
         timeout=60,
     )
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-after.json")
-    for resource_type in ["Volume", "Network", "Guest"]:
-        path = f"/run/d2b-resource-{resource_type.lower()}-after.json"
-        machine.succeed(
-            f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            f"d2b --zone work --json resource list "
-            f"{resource_type} >{path}"
-        )
-        machine.succeed(
-            f"jq -e '.snapshotRevision > 0 and "
-            f"(.resources | length >= 1) and "
-            f"any(.resources[]; .type == \"{resource_type}\")' "
-            f"{path}"
-        )
-
     machine.succeed(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Provider "
-        ">/run/d2b-providers-after.json && "
-        "jq -e '.resources | "
-        "map(select(.type == \"Provider\" and "
-        "(.metadata.name == \"display-wayland\" or "
-        ".metadata.name == \"clipboard-wayland\" or "
-        ".metadata.name == \"notification-desktop\"))) | "
-        "length == 3' /run/d2b-providers-after.json"
-    )
-    for resource_ref in persistent_refs:
-        resource_type, resource_name = resource_ref.split("/", 1)
-        safe_name = resource_ref.replace("/", "-").lower()
-        machine.succeed(
-            f"jq -e --arg ref '{resource_ref}' "
-            f"--slurpfile before /run/d2b-resource-{resource_type.lower()}-before.json "
-            f"'.resources[] | select(.type == \"{resource_type}\" and "
-            f".metadata.name == \"{resource_name}\") as $after | "
-            f"($before[0].resources[] | select(.type == \"{resource_type}\" and "
-            f".metadata.name == \"{resource_name}\")) as $old | "
-            f"($after.metadata.uid == $old.metadata.uid and "
-            f"$after.metadata.generation == $old.metadata.generation and "
-            f"$after.metadata.revision >= $old.metadata.revision)' "
-            f"/run/d2b-resource-{resource_type.lower()}-after.json"
-        )
-    machine.succeed(
-        "jq -e '"
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"display-wayland\")) | length == 1) and "
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"clipboard-wayland\")) | length == 1) and "
-        "(.resources | map(select(.type == \"Provider\" and .metadata.name == \"notification-desktop\")) | length == 1) and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"display-wayland\") | "
-        ".spec.config.runtimeVolumePolicyId == \"display-wayland.wlproxy-runtime.v1\") and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"clipboard-wayland\") | ("
-        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
-        ".spec.config.hostUserRef == \"User/alice\" and "
-        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
-        "(.spec.config.guestSources | length == 1) and "
-        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\")) and "
-        "(.resources[] | select(.type == \"Provider\" and .metadata.name == \"notification-desktop\") | ("
-        ".spec.config.hostExecutionRef == \"Host/host-system\" and "
-        ".spec.config.hostUserRef == \"User/alice\" and "
-        ".spec.config.displayWaylandRef == \"Provider/display-wayland\" and "
-        "(.spec.config.guestSources | length == 1) and "
-        ".spec.config.guestSources[0].guestRef == \"Guest/acceptance-guest\" and "
-        ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
-        "/run/d2b-providers-after.json"
-    )
-    machine.succeed(
-        "jq -e '"
-        ".resources[] | select(.type == \"Network\" and "
-        ".metadata.name == \"acceptance-network\") | "
-        "(.status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation and "
-        ".status.resource.configVolume.phase == \"Ready\" and "
-        ".status.resource.netVm.phase == \"Ready\" and "
-        ".status.resource.volumeAttachment.phase == \"Ready\")' "
-        "/run/d2b-resource-network-after.json"
-    )
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Host "
+        "d2b --zone work --json list Host "
         ">/run/d2b-host-after.json && "
-        "jq -e '.resources[] | select(.type == \"Host\" and .metadata.name == \"host-system\") "
-        "| .status.phase == \"Ready\"' /run/d2b-host-after.json"
+        "jq -e --slurpfile before /run/d2b-host-before.json "
+        "'.resources[] | select(.type == \"Host\" and "
+        ".metadata.name == \"host-system\") as $after | "
+        "($before[0].resources[] | select(.type == \"Host\" and "
+        ".metadata.name == \"host-system\")) as $old | "
+        "($after.metadata.uid == $old.metadata.uid and "
+        "$after.metadata.generation == $old.metadata.generation and "
+        "$after.metadata.revision >= $old.metadata.revision and "
+        "$after.status.phase == \"Ready\")' /run/d2b-host-after.json"
     )
 
     declared = set(

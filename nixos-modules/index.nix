@@ -140,6 +140,7 @@ let
     zones = lib.listToAttrs (map
       (zoneName: lib.nameValuePair zoneName (zoneSummary zoneName))
       (sortNames (lib.attrNames declaredZones)));
+    topology = cfg._resourceCompiler.zoneControl.allocatorTopology or null;
     inherit executionIndex networkIndex closureIndex;
   };
 

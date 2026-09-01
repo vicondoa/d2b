@@ -10,9 +10,7 @@ use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::ResourceUid;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{SourceKind, VolumeSpec},
-};
+use d2b_contracts_resource::v3::volume::{SourceKind, VolumeSpec};
 
 use crate::error::VolumeLocalError;
 use crate::finalization::{

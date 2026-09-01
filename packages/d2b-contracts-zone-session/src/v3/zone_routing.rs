@@ -26,11 +26,9 @@ use schemars::{
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::component_session::{OperationClass, OperationId};
-use d2b_contracts_resource::v3::{
-    execution_policy::{
+use d2b_contracts_resource::v3::execution_policy::{
     BoundedToken, MAX_BOUNDED_TOKEN_BYTES, PrimitiveSpecError, parsed_deserialize, redacted_debug,
     string_schema,
-},
 };
 
 /// Schema version of the v3 Zone routing wire contracts.
@@ -456,7 +454,6 @@ impl ZoneLinkRouteAdmissionRequest {
     pub const fn verb(&self) -> OperationClass {
         self.verb
     }
-
 }
 
 /// Signature algorithm for a route advertisement.

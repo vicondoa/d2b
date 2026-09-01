@@ -301,9 +301,9 @@ pub fn children_have_verified_stop_proofs(
 ) -> bool {
     proofs.len() == expected_children
         && proofs
-        .iter()
-        .copied()
-        .all(|proof| validate_stop_proof(owner, proof).is_ok())
+            .iter()
+            .copied()
+            .all(|proof| validate_stop_proof(owner, proof).is_ok())
 }
 
 /// Public status carries no PID, pidfd, unit name, cgroup, path, argv,
@@ -412,7 +412,11 @@ mod tests {
             cgroup_empty: true,
             manager_terminal: true,
         };
-        assert!(children_have_verified_stop_proofs(WaitReapOwner::Local, 0, &[]));
+        assert!(children_have_verified_stop_proofs(
+            WaitReapOwner::Local,
+            0,
+            &[]
+        ));
         assert!(!children_have_verified_stop_proofs(
             WaitReapOwner::Local,
             2,

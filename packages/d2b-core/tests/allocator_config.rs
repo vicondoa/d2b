@@ -82,7 +82,9 @@ fn allocator_env_bridge_mode_is_closed_on_decode() {
         topology
             .parent_map
             .get(&d2b_contracts_resource::v3::ZoneId::parse("child").unwrap()),
-        Some(&Some(d2b_contracts_resource::v3::ZoneId::parse("root").unwrap()))
+        Some(&Some(
+            d2b_contracts_resource::v3::ZoneId::parse("root").unwrap()
+        ))
     );
 
     let bad = json.replace("\"inherit-env\"", "\"surprise\"");

@@ -80,10 +80,10 @@ pub use hints::{
     SuppressionDecision, WatchPlan, WatchPlanError, WatchRegistry, WatchSelector,
 };
 pub use owner_reconcile::{
-    DesiredChild, ObservedChild, OwnedChildIntent, OwnedChildKind, OwnerBatchRecovery,
-    OwnerBatchResult, OwnerChildBatch, OwnerChildIdentity, OwnerGraph, OwnerGraphError, OwnerIndex,
-    OwnerLimits, OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
-    TeardownPlan, MAX_OWNER_CHILD_BATCH, MAX_OWNER_CHILD_DEPENDENCIES,
+    DesiredChild, MAX_OWNER_CHILD_BATCH, MAX_OWNER_CHILD_DEPENDENCIES, ObservedChild,
+    OwnedChildIntent, OwnedChildKind, OwnerBatchRecovery, OwnerBatchResult, OwnerChildBatch,
+    OwnerChildIdentity, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits, OwnerMutation,
+    OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger, TeardownPlan,
 };
 pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,

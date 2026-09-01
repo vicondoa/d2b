@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::zone_authority::ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX;
 use d2b_core_controller::authority::{
     AuthorityOperationState, AuthorityStorageClaim, AuthorityStorageOperation,
     ExternalNicRecoveryInventory, claim_digest,
@@ -21,7 +22,6 @@ use d2b_resource_store::{StoreOperationContext, StoreResolveRequest};
 use d2b_resource_store_redb::{
     AuthorityOperation, AuthorityOperationState as StoreAuthorityOperationState, RedbResourceStore,
 };
-use crate::zone_authority::ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX;
 
 /// Production authority persistence owner for one Zone redb store.
 pub struct RedbAuthorityPersistence {
@@ -341,9 +341,7 @@ fn is_zone_generation_publication(row: &AuthorityOperation) -> bool {
         && serde_json::from_slice::<serde_json::Value>(&row.payload)
             .ok()
             .is_some_and(|value| {
-                value
-                    .get("publication")
-                    .and_then(serde_json::Value::as_str)
+                value.get("publication").and_then(serde_json::Value::as_str)
                     == Some("zone-resource-plane")
             })
 }

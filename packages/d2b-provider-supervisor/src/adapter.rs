@@ -369,10 +369,24 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                     state.handles.remove(&finalize_identity);
                     state.quarantined_identities.remove(&finalize_identity);
                 }
+
                 Ok(())
             })
             .await;
         result.map_err(map_error)
+    }
+
+    /// Take the Provider-controller bootstrap endpoint retained with one handle.
+    pub async fn take_controller_bootstrap(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<Option<std::os::fd::OwnedFd>, ProcessConformanceError> {
+        let handle = self.handle(identity).map_err(map_error)?;
+        self.blocking(self.inner.default_timeout, move |backend| {
+            backend.take_controller_bootstrap(handle.as_ref())
+        })
+        .await
+        .map_err(map_error)
     }
 
     fn remember(

@@ -14,15 +14,11 @@ use std::{
     process::ExitCode,
 };
 
-use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ProviderManifest,
-    semantic_services::catalog,
-};
+use d2b_contracts_provider::v3::{ArtifactDigest, ProviderManifest, semantic_services::catalog};
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, canonical_json_bytes,
-    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
-    resource::RESOURCE_API_VERSION, ResourceUid,
+    ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, ResourceUid,
+    canonical_json_bytes, framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES,
+    is_canonical_digest, resource::RESOURCE_API_VERSION,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_resource_compiler::{
@@ -293,7 +289,10 @@ fn compile(
     let strict_secrets = strict_override.unwrap_or(input.strict_secrets);
     if let Some(zone_uid) = input.zone_uid.as_deref() {
         ResourceUid::parse(zone_uid.to_owned()).map_err(|_| {
-            CliError::new("resource-compiler-zone-uid-invalid", "declared Zone UID is invalid")
+            CliError::new(
+                "resource-compiler-zone-uid-invalid",
+                "declared Zone UID is invalid",
+            )
         })?;
     }
 

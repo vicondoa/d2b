@@ -408,7 +408,7 @@ pub fn plan_finalization(
     if input
         .direct_children
         .iter()
-        .any(|child| child.deletion_requested || child.finalizers_pending)
+        .any(|child| child.deletion_requested && child.finalizers_pending)
     {
         return Ok(blocked_plan(
             input.guest_uid,

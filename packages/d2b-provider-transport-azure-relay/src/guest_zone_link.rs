@@ -1,4 +1,3 @@
-
 //! Gateway Guest-local ZoneLink transport composition.
 
 use std::{
@@ -9,12 +8,12 @@ use std::{
     sync::Arc,
 };
 
-use d2b_contracts_resource::v3::ResourceRef;
 use crate::{
     AzureRelaySocketConnector, AzureRelayTransportProvider, RelayComponentSessionTransport,
     RelayCredentialBinding, RelayCredentialRole, RelayEnrollmentProof, RelayEnrollmentVerifier,
     RelayRole, RelayTransportConfig, RelayTransportError, RelayTransportSettings,
 };
+use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::guest_credential::{
     CredentialError, CredentialFilePolicy, GatewayGuestCredentialPort, SealingKey,
@@ -219,10 +218,7 @@ impl GatewayGuestZoneLinkRuntime {
 }
 
 fn digest_hex(digest: &[u8; 32]) -> String {
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -235,7 +231,8 @@ mod tests {
 
     fn sealed_runtime(dir: &Path) -> GatewayGuestZoneLinkRuntime {
         let credential_path = dir.join("credential.sealed.json");
-        let seal_key = SealingKey::from_bytes([7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]);
+        let seal_key =
+            SealingKey::from_bytes([7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]);
         GatewayCredential::enroll_sealed(
             &credential_path,
             &seal_key,
@@ -250,7 +247,11 @@ mod tests {
         )
         .expect("sealed credential");
         let seal_key_path = dir.join("seal.key");
-        fs::write(&seal_key_path, [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]).expect("seal key");
+        fs::write(
+            &seal_key_path,
+            [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN],
+        )
+        .expect("seal key");
         fs::set_permissions(&seal_key_path, fs::Permissions::from_mode(0o600))
             .expect("seal key mode");
         GatewayGuestZoneLinkRuntime::from_sealed(
@@ -341,7 +342,11 @@ mod tests {
         let invalid_credential = dir.path().join("invalid.sealed.json");
         let invalid_key = dir.path().join("invalid.key");
         fs::write(&invalid_credential, b"not-a-sealed-envelope").expect("invalid credential");
-        fs::write(&invalid_key, [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN]).expect("invalid key");
+        fs::write(
+            &invalid_key,
+            [7_u8; crate::guest_credential::GATEWAY_SEAL_KEY_LEN],
+        )
+        .expect("invalid key");
         fs::set_permissions(&invalid_credential, fs::Permissions::from_mode(0o600))
             .expect("invalid credential mode");
         fs::set_permissions(&invalid_key, fs::Permissions::from_mode(0o600))

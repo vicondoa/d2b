@@ -7,22 +7,10 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    ComponentTargetCapability,
-    CompatibilityRange,
-    ComponentDescriptor,
-    ComponentType,
-    ControllerInstanceScope,
-    ControllerTargetKind,
-    EffectPortClass,
-    PolicyEvaluation,
-    ProviderManifest,
-    ResourceApiBinding,
-    RevocationState,
-    SignatureState,
-    StandardCapabilityMatrix,
-    TrustEvidence,
+    ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor,
+    ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+    EffectPortClass, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState,
+    SignatureState, StandardCapabilityMatrix, TrustEvidence,
     provider::{
         BinaryRef, ComponentExecution, TargetRuntimeArtifacts, UpgradeDisposition, UpgradePolicy,
     },

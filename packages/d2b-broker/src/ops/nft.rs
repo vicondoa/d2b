@@ -69,22 +69,17 @@ fn live_table_has_foreign_entries(
             let Some(name) = chain.get("name").and_then(serde_json::Value::as_str) else {
                 return true;
             };
-            let comment = chain
-                .get("comment")
-                .and_then(serde_json::Value::as_str);
+            let comment = chain.get("comment").and_then(serde_json::Value::as_str);
             return !desired_chains.contains(name)
                 || comment.is_some_and(|value| value != expected_comment);
         }
         if let Some(rule) = entry.get("rule") {
             if rule.get("family").and_then(serde_json::Value::as_str) != Some(desired.table_family)
-                || rule.get("table").and_then(serde_json::Value::as_str)
-                    != Some(desired.table_name)
+                || rule.get("table").and_then(serde_json::Value::as_str) != Some(desired.table_name)
             {
                 return false;
             }
-            return rule
-                .get("comment")
-                .and_then(serde_json::Value::as_str)
+            return rule.get("comment").and_then(serde_json::Value::as_str)
                 != Some(expected_comment.as_str());
         }
         false

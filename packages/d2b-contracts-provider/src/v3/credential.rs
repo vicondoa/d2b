@@ -20,9 +20,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use d2b_contracts_resource::v3::{
-    ResourceRef,
-    Timestamp,
-    execution_policy::{ExecutionDomain, PrimitiveSpecError, parsed_deserialize, redacted_debug, require_execution_ref, require_resource_type, string_schema},
+    ResourceRef, Timestamp,
+    execution_policy::{
+        ExecutionDomain, PrimitiveSpecError, parsed_deserialize, redacted_debug,
+        require_execution_ref, require_resource_type, string_schema,
+    },
 };
 
 pub mod service;

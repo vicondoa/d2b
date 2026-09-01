@@ -82,5 +82,9 @@ fn generation_discovery_accepts_only_the_exact_enrolled_guest_profile() {
 
     let mut zero_channel_binding = identity;
     zero_channel_binding.transport_binding.channel_binding = [0; 32];
-    assert!(zero_channel_binding.validate_generation_discovery().is_err());
+    assert!(
+        zero_channel_binding
+            .validate_generation_discovery()
+            .is_err()
+    );
 }

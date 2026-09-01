@@ -14,8 +14,8 @@ use d2b_resource_store::mutation_seal::{
 };
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
-    PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreFilter, StoreGetRequest,
-    StoreListRequest, StoreError, StoreErrorKind, StoreMutation, StoreOperationContext,
+    PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreError, StoreErrorKind,
+    StoreFilter, StoreGetRequest, StoreListRequest, StoreMutation, StoreOperationContext,
     StoreProjection, StoreSlot, StoreWatchRequest,
 };
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
@@ -245,6 +245,7 @@ fn create_seal_body_for_type_as(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                configuration_generation: None,
                 assignment: None,
             },
             None,
@@ -485,6 +486,7 @@ fn create_owned_seal_body(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                configuration_generation: None,
                 assignment: None,
             },
             None,
@@ -828,6 +830,26 @@ fn broker_evidence_index_is_live_after_startup_snapshot() {
 }
 
 #[test]
+fn broker_evidence_index_allows_retry_failure_to_become_durable_success() {
+    let index = crate::BrokerEvidenceIndex::default();
+    let key = ZoneOperationKey::derive("work", "retry-operation").unwrap();
+    index
+        .insert(DurabilityEvidence {
+            key: key.clone(),
+            outcome: DurabilityOutcome::Failure,
+            effect_durable: false,
+        })
+        .unwrap();
+    let success = DurabilityEvidence {
+        key: key.clone(),
+        outcome: DurabilityOutcome::Success,
+        effect_durable: true,
+    };
+    index.insert(success.clone()).unwrap();
+    assert_eq!(index.get(&key).unwrap(), Some(success));
+}
+
+#[test]
 fn resource_mutation_audit_class_is_not_privileged_by_default() {
     let standard = resource_mutation_record(
         1,
@@ -907,14 +929,9 @@ async fn serialized_commit_fence_rejects_revoked_mutation() {
     let (_directory, file, marker) = provisioned_store();
     let store_identity = identity();
     let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
-    let store = RedbResourceStore::provision_owned(
-        file,
-        marker,
-        store_identity,
-        acceptor,
-    )
-    .await
-    .unwrap();
+    let store = RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+        .await
+        .unwrap();
     let canonical = create_body("revoked");
     let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
     let error = store
@@ -2894,11 +2911,7 @@ async fn public_owner_child_list_and_watch_are_bound_to_one_owner_uid() {
     let sibling_child = ResourceRef::parse("Process/sibling-child").unwrap();
     for (operation_id, target, owner) in [
         ("owner-list-guest-child", guest_child.clone(), guest.clone()),
-        (
-            "owner-list-sibling-child",
-            sibling_child,
-            sibling.clone(),
-        ),
+        ("owner-list-sibling-child", sibling_child, sibling.clone()),
     ] {
         store
             .commit_verified(issuer.seal(create_owned_seal_body(

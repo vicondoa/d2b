@@ -13,53 +13,25 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    BinaryRef,
-    CapabilitySupport,
-    CompatibilityRange,
-    ComponentDescriptor,
-    ComponentExecution,
-    ComponentTargetCapability,
-    ComponentStateKind,
-    ComponentStateNamespace,
-    ComponentStateView,
-    ComponentType,
-    ControllerInstanceScope,
-    ControllerTargetKind,
-    DependencyAlias,
-    DependencyDeclaration,
-    EffectPortClass,
-    PolicyEvaluation,
-    ProviderManifest,
-    ProviderSpec,
-    ResourceApiBinding,
-    RevocationState,
-    SignatureState,
-    StandardCapabilityMatrix,
-    StorageNeed,
-    TrustEvidence,
-    TargetRuntimeArtifacts,
-    UpgradeDisposition,
-    UpgradePolicy,
+    ArtifactDigest, ArtifactDigestSet, BinaryRef, CapabilitySupport, CompatibilityRange,
+    ComponentDescriptor, ComponentExecution, ComponentStateKind, ComponentStateNamespace,
+    ComponentStateView, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+    ControllerTargetKind, DependencyAlias, DependencyDeclaration, EffectPortClass,
+    PolicyEvaluation, ProviderManifest, ProviderSpec, ResourceApiBinding, RevocationState,
+    SignatureState, StandardCapabilityMatrix, StorageNeed, TargetRuntimeArtifacts, TrustEvidence,
+    UpgradeDisposition, UpgradePolicy,
 };
-use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::identity::{Locality, SessionPurpose, TransportBinding};
 use d2b_contracts_resource::v3::{
-    ResourceRef,
+    ResourceRef, ResourceTypeName, SchemaFingerprint,
     execution_policy::{BoundedToken, ExecutionDomain},
-    ResourceTypeName,
-    SchemaFingerprint,
     resource_schema::{PlacementAnchor, SchemaVersion},
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
 };
-use d2b_contracts_resource::v3::identity::{
-    Locality,
-    TransportBinding,
-    SessionPurpose,
-};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_provider_toolkit::fakes::{
     FakeBus, FakeCoreClient, FakeEffectPort, FakePortError, FakeResourceStore, FakeSupervisor,
     FaultPlan,

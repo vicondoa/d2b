@@ -362,8 +362,7 @@ mod tests {
             requests: Mutex::new(Vec::new()),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone())
-                .unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone()).unwrap();
         assert_eq!(
             open(
                 &context,

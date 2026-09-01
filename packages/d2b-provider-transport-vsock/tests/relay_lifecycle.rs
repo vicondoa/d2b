@@ -1,11 +1,8 @@
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
-    SessionKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
-    RelayEffectPort, RelayObservation, RelayPhase, SessionAuthority, SessionProof,
+    GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError, RelayEffectPort,
+    RelayObservation, RelayPhase, SessionAuthority, SessionKey, SessionProof,
 };
 use ring::rand::{SystemRandom, generate};
 use std::sync::{Arc, Mutex};

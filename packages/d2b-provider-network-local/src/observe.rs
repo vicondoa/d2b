@@ -299,7 +299,8 @@ pub fn parse_host_network_observation(
             let Some(prefix) = entry.get("prefixlen").and_then(Value::as_u64) else {
                 continue;
             };
-            let prefix = u8::try_from(prefix).map_err(|_| HostNetworkObservationError::InvalidOutput)?;
+            let prefix =
+                u8::try_from(prefix).map_err(|_| HostNetworkObservationError::InvalidOutput)?;
             if let Ok(cidr) = Ipv4Cidr::parse(format!("{local}/{prefix}")) {
                 if let Some(markers) = interface_marker {
                     for marker in markers {
@@ -328,12 +329,7 @@ pub fn parse_host_network_observation(
             .get("gateway")
             .and_then(value_to_string)
             .or_else(|| value.get("via").and_then(route_via_to_string));
-        let route_tuple = RouteTuple::new(
-            destination,
-            via,
-            device.map(ToOwned::to_owned),
-            table,
-        );
+        let route_tuple = RouteTuple::new(destination, via, device.map(ToOwned::to_owned), table);
         route_names.push(format!(
             "{destination}|{}|{}",
             device.unwrap_or("-"),
@@ -354,15 +350,12 @@ pub fn parse_host_network_observation(
         }
     }
 
-    Ok(HostNetworkOccupancy::from_route_tuples(
-        interface_names,
-        route_names,
-        route_tuples,
-        cidrs,
+    Ok(
+        HostNetworkOccupancy::from_route_tuples(interface_names, route_names, route_tuples, cidrs)
+            .with_interface_ownership_markers(interface_markers)
+            .with_route_ownership_markers(route_markers)
+            .with_cidr_ownership_markers(cidr_markers),
     )
-    .with_interface_ownership_markers(interface_markers)
-    .with_route_ownership_markers(route_markers)
-    .with_cidr_ownership_markers(cidr_markers))
 }
 
 fn link_marker(value: &Value) -> Option<String> {
@@ -436,10 +429,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(occupancy.interface_names()[0].as_str(), "foreign0");
-        assert!(occupancy
-            .cidrs()
-            .iter()
-            .any(|cidr| cidr.as_str() == "10.20.0.0/24"));
+        assert!(
+            occupancy
+                .cidrs()
+                .iter()
+                .any(|cidr| cidr.as_str() == "10.20.0.0/24")
+        );
         assert_eq!(occupancy.route_names(), ["10.20.0.0/24|foreign0|main"]);
         assert_eq!(occupancy.routes().len(), 1);
         assert_eq!(occupancy.routes()[0].destination(), "10.20.0.0/24");
@@ -461,7 +456,10 @@ mod tests {
         let ifname = IfName::parse("d2b-b12345678").unwrap();
         let route = occupancy.routes().first().unwrap();
         let cidr = Ipv4Cidr::parse("10.20.0.1/24").unwrap();
-        assert_eq!(occupancy.interface_ownership_marker(&ifname), Some(bridge_marker));
+        assert_eq!(
+            occupancy.interface_ownership_marker(&ifname),
+            Some(bridge_marker)
+        );
         assert_eq!(occupancy.route_ownership_marker(route), Some(route_marker));
         assert_eq!(occupancy.cidr_ownership_marker(&cidr), Some(bridge_marker));
     }

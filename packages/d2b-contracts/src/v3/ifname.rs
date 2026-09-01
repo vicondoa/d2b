@@ -303,7 +303,11 @@ pub fn derive_network_ifname(
     role: NetworkIfRole,
     attachment_uid: Option<&ResourceUid>,
 ) -> Result<IfName, IfNameError> {
-    let identity = format!("zone:{}:network:{}", zone_uid.as_str(), network_uid.as_str());
+    let identity = format!(
+        "zone:{}:network:{}",
+        zone_uid.as_str(),
+        network_uid.as_str()
+    );
     derive_ifname(
         &identity,
         role,
@@ -318,7 +322,11 @@ pub fn derive_network_route_name(
     network_uid: &ResourceUid,
     index: usize,
 ) -> String {
-    let identity = format!("zone:{}:network:{}", zone_uid.as_str(), network_uid.as_str());
+    let identity = format!(
+        "zone:{}:network:{}",
+        zone_uid.as_str(),
+        network_uid.as_str()
+    );
     let mut hash = FNV_OFFSET;
     hash_bytes(&mut hash, identity.as_bytes());
     hash_bytes(&mut hash, &[0x1f]);

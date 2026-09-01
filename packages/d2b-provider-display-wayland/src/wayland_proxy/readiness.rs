@@ -5,10 +5,10 @@ use std::{
     time::Duration,
 };
 
+use crate::wayland_proxy::identity::ProxyIdentity;
 pub use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessFailure, ProxyReadinessStage,
 };
-use crate::wayland_proxy::identity::ProxyIdentity;
 
 #[derive(Debug)]
 pub struct ReadinessReporter {
@@ -69,10 +69,7 @@ impl ReadinessReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::{
-        workload::WorkloadProviderKind,
-        workload_identity::WorkloadTarget,
-    };
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 
     fn identity() -> ProxyIdentity {
         ProxyIdentity::canonical(

@@ -239,10 +239,7 @@ fn valid_network_marker(line: &str) -> bool {
         })
 }
 
-fn find_owned_marker_block(
-    existing: &str,
-    intent: &ResolvedHostsIntent,
-) -> Option<(usize, usize)> {
+fn find_owned_marker_block(existing: &str, intent: &ResolvedHostsIntent) -> Option<(usize, usize)> {
     let marker = intent.ownership_marker.as_deref()?;
     let expected = format!("# d2b managed: {marker}");
     let mut search_from = 0;

@@ -4,6 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use d2b_contracts::{
+    LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState,
+    controller_config::RealmControllerPlacement,
+    launcher::LauncherWorkloadSummary,
+    workload_identity::{WorkloadIdentity, WorkloadTarget},
+};
 use d2b_contracts_control::{
     public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
     unsafe_local_wire::{HelperShellPolicy, RealmAccentColor},
@@ -14,12 +20,6 @@ use d2b_core::{
     unsafe_local_workloads::{
         UnsafeLocalLauncherItem, UnsafeLocalShellPolicy, UnsafeLocalWorkloadsJson,
     },
-};
-use d2b_contracts::{
-    LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState,
-    controller_config::RealmControllerPlacement,
-    launcher::LauncherWorkloadSummary,
-    workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 
 use crate::typed_error::{TypedError, WorkloadLaunchErrorKind};
@@ -623,6 +623,13 @@ fn controller_matches_direct_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{
+        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+        IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
+        WorkloadExecutionPosture,
+        ids::{RealmId, WorkloadId},
+        realm::RealmPath,
+    };
     use d2b_core::{
         configured_argv::ConfiguredArgv,
         contract_id::ContractId,
@@ -631,13 +638,6 @@ mod tests {
             UnsafeLocalShellItem, UnsafeLocalShellPolicy, UnsafeLocalWorkload,
             UnsafeLocalWorkloadsJson,
         },
-    };
-    use d2b_contracts::{
-        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
-        IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
-        WorkloadExecutionPosture,
-        ids::{RealmId, WorkloadId},
-        realm::RealmPath,
     };
 
     fn workload_identity(realm: &str) -> WorkloadIdentity {

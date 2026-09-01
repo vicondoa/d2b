@@ -21,16 +21,14 @@
 //! `nm-unmanaged-pre-create-required`.
 
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor, SystemLiveExec};
+use d2b_contracts_resource::v3::NetworkIfRole;
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedMacvtapIntent};
 use d2b_core::host_w3::TapRoleW3;
-use d2b_contracts_resource::v3::NetworkIfRole;
 use d2b_host::bridge_port::BridgePortFlagSet;
 use d2b_host::ifname::IfName;
-use d2b_host::netlink::{
-    NetlinkBackend, NetlinkError, readback_bridge_port_flags,
-};
 #[cfg(test)]
 use d2b_host::netlink::{LinkKind, LinkSpec, TapOwner, fake::FakeBackend, ipv6_off_sequence};
+use d2b_host::netlink::{NetlinkBackend, NetlinkError, readback_bridge_port_flags};
 use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -474,9 +472,11 @@ fn verify_tap_intent(
     }
     let (bridge_role, tap_role, attachment) = match intent.tap_role {
         TapRoleW3::NetVmLan => (NetworkIfRole::LanBridge, NetworkIfRole::NetVmLanTap, None),
-        TapRoleW3::UplinkP2P => {
-            (NetworkIfRole::UplinkBridge, NetworkIfRole::NetVmUplinkTap, None)
-        }
+        TapRoleW3::UplinkP2P => (
+            NetworkIfRole::UplinkBridge,
+            NetworkIfRole::NetVmUplinkTap,
+            None,
+        ),
         TapRoleW3::WorkloadLanIsolated | TapRoleW3::WorkloadLanEastWest => (
             NetworkIfRole::LanBridge,
             NetworkIfRole::WorkloadGuestTap,
@@ -509,8 +509,12 @@ fn verify_tap_intent(
             reason: "network-admission-mismatch".to_owned(),
         });
     }
-    if !admitted_interface_names.iter().any(|ifname| ifname == &expected_bridge)
-        || !admitted_interface_names.iter().any(|ifname| ifname == &expected_tap)
+    if !admitted_interface_names
+        .iter()
+        .any(|ifname| ifname == &expected_bridge)
+        || !admitted_interface_names
+            .iter()
+            .any(|ifname| ifname == &expected_tap)
     {
         return Err(super::OpError::Refused {
             operation: "CreateTap",
@@ -928,11 +932,8 @@ fn resolve_uid_bridge_port_target(
         context.attachment_generation,
         context.bundle_generation.clone(),
     );
-    let is_net_vm = vm_id
-        == d2b_contracts_resource::v3::derive_network_child_name(
-            &context.network_uid,
-            "vm",
-        );
+    let is_net_vm =
+        vm_id == d2b_contracts_resource::v3::derive_network_child_name(&context.network_uid, "vm");
     let (bridge_role, tap_role, port_role) = if is_net_vm {
         (
             d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
@@ -941,26 +942,26 @@ fn resolve_uid_bridge_port_target(
         )
     } else {
         match role_id {
-        "net-vm-lan" => (
-            d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
-            d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap,
-            TapRoleW3::NetVmLan,
-        ),
-        "uplink" => (
-            d2b_contracts_resource::v3::NetworkIfRole::UplinkBridge,
-            d2b_contracts_resource::v3::NetworkIfRole::NetVmUplinkTap,
-            TapRoleW3::UplinkP2P,
-        ),
-        "workload-lan" => (
-            d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
-            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
-            TapRoleW3::WorkloadLanIsolated,
-        ),
-        other => {
-            return Err(LiveSetBridgePortFlagsError::Resolve(format!(
-                "unsupported bridge-port role_id {other}"
-            )));
-        }
+            "net-vm-lan" => (
+                d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
+                d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap,
+                TapRoleW3::NetVmLan,
+            ),
+            "uplink" => (
+                d2b_contracts_resource::v3::NetworkIfRole::UplinkBridge,
+                d2b_contracts_resource::v3::NetworkIfRole::NetVmUplinkTap,
+                TapRoleW3::UplinkP2P,
+            ),
+            "workload-lan" => (
+                d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
+                d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+                TapRoleW3::WorkloadLanIsolated,
+            ),
+            other => {
+                return Err(LiveSetBridgePortFlagsError::Resolve(format!(
+                    "unsupported bridge-port role_id {other}"
+                )));
+            }
         }
     };
     let bridge = d2b_contracts_resource::v3::derive_network_ifname(
@@ -1221,18 +1222,15 @@ mod tests {
     use d2b_core::processes::ProcessesJson;
 
     fn network_tap_context() -> d2b_contracts_broker::broker_wire::NetworkTapContext {
-        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "223e4567-e89b-42d3-a456-426614174001",
-        )
-        .unwrap();
-        let network_uid = d2b_contracts_resource::v3::ResourceUid::parse(
-            "323e4567-e89b-42d3-a456-426614174002",
-        )
-        .unwrap();
-        let attachment_id = d2b_contracts_resource::v3::ResourceUid::parse(
-            "423e4567-e89b-42d3-a456-426614174003",
-        )
-        .unwrap();
+        let zone_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .unwrap();
+        let network_uid =
+            d2b_contracts_resource::v3::ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .unwrap();
+        let attachment_id =
+            d2b_contracts_resource::v3::ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003")
+                .unwrap();
         let admitted_interface_names = [
             (NetworkIfRole::LanBridge, None),
             (NetworkIfRole::UplinkBridge, None),

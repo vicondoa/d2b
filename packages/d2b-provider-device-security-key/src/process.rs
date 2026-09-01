@@ -1,10 +1,7 @@
 //! Security-key relay and Guest frontend Process declarations.
 
 use core::fmt;
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
 /// Security-key Provider Process role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

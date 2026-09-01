@@ -242,6 +242,7 @@ pub(crate) struct ProcessResourceRuntime {
     target_owner_ref: Option<ResourceRef>,
     target_ref: Option<ResourceRef>,
     guest_descriptor_digests: BTreeMap<ResourceRef, SchemaFingerprint>,
+    owner_uids: BTreeMap<ResourceRef, ResourceUid>,
     status_client: Option<Arc<dyn ProcessResourceClient>>,
 }
 
@@ -260,11 +261,22 @@ fn scoped_target_ref(
     target_owner_ref: Option<&ResourceRef>,
     target_ref: Option<&ResourceRef>,
 ) -> Option<ResourceRef> {
-    match (target_owner_ref, target_ref, record.owner_ref()) {
-        (Some(expected_owner), Some(target), Some(owner)) if expected_owner == &owner => {
+    let owner = record.owner_ref();
+    match (target_owner_ref, target_ref, owner.as_ref()) {
+        (Some(expected_owner), Some(target), Some(owner)) if expected_owner == owner => {
             Some(target.clone())
         }
-        _ => None,
+        _ => match (&record.process, owner) {
+            (DesiredProcess::Process(spec), Some(owner))
+                if owner.resource_type().as_str() == "Guest"
+                    && spec.execution().template().as_str() == "cloud-hypervisor-runner"
+                    && record.resource.resource_ref.name().as_str()
+                        == format!("{}-vmm", owner.name().as_str()) =>
+            {
+                Some(owner)
+            }
+            _ => None,
+        },
     }
 }
 
@@ -299,6 +311,7 @@ impl ProcessResourceRuntime {
             target_owner_ref: None,
             target_ref: None,
             guest_descriptor_digests: BTreeMap::new(),
+            owner_uids: BTreeMap::new(),
             status_client: None,
         }
     }
@@ -318,11 +331,7 @@ impl ProcessResourceRuntime {
         self.guest_execution = Some(binding);
     }
 
-    pub(crate) fn set_lifecycle_identity(
-        &mut self,
-        zone_uid: ResourceUid,
-        policy_revision: u64,
-    ) {
+    pub(crate) fn set_lifecycle_identity(&mut self, zone_uid: ResourceUid, policy_revision: u64) {
         self.zone_uid = Some(zone_uid);
         self.policy_revision = Some(policy_revision);
     }
@@ -341,6 +350,10 @@ impl ProcessResourceRuntime {
         descriptors: BTreeMap<ResourceRef, SchemaFingerprint>,
     ) {
         self.guest_descriptor_digests = descriptors;
+    }
+
+    pub(crate) fn set_owner_uids(&mut self, owner_uids: BTreeMap<ResourceRef, ResourceUid>) {
+        self.owner_uids = owner_uids;
     }
 
     pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
@@ -376,6 +389,12 @@ impl ProcessResourceRuntime {
                 .map(GuestExecutionBinding::provider_generation),
         )
         .with_owner_ref(owner_ref.clone())
+        .with_owner_uid(
+            owner_ref
+                .as_ref()
+                .and_then(|owner| self.owner_uids.get(owner))
+                .cloned(),
+        )
         .with_guest_descriptor_digest(
             owner_ref
                 .as_ref()
@@ -392,8 +411,12 @@ impl ProcessResourceRuntime {
         &mut self,
         snapshot: Vec<StoredResource>,
     ) -> Result<(), ProcessResourceRuntimeError> {
-        let mut desired =
-            decode_snapshot(&self.zone, self.target.as_ref(), snapshot, self.providers.mode())?;
+        let mut desired = decode_snapshot(
+            &self.zone,
+            self.target.as_ref(),
+            snapshot,
+            self.providers.mode(),
+        )?;
         let provider_assignment_generation = self
             .guest_execution
             .as_ref()
@@ -424,7 +447,16 @@ impl ProcessResourceRuntime {
             self.next_restart_at.remove(&key);
         }
 
-        for (key, mut record) in desired {
+        let mut desired = desired.into_values().collect::<Vec<_>>();
+        desired.sort_by_key(|record| {
+            (
+                !record.deletion_requested(),
+                is_static_controller(record),
+                record.key(),
+            )
+        });
+        for mut record in desired {
+            let key = record.resource.resource_ref.clone();
             let provider_identity = if is_static_controller(&record) {
                 record
                     .owner_ref()
@@ -443,7 +475,24 @@ impl ProcessResourceRuntime {
                 .is_some_and(|current| !current.same_desired_state(&record));
             if replace {
                 if let Some(current) = self.records.get(&key).cloned() {
-                    self.stop_record(&current).await?;
+                    self.stop_record(&current).await.inspect_err(|error| {
+                        tracing::warn!(
+                            process = %key.name().as_str(),
+                            error = ?error,
+                            "Process replacement stop failed",
+                        );
+                    })?;
+                    self.providers
+                        .finalize_resource(self.context(&current))
+                        .await
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                process = %key.name().as_str(),
+                                error,
+                                "Process replacement finalization failed",
+                            );
+                        })
+                        .map_err(map_provider_error)?;
                     self.records.remove(&key);
                 }
                 self.terminal.remove(&key);
@@ -456,9 +505,11 @@ impl ProcessResourceRuntime {
 
             if !was_present
                 && !replace
-                && !self
-                    .providers
-                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                && !self.providers.has_active_resource_in_zone(
+                    &self.zone,
+                    self.zone_uid.as_ref(),
+                    &key,
+                )
             {
                 match status_phase(&record.resource) {
                     Some(ResourcePhase::Succeeded) => {
@@ -482,17 +533,27 @@ impl ProcessResourceRuntime {
             }
 
             if record.deletion_requested() {
-                if !self
-                    .providers
-                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                if record.is_running()
+                    && !self.providers.has_active_resource_in_zone(
+                        &self.zone,
+                        self.zone_uid.as_ref(),
+                        &key,
+                    )
                 {
                     match &record.process {
                         DesiredProcess::Process(spec) => {
-                            let adoption = deletion_adoption(
-                                self.providers
-                                    .adopt_resource(self.context(&record), spec)
-                                    .await,
-                            )?;
+                            let adoption_result = self
+                                .providers
+                                .adopt_resource(self.context(&record), spec)
+                                .await;
+                            if let Err(error) = &adoption_result {
+                                tracing::warn!(
+                                    process = %record.resource.resource_ref,
+                                    error,
+                                    "Process deletion adoption failed",
+                                );
+                            }
+                            let adoption = deletion_adoption(adoption_result)?;
                             if let Some(candidate) = stale_candidate_for_deletion(adoption)? {
                                 let provider_ref = self.context(&record).provider_ref.clone();
                                 self.providers
@@ -517,20 +578,34 @@ impl ProcessResourceRuntime {
                         }
                     }
                 }
-                if self
-                    .providers
-                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
-                {
+                if self.providers.has_active_resource_in_zone(
+                    &self.zone,
+                    self.zone_uid.as_ref(),
+                    &key,
+                ) {
                     self.stop_record(&record).await?;
                 }
                 self.providers
                     .finalize_resource(self.context(&record))
                     .await
+                    .inspect_err(|error| {
+                        tracing::warn!(
+                            process = %record.resource.resource_ref,
+                            error,
+                            "Process deletion provider finalization failed",
+                        );
+                    })
                     .map_err(map_provider_error)?;
                 record = self
                     .publish_status(&record, ResourcePhase::Deleted, None)
                     .await?;
-                record = self.remove_finalizer(&record).await?;
+                record = self.remove_finalizer(&record).await.inspect_err(|error| {
+                    tracing::warn!(
+                        process = %record.resource.resource_ref,
+                        error = ?error,
+                        "Process deletion finalizer removal failed",
+                    );
+                })?;
                 self.terminal.insert(key.clone());
                 self.records.insert(key, record);
                 continue;
@@ -545,9 +620,11 @@ impl ProcessResourceRuntime {
             }
 
             if let DesiredProcess::Ephemeral(spec) = &record.process
-                && self
-                    .providers
-                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
+                && self.providers.has_active_resource_in_zone(
+                    &self.zone,
+                    self.zone_uid.as_ref(),
+                    &key,
+                )
                 && self.started_at.get(&key).is_some_and(|started| {
                     started.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
                 })
@@ -574,10 +651,11 @@ impl ProcessResourceRuntime {
             }
 
             if !record.is_running() {
-                if self
-                    .providers
-                    .has_active_resource_in_zone(&self.zone, self.zone_uid.as_ref(), &key)
-                {
+                if self.providers.has_active_resource_in_zone(
+                    &self.zone,
+                    self.zone_uid.as_ref(),
+                    &key,
+                ) {
                     self.stop_record(&record).await?;
                     self.providers
                         .finalize_resource(self.context(&record))
@@ -753,7 +831,15 @@ impl ProcessResourceRuntime {
                 .providers
                 .adopt_resource(self.context(record), spec)
                 .await
-                .map_err(map_provider_error)?,
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        resource_type = %record.key().resource_type().as_str(),
+                        error = %error,
+                        "Process Provider adoption probe failed",
+                    );
+                    map_provider_error(error)
+                })?,
             DesiredProcess::Ephemeral(spec) => self
                 .providers
                 .adopt_ephemeral_resource(self.context(record), spec)
@@ -825,7 +911,15 @@ impl ProcessResourceRuntime {
                 .providers
                 .launch_resource(self.context(record), spec, launch_timeout(&record.process))
                 .await
-                .map_err(map_provider_error)?,
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        resource_type = %record.key().resource_type().as_str(),
+                        error = %error,
+                        "Process Provider launch failed",
+                    );
+                    map_provider_error(error)
+                })?,
             DesiredProcess::Ephemeral(spec) => self
                 .providers
                 .launch_ephemeral_resource(
@@ -995,14 +1089,11 @@ impl ProcessResourceRuntime {
     }
 
     async fn stop_record(&self, record: &DesiredRecord) -> Result<(), ProcessResourceRuntimeError> {
-        if !self
-            .providers
-            .has_active_resource_in_zone(
-                &self.zone,
-                self.zone_uid.as_ref(),
-                &record.resource.resource_ref,
-            )
-        {
+        if !self.providers.has_active_resource_in_zone(
+            &self.zone,
+            self.zone_uid.as_ref(),
+            &record.resource.resource_ref,
+        ) {
             return Ok(());
         }
         match &record.process {
@@ -1422,7 +1513,11 @@ async fn update_finalizers(
     }
     let operation = process_operation_id(
         record,
-        if add { "finalizer-add" } else { "finalizer-remove" },
+        if add {
+            "finalizer-add"
+        } else {
+            "finalizer-remove"
+        },
     );
     let mut request = wire::UpdateFinalizersRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
@@ -2211,8 +2306,12 @@ pub(crate) async fn run_process_watch(
             } else {
                 return;
             }
-            if result.is_err() {
-                tracing::warn!(zone = %zone.as_str(), "generic Process reconciliation degraded");
+            if let Err(error) = result {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    error = ?error,
+                    "generic Process reconciliation degraded",
+                );
             }
             if let (Some(client), Some(session_ref)) =
                 (status_client.as_ref(), wayland_session_ref.as_ref())
@@ -2466,7 +2565,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_target_selector_is_limited_to_the_wayland_session_owner() {
+    fn guest_target_selector_is_limited_to_known_guest_scoped_processes() {
         let session_ref =
             ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
                 .expect("session ref");
@@ -2516,5 +2615,16 @@ mod tests {
             ),
             None
         );
+
+        let vmm = serde_json::from_str::<ProcessSpec>(
+            r#"{"executionRef":"Host/host-system","processClass":"worker","template":"cloud-hypervisor-runner"}"#,
+        )
+        .expect("VMM process");
+        let vmm_owner = ResourceRef::parse("Guest/acceptance-guest").expect("Guest owner");
+        let mut vmm_record = make_record(vmm_owner.to_canonical_string().as_str());
+        vmm_record.resource.resource_ref =
+            ResourceRef::parse("Process/acceptance-guest-vmm").expect("VMM ref");
+        vmm_record.process = DesiredProcess::Process(vmm);
+        assert_eq!(scoped_target_ref(&vmm_record, None, None), Some(vmm_owner));
     }
 }

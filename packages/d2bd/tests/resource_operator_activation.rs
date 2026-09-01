@@ -12,43 +12,23 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceEnvelope,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
-    device::DeviceSpec,
-    guest::GuestSpec,
-    storage::ZoneStoreId,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-    STANDARD_RESOURCE_TYPES,
-};
-use d2b_provider_display_wayland::{DisplayIdentity, WaylandSessionSpec};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    STANDARD_RESOURCE_TYPES, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+    TransportBinding,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision, canonical_digest, device::DeviceSpec,
+    guest::GuestSpec, storage::ZoneStoreId,
+};
 use d2b_core_controller::controller_assignment::ScopedCommitTransport;
+use d2b_provider_display_wayland::{DisplayIdentity, WaylandSessionSpec};
 use d2b_resource_api::{
     RedbBackend, ResourceBusAdapter, ResourceService,
     authz::{
@@ -534,8 +514,7 @@ async fn open_seeded_resource_api(
     ResourceBusAdapter<RedbBackend, d2b_resource_api::service::UnavailableUpgradeDispatcher>,
 ) {
     let (catalog, policy, state) = resource_policy(zone, snapshot);
-    let authorizer =
-        std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy)).unwrap());
+    let authorizer = std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy)).unwrap());
     let acceptor = authorizer
         .take_store_seal(store_identity.seal_identity())
         .unwrap();
@@ -623,14 +602,8 @@ async fn seed_host_resource(
     store_identity: StoreIdentity,
     snapshot: PolicySnapshot,
 ) {
-    let (store, adapter) = open_seeded_resource_api(
-        zone,
-        database_path,
-        marker_path,
-        store_identity,
-        snapshot,
-    )
-    .await;
+    let (store, adapter) =
+        open_seeded_resource_api(zone, database_path, marker_path, store_identity, snapshot).await;
     drop(adapter);
     let store = std::sync::Arc::try_unwrap(store).expect("release seed store");
     store
@@ -665,10 +638,8 @@ async fn create_operator_resource(
                 ResourceRef::parse("Guest/workstation").expect("valid Guest ref"),
                 ResourceRef::parse("Host/host-system").expect("valid Host ref"),
                 ResourceRef::parse("User/alice").expect("valid User ref"),
-                ResourceRef::parse(
-                    "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
-                )
-                .expect("valid WaylandPolicy ref"),
+                ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+                    .expect("valid WaylandPolicy ref"),
                 DisplayIdentity::new("display", "#112233", "#223344", "#334455")
                     .expect("valid display identity"),
                 true,
@@ -1482,20 +1453,29 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
         ))
         .await;
     assert_eq!(
-        blocked
-            .error
-            .as_ref()
-            .map(|error| error.reason.as_str()),
+        blocked.error.as_ref().map(|error| error.reason.as_str()),
         Some("owned-children-remain"),
         "owner deletion must remain blocked until child resources drain"
     );
 
     for (resource_type, name, operation_id) in [
-        ("Endpoint", "display-host-endpoint", "delete-wayland-host-endpoint"),
-        ("Endpoint", "display-guest-endpoint", "delete-wayland-guest-endpoint"),
+        (
+            "Endpoint",
+            "display-host-endpoint",
+            "delete-wayland-host-endpoint",
+        ),
+        (
+            "Endpoint",
+            "display-guest-endpoint",
+            "delete-wayland-guest-endpoint",
+        ),
     ] {
         let endpoint = client
-            .get(get_request(resource_type, name, &format!("get-{operation_id}")))
+            .get(get_request(
+                resource_type,
+                name,
+                &format!("get-{operation_id}"),
+            ))
             .await;
         let endpoint = endpoint.resource.as_ref().expect("Endpoint before delete");
         let revision = endpoint
@@ -1545,11 +1525,7 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
         ("display-guest-frontend", "delete-wayland-guest-process"),
     ] {
         let process = client
-            .get(get_request(
-                "Process",
-                name,
-                &format!("get-{operation_id}"),
-            ))
+            .get(get_request("Process", name, &format!("get-{operation_id}")))
             .await;
         let process = process.resource.as_ref().expect("Process before delete");
         let requested = client
@@ -1642,7 +1618,10 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
     drop(client);
     drop(adapter);
     let store = std::sync::Arc::try_unwrap(store).expect("release seeded resource store");
-    store.shutdown().await.expect("shutdown seeded resource store");
+    store
+        .shutdown()
+        .await
+        .expect("shutdown seeded resource store");
 }
 
 #[tokio::test]

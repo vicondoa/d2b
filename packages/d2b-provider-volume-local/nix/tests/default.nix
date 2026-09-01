@@ -136,7 +136,7 @@ in
       expr = builtins.hasAttr "volumes" evaluated.options.d2b;
       expected = true;
     };
-    "volume-local/guest-volume-projection-is-owner-local" = {
+    "volume-local/guest-store-view-projection-is-watched" = {
       expr = builtins.hasAttr "store-view-guest"
         projected.config.d2b._resourceCompiler.providerProjectionVolumeLocal.resourcesByZone.dev;
       expected = true;
@@ -146,7 +146,7 @@ in
         projected.config.d2b._resourceCompiler.providerProjectionVolumeLocal.resourcesByZone.dev;
       expected = true;
     };
-    "volume-local/valid-providers-emit-owned-children-only" = {
+    "volume-local/valid-providers-emit-current-generated-resources" = {
       expr = let
         compiler = projected.config.d2b._resourceCompiler;
         projection = compiler.providerProjectionVolumeLocal;
@@ -157,8 +157,12 @@ in
         private = projection.privateArtifact.resourceNames;
         storeSource = projection.resourcesByZone.dev.store-view-guest
           .spec.source.executionRef;
+        storeOwner = projection.resourcesByZone.dev.store-view-guest
+          .metadata.ownerRef or null;
         tpmSource = projection.resourcesByZone.dev.swtpm-guest
           .spec.source.executionRef;
+        tpmOwner = projection.resourcesByZone.dev.swtpm-guest
+          .metadata.ownerRef or null;
       };
       expected = {
         enabled = true;
@@ -170,7 +174,9 @@ in
           "User/vol-state-vfd"
         ];
         storeSource = "Host/storage-host";
+        storeOwner = null;
         tpmSource = "Host/storage-host";
+        tpmOwner = "Guest/guest";
       };
     };
     "volume-local/absent-provider-emits-no-children" = {

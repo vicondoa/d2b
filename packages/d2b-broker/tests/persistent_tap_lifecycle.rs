@@ -1,17 +1,17 @@
 use std::cell::Cell;
 
-use d2b_contracts::types::{BundleOpId, RoleId, VmId};
-use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
-use d2b_contracts_resource::v3::{
-    NetworkIfRole, ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
-    derive_network_ifname,
-};
 use d2b_broker::ops::{
     audit_op::OperationFields,
     network::{
         NetworkOpError, PersistentTapBackend, PersistentTapRealization, attachment_digest,
         delete_persistent_tap, load_persistent_tap_realization, persist_persistent_tap_realization,
     },
+};
+use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
+use d2b_contracts_resource::v3::{
+    NetworkIfRole, ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
+    derive_network_ifname,
 };
 
 struct FakeTap {

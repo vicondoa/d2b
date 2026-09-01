@@ -8,31 +8,14 @@
 use d2b_contracts_resource::v3::ResourceUid;
 
 pub use d2b_contracts_resource::v3::{
-    BRIDGE_TAG,
-    DEFAULT_PREFIX,
-    DerivedRole,
-    HASH_SUFFIX_LEN,
-    IfName,
-    IfNameError,
-    IfNameMapping,
-    MAX_IFNAME_BYTES,
-    NetworkIfRole,
-    TAP_TAG,
-    derive_ifname,
-    derive_network_ifname,
-    derive_network_ownership_marker,
-    detect_collisions,
-    looks_d2b_owned,
-    validate_prefix,
+    BRIDGE_TAG, DEFAULT_PREFIX, DerivedRole, HASH_SUFFIX_LEN, IfName, IfNameError, IfNameMapping,
+    MAX_IFNAME_BYTES, NetworkIfRole, TAP_TAG, derive_ifname, derive_network_ifname,
+    derive_network_ownership_marker, detect_collisions, looks_d2b_owned, validate_prefix,
 };
 
 /// Derive a bounded private route identity from immutable Network identity.
 pub fn derive_network_route_name(network_uid: &ResourceUid, index: usize) -> String {
-    d2b_contracts_resource::v3::derive_network_route_name(
-        network_uid,
-        network_uid,
-        index,
-    )
+    d2b_contracts_resource::v3::derive_network_route_name(network_uid, network_uid, index)
 }
 
 /// Derive a bounded private route identity from the complete Network identity.

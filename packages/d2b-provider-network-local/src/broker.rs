@@ -136,7 +136,11 @@ impl NetworkEffectContext {
 
     /// Add another trusted Network bridge intent to the atomic fabric set.
     pub fn with_additional_bridge_intent(mut self, intent_ref: BundleOpId) -> Self {
-        if !self.bridge_intent_refs.iter().any(|current| current == &intent_ref) {
+        if !self
+            .bridge_intent_refs
+            .iter()
+            .any(|current| current == &intent_ref)
+        {
             self.bridge_intent_refs.push(intent_ref);
         }
         self
@@ -400,8 +404,7 @@ impl NetworkEffectContext {
             || tap_context.network_generation != key.network_generation()
             || tap_context.attachment_generation != key.attachment_generation()
             || tap_context.bundle_generation != *key.bundle_generation()
-            || tap_context.admitted_interface_names.as_slice()
-                != proof.intent().interface_names()
+            || tap_context.admitted_interface_names.as_slice() != proof.intent().interface_names()
         {
             return Err(NetworkBrokerError::NetworkAdmissionMismatch);
         }
@@ -412,12 +415,8 @@ impl NetworkEffectContext {
             tap_context.attachment_generation,
             tap_context.bundle_generation.clone(),
         );
-        let identity = resolve_tap_identity(
-            &provenance,
-            vm_id,
-            role_id,
-            &tap_context.attachment_id,
-        )?;
+        let identity =
+            resolve_tap_identity(&provenance, vm_id, role_id, &tap_context.attachment_id)?;
         if !tap_context
             .admitted_interface_names
             .iter()
@@ -453,10 +452,7 @@ pub fn resolve_tap_identity(
 ) -> Result<NetworkTapIdentity, NetworkBrokerError> {
     let canonical_role_id = d2b_core::bundle_resolver::canonical_tap_role_id(role_id);
     let is_net_vm = vm_id.as_str()
-        == d2b_contracts_resource::v3::derive_network_child_name(
-            provenance.network_uid(),
-            "vm",
-        );
+        == d2b_contracts_resource::v3::derive_network_child_name(provenance.network_uid(), "vm");
     let (bridge_role, tap_role, attachment) = if is_net_vm {
         (NetworkIfRole::LanBridge, NetworkIfRole::NetVmLanTap, None)
     } else {
@@ -507,27 +503,21 @@ pub fn resolve_tap_identity(
 }
 
 fn network_ref_token(intent: &str) -> Option<&str> {
-    intent.split(':').nth(3).filter(|value| {
-        value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-    })
+    intent
+        .split(':')
+        .nth(3)
+        .filter(|value| value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 fn network_ref_kind(intent: &str) -> Option<&str> {
     match intent.split(':').next()? {
-        "network-bridge"
-        | "network-firewall"
-        | "network-hosts"
-        | "network-route"
+        "network-bridge" | "network-firewall" | "network-hosts" | "network-route"
         | "network-sysctl" => intent.split(':').next(),
         _ => None,
     }
 }
 
-fn network_ref_matches(
-    intent: &str,
-    zone_uid: &ResourceUid,
-    network_uid: &ResourceUid,
-) -> bool {
+fn network_ref_matches(intent: &str, zone_uid: &ResourceUid, network_uid: &ResourceUid) -> bool {
     let fields = intent.split(':').collect::<Vec<_>>();
     matches!(
         fields.first().copied(),
@@ -537,9 +527,13 @@ fn network_ref_matches(
             | Some("network-route")
             | Some("network-sysctl")
             | Some("network-marker")
-    ) && fields.get(1).and_then(|value| ResourceUid::parse((*value).to_owned()).ok())
+    ) && fields
+        .get(1)
+        .and_then(|value| ResourceUid::parse((*value).to_owned()).ok())
         == Some(zone_uid.clone())
-        && fields.get(2).and_then(|value| ResourceUid::parse((*value).to_owned()).ok())
+        && fields
+            .get(2)
+            .and_then(|value| ResourceUid::parse((*value).to_owned()).ok())
             == Some(network_uid.clone())
         && fields.get(3).is_some_and(|value| {
             value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -817,16 +811,19 @@ mod tests {
     };
 
     use super::*;
+    use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionKey};
     use d2b_contracts::types::{BundleOpId, VmId};
     use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
     use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceUid,
-    execution_policy::BoundedToken,
-    ifname::IfName,
-    network::{AttachmentGenerationFence, AttachmentHandle, EgressSpec, ExternalAttachmentMode, ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr, IsolationSpec, MacvtapMode, NetworkSpec, SharingPolicy},
-};
-    use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionKey};
+        ResourceBundleGenerationId, ResourceUid,
+        execution_policy::BoundedToken,
+        ifname::IfName,
+        network::{
+            AttachmentGenerationFence, AttachmentHandle, EgressSpec, ExternalAttachmentMode,
+            ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr, IsolationSpec, MacvtapMode,
+            NetworkSpec, SharingPolicy,
+        },
+    };
 
     #[derive(Clone, Default)]
     struct RecordingBroker {
@@ -926,8 +923,7 @@ mod tests {
         .unwrap();
         let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let zone_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
-        let attachment_uid =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let attachment_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
         let admission = NetworkAdmissionIntent::new(
             NetworkAdmissionKey::new(
                 zone_uid.clone(),
@@ -950,11 +946,13 @@ mod tests {
                 "work-net",
                 false,
             )),
-            BundleOpId::new(d2b_core::bundle_resolver::intent_id_network_projection_uids(
-                &zone_uid,
-                &network_uid,
-                "work-net",
-            )),
+            BundleOpId::new(
+                d2b_core::bundle_resolver::intent_id_network_projection_uids(
+                    &zone_uid,
+                    &network_uid,
+                    "work-net",
+                ),
+            ),
             BundleOpId::new("nm-unmanaged:host"),
             BundleOpId::new(d2b_core::bundle_resolver::intent_id_network_hosts_uids(
                 &zone_uid,
@@ -987,8 +985,7 @@ mod tests {
     #[test]
     fn provider_tap_identity_is_uid_bound_and_refuses_swapped_attachment() {
         let context = context(false);
-        let attachment_id =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let attachment_id = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
         let identity = context
             .tap_identity(&VmId::new("work-vm"), "ch", &attachment_id)
             .expect("admitted workload TAP identity");
@@ -1074,15 +1071,11 @@ mod tests {
                 ..valid.clone()
             },
             NetworkTapContext {
-                attachment_id: ResourceUid::parse(
-                    "523e4567-e89b-42d3-a456-426614174004",
-                )
-                .unwrap(),
+                attachment_id: ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap(),
                 ..valid.clone()
             },
             NetworkTapContext {
-                network_generation: d2b_contracts_resource::v3::ResourceGeneration::new(5)
-                    .unwrap(),
+                network_generation: d2b_contracts_resource::v3::ResourceGeneration::new(5).unwrap(),
                 ..valid.clone()
             },
             NetworkTapContext {
@@ -1111,8 +1104,7 @@ mod tests {
         let context = context(false);
         let proof = context.network_admission().unwrap();
         let key = proof.key();
-        let attachment_id =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let attachment_id = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
         let valid = NetworkTapContext {
             zone_uid: key.zone_uid().clone(),
             network_uid: key.network_uid().clone(),
@@ -1258,8 +1250,7 @@ mod tests {
             "network-bridge:323e4567-e89b-42d3-a456-426614174002:423e4567-e89b-42d3-a456-426614174003:aaaaaaaaaaaaaaaa:lan",
         );
         let port = BrokerNetworkEffectPort::new(broker.clone(), swapped_bridge);
-        let network_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         assert_eq!(
             block_on(port.create_bridges(&network_uid)),
             Err(NetworkEffectError::NetworkAdmissionMismatch)
@@ -1285,8 +1276,7 @@ mod tests {
         let mut mixed = context(true);
         mixed.route_intent_refs[0] = mixed.projection_intent_ref.clone();
         let port = BrokerNetworkEffectPort::new(broker.clone(), mixed);
-        let network_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         assert_eq!(
             block_on(port.apply_routes(&network_uid)),
             Err(NetworkEffectError::NetworkAdmissionMismatch)
@@ -1296,10 +1286,8 @@ mod tests {
 
     #[test]
     fn broker_port_refuses_swapped_sysctl_hosts_and_firewall_refs_before_effects() {
-        let network_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let foreign_network =
-            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
+        let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let foreign_network = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
 
         let broker = RecordingBroker::default();
         let mut swapped_sysctl = context(true);

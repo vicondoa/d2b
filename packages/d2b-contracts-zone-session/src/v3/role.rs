@@ -8,10 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ZoneId,
+    ResourceName, ResourceRef, ResourceTypeName, ZoneId,
     execution_policy::{BoundedText, redacted_debug},
 };
 

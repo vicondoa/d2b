@@ -36,11 +36,11 @@ pkgs.testers.runNixOSTest {
 
     # 1. Broker socket is created + listening before its service (socket
     #    activation): systemd binds/ACLs the AF_UNIX socket up front.
-    machine.wait_for_unit("d2b-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket", timeout=30)
 
     # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test \"$(systemctl show -P Type d2bd.service)\" = notify")
     machine.succeed("test \"$(systemctl show -P NotifyAccess d2bd.service)\" = main")
     machine.succeed("test \"$(systemctl show -P KillMode d2bd.service)\" = process")
@@ -49,12 +49,12 @@ pkgs.testers.runNixOSTest {
     )
 
     # 3. The live public wire surface: d2bd binds its AF_UNIX socket.
-    machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed(
         "systemctl restart d2bd.service"
     )
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
 
@@ -78,7 +78,7 @@ pkgs.testers.runNixOSTest {
         "echo \"$pid\""
     ).strip()
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     machine.succeed(f"test -d /proc/{survivor_pid}")

@@ -5,11 +5,11 @@
 pub mod error;
 pub mod mutation_seal;
 
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
-use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 
 pub use error::{
     MAX_STORE_SLOTS, MutationOrdinal, MutationOrdinalError, SealIdentityMismatch, StoreError,
@@ -263,6 +263,10 @@ pub struct StoreMutation {
     pub remove_finalizers: Vec<FinalizerId>,
     pub wait_for_reconcile: bool,
     pub reconcile_deadline_ms: Option<u64>,
+    /// Core-assigned configuration generation for an internal bundle apply.
+    ///
+    /// Public Resource API mutations always leave this unset.
+    pub configuration_generation: Option<ConfigurationGeneration>,
     /// Optional Core-issued assignment fence for controller-owned writes.
     pub assignment: Option<ResourceAssignmentFence>,
 }

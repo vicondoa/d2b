@@ -1,4 +1,4 @@
-# Type-G runNixOSTest: host remains isolated from Gateway Guest relay credentials.
+# Deferred Type-G runNixOSTest: host remains isolated from Gateway Guest relay credentials.
 { pkgs, self }:
 
 let
@@ -109,7 +109,7 @@ let
     name = "gateway-net-vm";
   };
   cloudHypervisorConfig = {
-    controllerExecutionRef = "Host/host";
+    controllerExecutionRef = "Host/host-system";
     defaultVcpus = 2;
     defaultMemoryMb = 512;
     defaultMachineType = "microvm";
@@ -124,7 +124,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "d2b-host-zone-gateway-isolation";
 
-  nodes.machine = d2bLib.d2bDaemonNode {
+  nodes.machine = d2bLib.d2bCloudHypervisorNode {
     extra = { ... }: {
       environment.systemPackages = [
         pkgs.iproute2
@@ -184,7 +184,7 @@ pkgs.testers.runNixOSTest {
       d2b.zones.work.trustedPublishers.d2b-volume-acceptance.signingKey =
         volumeProviderArtifact.trustedPublisher.signingKey;
       d2b.guestSystems.work.gateway = gatewayGuest;
-      d2b.zones.local-root.resources.host = {
+      d2b.zones.local-root.resources.host-system = {
         type = "Host";
         spec.providerRef = "Provider/system-core";
       };
@@ -207,7 +207,7 @@ pkgs.testers.runNixOSTest {
               osUsername = "d2bd";
             };
           };
-          host = {
+          host-system = {
             type = "Host";
             spec.providerRef = "Provider/system-core";
           };
@@ -215,6 +215,7 @@ pkgs.testers.runNixOSTest {
             type = "Guest";
             spec = {
               providerRef = "Provider/runtime-cloud-hypervisor";
+              executionRef = "Host/host-system";
               systemArtifactId = "gateway-system";
               networkAttachments = [
                 {
@@ -228,7 +229,7 @@ pkgs.testers.runNixOSTest {
             type = "Provider";
             spec = {
               artifactId = "acceptance-provider";
-              config.controllerExecutionRef = "Host/host";
+              config.controllerExecutionRef = "Host/host-system";
             };
           };
           volume-local = {
@@ -236,7 +237,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "volume-acceptance-provider";
               config = {
-                controllerExecutionRef = "Host/host";
+                controllerExecutionRef = "Host/host-system";
                 sourcePolicies = [
                   {
                     id = "default-state";
@@ -251,7 +252,7 @@ pkgs.testers.runNixOSTest {
             type = "Provider";
             spec = {
               artifactId = "volume-acceptance-provider";
-              config.controllerExecutionRef = "Host/host";
+              config.controllerExecutionRef = "Host/host-system";
             };
           };
           relay-egress = {
@@ -275,7 +276,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
-                controllerExecutionRef = "Host/host";
+                controllerExecutionRef = "Host/host-system";
                 executionRef = "Guest/gateway";
                 networkRef = "Network/relay-egress";
               };
@@ -286,7 +287,7 @@ pkgs.testers.runNixOSTest {
             spec = {
               artifactId = "acceptance-provider";
               config = {
-                controllerExecutionRef = "Host/host";
+                controllerExecutionRef = "Host/host-system";
                 credentialDomains = [ "system" ];
                 supportedOperations = [ "acquire-token" ];
               };
@@ -361,21 +362,21 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("d2bd.service")
-    machine.wait_for_unit("d2b-broker.socket")
-    machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_for_unit("d2bd.service", timeout=120)
+    machine.wait_for_unit("d2b-broker.socket", timeout=30)
+    machine.wait_for_file("/run/d2b/public.sock", timeout=30)
 
     # The committed Process/cloud-hypervisor-gateway row is desired-running;
     # d2bd's startup process reconciliation is the production Guest launcher.
     canary = ${builtins.toJSON gatewayCanary}
     gateway_vsock = "/var/lib/d2b/zones/work/guests/gateway/vsock.sock"
-    machine.wait_for_file(gateway_vsock)
+    machine.wait_for_file(gateway_vsock, timeout=120)
     machine.succeed(f"test -S {gateway_vsock}")
     observation_path = (
       "/var/lib/d2b/zones/work/guests/gateway/"
       "canary-observation/opened"
     )
-    machine.wait_for_file(observation_path)
+    machine.wait_for_file(observation_path, timeout=60)
     observation = machine.succeed(f"cat {observation_path}").strip()
     assert observation == (
       "schemaVersion=1\n"
@@ -383,10 +384,10 @@ pkgs.testers.runNixOSTest {
       "digest=sha256:${gatewayCanaryDigest}\n"
     )
 
-    policy = "/etc/d2b/host-realm-relay-egress-policy.json"
+    policy = "/etc/d2b/host-zone-relay-egress-policy.json"
     machine.succeed(f"test -r {policy}")
     machine.succeed(
-      f"jq -e '.mode == \"host-realm-relay-deny\" "
+      f"jq -e '.mode == \"host-zone-relay-deny\" "
       f"and (.gatewayInterfaces == []) "
       f"and (.diagnostics.redacted == true) "
       f"and (.diagnostics.rateLimited == true)' {policy}"

@@ -12,8 +12,9 @@ use crate::{
 };
 use d2b_provider_config_nixos::{
     ConfigApproveRequest, ConfigApproveResponse, ConfigDiffRequest, ConfigDiffResponse,
-    ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse, ConfigStatusRequest,
-    ConfigStatusResponse, ConfigSyncResponse, GuestConfigDocument, GUEST_CONFIG_IDENTIFIER,
+    ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse,
+    ConfigStatusRequest, ConfigStatusResponse, ConfigSyncResponse, GUEST_CONFIG_IDENTIFIER,
+    GuestConfigDocument,
 };
 
 #[derive(Debug, Args, Clone)]
@@ -166,9 +167,9 @@ pub(crate) fn config_validate_guest_name(guest: &str) -> Result<(), CliFailure> 
             .chars()
             .next()
             .is_some_and(|character| character.is_ascii_lowercase())
-        && guest
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-');
+        && guest.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
     if valid {
         Ok(())
     } else {
@@ -319,10 +320,7 @@ pub(crate) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), Cli
     drop(file);
     if let Err(error) = write_result {
         let _ = std::fs::remove_file(&tmp);
-        return Err(CliFailure::new(
-            1,
-            format!("config: write temp: {error}"),
-        ));
+        return Err(CliFailure::new(1, format!("config: write temp: {error}")));
     }
     std::fs::rename(&tmp, target).map_err(|error| {
         let _ = std::fs::remove_file(&tmp);
@@ -511,15 +509,17 @@ fn config(
             config_validate_guest_name(vm)?;
             let staging = config_staging_path(vm);
             if args.dry_run {
-                return context.emit(
-                    &json!({
-                        "command": "config sync",
-                        "mode": "dry-run",
-                        "resourceRef": guest_ref.to_canonical_string(),
-                        "identifier": GUEST_CONFIG_IDENTIFIER,
-                    }),
-                    mode,
-                ).map(|_| 0);
+                return context
+                    .emit(
+                        &json!({
+                            "command": "config sync",
+                            "mode": "dry-run",
+                            "resourceRef": guest_ref.to_canonical_string(),
+                            "identifier": GUEST_CONFIG_IDENTIFIER,
+                        }),
+                        mode,
+                    )
+                    .map(|_| 0);
             }
             let value = context.invoke_service(
                 d2b_resource_client::ZoneServiceKind::ConfigNixos,
@@ -534,15 +534,20 @@ fn config(
             )?;
             let response: ConfigSyncResponse =
                 serde_json::from_value(strip_config_response_envelope(value)).map_err(|_| {
+                    context.failure(
+                        "config-document-encoding-failed",
+                        "Zone returned an invalid config-nixos response",
+                        mode,
+                        1,
+                    )
+                })?;
+            let document = response.document().map_err(|error| {
                 context.failure(
-                    "config-document-encoding-failed",
-                    "Zone returned an invalid config-nixos response",
+                    error.code(),
+                    "config-nixos returned an invalid document",
                     mode,
                     1,
                 )
-            })?;
-            let document = response.document().map_err(|error| {
-                context.failure(error.code(), "config-nixos returned an invalid document", mode, 1)
             })?;
             if let Some(parent) = staging.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| {
@@ -585,13 +590,8 @@ fn config(
             let staged_document = read_staged_document(context, &staging, mode)?;
             invoke_config_stage(context, guest_ref.clone(), &staged_document, deadline, mode)?;
             let against_digest = config_view_identifier(&args.against, context, mode)?;
-            let service_diff = invoke_config_diff(
-                context,
-                guest_ref.clone(),
-                against_digest,
-                deadline,
-                mode,
-            )?;
+            let service_diff =
+                invoke_config_diff(context, guest_ref.clone(), against_digest, deadline, mode)?;
             let output = std::process::Command::new("diff")
                 .arg("-u")
                 .arg(&args.against)
@@ -607,12 +607,7 @@ fn config(
                 })?;
             let code = output.status.code().unwrap_or(-1);
             if code > 1 {
-                return Err(context.failure(
-                    "config-diff-failed",
-                    "config diff failed",
-                    mode,
-                    1,
-                ));
+                return Err(context.failure("config-diff-failed", "config diff failed", mode, 1));
             }
             let differs = code == 1;
             if service_diff.differs != differs {
@@ -999,7 +994,10 @@ mod tests {
             let path = std::env::current_dir()
                 .expect("current directory")
                 .join(".scratch")
-                .join(format!("activation-config-{label}-{}-{nonce}", std::process::id()));
+                .join(format!(
+                    "activation-config-{label}-{}-{nonce}",
+                    std::process::id()
+                ));
             std::fs::create_dir_all(&path).expect("create scratch directory");
             Self(path)
         }
@@ -1031,12 +1029,9 @@ mod tests {
         let bytes = b"{ services.nginx.enable = true; }\n";
         std::fs::write(&staging, bytes).expect("write staging");
 
-        let written = config_approve_core_with_digest(
-            &staging,
-            &target,
-            Some(&crate::sha256_hex(bytes)),
-        )
-        .expect("approve staging");
+        let written =
+            config_approve_core_with_digest(&staging, &target, Some(&crate::sha256_hex(bytes)))
+                .expect("approve staging");
 
         assert_eq!(written, bytes.len());
         assert_eq!(std::fs::read(&target).expect("read target"), bytes);

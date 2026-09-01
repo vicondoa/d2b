@@ -47,8 +47,7 @@ pub struct PeerOverride {
 #[cfg(any(test, feature = "test-support"))]
 // Compiled out unless test-support is enabled by d2bd's test targets; release
 // binaries contain no peer-identity override path.
-pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
-    std::sync::Mutex::new(None);
+pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> = std::sync::Mutex::new(None);
 
 #[cfg(any(test, feature = "test-support"))]
 pub static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -239,5 +238,4 @@ mod tests {
             assert!(!verb_allowed_for_host_shutdown(verb));
         }
     }
-
 }

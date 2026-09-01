@@ -2403,9 +2403,7 @@ mod tests {
     fn broker_reap_health_fail_on_zombie() {
         // Spawn a child that exits immediately, then check its state
         // before waitpid - it should be in Z state.
-        let mut child = system_tool_command("true")
-            .spawn()
-            .expect("spawn true");
+        let mut child = system_tool_command("true").spawn().expect("spawn true");
         let pid = child.id() as i32;
         // Give the child time to exit without being reaped.
         std::thread::sleep(std::time::Duration::from_millis(50));

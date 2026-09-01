@@ -1063,8 +1063,7 @@ const _: fn() = || {
     impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
     impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
     impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
-    let _ =
-        <AuthorizationLease as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
+    let _ = <AuthorizationLease as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
 };
 
 impl AuthorizationLease {
@@ -1178,6 +1177,7 @@ pub struct NativeAuthorizer {
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
     store_binding: Mutex<Option<StoreAdmissionBinding>>,
+    session_store_binding: Option<StoreAdmissionBinding>,
     store_seal:
         std::sync::Arc<Mutex<Option<d2b_resource_store::mutation_seal::MutationSealIssuer>>>,
 }
@@ -1228,6 +1228,7 @@ impl NativeAuthorizer {
                 .as_ref()
                 .map(|binding| binding.seal_issuer())
                 .unwrap_or_else(|| std::sync::Arc::new(Mutex::new(None))),
+            session_store_binding: store_binding.clone(),
             store_binding: Mutex::new(store_binding),
         })
     }
@@ -1241,6 +1242,14 @@ impl NativeAuthorizer {
             return Err(StoreBindingError);
         }
         binding.take().ok_or(StoreBindingError)
+    }
+
+    pub(super) fn session_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
+        self.session_store_binding
+            .as_ref()
+            .filter(|binding| binding.has_seal_issuer())
+            .cloned()
+            .ok_or(StoreBindingError)
     }
 
     pub fn take_store_seal(
@@ -2076,8 +2085,7 @@ mod tests {
 
     #[test]
     fn authorization_lease_binds_the_complete_downstream_identity() {
-        let subject_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
         let object_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap();
         let lease = AuthorizationLease::issue(

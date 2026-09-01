@@ -33,6 +33,7 @@ impl core::fmt::Debug for AdmissionIssuer {
 }
 
 /// Store-side half of an instance-bound admission capability.
+#[derive(Clone)]
 struct AdmissionVerifier {
     authority: Arc<AdmissionAuthority>,
 }
@@ -44,6 +45,7 @@ impl core::fmt::Debug for AdmissionVerifier {
 }
 
 /// Unique identity owned by one concrete resource-store backend.
+#[derive(Clone)]
 struct StoreIdentity {
     authority: Arc<StoreIdentityAuthority>,
 }
@@ -54,6 +56,7 @@ impl core::fmt::Debug for StoreIdentity {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct StoreAdmissionBinding {
     verifier: AdmissionVerifier,
     store_identity: StoreIdentity,
@@ -176,7 +179,8 @@ impl AdmissionPermit {
             Some(object_uid),
             Some(object_generation),
             target.verb,
-            self.zone_policy_revision.max(self.policy_snapshot.policy_revision),
+            self.zone_policy_revision
+                .max(self.policy_snapshot.policy_revision),
             Some(provider_assignment_generation),
             operation_id,
         )
@@ -237,8 +241,7 @@ impl AdmissionPermit {
                     mutation.expected_uid.clone(),
                     object_generation,
                     target.verb,
-                    self
-                        .zone_policy_revision
+                    self.zone_policy_revision
                         .max(self.policy_snapshot.policy_revision),
                     mutation
                         .assignment
@@ -320,7 +323,10 @@ impl core::fmt::Debug for AdmittedMutation {
             .field("authorization", &"<redacted>")
             .field("policy_snapshot", &"<redacted>")
             .field("operation", &"<redacted>")
-            .field("has_authorization_lease", &self.authorization_lease.is_some())
+            .field(
+                "has_authorization_lease",
+                &self.authorization_lease.is_some(),
+            )
             .field("authority", &"<redacted>")
             .field("store_identity", &"<redacted>")
             .finish()
@@ -561,6 +567,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
+            configuration_generation: None,
             assignment: None,
         }
     }
@@ -590,7 +597,10 @@ mod tests {
             .authorization_lease()
             .expect("Zone runtime must attach downstream lease evidence");
         assert_eq!(lease.zone_uid(), &zone_uid);
-        assert_eq!(lease.subject_uid().as_str(), "123e4567-e89b-42d3-a456-426614174000");
+        assert_eq!(
+            lease.subject_uid().as_str(),
+            "123e4567-e89b-42d3-a456-426614174000"
+        );
         assert_eq!(lease.operation(), d2b_resource_store::AdmittedVerb::Create);
         assert_eq!(lease.policy_revision(), 1);
         assert_eq!(lease.operation_id(), "op-1");

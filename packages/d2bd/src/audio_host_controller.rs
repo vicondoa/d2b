@@ -42,9 +42,9 @@ use d2b_contracts_broker::broker_wire::{
     PipeWireAudioRequest,
 };
 use d2b_contracts_control::public_wire::AudioChannel;
-use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
 use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
+use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
 #[cfg(test)]
 use serde_json::Value;
 

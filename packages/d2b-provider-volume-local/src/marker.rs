@@ -7,11 +7,7 @@
 use std::fmt;
 
 use d2b_contracts_resource::v3::{
-    MarkerStatus,
-    ResourceUid,
-    SchemaFingerprint,
-    SchemaVersion,
-    VolumeStateSchemaId,
+    MarkerStatus, ResourceUid, SchemaFingerprint, SchemaVersion, VolumeStateSchemaId,
 };
 use serde::{Deserialize, Serialize};
 

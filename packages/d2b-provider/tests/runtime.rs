@@ -4,30 +4,17 @@
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::ZoneRevision;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
+};
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, SchemaFingerprint,
+};
 use d2b_contracts_zone_session::v3::{
     component_session::{OperationClass, OperationId},
     zone_routing::{ZoneLabelId, ZonePath},
-};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourceName,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
 };
 use d2b_provider::{
     AdmissionOptions, CancellationToken, ForwardTarget, PROVIDER_SCHEMA_VERSION,
@@ -37,9 +24,7 @@ use d2b_provider::{
     RegistryLifecycle, RegistryLimits, SessionIdentity, ZoneRouteFailClosedReason,
     admit_provider_forward,
 };
-use d2b_zone_routing::engine::{
-    ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
-};
+use d2b_zone_routing::engine::{ZoneRouteAdmission, ZoneRouteAdmissionExpectation};
 
 const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const UID: &str = "123e4567-e89b-42d3-a456-426614174000";
@@ -495,12 +480,10 @@ fn forward_request(zone_path: &ZonePath, hops: u32) -> ProviderForwardRequest {
         ZoneLabelId::parse("payments").expect("valid label"),
         hops,
     );
-    request
-        .with_admissions(route_admission(zone_path, OperationClass::Invoke, "get"), route_admission(
-            zone_path,
-            OperationClass::Relay,
-            "relay",
-        ))
+    request.with_admissions(
+        route_admission(zone_path, OperationClass::Invoke, "get"),
+        route_admission(zone_path, OperationClass::Relay, "relay"),
+    )
 }
 
 fn route_admission(
@@ -519,18 +502,15 @@ fn route_admission(
     )
     .expect("direct edge");
     let expectation = ZoneRouteAdmissionExpectation::new(
-        ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-            .expect("valid link UID"),
+        ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid link UID"),
         edge,
         d2b_contracts_zone_session::v3::zone_routing::ZoneLinkControllerGeneration::parse(
             "controller-1",
         )
         .expect("valid controller generation"),
         ReconnectGeneration::new(7).expect("valid reconnect generation"),
-        ResourceUid::parse("22222222-2222-4222-8222-222222222222")
-            .expect("valid source UID"),
-        ResourceUid::parse("33333333-3333-4333-8333-333333333333")
-            .expect("valid target UID"),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("valid source UID"),
+        ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("valid target UID"),
         OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
         verb,
         d2b_contracts_zone_session::v3::zone_routing::ZoneRouteCapability::parse(capability)
@@ -583,8 +563,8 @@ fn each_forward_requires_relay_plus_the_target_verb() {
     let work = zone(&["work"]);
     let request = forward_request(&work, 4);
 
-    let forwarded = admit_provider_forward(&request)
-        .expect("both independent admissions admit the hop");
+    let forwarded =
+        admit_provider_forward(&request).expect("both independent admissions admit the hop");
     assert_eq!(forwarded.forwarded_remaining_hops(), 3);
     assert_eq!(forwarded.target(), request.target());
     assert_eq!(forwarded.next_hop(), request.next_hop());
@@ -602,8 +582,7 @@ fn every_hop_re_evaluates_both_grants_and_the_budget() {
     }
     assert_eq!(remaining, 0);
     assert_eq!(
-        admit_provider_forward(&forward_request(&work, remaining))
-        .err(),
+        admit_provider_forward(&forward_request(&work, remaining)).err(),
         Some(ZoneRouteFailClosedReason::HopLimitExceeded)
     );
 }
@@ -622,10 +601,7 @@ fn a_disconnected_uplink_and_an_attachment_offer_fail_closed() {
         Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
     );
     assert_eq!(
-        admit_provider_forward(
-            &forward_request(&work, 4).with_attachment_offer(true),
-        )
-        .err(),
+        admit_provider_forward(&forward_request(&work, 4).with_attachment_offer(true),).err(),
         Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink)
     );
 }

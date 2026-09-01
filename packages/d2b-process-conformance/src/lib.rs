@@ -52,7 +52,7 @@ pub use terminal::{
     BrokerTerminalResult, ExitClass as BrokerExitClass, ParentWaitEvidence, ProcessOutcome,
 };
 pub use ticket::{
-    CancellationBinding, CompiledDigests, InheritedFdTable, LaunchTicket, MAX_INHERITED_FDS,
-    MAX_LAUNCH_DEADLINE_MS, GuestExecutionBinding, OperationBinding, ReadinessExpectation,
+    CancellationBinding, CompiledDigests, GuestExecutionBinding, InheritedFdTable, LaunchTicket,
+    MAX_INHERITED_FDS, MAX_LAUNCH_DEADLINE_MS, OperationBinding, ReadinessExpectation,
     execution_commitment, runtime_scope_commitment,
 };

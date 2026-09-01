@@ -482,10 +482,7 @@ fn redacted_line(original: &str, lower: &str) -> String {
         .filter(|prefix| prefix.eq_ignore_ascii_case("warning:"))
         .map(|prefix| format!("{prefix} "))
         .unwrap_or_default();
-    format!(
-        "{warning_prefix}[REDACTED]{}",
-        redaction_hints(lower)
-    )
+    format!("{warning_prefix}[REDACTED]{}", redaction_hints(lower))
 }
 
 fn redact_text(input: &str) -> String {

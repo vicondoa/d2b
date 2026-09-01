@@ -24,21 +24,14 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRouteHop, ZoneRoutePath},
-};
+use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, ReconnectGeneration};
 use d2b_contracts_resource::v3::{
-    MAX_BATCH_MUTATIONS,
-    MAX_FILTER_VALUES,
-    MAX_LIST_FILTERS,
-    ResourceName,
-    ResourceTypeName,
-    ZoneRevision,
-    is_canonical_digest,
+    MAX_BATCH_MUTATIONS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, ResourceName, ResourceTypeName,
+    ZoneRevision, is_canonical_digest,
 };
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    ReconnectGeneration,
+use d2b_contracts_zone_session::v3::zone_routing::{
+    ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet,
+    ZoneRouteFailClosedReason, ZoneRouteHop, ZoneRoutePath,
 };
 use d2b_resource_api::authz::ApiMethod;
 use sha2::{Digest, Sha256};
@@ -944,11 +937,9 @@ impl ChildWatchCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::{
-    zone_routing::{
+    use d2b_contracts_zone_session::v3::zone_routing::{
         ZoneLabelId, ZoneRouteHopDirection, ZoneRouteId, ZoneTreeEdge,
-    },
-};
+    };
 
     /// Build a Zone path from root-first labels.
     ///

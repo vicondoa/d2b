@@ -51,10 +51,7 @@ pub struct ActivationRunnerInput {
 
 fn nonzero_u64_schema(generator: &mut SchemaGenerator) -> Schema {
     let mut schema: SchemaObject = <u64>::json_schema(generator).into();
-    schema
-        .number
-        .get_or_insert_with(Default::default)
-        .minimum = Some(1.0);
+    schema.number.get_or_insert_with(Default::default).minimum = Some(1.0);
     schema.into()
 }
 

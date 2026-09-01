@@ -5,14 +5,15 @@ use async_trait::async_trait;
 use d2b_contracts_provider::v3::credential::CredentialLeaseHandle;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_provider_runtime_azure_container_apps::{
-    AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
-    AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
-    AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
-    AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource, AcaMemoryMib,
-    AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding, AcaRuntimeConfig,
+    AcaClock, AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError,
+    AcaControlErrorKind, AcaControlHealth, AcaController, AcaControllerError, AcaCpuMillis,
+    AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaDeleteOutcome,
+    AcaDeploymentRequest, AcaDeploymentResponse, AcaDeploymentService, AcaDesiredDiskImage,
+    AcaDesiredSandbox, AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord,
+    AcaDiskImageSource, AcaMemoryMib, AcaOperationId, AcaPhase, AcaProfileId, AcaReadinessPolicy,
+    AcaReconcileOutcome, AcaRecoveryState, AcaResourceBinding, AcaRuntimeConfig,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
-    AcaClock, AcaController, AcaControllerError, AcaDeploymentRequest, AcaDeploymentResponse,
-    AcaDeploymentService, AcaPhase, AcaReconcileOutcome, AcaRecoveryState, AcaServiceMethod,
+    AcaServiceMethod,
 };
 
 #[derive(Default)]

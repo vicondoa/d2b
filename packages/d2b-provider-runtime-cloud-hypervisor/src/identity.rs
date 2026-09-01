@@ -431,8 +431,12 @@ impl<'de> Deserialize<'de> for VolumeCreateBody {
         }
 
         let wire = Wire::deserialize(deserializer)?;
-        let body = Self::new(wire.execution_ref, wire.system_artifact_id, wire.view.as_str())
-            .map_err(serde::de::Error::custom)?;
+        let body = Self::new(
+            wire.execution_ref,
+            wire.system_artifact_id,
+            wire.view.as_str(),
+        )
+        .map_err(serde::de::Error::custom)?;
         if body.provider_ref != wire.provider_ref {
             return Err(serde::de::Error::custom(
                 ChildIdentityError::WrongResourceType,
@@ -492,9 +496,7 @@ impl<'de> Deserialize<'de> for ChildMutation {
 
         let wire = Wire::deserialize(deserializer)?;
         if wire.precondition != CreatePrecondition::CreateAbsent {
-            return Err(serde::de::Error::custom(
-                ChildIdentityError::InvalidToken,
-            ));
+            return Err(serde::de::Error::custom(ChildIdentityError::InvalidToken));
         }
         Self::new(wire.target, wire.owner_ref, wire.zone, wire.body)
             .map_err(serde::de::Error::custom)

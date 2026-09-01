@@ -815,9 +815,7 @@ mod tests {
         )
         .expect("route operation");
         let (verifier, evidence) = authority.issue(request).expect("issue route admission");
-        let admission = verifier
-            .verify(evidence)
-            .expect("verify route admission");
+        let admission = verifier.verify(evidence).expect("verify route admission");
         (session, admission, verifier)
     }
 

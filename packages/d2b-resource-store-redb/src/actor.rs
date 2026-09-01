@@ -2608,10 +2608,8 @@ mod tests {
 
     #[test]
     fn owner_filter_matches_only_the_exact_owner_uid() {
-        let child_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let owner_uid =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let child_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let owner_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
         let filter = [StoreFilter {
             field: "owner.resourceUid".to_owned(),
             values: vec![owner_uid.as_str().to_owned()],
@@ -2624,11 +2622,7 @@ mod tests {
             Some(owner_uid.as_str()),
         ));
         assert!(!filters_match(
-            &filter,
-            "Process",
-            "worker",
-            &child_uid,
-            None,
+            &filter, "Process", "worker", &child_uid, None,
         ));
     }
 

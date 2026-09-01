@@ -9,40 +9,26 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    component_session::{
-        AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, EndpointPurpose,
-        EndpointRole, HandshakeOffer, HealthState, Locality as ComponentLocality, MetricLabels,
-        MetricReason, MetricResult, NoiseProfile, OperationClass, PurposeClass, RequestId,
-        SessionErrorCode, TransportClass,
-    },
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
 };
 use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
 };
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding as IdentityTransportBinding,
+use d2b_contracts_zone_session::v3::component_session::{
+    AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, EndpointPurpose,
+    EndpointRole, HandshakeOffer, HealthState, Locality as ComponentLocality, MetricLabels,
+    MetricReason, MetricResult, NoiseProfile, OperationClass, PurposeClass, RequestId,
+    SessionErrorCode, TransportClass,
 };
 use d2b_resource_api::authz::SessionVerb;
 
 use crate::{
     Cancellation, ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedAttachment,
     OwnedTransport, Result, SessionDriverHandle, SessionEngine, SessionError, SessionEvent,
-    SessionOperation, StreamEvent, StreamId,
-    handshake::EstablishedAuthentication, metrics::reason_for_error,
+    SessionOperation, StreamEvent, StreamId, handshake::EstablishedAuthentication,
+    metrics::reason_for_error,
 };
 
 /// Redacted transport evidence presented to the trusted session authority.

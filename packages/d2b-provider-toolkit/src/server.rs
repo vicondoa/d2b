@@ -14,22 +14,14 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_zone_session::v3::{
-    ProviderMethod,
-    component_session::RequestId,
-    zone_routing::ZonePath,
-};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceRef,
-    execution_policy::BoundedToken,
-};
 use d2b_contracts_resource::v3::identity::ServiceName;
-use d2b_session::{
-    AuthenticatedSessionRouteBinding,
-    Cancellation,
-    ComponentSessionDriver,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken,
 };
+use d2b_contracts_zone_session::v3::{
+    ProviderMethod, component_session::RequestId, zone_routing::ZonePath,
+};
+use d2b_session::{AuthenticatedSessionRouteBinding, Cancellation, ComponentSessionDriver};
 use tokio::sync::Notify;
 
 use crate::{ProviderAgentAdapter, ProviderFrameCodec, ProviderService, ProviderToolkitError};

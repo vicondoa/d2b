@@ -9,15 +9,15 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::ResourceRef;
-use d2b_session::{OwnedTransport, TransportPacket};
 use d2b_provider_transport_azure_relay::{
     AzureRelayTransportProvider, CreditWindow, MAX_RELAY_GENERATION_FENCES, ReconnectBackoff,
-    RelayAuthenticatedPeer, RelayCredentialBinding, RelayCredentialError, RelayCredentialLease,
-    RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole, RelayEndpoint,
-    RelayComponentSessionTransport, RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame,
+    RelayAuthenticatedPeer, RelayComponentSessionTransport, RelayCredentialBinding,
+    RelayCredentialError, RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort,
+    RelayCredentialRole, RelayEndpoint, RelayEnrollmentProof, RelayEnrollmentVerifier, RelayFrame,
     RelayRole, RelaySecret, RelaySocket, RelaySocketConnector, RelayTransportConfig,
     RelayTransportError, RelayTransportSettings,
 };
+use d2b_session::{OwnedTransport, TransportPacket};
 use tokio::sync::Notify;
 
 #[derive(Default)]

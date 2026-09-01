@@ -688,7 +688,9 @@ pub fn delete_persistent_tap<B: PersistentTapBackend>(
         return Ok(attachment_digest(&realization.attachment_id));
     }
     if backend.tap_exists(&realization.ifname)? {
-        if backend.tap_ownership_marker(&realization.ifname)?.as_deref()
+        if backend
+            .tap_ownership_marker(&realization.ifname)?
+            .as_deref()
             != Some(realization.ownership_marker.as_str())
         {
             return Err(NetworkOpError::ForeignOwnership);
@@ -768,12 +770,12 @@ impl PersistentTapBackend for SystemPersistentTapBackend {
     }
 
     fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError> {
-        Ok(std::fs::read_to_string(
-            PathBuf::from("/sys/class/net").join(ifname).join("ifalias"),
+        Ok(
+            std::fs::read_to_string(PathBuf::from("/sys/class/net").join(ifname).join("ifalias"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
         )
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty()))
     }
 
     fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError> {
@@ -810,9 +812,7 @@ fn digest_parts(parts: &[&[u8]]) -> String {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::IfName;
-    use d2b_contracts_resource::v3::{
-        ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
-    };
+    use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
     use std::cell::{Cell, RefCell};
 
     struct FakeBridge {
@@ -934,10 +934,7 @@ mod tests {
             Ok(self.present.get())
         }
 
-        fn tap_ownership_marker(
-            &self,
-            _ifname: &str,
-        ) -> Result<Option<String>, NetworkOpError> {
+        fn tap_ownership_marker(&self, _ifname: &str) -> Result<Option<String>, NetworkOpError> {
             Ok(self.present.get().then(|| realization().ownership_marker))
         }
 
@@ -951,8 +948,7 @@ mod tests {
     fn request(network: u64, attachment: u64) -> DeletePersistentTapRequest {
         DeletePersistentTapRequest {
             attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
-                .unwrap(),
+            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
             expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
                 .unwrap(),
             expected_network_generation: ResourceGeneration::new(network).unwrap(),
@@ -1111,8 +1107,10 @@ mod tests {
                     attachment_id,
                     expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
                         .unwrap(),
-                    expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
-                        .unwrap(),
+                    expected_network_uid: ResourceUid::parse(
+                        "323e4567-e89b-42d3-a456-426614174002"
+                    )
+                    .unwrap(),
                     expected_network_generation: ResourceGeneration::new(4).unwrap(),
                     expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
                     expected_bundle_generation: bundle_generation(),
@@ -1238,7 +1236,8 @@ mod tests {
         let request = DeletePersistentTapRequest {
             attachment_id,
             expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .unwrap(),
             expected_network_generation: ResourceGeneration::new(4).unwrap(),
             expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
             expected_bundle_generation: bundle_generation(),

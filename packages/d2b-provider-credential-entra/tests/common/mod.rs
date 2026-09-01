@@ -3,33 +3,18 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
     CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams, PlacementBinding,
     dispatch_authorized_provider,
-},
-};
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    SchemaFingerprint,
 };
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
 };
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint};
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,

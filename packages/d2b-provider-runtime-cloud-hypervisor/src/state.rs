@@ -15,6 +15,7 @@ pub enum GuestStatusPhase {
     /// A previously usable Guest lost required health.
     Degraded,
     /// Deletion is in progress.
+    #[serde(rename = "Deleting")]
     Draining,
 }
 

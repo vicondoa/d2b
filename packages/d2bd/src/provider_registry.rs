@@ -1302,13 +1302,8 @@ mod tests {
     #[test]
     fn v3_lifecycle_does_not_require_the_legacy_guest_route_map() {
         let provider_ref = ResourceRef::parse("Provider/runtime").expect("Provider ref");
-        let runtime = ProviderRuntime::from_bindings(
-            zone(),
-            1,
-            [binding("runtime")],
-            [],
-        )
-        .expect("runtime composition");
+        let runtime = ProviderRuntime::from_bindings(zone(), 1, [binding("runtime")], [])
+            .expect("runtime composition");
         let effect = RecordingEffect;
         let result = runtime
             .dispatch_v3_lifecycle(
@@ -1323,9 +1318,7 @@ mod tests {
             .expect("v3 lifecycle dispatch");
         assert_eq!(
             result,
-            ProviderRuntimeDispatch::Active(EffectDispatch::Dispatched(
-                "broker-effect-dispatched"
-            ))
+            ProviderRuntimeDispatch::Active(EffectDispatch::Dispatched("broker-effect-dispatched"))
         );
     }
 }

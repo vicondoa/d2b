@@ -30,7 +30,9 @@ const CONTROLLER_BOOTSTRAP_FD: i32 = 10;
 pub(crate) enum ControllerSessionError {
     Bootstrap,
     Transport,
-    Session,
+    Handshake,
+    Receive,
+    Keepalive,
     Assignment,
 }
 
@@ -39,7 +41,9 @@ impl std::fmt::Display for ControllerSessionError {
         formatter.write_str(match self {
             Self::Bootstrap => "controller-bootstrap-failed",
             Self::Transport => "controller-transport-failed",
-            Self::Session => "controller-session-failed",
+            Self::Handshake => "controller-handshake-failed",
+            Self::Receive => "controller-receive-failed",
+            Self::Keepalive => "controller-keepalive-failed",
             Self::Assignment => "controller-assignment-failed",
         })
     }
@@ -61,7 +65,10 @@ pub(crate) fn run_from_fd10() -> i32 {
         run_controller_session(bootstrap).await
     }) {
         Ok(()) => 0,
-        Err(_) => crate::RUNTIME_UNAVAILABLE_EXIT,
+        Err(error) => {
+            eprintln!("{error}");
+            crate::RUNTIME_UNAVAILABLE_EXIT
+        }
     }
 }
 
@@ -118,7 +125,7 @@ pub(crate) async fn run_controller_session(
         Instant::now(),
     )
     .await
-    .map_err(|_| ControllerSessionError::Session)?;
+    .map_err(|_| ControllerSessionError::Handshake)?;
     let assignment_stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID)
         .map_err(|_| ControllerSessionError::Assignment)?;
     session
@@ -173,10 +180,10 @@ pub(crate) async fn run_controller_session(
                 break Err(ControllerSessionError::Assignment);
             }
             Ok(Ok(_)) | Err(_) => {}
-            Ok(Err(_)) => break Err(ControllerSessionError::Session),
+            Ok(Err(_)) => break Err(ControllerSessionError::Receive),
         }
         if session.drive_keepalive(Instant::now()).await.is_err() {
-            break Err(ControllerSessionError::Session);
+            break Err(ControllerSessionError::Keepalive);
         }
     };
     assignments.revoke();

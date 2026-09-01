@@ -9,9 +9,9 @@ use std::{
 };
 
 use crate::context::{
-    CliContext, ErrorFrame, OutputMode, SeqpacketUnixSocket, ZoneContext, cli_failure_from_daemon_error,
-    daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable, output_mode,
-    parse_hello_reply,
+    CliContext, ErrorFrame, OutputMode, SeqpacketUnixSocket, ZoneContext,
+    cli_failure_from_daemon_error, daemon_hello_frame, decode_daemon_frame, is_daemon_unreachable,
+    output_mode, parse_hello_reply,
 };
 use crate::{
     CliFailure, activation, complete, endpoint, exec, guest, host, print_json, print_stdout,
@@ -21,9 +21,7 @@ use clap::{Args, Parser, Subcommand};
 use d2b_contracts_broker::broker_wire::AuditExportCursor;
 use d2b_contracts_control::{
     cli_output::{AuthDeniedSubcommandV2, AuthRoleV2, AuthSocketStatusV2, AuthStatusOutputV2},
-    public_wire::{
-        self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
-    },
+    public_wire::{self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -323,7 +321,10 @@ pub(crate) fn emit_host_error(
 ) -> Result<i32, CliFailure> {
     if json_output {
         let mut rendered = serde_json::to_string_pretty(envelope).map_err(|error| {
-            CliFailure::new(1, format!("failed to serialize host error envelope: {error}"))
+            CliFailure::new(
+                1,
+                format!("failed to serialize host error envelope: {error}"),
+            )
         })?;
         rendered.push('\n');
         print_stdout(&rendered);
@@ -399,10 +400,7 @@ pub(crate) enum AuditSocketOutcome {
     Lines(Vec<String>),
 }
 
-pub(crate) fn daemon_audit_frame(
-    type_name: &str,
-    json_mode: bool,
-) -> Result<Vec<u8>, CliFailure> {
+pub(crate) fn daemon_audit_frame(type_name: &str, json_mode: bool) -> Result<Vec<u8>, CliFailure> {
     daemon_audit_frame_with_cursor(type_name, json_mode, None)
 }
 
@@ -460,7 +458,9 @@ fn parse_audit_page(
                     .collect();
                 (lines, frame.payload.next_cursor, frame.payload.complete)
             })
-            .map_err(|error| CliFailure::new(1, format!("failed to decode auditResponse: {error}"))),
+            .map_err(|error| {
+                CliFailure::new(1, format!("failed to decode auditResponse: {error}"))
+            }),
         "error" => {
             let frame: ErrorFrame = serde_json::from_value(value).map_err(|error| {
                 CliFailure::new(1, format!("failed to decode error reply: {error}"))
@@ -518,10 +518,7 @@ pub(crate) fn try_audit_via_socket(
         Err(error) => {
             return Err(CliFailure::new(
                 1,
-                format!(
-                    "failed to connect to {}: {error}",
-                    public_socket.display()
-                ),
+                format!("failed to connect to {}: {error}", public_socket.display()),
             ));
         }
     };
@@ -537,12 +534,12 @@ pub(crate) fn try_audit_via_socket(
     let mut lines = Vec::new();
     for _ in 0..1024 {
         let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
-        socket
-            .send_frame(&request)
-            .map_err(|error| CliFailure::new(1, format!("failed to send audit request: {error}")))?;
-        let response = socket
-            .recv_frame()
-            .map_err(|error| CliFailure::new(1, format!("failed to receive audit reply: {error}")))?;
+        socket.send_frame(&request).map_err(|error| {
+            CliFailure::new(1, format!("failed to send audit request: {error}"))
+        })?;
+        let response = socket.recv_frame().map_err(|error| {
+            CliFailure::new(1, format!("failed to receive audit reply: {error}"))
+        })?;
         let (page, next_cursor, complete) = parse_audit_page(&response)?;
         lines.extend(page);
         if complete {
@@ -829,7 +826,10 @@ fn audit(
     _deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if args.strict {
-        return emit_host_error(&not_yet_implemented_envelope("audit --strict"), mode.is_json());
+        return emit_host_error(
+            &not_yet_implemented_envelope("audit --strict"),
+            mode.is_json(),
+        );
     }
     match try_audit_via_socket(context.public_socket_path(), mode.is_json())? {
         AuditSocketOutcome::Lines(lines) => {
@@ -848,9 +848,7 @@ fn auth(
     mode: OutputMode,
 ) -> Result<i32, CliFailure> {
     match &args.command {
-        GenericAuthCommand::Status => {
-            auth_status(context, args.test_uid, mode)
-        }
+        GenericAuthCommand::Status => auth_status(context, args.test_uid, mode),
     }
 }
 
@@ -1028,12 +1026,12 @@ fn report_dispatch_failure(
                 .clone()
                 .or_else(|| std::env::var("D2B_ZONE").ok())
                 .unwrap_or_else(|| "local-root".to_owned());
-            let zone =
-                if d2b_contracts_resource::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
-                    requested_zone
-                } else {
-                    "local-root".to_owned()
-                };
+            let zone = if d2b_contracts_resource::v3::ZoneId::parse(requested_zone.clone()).is_ok()
+            {
+                requested_zone
+            } else {
+                "local-root".to_owned()
+            };
             let mut failure = CliFailure::new(exit_code, format!("{class}: {message}"));
             let mut rendered = serde_json::to_string(&serde_json::json!({
                 "ok": false,
@@ -1112,7 +1110,6 @@ mod tests {
             });
         }
     }
-
 
     #[test]
     fn built_in_registry_is_unique_and_matches_expected_size() {

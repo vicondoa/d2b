@@ -389,15 +389,13 @@ impl ZoneEntrypointResolver {
         }
 
         let decision = match admission {
-            Some(admission) => {
-                engine.decide_route_via_entrypoint(
-                    local_root,
-                    &entrypoint_zone,
-                    target_zone,
-                    remaining_hops,
-                    admission,
-                )
-            }
+            Some(admission) => engine.decide_route_via_entrypoint(
+                local_root,
+                &entrypoint_zone,
+                target_zone,
+                remaining_hops,
+                admission,
+            ),
             None => {
                 let route_request =
                     ZoneRouteRequest::new(local_root.clone(), entrypoint_zone.clone())
@@ -427,19 +425,16 @@ redacted_topology_debug!(ZoneEntrypointResolver);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{
-        ResourceUid, ZoneRevision,
-        identity::ReconnectGeneration,
-    };
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision, identity::ReconnectGeneration};
     use d2b_contracts_zone_session::v3::{
-    component_session::{OperationClass, OperationId},
-    zone_routing::{
-        ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
-        ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
-        ZoneRouteCapability, ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature,
-        ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
-    },
-};
+        component_session::{OperationClass, OperationId},
+        zone_routing::{
+            ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
+            ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
+            ZoneRouteCapability, ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature,
+            ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
+        },
+    };
 
     use crate::engine::{
         ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,

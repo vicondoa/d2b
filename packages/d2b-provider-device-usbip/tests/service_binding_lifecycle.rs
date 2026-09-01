@@ -28,14 +28,11 @@ fn explicit_binding_children_are_resource_backed_and_ordered_for_teardown() {
             .iter()
             .map(|child| child.role())
             .collect::<Vec<_>>(),
-            vec![
-                "guest-endpoint",
-                "guest-proxy"
-            ]
+        vec!["guest-endpoint", "guest-proxy"]
     );
     assert_eq!(
-            children.child("guest-endpoint").unwrap().producer_ref(),
-            Some(children.child("guest-proxy").unwrap().resource_ref())
+        children.child("guest-endpoint").unwrap().producer_ref(),
+        Some(children.child("guest-proxy").unwrap().resource_ref())
     );
 }
 

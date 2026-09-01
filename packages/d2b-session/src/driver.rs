@@ -9,10 +9,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     ChannelClass, CloseReason, OperationClass, Remediation, RequestId, SessionErrorCode,
-},
 };
 use tokio::sync::{mpsc, oneshot};
 

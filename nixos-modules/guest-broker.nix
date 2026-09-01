@@ -3,26 +3,46 @@
 # Every workload Guest gets a separate socket-activated broker instance. The
 # executable is the same host-tool derivation used by the Host profile; only
 # the process-start profile and authority roots differ.
-{ config, lib, pkgs, name, d2bHostTools, d2bUsePrebuiltHostTools ? false, ... }:
+{ config
+, lib
+, pkgs
+, name
+, d2bHostTools
+, d2bHostToolOverrides ? null
+, d2bUsePrebuiltHostTools ? false
+, ...
+}:
 
 let
+  d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if d2bUsePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
   brokerSourcePackage = d2bHostTools.broker;
-  brokerPackage =
-    if prebuilt ? "selectPackage"
-    then prebuilt.selectPackage "d2b-broker" brokerSourcePackage
-    else brokerSourcePackage;
+  brokerPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "broker";
+    fallback =
+      if prebuilt ? "selectPackage"
+      then prebuilt.selectPackage "d2b-broker" brokerSourcePackage
+      else brokerSourcePackage;
+  };
   brokerSocket = "/run/d2b/guest-broker.sock";
   brokerState = "/var/lib/d2b/guest-broker";
   brokerAudit = "/var/lib/d2b/guest-audit";
-  brokerBundle = "/etc/d2b/guest-bundle.json";
+  brokerBundle = config.d2b.guestBroker.bundlePath;
   brokerUid = config.users.users.d2bd.uid or 997;
   brokerGid = config.users.groups.d2bd.gid or 997;
 in
 {
+  options.d2b.guestBroker.bundlePath = lib.mkOption {
+    type = lib.types.str;
+    default = "/etc/d2b/guest-bundle.json";
+    internal = true;
+  };
+
+  config = {
   users.groups.d2bd = {
     gid = lib.mkDefault 997;
   };
@@ -108,5 +128,6 @@ in
       StandardError = "journal";
       SyslogIdentifier = "d2b-broker-guest";
     };
+  };
   };
 }

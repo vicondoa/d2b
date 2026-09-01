@@ -9,11 +9,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     AttachmentTransport, BlockImageFormat, CreatePolicy, EntryRestartPolicy, SourceKind,
     VolumeKind, VolumeSpec,
-},
 };
 
 use crate::error::VolumeLocalError;
@@ -151,8 +149,7 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
             if quota.max_bytes().is_none() || quota.max_inodes().is_none() {
                 return Err(VolumeLocalError::TmpfsQuotaMissing);
             }
-            if quota.enforcement() != d2b_contracts_resource::v3::volume::QuotaEnforcement::Hard
-            {
+            if quota.enforcement() != d2b_contracts_resource::v3::volume::QuotaEnforcement::Hard {
                 return Err(VolumeLocalError::InvalidSpec);
             }
             if spec
@@ -203,13 +200,10 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
                     .attachments()
                     .iter()
                     .any(|attachment| attachment.transport() != AttachmentTransport::Virtiofs)
-                || spec
-                    .attachments()
-                    .iter()
-                    .any(|attachment| {
-                        attachment.access()
-                            != d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly
-                    })
+                || spec.attachments().iter().any(|attachment| {
+                    attachment.access()
+                        != d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly
+                })
             {
                 return Err(VolumeLocalError::InvalidSpec);
             }
@@ -397,15 +391,20 @@ mod tests {
             "views": { "guest-ro": { "path": "", "rights": ["read", "traverse"] } }
         });
         let spec: VolumeSpec = serde_json::from_value(value).expect("valid Nix closure");
+        assert_eq!(spec.source().settings().kind(), SourceKind::NixClosure);
         assert_eq!(
-            spec.source().settings().kind(),
-            SourceKind::NixClosure
-        );
-        assert_eq!(
-            spec.source().settings().system_artifact_id().map(|id| id.as_str()),
+            spec.source()
+                .settings()
+                .system_artifact_id()
+                .map(|id| id.as_str()),
             Some("guest-system")
         );
-        assert!(SourcePolicyCatalog::new([]).unwrap().validate(&spec).is_ok());
+        assert!(
+            SourcePolicyCatalog::new([])
+                .unwrap()
+                .validate(&spec)
+                .is_ok()
+        );
         assert!(validate_source_spec(&spec).is_ok());
     }
 

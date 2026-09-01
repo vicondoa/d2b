@@ -10,12 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourcePhase,
-    ResourceRef,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
+    ResourceName, ResourcePhase, ResourceRef, ResourceUid, Timestamp, ZoneId,
     execution_policy::redacted_debug,
 };
 
@@ -425,7 +420,9 @@ pub fn validate_self_resource(
 }
 
 /// Validate the only allowed Zone finalizer shape.
-pub fn validate_finalizer(finalizer: &d2b_contracts_resource::v3::FinalizerId) -> Result<(), ZoneContractError> {
+pub fn validate_finalizer(
+    finalizer: &d2b_contracts_resource::v3::FinalizerId,
+) -> Result<(), ZoneContractError> {
     if finalizer.as_str() == ZONE_DRAIN_FINALIZER {
         Ok(())
     } else {

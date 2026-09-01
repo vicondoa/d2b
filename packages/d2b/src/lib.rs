@@ -86,8 +86,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> =
-    std::sync::Mutex::new(());
+pub(crate) static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {

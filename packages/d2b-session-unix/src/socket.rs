@@ -368,20 +368,12 @@ fn duplicate_inherited_fd(raw_fd: RawFd) -> Result<OwnedFd, UnixSessionError> {
     if raw_fd < 0 {
         return Err(UnixSessionError::InvalidSocket);
     }
-    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    use nix::fcntl::{FcntlArg, fcntl};
+    use std::os::fd::FromRawFd;
 
-    let descriptor_flags = fcntl(raw_fd, FcntlArg::F_GETFD).map_err(nix_io_error)?;
-    let descriptor_flags = FdFlag::from_bits_truncate(descriptor_flags) | FdFlag::FD_CLOEXEC;
-    fcntl(raw_fd, FcntlArg::F_SETFD(descriptor_flags)).map_err(nix_io_error)?;
-
-    let pid = rustix::process::Pid::from_raw(
-        i32::try_from(std::process::id()).map_err(|_| UnixSessionError::InvalidSocket)?,
-    )
-    .ok_or(UnixSessionError::InvalidSocket)?;
-    let pidfd =
-        rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).map_err(io_error)?;
-    rustix::process::pidfd_getfd(&pidfd, raw_fd, rustix::process::PidfdGetfdFlags::empty())
-        .map_err(io_error)
+    let duplicated = fcntl(raw_fd, FcntlArg::F_DUPFD_CLOEXEC(3)).map_err(nix_io_error)?;
+    // SAFETY: F_DUPFD_CLOEXEC returned a new owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
 }
 
 fn nix_io_error(error: nix::errno::Errno) -> UnixSessionError {

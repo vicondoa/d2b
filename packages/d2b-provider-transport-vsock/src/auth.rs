@@ -1,10 +1,7 @@
 //! Guest-bound proof-of-possession and replay-safe ComponentSession admission.
 
 use crate::limits::MAX_REPLAY_ENTRIES;
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use ring::hmac;
 use std::{collections::HashSet, fmt};
 
@@ -302,7 +299,10 @@ fn sign_tag(
 ) -> [u8; TAG_BYTES] {
     let mut transcript = Vec::with_capacity(160);
     transcript.extend_from_slice(b"d2b-component-session-auth-v1\0");
-    append_field(&mut transcript, identity.guest.to_canonical_string().as_bytes());
+    append_field(
+        &mut transcript,
+        identity.guest.to_canonical_string().as_bytes(),
+    );
     append_field(&mut transcript, identity.zone.as_str().as_bytes());
     append_field(&mut transcript, &identity.cid.0.to_be_bytes());
     append_field(&mut transcript, identity.boot_id.as_bytes());

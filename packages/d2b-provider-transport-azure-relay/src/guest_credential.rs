@@ -13,18 +13,16 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
-use base64::Engine;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use crate::auth::{
-    MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas,
-};
+use crate::auth::{MAX_SAS_TTL_SECS, RelayCredential, RelayEndpoint, RelayError, mint_sas};
 use crate::{
     MAX_ACTIVE_RELAY_LEASES, MAX_RELAY_LEASE_TTL_MS, RelayCredentialBinding, RelayCredentialError,
     RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort, RelayCredentialRole,
     RelaySecret,
 };
+use async_trait::async_trait;
+use base64::Engine;
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

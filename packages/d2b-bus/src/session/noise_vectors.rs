@@ -17,12 +17,10 @@
 //! policies this crate introduces are driven through the same runtime, so a
 //! policy that lowers must also handshake.
 
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentPolicy, AttachmentPolicyKind, EndpointPolicy, EndpointPurpose, EndpointRole,
     IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
     ServicePackage, TransportBinding, TransportClass,
-},
 };
 use snow::{Builder, HandshakeState, params::NoiseParams};
 

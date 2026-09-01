@@ -66,7 +66,5 @@ pub use admission::{
     SessionLiveness, SessionRegistrationCapability, TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
-pub use d2b_contracts_zone_session::v3::{
-    component_session as contract,
-};
+pub use d2b_contracts_zone_session::v3::component_session as contract;
 pub use d2b_resource_api::authz::SessionVerb;

@@ -20,9 +20,7 @@ use std::{
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
-use d2b_contracts_resource::v3::{
-    ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_process_conformance::LaunchTicket;
 use d2b_resource_api::AuthorizationLease;
 use d2b_resource_store::AdmittedVerb;
@@ -264,8 +262,7 @@ impl LifecycleAuthorization {
             || guest_ref.resource_type().as_str() != "Guest"
             || lease.object_uid() != Some(&guest_uid)
             || lease.object_generation() != Some(guest_generation)
-            || lease.provider_assignment_generation()
-                != Some(provider_assignment_generation)
+            || lease.provider_assignment_generation() != Some(provider_assignment_generation)
             || lease.policy_revision() == 0
             || lease.operation_id().is_empty()
             || lease.operation_id().len() > 128
@@ -360,10 +357,8 @@ impl LifecycleAuthorization {
             guest_uid: ResourceUid::parse(guest_uid).expect("test Guest UID"),
             guest_generation: ResourceGeneration::new(guest_generation)
                 .expect("test Guest generation"),
-            provider_assignment_generation: ResourceGeneration::new(
-                provider_assignment_generation,
-            )
-            .expect("test Provider assignment generation"),
+            provider_assignment_generation: ResourceGeneration::new(provider_assignment_generation)
+                .expect("test Provider assignment generation"),
             policy_revision,
             operation_id: operation_id.to_owned(),
             stop_only: false,
@@ -840,8 +835,7 @@ impl ProviderLifecycleDispatch {
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let now = now_ms();
         self.retain_live(&mut mutations);
-        let latest_generation =
-            latest_generation_for_identity(&mutations, request.authorization());
+        let latest_generation = latest_generation_for_identity(&mutations, request.authorization());
         let guest_executing = guest_has_execution(&mutations, request.authorization());
         if let Some(mutation) = mutations.get_mut(request.idempotency_key()) {
             if mutation.quarantined || mutation.authorization.is_none() {
@@ -1082,8 +1076,7 @@ impl ProviderLifecycleDispatch {
             .mutations
             .lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
-        let latest_generation =
-            latest_generation_for_identity(&mutations, request.authorization());
+        let latest_generation = latest_generation_for_identity(&mutations, request.authorization());
         let Some(mutation) = mutations.get_mut(request.idempotency_key()) else {
             return Err(ProviderEffectError::StateUnavailable);
         };
@@ -1239,8 +1232,12 @@ impl ProviderLifecycleDispatch {
                     admitted_at_ms: mutation.admitted_at_ms,
                     desired_generation: mutation.desired_generation,
                     status: mutation.status,
-                    subject_uid: authorization
-                        .and_then(|value| value.subject_uid.as_ref().map(|uid| uid.as_str().to_owned())),
+                    subject_uid: authorization.and_then(|value| {
+                        value
+                            .subject_uid
+                            .as_ref()
+                            .map(|uid| uid.as_str().to_owned())
+                    }),
                     zone_uid: authorization.map(|value| value.zone_uid.as_str().to_owned()),
                     guest_uid: authorization.map(|value| value.guest_uid.as_str().to_owned()),
                     guest_generation: authorization.map(|value| value.guest_generation.get()),
@@ -1290,9 +1287,7 @@ fn lifecycle_identity_key(mutation: &LifecycleMutation) -> Option<LifecycleIdent
     })
 }
 
-fn validate_authorization(
-    request: &GuestLifecycleRequest,
-) -> Result<(), ProviderEffectError> {
+fn validate_authorization(request: &GuestLifecycleRequest) -> Result<(), ProviderEffectError> {
     let authorization = request.authorization();
     if authorization.guest_uid.as_str().is_empty()
         || authorization.guest_generation.get() == 0
@@ -1309,9 +1304,7 @@ fn validate_authorization(
     Ok(())
 }
 
-fn persisted_authorization(
-    entry: &PersistedLifecycleMutation,
-) -> Option<LifecycleAuthorization> {
+fn persisted_authorization(entry: &PersistedLifecycleMutation) -> Option<LifecycleAuthorization> {
     let zone_uid = ResourceUid::parse(entry.zone_uid.as_ref()?).ok()?;
     let guest_ref = ResourceRef::parse(&entry.guest).ok()?;
     if guest_ref.resource_type().as_str() != "Guest" {
@@ -1419,18 +1412,15 @@ fn mutation_has_identity(
     authorization: &LifecycleAuthorization,
 ) -> bool {
     !mutation.quarantined
-        && mutation
-            .authorization
-            .as_ref()
-            .is_some_and(|current| {
-                current.zone_uid == authorization.zone_uid
-                    && current.guest_ref == authorization.guest_ref
-                    && current.guest_uid == authorization.guest_uid
-                    && current.guest_generation == authorization.guest_generation
-                    && current.provider_assignment_generation
-                        == authorization.provider_assignment_generation
-                    && current.policy_revision == authorization.policy_revision
-            })
+        && mutation.authorization.as_ref().is_some_and(|current| {
+            current.zone_uid == authorization.zone_uid
+                && current.guest_ref == authorization.guest_ref
+                && current.guest_uid == authorization.guest_uid
+                && current.guest_generation == authorization.guest_generation
+                && current.provider_assignment_generation
+                    == authorization.provider_assignment_generation
+                && current.policy_revision == authorization.policy_revision
+        })
 }
 
 fn latest_generation_for_identity(
@@ -1720,12 +1710,7 @@ mod tests {
         operation: GuestLifecycleOperation,
         key: &str,
     ) -> GuestLifecycleRequest {
-        request_with_guest(
-            zone,
-            operation,
-            key,
-            "22222222-2222-4222-8222-222222222222",
-        )
+        request_with_guest(zone, operation, key, "22222222-2222-4222-8222-222222222222")
     }
 
     fn request_with_guest(
@@ -1942,8 +1927,8 @@ mod tests {
             mutations
                 .get_mut("durable-stop")
                 .expect("applied stop")
-                .admitted_at_ms = now_ms()
-                .saturating_sub(LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64 + 1);
+                .admitted_at_ms =
+                now_ms().saturating_sub(LIFECYCLE_IDEMPOTENCY_TTL.as_millis() as u64 + 1);
         }
         assert_eq!(
             dispatch
@@ -2842,24 +2827,22 @@ mod tests {
             authorization,
         )
         .expect("request");
-        let dispatch =
-            ProviderLifecycleDispatch::new_persistent(zone, &path).expect("open state");
+        let dispatch = ProviderLifecycleDispatch::new_persistent(zone, &path).expect("open state");
         let effect = RecordingEffect {
             calls: Arc::new(AtomicUsize::new(0)),
             reject: AtomicBool::new(false),
         };
         assert_eq!(
-            dispatch.dispatch(
-                &BrokerCallerRole::AdminUid { uid: 1000 },
-                &request,
-                &effect,
-            ),
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &request, &effect,),
             Ok(EffectDispatch::Dispatched(1))
         );
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).expect("read identity state"))
                 .expect("parse identity state");
-        assert_eq!(persisted[0]["zoneUid"], "11111111-1111-4111-8111-111111111111");
+        assert_eq!(
+            persisted[0]["zoneUid"],
+            "11111111-1111-4111-8111-111111111111"
+        );
         assert_eq!(
             persisted[0]["guestUid"],
             "22222222-2222-4222-8222-222222222222"
@@ -2926,11 +2909,9 @@ mod tests {
             ),
         )
         .expect("replacement request");
-        let restarted = ProviderLifecycleDispatch::new_persistent(
-            ZoneId::parse("work").expect("Zone"),
-            &path,
-        )
-        .expect("restore state");
+        let restarted =
+            ProviderLifecycleDispatch::new_persistent(ZoneId::parse("work").expect("Zone"), &path)
+                .expect("restore state");
         assert_eq!(
             restarted.dispatch(
                 &BrokerCallerRole::AdminUid { uid: 1000 },
@@ -2943,7 +2924,10 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).expect("read quarantined state"))
                 .expect("parse quarantined state");
         assert_eq!(persisted[0]["quarantined"], true);
-        assert_eq!(persisted[0]["guestUid"], "22222222-2222-4222-8222-222222222222");
+        assert_eq!(
+            persisted[0]["guestUid"],
+            "22222222-2222-4222-8222-222222222222"
+        );
         assert_eq!(effect.calls.load(Ordering::Acquire), 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2996,10 +2980,8 @@ mod tests {
 
     #[test]
     fn uidless_lifecycle_row_is_quarantined_and_retained() {
-        let root = crate::test_scratch_root().join(format!(
-            "provider-lifecycle-uidless-{}",
-            std::process::id()
-        ));
+        let root = crate::test_scratch_root()
+            .join(format!("provider-lifecycle-uidless-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         std::fs::create_dir_all(&root).expect("create state directory");
@@ -3049,11 +3031,7 @@ mod tests {
             "fresh-after-quarantine",
         );
         assert_eq!(
-            dispatch.dispatch(
-                &BrokerCallerRole::AdminUid { uid: 1000 },
-                &fresh,
-                &effect,
-            ),
+            dispatch.dispatch(&BrokerCallerRole::AdminUid { uid: 1000 }, &fresh, &effect,),
             Ok(EffectDispatch::Dispatched(1))
         );
         let retained: serde_json::Value =
@@ -3063,9 +3041,7 @@ mod tests {
         assert_eq!(
             retained
                 .as_array()
-                .and_then(|entries| entries
-                    .iter()
-                    .find(|entry| entry["key"] == "uidless"))
+                .and_then(|entries| entries.iter().find(|entry| entry["key"] == "uidless"))
                 .and_then(|entry| entry["quarantined"].as_bool()),
             Some(true)
         );

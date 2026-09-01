@@ -51,23 +51,21 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use d2b_contracts_resource::v3::{ResourceUid, SchemaFingerprint, ZoneRevision};
 use d2b_contracts_resource::v3::identity::{
     BindingDigest, EvidenceClass, Locality as IdentityLocality, ReconnectGeneration,
     TransportBinding as IdentityTransportBinding,
 };
 use d2b_contracts_resource::v3::resource_schema::canonical_json_bytes;
+use d2b_contracts_resource::v3::{ResourceUid, SchemaFingerprint, ZoneRevision};
 use d2b_contracts_zone_session::v3::component_session as base;
-use d2b_contracts_zone_session::v3::{
-    zone_session::{
-    AttachmentPolicy, EndpointPurpose, EndpointRole, LimitProfile, NoiseProfile, PurposeClass,
-    ServicePackage,
-},
-};
+pub use d2b_contracts_zone_session::v3::zone_routing::ZoneLinkRouteAdmissionRequest;
 use d2b_contracts_zone_session::v3::zone_routing::{
     ZoneLinkControllerGeneration, ZoneRouteCapability, ZoneTreeEdge,
 };
-pub use d2b_contracts_zone_session::v3::zone_routing::ZoneLinkRouteAdmissionRequest;
+use d2b_contracts_zone_session::v3::zone_session::{
+    AttachmentPolicy, EndpointPurpose, EndpointRole, LimitProfile, NoiseProfile, PurposeClass,
+    ServicePackage,
+};
 
 // `TransportBinding` is not part of the extended taxonomy, so the Zone
 // contract module does not re-export it. It is taken from its single
@@ -230,7 +228,6 @@ impl ZoneEndpointPolicy {
             attachment_policy: self.attachment_policy,
         }
     }
-
 }
 
 /// The generation-independent part of a Zone endpoint policy.
@@ -398,12 +395,8 @@ impl RouteAdmissionSessionBinding {
             .map_err(|_| ZonePolicyError::ZoneLinkNotAdmissible)?;
         let context = session.context();
         let expected_locality = match policy.transport_binding.locality {
-            base::Locality::GuestLocal => {
-                IdentityLocality::Local
-            }
-            base::Locality::Remote => {
-                IdentityLocality::AdjacentZone
-            }
+            base::Locality::GuestLocal => IdentityLocality::Local,
+            base::Locality::Remote => IdentityLocality::AdjacentZone,
             _ => return Err(ZonePolicyError::ZoneLinkNotAdmissible),
         };
         let expected_schema = policy_schema_fingerprint(policy)?;
@@ -555,9 +548,7 @@ impl RouteAdmissionError {
             Self::Revoked => "route-admission-revoked",
             Self::ZoneLinkMismatch => "route-admission-zonelink-mismatch",
             Self::EdgeMismatch => "route-admission-edge-mismatch",
-            Self::ControllerGenerationMismatch => {
-                "route-admission-controller-generation-mismatch"
-            }
+            Self::ControllerGenerationMismatch => "route-admission-controller-generation-mismatch",
             Self::ReconnectGenerationMismatch => "route-admission-reconnect-generation-mismatch",
             Self::SourceZoneMismatch => "route-admission-source-zone-mismatch",
             Self::TargetZoneMismatch => "route-admission-target-zone-mismatch",
@@ -1129,11 +1120,9 @@ const _: fn() = assert_route_admission_types_have_no_minting_traits;
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
-    use d2b_contracts_zone_session::v3::{
-    zone_session::{
+    use d2b_contracts_zone_session::v3::zone_session::{
         IdentityEvidenceRequirement, Locality, TransportClass,
-    },
-};
+    };
 
     /// The enrolled ZoneLink policy: `Noise_KK` over adjacent-Zone carriage.
     ///
@@ -1302,11 +1291,11 @@ mod tests {
 #[cfg(test)]
 mod route_admission_tests {
     use super::*;
-    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision};
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision};
     use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
     use d2b_contracts_zone_session::v3::zone_routing::{
-        ZoneLinkControllerGeneration, ZoneLabelId, ZonePath, ZoneRouteCapability, ZoneTreeEdge,
+        ZoneLabelId, ZoneLinkControllerGeneration, ZonePath, ZoneRouteCapability, ZoneTreeEdge,
     };
     use std::sync::{
         Arc,
@@ -1336,11 +1325,7 @@ mod route_admission_tests {
 
     fn route_admission_pair_with_clock(
         initial_time: u64,
-    ) -> (
-        RouteAdmissionIssuer,
-        RouteAdmissionVerifier,
-        Arc<AtomicU64>,
-    ) {
+    ) -> (RouteAdmissionIssuer, RouteAdmissionVerifier, Arc<AtomicU64>) {
         let policy = fixtures::enrolled_zone_link(7)
             .lower()
             .expect("valid ZoneLink session policy");
@@ -1352,7 +1337,8 @@ mod route_admission_tests {
             uid('1'),
             ZoneTreeEdge::new(path(&["parent"]), path(&["child", "parent"]))
                 .expect("direct Zone edge"),
-            ZoneLinkControllerGeneration::parse("generation-1").expect("valid controller generation"),
+            ZoneLinkControllerGeneration::parse("generation-1")
+                .expect("valid controller generation"),
             uid('2'),
             uid('3'),
             ZoneRouteCapability::parse("resource-read").expect("valid capability"),
@@ -1395,7 +1381,10 @@ mod route_admission_tests {
         assert_eq!(opened.verb(), OperationClass::Invoke);
         assert_eq!(opened.required_capability().as_str(), "resource-read");
         assert_eq!(opened.issued_at_unix_ms(), 1_000);
-        assert_eq!(opened.expires_at_unix_ms(), 1_000 + MAX_ROUTE_ADMISSION_LIFETIME_MS);
+        assert_eq!(
+            opened.expires_at_unix_ms(),
+            1_000 + MAX_ROUTE_ADMISSION_LIFETIME_MS
+        );
         assert_eq!(
             opened.session_binding().purpose(),
             base::EndpointPurpose::ZoneLink

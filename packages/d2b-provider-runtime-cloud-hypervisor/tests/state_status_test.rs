@@ -220,6 +220,18 @@ fn finalization_requires_a_complete_current_generation_drain() {
 }
 
 #[test]
+fn draining_uses_provider_deleting_phase_on_the_wire() {
+    let status = reduce_status(&GuestStatusObservation {
+        deletion_requested: true,
+        ..ready_observation()
+    });
+    assert_eq!(
+        serde_json::to_value(status).unwrap()["phase"],
+        serde_json::json!("Deleting")
+    );
+}
+
+#[test]
 fn status_debug_output_is_identity_free() {
     let status = reduce_status(&ready_observation());
     let debug = format!("{status:?}").to_ascii_lowercase();

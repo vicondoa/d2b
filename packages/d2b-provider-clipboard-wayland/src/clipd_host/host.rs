@@ -7,7 +7,9 @@
 
 use std::time::Instant;
 
-use crate::clipd_host::niri::{FocusedWindowSnapshot, HostClipboardAttributor, HostSelectionAttribution};
+use crate::clipd_host::niri::{
+    FocusedWindowSnapshot, HostClipboardAttributor, HostSelectionAttribution,
+};
 use crate::clipd_host::policy::AttributionQuality;
 use crate::clipd_host::wayland::DataControlOffer;
 
@@ -99,7 +101,10 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     /// Attribution quality of the current selection.
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only attribution inspection"))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "test-only attribution inspection")
+    )]
     pub fn current_attribution_quality(&self) -> Option<AttributionQuality> {
         self.current_selection
             .as_ref()

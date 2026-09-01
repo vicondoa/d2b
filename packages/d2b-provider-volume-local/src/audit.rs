@@ -9,15 +9,11 @@ use std::fmt::{self, Write as _};
 use std::future::Future;
 
 use d2b_contracts_resource::v3::volume::EntryType;
-use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::{
-    MigrationPolicy,
-    PersistenceClass,
-    ResourceGeneration,
-    ResourceRef,
-    SchemaVersion,
+    MigrationPolicy, PersistenceClass, ResourceGeneration, ResourceRef, SchemaVersion,
     VolumeStateSchemaId,
 };
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

@@ -1996,6 +1996,7 @@ pub(crate) fn policy_ref_device_classes(
         // authenticated Health probe, which speaks ttRPC over the component-session
         // vsock and uses connect(2)/socket ioctls.
         "w1-host-reconcile"
+        | "w1-provider-controller"
         | "w1-store-virtiofs-preflight"
         | "w1-component-session-health"
         | "w1-activation-nixos-runner" => Some(&[]),
@@ -2939,6 +2940,21 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             }
         }
     }
+    if let Some(api_socket) = cloud_hypervisor_api_socket(plan) {
+        let state_dir = api_socket
+            .parent()
+            .ok_or_else(|| LiveHandlerError::SpawnFailed {
+                detail: "cloud-hypervisor api socket has no state-directory parent".to_owned(),
+            })?;
+        grant_runner_state_dir_acls(state_dir, plan.uid).map_err(|detail| {
+            LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh cloud-hypervisor state-directory ACL for runner uid {}: {detail}",
+                    plan.uid
+                ),
+            }
+        })?;
+    }
     refresh_obs_vsock_acl(plan)?;
     refresh_component_session_vsock_acl(plan)?;
 
@@ -2952,6 +2968,24 @@ fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
     plan.argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--api-socket").then(|| PathBuf::from(&pair[1])))
+}
+
+fn grant_runner_state_dir_acls(state_dir: &Path, uid: u32) -> Result<(), String> {
+    let mut chain: Vec<&Path> = state_dir
+        .ancestors()
+        .filter(|component| !component.as_os_str().is_empty())
+        .collect();
+    chain.reverse();
+    let last = chain.len().saturating_sub(1);
+    for (index, directory) in chain.into_iter().enumerate() {
+        let acl = if index == last {
+            format!("u:{uid}:rwx")
+        } else {
+            format!("u:{uid}:--x")
+        };
+        setfacl_fd_safe(directory, &acl, AclPathKind::Directory)?;
+    }
+    Ok(())
 }
 
 fn grant_daemon_api_socket_acl(api_socket: PathBuf) {

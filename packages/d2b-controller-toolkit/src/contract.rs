@@ -3,12 +3,7 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
 };
 
 use crate::ContextError;

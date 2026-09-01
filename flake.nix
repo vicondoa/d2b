@@ -602,6 +602,8 @@
           let
             pkgs = nixpkgsFor.${system};
             hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
+            cloudHypervisorControllerBundleEnv =
+              builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
             bazelHostTools =
               if hostToolBundleEnv == "" then
                 null
@@ -612,12 +614,26 @@
                     path = /. + hostToolBundleEnv;
                     name = "d2b-bazel-host-tools";
                   };
+                  rawCloudHypervisorController =
+                    if cloudHypervisorControllerBundleEnv == "" then null else
+                    builtins.path {
+                      path = /. + cloudHypervisorControllerBundleEnv;
+                      name = "d2b-bazel-cloud-hypervisor-controller";
+                    };
                 };
             testSelf =
               if bazelHostTools == null then
                 self
               else
                 self // {
+                  lib = self.lib // {
+                    d2bHostToolOverrides =
+                      bazelHostTools.d2bHostToolOverrides;
+                    evalGuest = args: self.lib.evalGuest (args // {
+                      d2bHostToolOverrides =
+                        bazelHostTools.d2bHostToolOverrides;
+                    });
+                  };
                   nixosModules = self.nixosModules // {
                     default = {
                       imports = [ self.nixosModules.default ];
@@ -626,9 +642,16 @@
                     };
                   };
                   packages = self.packages // {
-                    ${system} = self.packages.${system} // {
-                      d2b-wayland-proxy = bazelHostTools.package;
-                    };
+                    ${system} = self.packages.${system}
+                      // {
+                        d2b-wayland-proxy = bazelHostTools.package;
+                      }
+                      // nixpkgs.lib.optionalAttrs
+                        (bazelHostTools.cloudHypervisorControllerPackage != null)
+                        {
+                          d2b-cloud-hypervisor-controller =
+                            bazelHostTools.cloudHypervisorControllerPackage;
+                        };
                   };
                 };
             testDir = ./tests/host-integration;
@@ -1412,6 +1435,7 @@
           };
         evalGuest = {
           system ? builtins.currentSystem,
+          d2bHostToolOverrides ? null,
           extraSpecialArgs ? { },
           nixpkgsConfig ? { },
           nixpkgsOverlays ? [ ],
@@ -1442,10 +1466,12 @@
               lib = guestPkgs.lib;
               pkgs = guestPkgs;
               d2bHostTools = guestTools;
+              inherit d2bHostToolOverrides;
             };
           in
           evaluator._evalGuest (builtins.removeAttrs args [
             "system"
+            "d2bHostToolOverrides"
             "extraSpecialArgs"
             "nixpkgsConfig"
             "nixpkgsOverlays"

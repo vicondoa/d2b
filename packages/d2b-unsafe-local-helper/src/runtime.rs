@@ -2,9 +2,7 @@ use crate::environment::EnvironmentError;
 use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
 use d2b_contracts::{
-    ids::OperationId,
-    workload::WorkloadProviderKind,
-    workload_identity::WorkloadTarget,
+    ids::OperationId, workload::WorkloadProviderKind, workload_identity::WorkloadTarget,
 };
 use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,

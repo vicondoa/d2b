@@ -4,9 +4,9 @@ use std::io;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1445,8 +1445,7 @@ fn validate_tap_create_provenance(
     let canonical_role_id = d2b_core::bundle_resolver::canonical_tap_role_id(role_id.as_str());
     if !matches!(
         canonical_role_id,
-        "ch"
-            | "qemu-media"
+        "ch" | "qemu-media"
             | "net-vm-lan"
             | "uplink"
             | "workload-lan"
@@ -1508,7 +1507,9 @@ fn validate_tap_create_provenance(
             tap_attachment,
         )
         .map_err(|_| "network-admission-mismatch")?;
-        if admitted_interface_names.iter().any(|ifname| ifname == &bridge)
+        if admitted_interface_names
+            .iter()
+            .any(|ifname| ifname == &bridge)
             && admitted_interface_names.iter().any(|ifname| ifname == &tap)
         {
             Ok(())
@@ -1542,12 +1543,13 @@ fn require_installed_network_generation(
     resolver: &BundleResolver,
     provenance: &d2b_contracts_resource::v3::NetworkProvenance,
 ) -> Result<(), BrokerError> {
-    let installed = resolver
-        .installed_generation_identity()
-        .ok_or(BrokerError::RequestValidation {
-            operation: "NetworkEffect",
-            reason: "installed-generation-unavailable",
-        })?;
+    let installed =
+        resolver
+            .installed_generation_identity()
+            .ok_or(BrokerError::RequestValidation {
+                operation: "NetworkEffect",
+                reason: "installed-generation-unavailable",
+            })?;
     if installed.as_str() != provenance.bundle_generation().as_str() {
         return Err(BrokerError::RequestValidation {
             operation: "NetworkEffect",
@@ -1565,99 +1567,110 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
     // owning lifecycle authz classification.
     match request {
         BrokerRequest::ApplyNftables(req) => {
-            validate_network_authority(
-                req.scope_id.as_str(),
-                req.bundle_nft_intent_ref.as_str(),
-            )
-            .map_err(|reason| BrokerError::RequestValidation {
-                operation: "ApplyNftables",
-                reason,
-            })
+            validate_network_authority(req.scope_id.as_str(), req.bundle_nft_intent_ref.as_str())
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "ApplyNftables",
+                    reason,
+                })
         }
         BrokerRequest::ApplyNftablesProjection(req) => {
-            validate_bundle_op_id(req.bundle_nft_projection_intent_ref.as_str()).and_then(|_| {
-                validate_uid_network_authority(
-                    req.scope_id.as_str(),
-                    req.bundle_nft_projection_intent_ref.as_str(),
-                    &req.zone_uid,
-                    &req.network_uid,
-                    req.network_generation,
-                    req.attachment_generation,
-                    &req.expected_generation_id,
-                )
-            }).map_err(|reason| BrokerError::RequestValidation {
-                operation: "ApplyNftablesProjection",
-                reason,
-            })
+            validate_bundle_op_id(req.bundle_nft_projection_intent_ref.as_str())
+                .and_then(|_| {
+                    validate_uid_network_authority(
+                        req.scope_id.as_str(),
+                        req.bundle_nft_projection_intent_ref.as_str(),
+                        &req.zone_uid,
+                        &req.network_uid,
+                        req.network_generation,
+                        req.attachment_generation,
+                        &req.expected_generation_id,
+                    )
+                })
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "ApplyNftablesProjection",
+                    reason,
+                })
         }
         BrokerRequest::CreateBridge(req) => {
-            validate_bundle_op_id(req.bundle_bridge_intent_ref.as_str()).and_then(|_| {
-                validate_uid_network_authority(
-                    req.scope_id.as_str(),
-                    req.bundle_bridge_intent_ref.as_str(),
-                    &req.zone_uid,
-                    &req.network_uid,
-                    req.network_generation,
-                    req.attachment_generation,
-                    &req.bundle_generation,
-                )
-            }).map_err(|reason| BrokerError::RequestValidation {
-                operation: "CreateBridge",
-                reason,
-            })
+            validate_bundle_op_id(req.bundle_bridge_intent_ref.as_str())
+                .and_then(|_| {
+                    validate_uid_network_authority(
+                        req.scope_id.as_str(),
+                        req.bundle_bridge_intent_ref.as_str(),
+                        &req.zone_uid,
+                        &req.network_uid,
+                        req.network_generation,
+                        req.attachment_generation,
+                        &req.bundle_generation,
+                    )
+                })
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "CreateBridge",
+                    reason,
+                })
         }
         BrokerRequest::DeleteBridge(req) => {
-            validate_bundle_op_id(req.bundle_bridge_intent_ref.as_str()).and_then(|_| {
-                validate_uid_network_authority(
-                    req.scope_id.as_str(),
-                    req.bundle_bridge_intent_ref.as_str(),
-                    &req.zone_uid,
-                    &req.network_uid,
-                    req.network_generation,
-                    req.attachment_generation,
-                    &req.bundle_generation,
-                )
-            }).map_err(|reason| BrokerError::RequestValidation {
-                operation: "DeleteBridge",
-                reason,
-            })
+            validate_bundle_op_id(req.bundle_bridge_intent_ref.as_str())
+                .and_then(|_| {
+                    validate_uid_network_authority(
+                        req.scope_id.as_str(),
+                        req.bundle_bridge_intent_ref.as_str(),
+                        &req.zone_uid,
+                        &req.network_uid,
+                        req.network_generation,
+                        req.attachment_generation,
+                        &req.bundle_generation,
+                    )
+                })
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "DeleteBridge",
+                    reason,
+                })
         }
         BrokerRequest::ApplyRoute(req) => {
-            validate_bundle_op_id(req.bundle_route_intent_ref.as_str()).and_then(|_| {
-                validate_uid_network_authority(
-                    req.scope_id.as_str(),
-                    req.bundle_route_intent_ref.as_str(),
-                    &req.zone_uid,
-                    &req.network_uid,
-                    req.network_generation,
-                    req.attachment_generation,
-                    &req.bundle_generation,
-                )
-            }).map_err(|reason| BrokerError::RequestValidation {
-                operation: "ApplyRoute",
-                reason,
-            })
+            validate_bundle_op_id(req.bundle_route_intent_ref.as_str())
+                .and_then(|_| {
+                    validate_uid_network_authority(
+                        req.scope_id.as_str(),
+                        req.bundle_route_intent_ref.as_str(),
+                        &req.zone_uid,
+                        &req.network_uid,
+                        req.network_generation,
+                        req.attachment_generation,
+                        &req.bundle_generation,
+                    )
+                })
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "ApplyRoute",
+                    reason,
+                })
         }
         BrokerRequest::ApplySysctl(req) => {
-            validate_bundle_op_id(req.bundle_sysctl_intent_ref.as_str()).and_then(|_| {
-                validate_uid_network_authority(
-                    req.scope_id.as_str(),
-                    req.bundle_sysctl_intent_ref.as_str(),
-                    &req.zone_uid,
-                    &req.network_uid,
-                    req.network_generation,
-                    req.attachment_generation,
-                    &req.bundle_generation,
-                )
-            }).map_err(|reason| BrokerError::RequestValidation {
-                operation: "ApplySysctl",
-                reason,
-            })
+            validate_bundle_op_id(req.bundle_sysctl_intent_ref.as_str())
+                .and_then(|_| {
+                    validate_uid_network_authority(
+                        req.scope_id.as_str(),
+                        req.bundle_sysctl_intent_ref.as_str(),
+                        &req.zone_uid,
+                        &req.network_uid,
+                        req.network_generation,
+                        req.attachment_generation,
+                        &req.bundle_generation,
+                    )
+                })
+                .map_err(|reason| BrokerError::RequestValidation {
+                    operation: "ApplySysctl",
+                    reason,
+                })
         }
         BrokerRequest::UpdateHostsFile(req) => {
             validate_bundle_op_id(req.bundle_hosts_intent_ref.as_str())
                 .and_then(|_| {
-                    if req.bundle_hosts_intent_ref.as_str().starts_with("network-hosts:") {
+                    if req
+                        .bundle_hosts_intent_ref
+                        .as_str()
+                        .starts_with("network-hosts:")
+                    {
                         let (
                             Some(zone_uid),
                             Some(network_uid),
@@ -1708,56 +1721,50 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
                     reason,
                 })
         }
-        BrokerRequest::SeedDnsmasqLease(req) => {
-            validate_network_scope_provenance(
-                req.scope_id.as_str(),
-                &req.zone_uid,
-                &req.network_uid,
-                req.network_generation,
-                req.attachment_generation,
-                &req.bundle_generation,
-            )
-            .map_err(|reason| BrokerError::RequestValidation {
-                operation: "SeedDnsmasqLease",
-                reason,
-            })
-        }
-        BrokerRequest::CreatePersistentTap(req) => {
-            validate_tap_create_provenance(
-                &req.bundle_tap_intent_ref,
-                &req.vm_id,
-                &req.role_id,
-                &req.attachment_id,
-                &req.zone_uid,
-                &req.network_uid,
-                req.network_generation,
-                req.attachment_generation,
-                &req.bundle_generation,
-                &req.admitted_interface_names,
-            )
-            .map_err(|reason| BrokerError::RequestValidation {
-                operation: "CreatePersistentTap",
-                reason,
-            })
-        }
-        BrokerRequest::CreateTapFd(req) => {
-            validate_tap_create_provenance(
-                &req.bundle_tap_intent_ref,
-                &req.vm_id,
-                &req.role_id,
-                &req.attachment_id,
-                &req.zone_uid,
-                &req.network_uid,
-                req.network_generation,
-                req.attachment_generation,
-                &req.bundle_generation,
-                &req.admitted_interface_names,
-            )
-            .map_err(|reason| BrokerError::RequestValidation {
-                operation: "CreateTapFd",
-                reason,
-            })
-        }
+        BrokerRequest::SeedDnsmasqLease(req) => validate_network_scope_provenance(
+            req.scope_id.as_str(),
+            &req.zone_uid,
+            &req.network_uid,
+            req.network_generation,
+            req.attachment_generation,
+            &req.bundle_generation,
+        )
+        .map_err(|reason| BrokerError::RequestValidation {
+            operation: "SeedDnsmasqLease",
+            reason,
+        }),
+        BrokerRequest::CreatePersistentTap(req) => validate_tap_create_provenance(
+            &req.bundle_tap_intent_ref,
+            &req.vm_id,
+            &req.role_id,
+            &req.attachment_id,
+            &req.zone_uid,
+            &req.network_uid,
+            req.network_generation,
+            req.attachment_generation,
+            &req.bundle_generation,
+            &req.admitted_interface_names,
+        )
+        .map_err(|reason| BrokerError::RequestValidation {
+            operation: "CreatePersistentTap",
+            reason,
+        }),
+        BrokerRequest::CreateTapFd(req) => validate_tap_create_provenance(
+            &req.bundle_tap_intent_ref,
+            &req.vm_id,
+            &req.role_id,
+            &req.attachment_id,
+            &req.zone_uid,
+            &req.network_uid,
+            req.network_generation,
+            req.attachment_generation,
+            &req.bundle_generation,
+            &req.admitted_interface_names,
+        )
+        .map_err(|reason| BrokerError::RequestValidation {
+            operation: "CreateTapFd",
+            reason,
+        }),
         BrokerRequest::SpawnRunner(req)
             if req.role == d2b_contracts_broker::broker_wire::RunnerRole::QemuMedia
                 && req.network_tap_context.is_none() =>
@@ -2307,7 +2314,7 @@ fn validate_spawn_runner_request_fds(
         ));
     }
     match role {
-        RunnerRole::ProviderController if inherited_fd_count == 1 && attached_fd_count == 1 => {
+        RunnerRole::ProviderController if inherited_fd_count == 1 && attached_fd_count == 2 => {
             Ok(())
         }
         RunnerRole::ProviderController => Err(BrokerError::Protocol(
@@ -2449,8 +2456,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         && !matches!(
             request,
             RealBrokerRequest::Hello(_)
-            | RealBrokerRequest::ConsumeLifecycleLease(_)
-            | RealBrokerRequest::SignalRunner(_)
+                | RealBrokerRequest::ConsumeLifecycleLease(_)
+                | RealBrokerRequest::SignalRunner(_)
                 | RealBrokerRequest::PollChildReaped
                 | RealBrokerRequest::DeregisterRunnerPidfd(_)
                 | RealBrokerRequest::CgroupKill(_)
@@ -2738,66 +2745,68 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::UpdateHostsFile(req) => {
             let resolver = require_resolver(resolver)?;
-            let (intent, network_provenance) =
-                if req.bundle_hosts_intent_ref.as_str().starts_with("network-hosts:") {
-                    let provenance = network_provenance(
-                        req.zone_uid
-                            .clone()
-                            .ok_or(BrokerError::RequestValidation {
-                                operation: "UpdateHostsFile",
-                                reason: "network-admission-mismatch",
-                            })?,
-                        req.network_uid
-                            .clone()
-                            .ok_or(BrokerError::RequestValidation {
-                                operation: "UpdateHostsFile",
-                                reason: "network-admission-mismatch",
-                            })?,
-                        req.network_generation.ok_or(BrokerError::RequestValidation {
+            let (intent, network_provenance) = if req
+                .bundle_hosts_intent_ref
+                .as_str()
+                .starts_with("network-hosts:")
+            {
+                let provenance = network_provenance(
+                    req.zone_uid.clone().ok_or(BrokerError::RequestValidation {
+                        operation: "UpdateHostsFile",
+                        reason: "network-admission-mismatch",
+                    })?,
+                    req.network_uid
+                        .clone()
+                        .ok_or(BrokerError::RequestValidation {
                             operation: "UpdateHostsFile",
                             reason: "network-admission-mismatch",
                         })?,
-                        req.attachment_generation
-                            .ok_or(BrokerError::RequestValidation {
-                                operation: "UpdateHostsFile",
-                                reason: "network-admission-mismatch",
-                            })?,
-                        req.bundle_generation.clone().ok_or(BrokerError::RequestValidation {
+                    req.network_generation
+                        .ok_or(BrokerError::RequestValidation {
                             operation: "UpdateHostsFile",
                             reason: "network-admission-mismatch",
                         })?,
-                    );
-                    require_installed_network_generation(resolver, &provenance)?;
-                    (
-                        resolver
-                            .resolve_network_hosts_intent(
-                                req.bundle_hosts_intent_ref.as_str(),
-                                &provenance,
-                            )
-                            .ok_or_else(|| BrokerError::BundleIntentMissing {
-                                kind: "hosts",
-                                intent_id: req.bundle_hosts_intent_ref.as_str().to_owned(),
-                            })?,
-                        Some(provenance),
-                    )
-                } else {
-                    (
-                        resolver
-                            .find_hosts_intent(req.bundle_hosts_intent_ref.as_str())
-                            .ok_or_else(|| BrokerError::BundleIntentMissing {
-                                kind: "hosts",
-                                intent_id: req.bundle_hosts_intent_ref.as_str().to_owned(),
-                            })?
-                            .clone(),
-                        None,
-                    )
-                };
+                    req.attachment_generation
+                        .ok_or(BrokerError::RequestValidation {
+                            operation: "UpdateHostsFile",
+                            reason: "network-admission-mismatch",
+                        })?,
+                    req.bundle_generation
+                        .clone()
+                        .ok_or(BrokerError::RequestValidation {
+                            operation: "UpdateHostsFile",
+                            reason: "network-admission-mismatch",
+                        })?,
+                );
+                require_installed_network_generation(resolver, &provenance)?;
+                (
+                    resolver
+                        .resolve_network_hosts_intent(
+                            req.bundle_hosts_intent_ref.as_str(),
+                            &provenance,
+                        )
+                        .ok_or_else(|| BrokerError::BundleIntentMissing {
+                            kind: "hosts",
+                            intent_id: req.bundle_hosts_intent_ref.as_str().to_owned(),
+                        })?,
+                    Some(provenance),
+                )
+            } else {
+                (
+                    resolver
+                        .find_hosts_intent(req.bundle_hosts_intent_ref.as_str())
+                        .ok_or_else(|| BrokerError::BundleIntentMissing {
+                            kind: "hosts",
+                            intent_id: req.bundle_hosts_intent_ref.as_str().to_owned(),
+                        })?
+                        .clone(),
+                    None,
+                )
+            };
             if let Some(provenance) = network_provenance.as_ref() {
-                let expected_marker =
-                    d2b_contracts_resource::v3::derive_network_ownership_marker(
-                        provenance,
-                        "hosts",
-                    );
+                let expected_marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+                    provenance, "hosts",
+                );
                 if intent.provenance.as_ref() != Some(provenance)
                     || intent.ownership_marker.as_deref() != Some(expected_marker.as_str())
                 {
@@ -2933,7 +2942,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )))
         }
         RealBrokerRequest::OpenPidfd(req) => {
-            // OpenPidfd returns one SCM_RIGHTS-bearing response fd.
+            // OpenPidfd returns the pidfd and, for Provider controllers, the
+            // broker-retained bootstrap endpoint.
             let runner_id = runner_registry_key(
                 req.vm_id.as_str(),
                 req.role_id.as_str(),
@@ -2991,7 +3001,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.template_identity,
                 req.guest_execution.as_ref(),
                 intent,
-            )?;
+            )
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = ?error,
+                    "ObserveRunner typed Process metadata validation failed",
+                );
+            })?;
             if typed {
                 let placement = private_cgroup_placement(
                     &intent.cgroup_placement,
@@ -3049,6 +3065,16 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 remove_runner_metadata(runner_id.as_str());
                 return Err(error);
             }
+            let controller_bootstrap = controller_bootstrap_registry()
+                .lock()
+                .map_err(|_| {
+                    BrokerError::Protocol("controller bootstrap registry mutex poisoned".to_owned())
+                })?
+                .get(&runner_id)
+                .map(OwnedFd::try_clone)
+                .transpose()
+                .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+            let controller_bootstrap_fd_index = controller_bootstrap.as_ref().map(|_| 1);
             let response =
                 BrokerResponse::OpenPidfd(d2b_contracts_broker::broker_wire::OpenPidfdResponse {
                     vm_id: req.vm_id.clone(),
@@ -3056,8 +3082,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     pid: outcome.pid,
                     verified_start_time_ticks: outcome.verified_start_time_ticks,
                     pidfd_index: 0,
+                    controller_bootstrap_fd_index,
                 });
-            Ok(DispatchResult::with_fd(response, outcome.pidfd))
+            let mut response_fds = vec![outcome.pidfd];
+            response_fds.extend(controller_bootstrap);
+            Ok(DispatchResult::with_fds(response, response_fds))
         }
         RealBrokerRequest::ConsumeLifecycleLease(req) => {
             consume_lifecycle_lease(&req, &caller_role)?;
@@ -3128,6 +3157,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 .ok_or_else(|| BrokerError::BundleIntentMissing {
                     kind: "runner",
                     intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                })
+                .inspect_err(|error| {
+                    tracing::warn!(error = ?error, "ObserveRunner intent lookup failed");
                 })?;
             let expected_role = runner_role_for_process_role(&intent.role).ok_or_else(|| {
                 BrokerError::SpawnRunnerIntentMismatch {
@@ -3145,6 +3177,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         _ => intent.role_id.as_str(),
                     }
             {
+                tracing::warn!("ObserveRunner basic intent identity validation failed");
                 return Err(BrokerError::LiveHandler(
                     "runner observation intent mismatch".to_owned(),
                 ));
@@ -3157,7 +3190,10 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.runtime_scope,
                 &intent.role_id,
                 req.guest_execution.as_ref(),
-            )?;
+            )
+            .inspect_err(|error| {
+                tracing::warn!(error = ?error, "ObserveRunner typed identity decoding failed");
+            })?;
             validate_typed_process_metadata(
                 typed,
                 req.owner_ref.as_ref(),
@@ -3167,7 +3203,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.guest_execution.as_ref(),
                 intent,
             )?;
-            let response = observe_registered_runner(&req, intent)?;
+            let response = observe_registered_runner(&req, intent).inspect_err(|error| {
+                tracing::warn!(error = ?error, "ObserveRunner registry observation failed");
+            })?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -3853,8 +3891,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                             resolved: "bounded-json".to_owned(),
                         }
                     })?;
-                    if encoded.len()
-                        > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
+                    if encoded.len() > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
                     {
                         return Err(BrokerError::SpawnRunnerIntentMismatch {
                             field: "activation_input",
@@ -4007,9 +4044,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             cleanup_cloud_hypervisor_stale_sockets(&req.role, &intent.argv)?;
             cleanup_video_stale_socket(&req.role, &intent.argv)?;
             cleanup_otel_host_bridge_stale_socket(&req.role, &intent.argv)?;
+            let argv =
+                bind_cloud_hypervisor_guest_uid(req.role, req.owner_uid.as_ref(), &intent.argv)?;
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
-                argv: intent.argv.clone(),
+                argv,
                 uid: intent.uid,
                 gid: intent.gid,
                 supplementary_groups: intent.supplementary_groups.clone(),
@@ -4127,7 +4166,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 cleanup_spawned_runner_after_failure(runner_id.as_str(), outcome.pidfd.as_fd());
                 return Err(error);
             }
-            let console_fd_index = if outcome.extra_response_fds.is_empty() {
+            let controller_bootstrap_fd_index =
+                (req.role == RunnerRole::ProviderController).then_some(1);
+            let console_fd_index = if outcome.extra_response_fds.is_empty()
+                || req.role == RunnerRole::ProviderController
+            {
                 None
             } else {
                 Some(1)
@@ -4153,6 +4196,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     pid: outcome.pid,
                     start_time_ticks: outcome.start_time_ticks,
                     pidfd_index: 0,
+                    controller_bootstrap_fd_index,
                     console_fd_index,
                 },
             );
@@ -4181,19 +4225,15 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     intent_id: req.bundle_nft_projection_intent_ref.as_str().to_owned(),
                 })?;
             let marker = resolver
-                .resolve_network_marker_intent(
-                    &intent.ownership_marker_intent_ref,
-                    &provenance,
-                )
+                .resolve_network_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
                 .ok_or_else(|| BrokerError::BundleIntentMissing {
                     kind: "nft-ownership-marker",
                     intent_id: intent.ownership_marker_intent_ref.clone(),
                 })?;
-            let expected_marker =
-                d2b_contracts_resource::v3::derive_network_ownership_marker(
-                    &provenance,
-                    "firewall",
-                );
+            let expected_marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+                &provenance,
+                "firewall",
+            );
             if intent.provenance.as_ref() != Some(&provenance)
                 || marker.provenance.as_ref() != Some(&provenance)
                 || marker.marker != expected_marker
@@ -4345,12 +4385,13 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         }
         RealBrokerRequest::DeletePersistentTap(req) => {
             let resolver = require_resolver(resolver)?;
-            let installed = resolver
-                .installed_generation_identity()
-                .ok_or(BrokerError::RequestValidation {
-                    operation: "DeletePersistentTap",
-                    reason: "installed-generation-unavailable",
-                })?;
+            let installed =
+                resolver
+                    .installed_generation_identity()
+                    .ok_or(BrokerError::RequestValidation {
+                        operation: "DeletePersistentTap",
+                        reason: "installed-generation-unavailable",
+                    })?;
             if installed.as_str() != req.expected_bundle_generation.as_str() {
                 return Err(BrokerError::RequestValidation {
                     operation: "DeletePersistentTap",
@@ -4433,8 +4474,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 if let Err(cleanup) = crate::ops::network::remove_persistent_tap_realization(
                     &config.state_dir,
                     &req.attachment_id,
-                )
-                {
+                ) {
                     return Err(BrokerError::RequestValidation {
                         operation: "CreatePersistentTap",
                         reason: cleanup.code(),
@@ -5317,6 +5357,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     // is carried in `operation_fields`; the header
                     // `error_kind` is the classified stage slug.
                     let error_kind = store_sync_error_kind(err.error_stage());
+                    tracing::warn!(
+                        error_stage = error_kind,
+                        error = %err,
+                        "StoreSync execution failed",
+                    );
                     write_decision_op_record!(
                         audit_log,
                         bundle_metadata,
@@ -6135,10 +6180,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 );
                 require_installed_network_generation(resolver, &provenance)?;
             }
-            let expected_vm = d2b_contracts_resource::v3::derive_network_child_name(
-                &req.network_uid,
-                "vm",
-            );
+            let expected_vm =
+                d2b_contracts_resource::v3::derive_network_child_name(&req.network_uid, "vm");
             if req.vm_id.as_str() != expected_vm {
                 return Err(BrokerError::RequestValidation {
                     operation: "SeedDnsmasqLease",
@@ -6866,6 +6909,12 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn controller_bootstrap_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Clone)]
 struct RunnerRegistration {
     vm_id: String,
@@ -7037,9 +7086,7 @@ fn registration_matches(
     provider_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     provider_identity: Option<[u8; 32]>,
     template_identity: Option<[u8; 32]>,
-    guest_execution: Option<
-        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
-    >,
+    guest_execution: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
 ) -> bool {
     let strict = resource_ref.is_some();
     let owner_matches = if strict {
@@ -7055,14 +7102,12 @@ fn registration_matches(
     let provider_identity_matches = if strict {
         registration.provider_identity == provider_identity
     } else {
-        provider_identity
-            .is_none_or(|identity| registration.provider_identity == Some(identity))
+        provider_identity.is_none_or(|identity| registration.provider_identity == Some(identity))
     };
     let template_identity_matches = if strict {
         registration.template_identity == template_identity
     } else {
-        template_identity
-            .is_none_or(|identity| registration.template_identity == Some(identity))
+        template_identity.is_none_or(|identity| registration.template_identity == Some(identity))
     };
     registration.resource_ref.as_ref() == resource_ref
         && registration.resource_uid.as_ref() == resource_uid
@@ -7256,6 +7301,22 @@ fn observe_registered_runner(
             }
             let executable_verified =
                 executable_observation.is_verified_for_registered(pidfd_registered, cgroup_verified);
+            if pidfd_registered && cgroup_verified && executable_verified {
+                tracing::debug!(
+                    runner_id,
+                    pid = observed_registration.pid,
+                    "ObserveRunner found a verified registered runner",
+                );
+            } else {
+                tracing::warn!(
+                    runner_id,
+                    pid = observed_registration.pid,
+                    pidfd_registered,
+                    cgroup_verified,
+                    executable_verified,
+                    "ObserveRunner registered runner verification is incomplete",
+                );
+            }
             if rebound {
                 if let Some(stored) = metadata_registry.get_mut(&runner_id) {
                     stored.guest_execution = observed_registration.guest_execution.clone();
@@ -7323,8 +7384,22 @@ fn discover_runner_candidate(
         let executable_verified = executable_observation.is_verified_for_discovery();
         candidates.push((pid, start_time_ticks, executable_verified));
     }
-    let Some((pid, start_time_ticks, executable_verified)) =
-        select_runner_candidate(candidates)?
+    if !candidates.is_empty() {
+        tracing::warn!(
+            cgroup_subtree,
+            candidate_count = candidates.len(),
+            candidate_pids = ?candidates
+                .iter()
+                .map(|(pid, _, _)| *pid)
+                .collect::<Vec<_>>(),
+            executable_verified = ?candidates
+                .iter()
+                .map(|(_, _, verified)| *verified)
+                .collect::<Vec<_>>(),
+            "ObserveRunner discovered unregistered cgroup candidates",
+        );
+    }
+    let Some((pid, start_time_ticks, executable_verified)) = select_runner_candidate(candidates)?
     else {
         return Ok(absent_runner_response(request));
     };
@@ -7446,10 +7521,7 @@ fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn duplicate_runner_pidfd(
-    registry: &HashMap<String, OwnedFd>,
-    runner_id: &str,
-) -> Option<OwnedFd> {
+fn duplicate_runner_pidfd(registry: &HashMap<String, OwnedFd>, runner_id: &str) -> Option<OwnedFd> {
     let pidfd = registry.get(runner_id)?;
     match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
         Ok(pidfd) => Some(pidfd),
@@ -7661,6 +7733,9 @@ fn remove_runner_registries(runner_id: &str) -> bool {
     };
     pidfd_registry.remove(runner_id);
     metadata_registry.remove(runner_id);
+    if let Ok(mut bootstrap_registry) = controller_bootstrap_registry().lock() {
+        bootstrap_registry.remove(runner_id);
+    }
     true
 }
 
@@ -7961,6 +8036,16 @@ fn prepare_runner_preopened_fds(
     daemon_gid: u32,
 ) -> Result<RunnerPreopenedFds, BrokerError> {
     if req.role == d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor {
+        let typed_resource = req.resource_ref.is_some()
+            && req.resource_uid.is_some()
+            && req.zone_uid.is_some()
+            && req.runtime_scope.is_some();
+        if typed_resource && req.network_tap_context.is_none() {
+            return Ok(RunnerPreopenedFds {
+                child_fds: Vec::new(),
+                response_fds: Vec::new(),
+            });
+        }
         let runner_intent = resolver
             .find_runner_intent(req.bundle_runner_intent_ref.as_str())
             .ok_or_else(|| BrokerError::BundleIntentMissing {
@@ -8165,14 +8250,9 @@ impl DispatchBackend for LiveDispatchBackend {
         let ip_binary = ip_binary_path();
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         crate::ops::route::apply_with_preflight_owned(
-            &exec,
-            &ip_binary,
-            state_dir,
-            intent,
-            provenance,
-            destroy,
+            &exec, &ip_binary, state_dir, intent, provenance, destroy,
         )
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
     }
 
     fn apply_sysctl(
@@ -8338,7 +8418,7 @@ impl DispatchBackend for LiveDispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
         resolver: &BundleResolver,
         req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
-        request_fds: Vec<OwnedFd>,
+        mut request_fds: Vec<OwnedFd>,
         audit_log: &crate::audit::AuditLog,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
         // Reserve the runner_id BEFORE spawning the child: refuse a
@@ -8354,6 +8434,22 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_uid,
             self.daemon_gid,
         )?;
+        let (controller_bootstrap_response, retained_controller_bootstrap) =
+            if req.role == d2b_contracts_broker::broker_wire::RunnerRole::ProviderController {
+                let retained = request_fds.pop().ok_or_else(|| {
+                    BrokerError::Protocol(
+                        "ProviderController bootstrap escrow fd is missing".to_owned(),
+                    )
+                })?;
+                let response = retained.try_clone().map_err(|error| {
+                    BrokerError::LiveHandler(format!(
+                        "Provider controller bootstrap duplicate: {error}"
+                    ))
+                })?;
+                (Some(response), Some(retained))
+            } else {
+                (None, None)
+            };
         if !request_fds.is_empty() && !preopened.child_fds.is_empty() {
             return Err(BrokerError::Protocol(
                 "request inherited fds cannot combine with broker-preopened fds".to_owned(),
@@ -8366,26 +8462,29 @@ impl DispatchBackend for LiveDispatchBackend {
             req.activation_input.as_ref(),
         )
         .map_err(|err| {
-                // Log the actual LiveHandlerError detail before wrapping it
-                // in the opaque BrokerError::LiveHandler envelope so
-                // operators can see WHY the spawn failed in journalctl.
-                tracing::error!(
-                    runner_id = %runner_id,
-                    error = %err,
-                    "live_spawn_runner failed"
-                );
-                // swtpm-dir hardening fail-closed carries a structured,
-                // path-free audit that the dispatch arm must emit as a
-                // terminal PrepareSwtpmDir record; preserve it instead of
-                // collapsing to the opaque LiveHandler envelope.
-                match err {
-                    crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
-                        BrokerError::SwtpmDirHardening { audit, reason }
-                    }
-                    other => BrokerError::LiveHandler(other.to_string()),
+            // Log the actual LiveHandlerError detail before wrapping it
+            // in the opaque BrokerError::LiveHandler envelope so
+            // operators can see WHY the spawn failed in journalctl.
+            tracing::error!(
+                runner_id = %runner_id,
+                error = %err,
+                "live_spawn_runner failed"
+            );
+            // swtpm-dir hardening fail-closed carries a structured,
+            // path-free audit that the dispatch arm must emit as a
+            // terminal PrepareSwtpmDir record; preserve it instead of
+            // collapsing to the opaque LiveHandler envelope.
+            match err {
+                crate::live_handlers::LiveHandlerError::SwtpmDirHardening { audit, reason } => {
+                    BrokerError::SwtpmDirHardening { audit, reason }
                 }
-            })?;
+                other => BrokerError::LiveHandler(other.to_string()),
+            }
+        })?;
         outcome.extra_response_fds = preopened.response_fds;
+        outcome
+            .extra_response_fds
+            .extend(controller_bootstrap_response);
         register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
             // Registration failed: the broker is about to drop this
             // just-spawned child's pidfd. Reap it now (targeted,
@@ -8395,6 +8494,14 @@ impl DispatchBackend for LiveDispatchBackend {
             #[cfg(not(feature = "layer1-bootstrap"))]
             targeted_reap_runner(runner_id, outcome.pidfd.as_fd());
         })?;
+        if let Some(bootstrap) = retained_controller_bootstrap {
+            controller_bootstrap_registry()
+                .lock()
+                .map_err(|_| {
+                    BrokerError::Protocol("controller bootstrap registry mutex poisoned".to_owned())
+                })?
+                .insert(runner_id.to_owned(), bootstrap);
+        }
         // Close the registration-window race: if the child exited
         // between clone3 and the registry insertion above, its SIGCHLD
         // may have already been coalesced/consumed by a reap pass that
@@ -8643,12 +8750,13 @@ fn dispatch_set_bridge_port_flags_inner(
             operation: "SetBridgePortFlags",
             reason: "network-admission-required",
         })?;
-    let installed = resolver
-        .installed_generation_identity()
-        .ok_or(BrokerError::RequestValidation {
-            operation: "SetBridgePortFlags",
-            reason: "installed-generation-unavailable",
-        })?;
+    let installed =
+        resolver
+            .installed_generation_identity()
+            .ok_or(BrokerError::RequestValidation {
+                operation: "SetBridgePortFlags",
+                reason: "installed-generation-unavailable",
+            })?;
     if installed.as_str() != context.bundle_generation.as_str()
         || context.network_generation.get() == 0
         || context.attachment_generation.get() == 0
@@ -10246,12 +10354,13 @@ fn validate_guest_process_binding(
             resolved: "nonzero-target-session-boot-assignment-generations".to_owned(),
         });
     }
-    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
-        .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|_| {
+        BrokerError::SpawnRunnerIntentMismatch {
             field: "guest_execution.boot_identity_digest",
             requested: "present".to_owned(),
             resolved: "kernel-boot-identity-unavailable".to_owned(),
-        })?;
+        }
+    })?;
     let mut digest = Sha256::new();
     digest.update(b"d2b-kernel-boot-id-v1\0");
     digest.update(boot_id.trim().as_bytes());
@@ -10331,6 +10440,12 @@ fn validate_sandbox_launch_plan(
     };
     for class in &plan.namespace_classes {
         if !requested_namespaces(*class) {
+            tracing::warn!(
+                requested = ?plan.namespace_classes,
+                trusted = ?intent.namespaces,
+                rejected = ?class,
+                "SpawnRunner namespace contract mismatch",
+            );
             return Err(BrokerError::SpawnRunnerIntentMismatch {
                 field: "sandbox_plan.namespace_classes",
                 requested: format!("{class:?}"),
@@ -10345,6 +10460,11 @@ fn validate_sandbox_launch_plan(
         )
     }) != expected_namespaces.user
     {
+        tracing::warn!(
+            requested = ?plan.namespace_classes,
+            trusted = ?intent.namespaces,
+            "SpawnRunner user namespace contract mismatch",
+        );
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.namespace_classes",
             requested: "user".to_owned(),
@@ -10452,42 +10572,28 @@ fn validate_sandbox_launch_plan(
         .capabilities
         .iter()
         .filter_map(|capability| match capability.as_str() {
-            "CAP_NET_BIND_SERVICE" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind,
-            ),
-            "CAP_NET_RAW" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::NetworkRaw,
-            ),
-            "CAP_NET_ADMIN" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::NetworkAdmin,
-            ),
-            "CAP_SYS_TIME" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::SysTime,
-            ),
-            "CAP_SYS_PTRACE" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::SysPtrace,
-            ),
-            "CAP_SYS_ADMIN" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::SysAdmin,
-            ),
-            "CAP_DAC_OVERRIDE" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::DacOverride,
-            ),
-            "CAP_FOWNER" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::Fowner,
-            ),
-            "CAP_CHOWN" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::Chown,
-            ),
-            "CAP_SETUID" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::Setuid,
-            ),
-            "CAP_SETGID" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::Setgid,
-            ),
-            "CAP_AUDIT_WRITE" => Some(
-                d2b_contracts_resource::v3::process::CapabilityClass::AuditWrite,
-            ),
+            "CAP_NET_BIND_SERVICE" => {
+                Some(d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind)
+            }
+            "CAP_NET_RAW" => Some(d2b_contracts_resource::v3::process::CapabilityClass::NetworkRaw),
+            "CAP_NET_ADMIN" => {
+                Some(d2b_contracts_resource::v3::process::CapabilityClass::NetworkAdmin)
+            }
+            "CAP_SYS_TIME" => Some(d2b_contracts_resource::v3::process::CapabilityClass::SysTime),
+            "CAP_SYS_PTRACE" => {
+                Some(d2b_contracts_resource::v3::process::CapabilityClass::SysPtrace)
+            }
+            "CAP_SYS_ADMIN" => Some(d2b_contracts_resource::v3::process::CapabilityClass::SysAdmin),
+            "CAP_DAC_OVERRIDE" => {
+                Some(d2b_contracts_resource::v3::process::CapabilityClass::DacOverride)
+            }
+            "CAP_FOWNER" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Fowner),
+            "CAP_CHOWN" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Chown),
+            "CAP_SETUID" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Setuid),
+            "CAP_SETGID" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Setgid),
+            "CAP_AUDIT_WRITE" => {
+                Some(d2b_contracts_resource::v3::process::CapabilityClass::AuditWrite)
+            }
             "CAP_KILL" => Some(d2b_contracts_resource::v3::process::CapabilityClass::Kill),
             _ => None,
         })
@@ -10540,9 +10646,7 @@ fn typed_process_identity(
     generation: Option<u64>,
     runtime_scope: Option<[u8; 32]>,
     intent_role_id: &str,
-    guest_execution: Option<
-        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
-    >,
+    guest_execution: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
 ) -> Result<bool, BrokerError> {
     let typed = resource_ref.is_some()
         || resource_uid.is_some()
@@ -10664,9 +10768,7 @@ fn validate_typed_process_metadata(
     provider_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
     provider_identity: Option<[u8; 32]>,
     template_identity: Option<[u8; 32]>,
-    guest_execution: Option<
-        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
-    >,
+    guest_execution: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<(), BrokerError> {
     if !typed {
@@ -10726,8 +10828,7 @@ fn validate_typed_process_metadata(
             resolved: "signed-process-provider".to_owned(),
         });
     }
-    let expected_template = if intent.role == d2b_core::processes::ProcessRole::ProviderController
-    {
+    let expected_template = if intent.role == d2b_core::processes::ProcessRole::ProviderController {
         intent.profile_id.as_str()
     } else {
         intent.role_id.as_str()
@@ -11188,6 +11289,44 @@ fn cleanup_cloud_hypervisor_stale_sockets(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn bind_cloud_hypervisor_guest_uid(
+    role: RunnerRole,
+    owner_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
+    argv: &[String],
+) -> Result<Vec<String>, BrokerError> {
+    if role != RunnerRole::CloudHypervisor {
+        return Ok(argv.to_vec());
+    }
+    let owner_uid = owner_uid.ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
+        field: "owner_uid",
+        requested: "missing".to_owned(),
+        resolved: "required-for-cloud-hypervisor".to_owned(),
+    })?;
+    let mut bound = argv.to_vec();
+    let cmdline_index = bound
+        .iter()
+        .position(|argument| argument == "--cmdline")
+        .and_then(|index| bound.get(index + 1).map(|_| index + 1))
+        .ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
+            field: "argv",
+            requested: "cloud-hypervisor-without-cmdline".to_owned(),
+            resolved: "cmdline-required".to_owned(),
+        })?;
+    if bound[cmdline_index]
+        .split_ascii_whitespace()
+        .any(|argument| argument.starts_with("d2b.guest_uid="))
+    {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "argv",
+            requested: "prebound-guest-uid".to_owned(),
+            resolved: "broker-owned".to_owned(),
+        });
+    }
+    bound[cmdline_index].push_str(" d2b.guest_uid=");
+    bound[cmdline_index].push_str(owner_uid.as_str());
+    Ok(bound)
+}
+
 fn cleanup_video_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
@@ -13250,8 +13389,13 @@ fn remove_and_notify(
     if let Err(err) = audit_log.write_child_reaped(&notif) {
         tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
     }
+    tracing::info!(
+        runner_id = %runner_id,
+        pid = notif.pid,
+        exit_status = ?notif.exit_status,
+        "broker: child reaped via SIGCHLD handler",
+    );
     push_child_reap_notification(notif);
-    tracing::info!(runner_id = %runner_id, "broker: child reaped via SIGCHLD handler");
     removed
 }
 
@@ -13359,24 +13503,17 @@ mod tests {
     #[test]
     fn network_request_validation_rejects_legacy_and_mixed_scope_refs() {
         let zone_uid =
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "123e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap();
+            d2b_contracts_resource::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .unwrap();
         let network_uid =
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "223e4567-e89b-42d3-a456-426614174001",
-            )
-            .unwrap();
-        let network_generation =
-            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap();
-        let attachment_generation =
-            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap();
-        let bundle_generation =
-            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            )
-            .unwrap();
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .unwrap();
+        let network_generation = d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap();
+        let attachment_generation = d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap();
+        let bundle_generation = d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
         assert_eq!(
             validate_uid_network_authority(
                 "network:123e4567-e89b-42d3-a456-426614174000:223e4567-e89b-42d3-a456-426614174001",
@@ -13430,12 +13567,9 @@ mod tests {
             ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
         };
 
-        let zone_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let network_uid =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
-        let other_network_uid =
-            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let zone_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let network_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let other_network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let network_generation = ResourceGeneration::new(4).unwrap();
         let attachment_generation = ResourceGeneration::new(7).unwrap();
         let bundle_generation = ResourceBundleGenerationId::parse(
@@ -13449,25 +13583,23 @@ mod tests {
         ));
         let other_token = d2b_core::bundle_resolver::network_name_token("other");
 
-        let projection = BrokerRequest::ApplyNftablesProjection(
-            ApplyNftablesProjectionRequest {
-                bundle_nft_projection_intent_ref: BundleOpId::new(format!(
-                    "network-firewall:{}:{}:{}",
-                    zone_uid.as_str(),
-                    other_network_uid.as_str(),
-                    other_token
-                )),
-                scope_id: scope_id.clone(),
-                action: NftablesProjectionAction::Apply,
-                zone_uid: zone_uid.clone(),
-                network_uid: network_uid.clone(),
-                network_generation,
-                attachment_generation,
-                expected_generation_id: bundle_generation.clone(),
-                desired_hash: None,
-                tracing_span_id: None,
-            },
-        );
+        let projection = BrokerRequest::ApplyNftablesProjection(ApplyNftablesProjectionRequest {
+            bundle_nft_projection_intent_ref: BundleOpId::new(format!(
+                "network-firewall:{}:{}:{}",
+                zone_uid.as_str(),
+                other_network_uid.as_str(),
+                other_token
+            )),
+            scope_id: scope_id.clone(),
+            action: NftablesProjectionAction::Apply,
+            zone_uid: zone_uid.clone(),
+            network_uid: network_uid.clone(),
+            network_generation,
+            attachment_generation,
+            expected_generation_id: bundle_generation.clone(),
+            desired_hash: None,
+            tracing_span_id: None,
+        });
         assert!(matches!(
             validate_broker_request(&projection),
             Err(BrokerError::RequestValidation {
@@ -13721,8 +13853,10 @@ mod tests {
         let mut registration = guest_runner_registration(guest_execution_binding(1));
         let next = guest_execution_binding(2);
 
-        assert!(rebind_guest_execution_registration(&mut registration, Some(&next))
-            .expect("newer session generation rebinds"));
+        assert!(
+            rebind_guest_execution_registration(&mut registration, Some(&next))
+                .expect("newer session generation rebinds")
+        );
         assert_eq!(registration.guest_execution, Some(next.clone()));
         assert!(
             !rebind_guest_execution_registration(&mut registration, Some(&next))
@@ -14690,26 +14824,30 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(validate_typed_process_metadata(
-            true,
-            None,
-            Some(&provider_ref),
-            Some([9; 32]),
-            Some(template_identity),
-            None,
-            &intent,
-        )
-        .is_err());
-        assert!(validate_typed_process_metadata(
-            true,
-            None,
-            Some(&provider_ref),
-            Some(provider_identity),
-            Some([9; 32]),
-            None,
-            &intent,
-        )
-        .is_err());
+        assert!(
+            validate_typed_process_metadata(
+                true,
+                None,
+                Some(&provider_ref),
+                Some([9; 32]),
+                Some(template_identity),
+                None,
+                &intent,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_typed_process_metadata(
+                true,
+                None,
+                Some(&provider_ref),
+                Some(provider_identity),
+                Some([9; 32]),
+                None,
+                &intent,
+            )
+            .is_err()
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -14719,9 +14857,7 @@ mod tests {
         use d2b_contracts_broker::broker_wire::{
             RunnerAllocation, RunnerAllocationKind, SpawnRunnerRequest,
         };
-        use d2b_contracts_resource::v3::{
-            ResourceRef, execution_policy::ExecutionDomain,
-        };
+        use d2b_contracts_resource::v3::{ResourceRef, execution_policy::ExecutionDomain};
 
         let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
             .with_intent_id("runner:corp-vm:cloud-hypervisor")
@@ -14768,10 +14904,8 @@ mod tests {
             zone_uid: Some(zone_uid.clone()),
             owner_ref: None,
             provider_ref: Some(
-                d2b_contracts_resource::v3::ResourceRef::parse(
-                    "Provider/system-minijail",
-                )
-                .expect("provider ref"),
+                d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-minijail")
+                    .expect("provider ref"),
             ),
             bundle_content_identity: Some("sha256:bundle".to_owned()),
             provider_identity: Some(provider_identity),
@@ -17920,39 +18054,31 @@ mod tests {
             admitted_interface_names: admitted_interface_names.clone(),
             tracing_span_id: None,
         };
-        assert!(validate_broker_request(&BrokerRequest::CreatePersistentTap(
-            request.clone()
-        ))
-        .is_ok());
+        assert!(
+            validate_broker_request(&BrokerRequest::CreatePersistentTap(request.clone())).is_ok()
+        );
 
         let cases = [
             (
                 "zone",
                 CreatePersistentTapRequest {
-                    zone_uid: ResourceUid::parse(
-                        "423e4567-e89b-42d3-a456-426614174003",
-                    )
-                    .unwrap(),
+                    zone_uid: ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap(),
                     ..request.clone()
                 },
             ),
             (
                 "network",
                 CreatePersistentTapRequest {
-                    network_uid: ResourceUid::parse(
-                        "523e4567-e89b-42d3-a456-426614174004",
-                    )
-                    .unwrap(),
+                    network_uid: ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004")
+                        .unwrap(),
                     ..request.clone()
                 },
             ),
             (
                 "attachment",
                 CreatePersistentTapRequest {
-                    attachment_id: ResourceUid::parse(
-                        "623e4567-e89b-42d3-a456-426614174005",
-                    )
-                    .unwrap(),
+                    attachment_id: ResourceUid::parse("623e4567-e89b-42d3-a456-426614174005")
+                        .unwrap(),
                     ..request.clone()
                 },
             ),
@@ -18050,16 +18176,18 @@ mod tests {
         let request = CreateTapFdRequest {
             role_id: role_id.clone(),
             vm_id: VmId::new("corp-vm"),
-            bundle_tap_intent_ref: BundleOpId::new(d2b_core::bundle_resolver::intent_id_network_tap(
-                &zone_uid,
-                &network_uid,
-                &attachment_id,
-                network_generation,
-                attachment_generation,
-                &bundle_generation,
-                role_id.as_str(),
-                "corp-vm",
-            )),
+            bundle_tap_intent_ref: BundleOpId::new(
+                d2b_core::bundle_resolver::intent_id_network_tap(
+                    &zone_uid,
+                    &network_uid,
+                    &attachment_id,
+                    network_generation,
+                    attachment_generation,
+                    &bundle_generation,
+                    role_id.as_str(),
+                    "corp-vm",
+                ),
+            ),
             attachment_id,
             network_generation,
             attachment_generation,
@@ -19487,9 +19615,7 @@ mod tests {
                 bundle_runner_intent_ref: "runner:reap-vm:role:cloud-hypervisor".to_owned(),
                 pid,
                 start_time_ticks,
-                binary_path: PathBuf::from(
-                    "/nix/store/current-provider-controller/bin/controller",
-                ),
+                binary_path: PathBuf::from("/nix/store/current-provider-controller/bin/controller"),
                 cgroup_subtree: "d2b.slice/reap-vm/ch-runner".to_owned(),
                 guest_execution: None,
             }
@@ -19512,7 +19638,10 @@ mod tests {
             runner_pidfd_registry()
                 .lock()
                 .expect("registry lock")
-                .insert(runner_id.to_owned(), pidfd.try_clone().expect("clone pidfd"));
+                .insert(
+                    runner_id.to_owned(),
+                    pidfd.try_clone().expect("clone pidfd"),
+                );
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19562,7 +19691,10 @@ mod tests {
             runner_pidfd_registry()
                 .lock()
                 .expect("registry lock")
-                .insert(runner_id.to_owned(), pidfd.try_clone().expect("clone pidfd"));
+                .insert(
+                    runner_id.to_owned(),
+                    pidfd.try_clone().expect("clone pidfd"),
+                );
             runner_metadata_registry()
                 .lock()
                 .expect("metadata lock")
@@ -19937,6 +20069,5 @@ mod tests {
             assert!(!drained.iter().any(|n| n.runner_id == "overflow-0"));
             assert!(drained.iter().any(|n| n.runner_id == "overflow-256"));
         }
-
     }
 }

@@ -5,10 +5,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceTypeName,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName};
 use d2b_controller_toolkit::{
     OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason, TriggerSet,
 };

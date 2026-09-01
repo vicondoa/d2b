@@ -7,15 +7,11 @@
 
 use std::{collections::BTreeMap, fmt, sync::Mutex};
 
-use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    execution_policy::BoundedToken,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, execution_policy::BoundedToken,
     identity::AuthenticatedSubjectContext,
 };
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
 /// The per-Zone concurrent mutation ceiling.
 pub const MAX_DISPATCH_IN_FLIGHT: usize = 64;
@@ -371,28 +367,22 @@ impl std::error::Error for RouterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts_resource::v3::{
-        ResourceName, ResourceTypeName, ZoneId, SchemaFingerprint,
-    };
     use d2b_contracts_resource::v3::identity::{
         BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName, SessionBinding,
         SessionPurpose, TranscriptHash, TransportBinding,
     };
+    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, SchemaFingerprint, ZoneId};
+    use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
 
     fn zone() -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse("dev").unwrap()]).unwrap()
     }
 
     fn subject(subject_ref: &str) -> AuthenticatedSubjectContext {
-        let digest =
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         let session = SessionBinding::new(
             SchemaFingerprint::parse(digest).unwrap(),
-            TransportBinding::new(
-                Locality::Local,
-                BindingDigest::parse(digest).unwrap(),
-            ),
+            TransportBinding::new(Locality::Local, BindingDigest::parse(digest).unwrap()),
             ReconnectGeneration::new(1).unwrap(),
             TranscriptHash::from_bytes([0; 32]),
         );

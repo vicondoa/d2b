@@ -17,7 +17,6 @@ use d2b_bus::{
     ComponentSessionAdmission, EndpointError, OperationId, OperationSpec, ResourceCall,
     ResourceQuery, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
-use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_provider::v3::{
     ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
     ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
@@ -25,9 +24,11 @@ use d2b_contracts_provider::v3::{
     RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
     UpgradePolicy,
 };
+use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::{
     BindingDigest, EvidenceClass, ReconnectGeneration, ServiceName,
 };
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ExecutionDomain, PlacementAnchor,
     ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, SchemaVersion, ZoneId,
@@ -42,7 +43,6 @@ use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentRequest, AssignmentVerb, ControllerAssignmentRegistry,
     ControllerRoleContract, ScopedCommitTransport,
 };
-use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_resource_api::authz::{
     ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
     CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
@@ -230,10 +230,9 @@ fn controller_peer_child() {
     let Some(name) = std::env::var_os(CONTROLLER_PEER_CHILD_ENV) else {
         return;
     };
-    let address = std::os::unix::net::SocketAddr::from_abstract_name(
-        name.to_string_lossy().as_bytes(),
-    )
-    .unwrap();
+    let address =
+        std::os::unix::net::SocketAddr::from_abstract_name(name.to_string_lossy().as_bytes())
+            .unwrap();
     UnixStream::connect_addr(&address).unwrap();
 }
 
@@ -243,8 +242,7 @@ fn child_verified_peer() -> VerifiedUnixPeer {
         std::process::id(),
         CONTROLLER_PEER_LISTENER_ID.fetch_add(1, Ordering::Relaxed)
     );
-    let address =
-        std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+    let address = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
     let listener = UnixListener::bind_addr(&address).unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -276,15 +274,7 @@ async fn admit(
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar,
-        policy,
-        subject,
-        uid,
-        provider,
-        _allowed,
-        None,
-        true,
-        None,
+        registrar, policy, subject, uid, provider, _allowed, None, true, None,
     )
     .await
 }
@@ -302,15 +292,7 @@ async fn admit_without_echo(
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar,
-        policy,
-        subject,
-        uid,
-        provider,
-        allowed,
-        None,
-        false,
-        None,
+        registrar, policy, subject, uid, provider, allowed, None, false, None,
     )
     .await
 }
@@ -590,14 +572,8 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         ("Host/alice", "22222222-2222-4222-8222-222222222222"),
         ("Provider/audit", "33333333-3333-4333-8333-333333333333"),
         ("Guest/bob", "44444444-4444-4444-8444-444444444444"),
-        (
-            "Provider/external",
-            "55555555-5555-4555-8555-555555555555",
-        ),
-        (
-            "Provider/external",
-            "66666666-6666-4666-8666-666666666666",
-        ),
+        ("Provider/external", "55555555-5555-4555-8555-555555555555"),
+        ("Provider/external", "66666666-6666-4666-8666-666666666666"),
     ]
     .into_iter()
     .map(|(subject, uid)| BoundSubject {
@@ -661,8 +637,14 @@ async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
     for subject in [
-        ("Provider/system-core", "11111111-1111-4111-8111-111111111111"),
-        ("Provider/system-minijail", "22222222-2222-4222-8222-222222222222"),
+        (
+            "Provider/system-core",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+        (
+            "Provider/system-minijail",
+            "22222222-2222-4222-8222-222222222222",
+        ),
     ] {
         registrar
             .install_test_unix_subject(
@@ -706,10 +688,7 @@ async fn committed_controller_subject_installation_binds_an_exact_verified_peer(
             &verified_peer,
             CommittedControllerProcessSubjectInput {
                 provider_ref: ResourceRef::parse("Provider/external").unwrap(),
-                provider_uid: ResourceUid::parse(
-                    "55555555-5555-4555-8555-555555555555",
-                )
-                .unwrap(),
+                provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
                 process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
                 zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
                 execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
@@ -784,10 +763,7 @@ async fn exact_controller_subject_records_are_consumed_once() {
             &first_peer,
             CommittedControllerProcessSubjectInput {
                 provider_ref: ResourceRef::parse("Provider/external").unwrap(),
-                provider_uid: ResourceUid::parse(
-                    "55555555-5555-4555-8555-555555555555",
-                )
-                .unwrap(),
+                provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
                 process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
                 zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
                 execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
@@ -1001,7 +977,9 @@ async fn a_shared_provider_uid_cannot_select_a_resource_controller() {
     )
     .unwrap()
     .for_service(ServicePackage::ResourceV3);
-    registrar.install_test_unix_subject(uid_only_subject).unwrap();
+    registrar
+        .install_test_unix_subject(uid_only_subject)
+        .unwrap();
 
     let error = registrar
         .component_session_acceptor(
@@ -1025,7 +1003,9 @@ async fn explicitly_installed_system_core_subject_still_registers() {
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
-    registrar.install_system_core_subject(&verified_peer).unwrap();
+    registrar
+        .install_system_core_subject(&verified_peer)
+        .unwrap();
     registrar
         .component_session_acceptor(
             policy(
@@ -1462,9 +1442,7 @@ fn query_frame(method: &str) -> Vec<u8> {
             ..resource_wire::ListFilter::default()
         });
         let mut projection = resource_wire::Projection::new();
-        projection.kind = EnumOrUnknown::new(
-            resource_wire::ProjectionKind::PROJECTION_KIND_FULL,
-        );
+        projection.kind = EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
         request.projection = MessageField::some(projection);
         request.write_to_bytes().unwrap()
     } else {
@@ -1477,9 +1455,7 @@ fn query_frame(method: &str) -> Vec<u8> {
             ..resource_wire::ListFilter::default()
         });
         let mut projection = resource_wire::Projection::new();
-        projection.kind = EnumOrUnknown::new(
-            resource_wire::ProjectionKind::PROJECTION_KIND_FULL,
-        );
+        projection.kind = EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
         request.projection = MessageField::some(projection);
         request.write_to_bytes().unwrap()
     };
@@ -1523,10 +1499,10 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     let query = ResourceQuery::from_scoped(
         lease
             .child_query(
-                vec![d2b_contracts_resource::v3::ResourceTypeName::parse(
-                    PROCESS_RESOURCE_TYPE,
-                )
-                .unwrap()],
+                vec![
+                    d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE)
+                        .unwrap(),
+                ],
                 Vec::new(),
                 Vec::new(),
             )
@@ -1571,12 +1547,10 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     )
     .await;
     let endpoint_subject = native
-        .issue_authenticated_subject(
-            resource_endpoint.route_binding().context().clone(),
-            state,
-        )
+        .issue_authenticated_subject(resource_endpoint.route_binding().context().clone(), state)
         .unwrap();
-    let adapter = Arc::new(ResourceBusAdapter::bind_component_session(service, endpoint_subject).unwrap());
+    let adapter =
+        Arc::new(ResourceBusAdapter::bind_component_session(service, endpoint_subject).unwrap());
     let service_task = tokio::spawn(serve_ttrpc_services(
         Arc::new(resource_remote),
         adapter.ttrpc_services(),
@@ -1636,7 +1610,8 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
             response.status
         );
         if method == "List" {
-            let response = resource_wire::ListResponse::parse_from_bytes(&response.payload).unwrap();
+            let response =
+                resource_wire::ListResponse::parse_from_bytes(&response.payload).unwrap();
             assert!(response.error.is_none());
             assert_eq!(response.snapshot_revision, 8);
         } else {
@@ -1651,28 +1626,30 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     assert_eq!(lists.len(), 1);
     assert_eq!(
         lists[0].resource_types,
-        vec![
-            d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()
-        ]
+        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
     );
     assert_eq!(lists[0].resource_names, Vec::new());
     assert_eq!(lists[0].filters.len(), 1);
     assert_eq!(lists[0].filters[0].field, "owner.resourceUid");
-    assert_eq!(lists[0].filters[0].values, vec![owner_uid.as_str().to_owned()]);
+    assert_eq!(
+        lists[0].filters[0].values,
+        vec![owner_uid.as_str().to_owned()]
+    );
     drop(lists);
 
     let watches = watches.lock().unwrap();
     assert_eq!(watches.len(), 1);
     assert_eq!(
         watches[0].resource_types,
-        vec![
-            d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()
-        ]
+        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
     );
     assert_eq!(watches[0].resource_names, Vec::new());
     assert_eq!(watches[0].filters.len(), 1);
     assert_eq!(watches[0].filters[0].field, "owner.resourceUid");
-    assert_eq!(watches[0].filters[0].values, vec![owner_uid.as_str().to_owned()]);
+    assert_eq!(
+        watches[0].filters[0].values,
+        vec![owner_uid.as_str().to_owned()]
+    );
 
     service_task.abort();
     let _ = service_task.await;
@@ -1890,7 +1867,10 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(forged, BusError::Endpoint(EndpointError::Rejected)));
+    assert!(matches!(
+        forged,
+        BusError::Endpoint(EndpointError::Rejected)
+    ));
 
     for attempt in 0..8 {
         if commits.lock().unwrap().len() >= 2 {

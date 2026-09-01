@@ -950,10 +950,7 @@ impl TransportWriter for RelayComponentSessionWriter {
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
-        self.connection
-            .close()
-            .await
-            .map_err(map_transport_error)
+        self.connection.close().await.map_err(map_transport_error)
     }
 }
 
@@ -961,16 +958,15 @@ impl TransportWriter for RelayComponentSessionWriter {
 impl OwnedTransport for RelayComponentSessionTransport {
     fn descriptor(&self) -> TransportDescriptor {
         TransportDescriptor {
-            class: d2b_contracts_zone_session::v3::component_session::TransportClass::ProviderStream,
+            class:
+                d2b_contracts_zone_session::v3::component_session::TransportClass::ProviderStream,
             locality: d2b_contracts_zone_session::v3::component_session::Locality::Remote,
             packet_atomic: false,
             supports_attachments: false,
         }
     }
 
-    fn into_split(
-        self: Box<Self>,
-    ) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
         (
             Box::new(RelayComponentSessionReader {
                 connection: Arc::clone(&self.connection),
@@ -1007,10 +1003,7 @@ impl OwnedTransport for RelayComponentSessionTransport {
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
-        self.connection
-            .close()
-            .await
-            .map_err(map_transport_error)
+        self.connection.close().await.map_err(map_transport_error)
     }
 }
 

@@ -646,9 +646,7 @@ impl OwnerChildBatch {
     }
 
     /// Return owner generation captured for uncertain-response fencing.
-    pub const fn owner_generation(
-        &self,
-    ) -> d2b_contracts_resource::v3::ResourceGeneration {
+    pub const fn owner_generation(&self) -> d2b_contracts_resource::v3::ResourceGeneration {
         self.owner_generation
     }
 
@@ -1927,8 +1925,7 @@ mod tests {
     #[test]
     fn uncertain_batch_recovery_preserves_existing_siblings() {
         let owner = target("work", "Guest", "desktop", 1);
-        let owner_generation =
-            d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
+        let owner_generation = d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
         let existing = ObservedChild::with_owner(
             target("work", "Process", "existing", 2),
             &owner,

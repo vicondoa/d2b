@@ -1,10 +1,10 @@
 //! Redacted route and net-VM readiness preflight.
 
+use crate::ifname::{derive_network_route_name, derive_network_route_name_for};
 use d2b_contracts_resource::v3::network::NetworkComponentPhase;
 use d2b_contracts_resource::v3::{
     IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
 };
-use crate::ifname::{derive_network_route_name, derive_network_route_name_for};
 use std::collections::BTreeSet;
 
 /// Kernel route occupancy tuple. Route names are not kernel state, so
@@ -109,12 +109,7 @@ impl NetworkRouteIntent {
             attachment_generation: None,
             bundle_generation,
             route_name: derive_network_route_name(&network_uid, index),
-            tuple: RouteTuple::new(
-                destination,
-                None,
-                Some(device.as_str().to_owned()),
-                "main",
-            ),
+            tuple: RouteTuple::new(destination, None, Some(device.as_str().to_owned()), "main"),
         }
     }
 
@@ -138,12 +133,7 @@ impl NetworkRouteIntent {
             attachment_generation: Some(attachment_generation),
             bundle_generation,
             route_name: derive_network_route_name_for(&zone_uid, &network_uid, index),
-            tuple: RouteTuple::new(
-                destination,
-                via,
-                Some(device.as_str().to_owned()),
-                table,
-            ),
+            tuple: RouteTuple::new(destination, via, Some(device.as_str().to_owned()), table),
         }
     }
 
@@ -254,12 +244,7 @@ pub fn validate_network_route_intent_with_provenance(
     if intent.zone_uid() != Some(zone_uid) {
         return Err(RouteProvenanceError::NetworkMismatch);
     }
-    validate_network_route_intent(
-        intent,
-        network_uid,
-        network_generation,
-        bundle_generation,
-    )?;
+    validate_network_route_intent(intent, network_uid, network_generation, bundle_generation)?;
     if intent.attachment_generation() != Some(attachment_generation) {
         return Err(RouteProvenanceError::GenerationMismatch);
     }

@@ -11,15 +11,12 @@ use std::time::Duration;
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
-    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest,
-    GuestExecutionBinding as BrokerGuestExecutionBinding, OpenPidfdRequest, RunnerRole,
-    RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
+    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
+    GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest, OpenPidfdRequest,
+    RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
 };
+use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::ExecutionDomain};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
-use d2b_contracts_resource::v3::{
-    ActivationRunnerInput,
-    execution_policy::ExecutionDomain,
-};
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process::{
@@ -47,6 +44,8 @@ pub struct BrokerLaunchIntent {
     pub zone_uid: Option<ResourceUid>,
     /// Exact semantic owner of a typed Process resource, when present.
     pub owner_ref: Option<ResourceRef>,
+    /// Immutable UID of the semantic owner.
+    pub owner_uid: Option<ResourceUid>,
     /// Selected Process Provider reference.
     pub provider_ref: ResourceRef,
     /// Private host-runtime scope commitment.
@@ -101,9 +100,7 @@ impl BrokerLaunchIntent {
     }
 
     fn wire_zone_uid(&self) -> Option<ResourceUid> {
-        self.typed_identity
-            .then(|| self.zone_uid.clone())
-            .flatten()
+        self.typed_identity.then(|| self.zone_uid.clone()).flatten()
     }
 
     fn wire_owner_ref(&self) -> Option<ResourceRef> {
@@ -129,9 +126,7 @@ impl BrokerLaunchIntent {
     }
 
     fn wire_runtime_scope(&self) -> Option<[u8; 32]> {
-        self.typed_identity
-            .then(|| self.runtime_scope)
-            .flatten()
+        self.typed_identity.then(|| self.runtime_scope).flatten()
     }
 }
 
@@ -451,10 +446,8 @@ impl BundleBackedLaunchResolver {
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
             .filter(|owner| {
-                ticket.process_ref().name().as_str()
-                    == format!("{}-vmm", owner.name().as_str())
-            })
-        {
+                ticket.process_ref().name().as_str() == format!("{}-vmm", owner.name().as_str())
+            }) {
             let Some(zone_uid) = ticket.zone_uid() else {
                 return Err(ProcessEffectError::IdentityChanged);
             };
@@ -552,20 +545,22 @@ impl BundleBackedLaunchResolver {
         {
             return Err(ProcessEffectError::IdentityChanged);
         }
-        let guest_execution = ticket.guest_execution_binding().map(|binding| {
-            BrokerGuestExecutionBinding {
-                target_uid: binding.target_uid().clone(),
-                boot_identity_digest: binding.boot_identity_digest().as_bytes(),
-                session_generation: binding.session_generation().get(),
-                assignment_epoch: binding.assignment_epoch(),
-                provider_generation: binding.provider_generation().get(),
-                controller_generation: binding.controller_generation().get(),
-            }
-        });
+        let guest_execution =
+            ticket
+                .guest_execution_binding()
+                .map(|binding| BrokerGuestExecutionBinding {
+                    target_uid: binding.target_uid().clone(),
+                    boot_identity_digest: binding.boot_identity_digest().as_bytes(),
+                    session_generation: binding.session_generation().get(),
+                    assignment_epoch: binding.assignment_epoch(),
+                    provider_generation: binding.provider_generation().get(),
+                    controller_generation: binding.controller_generation().get(),
+                });
         Ok(BrokerLaunchIntent {
             vm_id: VmId::new(vm_name),
             zone_uid: ticket.zone_uid().cloned(),
             owner_ref: ticket.owner_ref().cloned(),
+            owner_uid: ticket.owner_uid().cloned(),
             provider_ref: ticket.provider_ref().clone(),
             runtime_scope: ticket.runtime_scope().map(|scope| scope.as_bytes()),
             typed_identity,
@@ -643,6 +638,7 @@ pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
 pub struct BrokerPidfdHandle {
     pidfd: OwnedFd,
     observed: BrokerObservedProcess,
+    controller_bootstrap: Mutex<Option<OwnedFd>>,
 }
 
 impl std::fmt::Debug for BrokerPidfdHandle {
@@ -786,7 +782,6 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         }
         Ok(read_proc_start_time(peer_pid)? == Some(handle.observed.start_time_ticks))
     }
-
 }
 
 impl<R: BrokerLaunchResolver> std::fmt::Debug for BrokerProcessBackend<R> {
@@ -813,35 +808,38 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
-        let inherited_fd_count =
-            u16::try_from(inherited_fds.len()).map_err(|_| ProcessEffectError::LaunchFailed)?;
-        let frame = self.request_with_fds(BrokerRequest::SpawnRunner(SpawnRunnerRequest {
-            execution_ref: Some(intent.execution_ref.clone()),
-            execution_domain: Some(intent.domain),
-            user_ref: intent.user_ref.clone(),
-            vm_id: intent.vm_id.clone(),
-            role_id: intent.role_id.clone(),
-            zone_uid: intent.wire_zone_uid(),
-            owner_ref: intent.wire_owner_ref(),
-            provider_ref: intent.wire_provider_ref(),
-            resource_ref: intent.wire_resource_ref(),
-            resource_uid: intent.wire_resource_uid(),
-            bundle_content_identity: Some(intent.bundle_content_identity.clone()),
-            provider_identity: intent.wire_provider_identity(),
-            template_identity: intent.wire_template_identity(),
-            generation: intent.wire_generation(),
-            runtime_scope: intent.wire_runtime_scope(),
-            guest_execution: intent.guest_execution.clone(),
-            sandbox_plan: intent.sandbox_plan.clone(),
-            activation_input: intent.activation_input.clone(),
-            role: intent.role,
-            bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
-            runtime_allocations: Vec::new(),
-            tracing_span_id: None,
-            workload_identity: None,
-            inherited_fd_count,
-            network_tap_context: None,
-        }), &inherited_fds)?;
+        let inherited_fd_count = request.ticket().inherited_fd_table().count();
+        let frame = self.request_with_fds(
+            BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+                execution_ref: Some(intent.execution_ref.clone()),
+                execution_domain: Some(intent.domain),
+                user_ref: intent.user_ref.clone(),
+                vm_id: intent.vm_id.clone(),
+                role_id: intent.role_id.clone(),
+                zone_uid: intent.wire_zone_uid(),
+                owner_ref: intent.wire_owner_ref(),
+                owner_uid: intent.owner_uid.clone(),
+                provider_ref: intent.wire_provider_ref(),
+                resource_ref: intent.wire_resource_ref(),
+                resource_uid: intent.wire_resource_uid(),
+                bundle_content_identity: Some(intent.bundle_content_identity.clone()),
+                provider_identity: intent.wire_provider_identity(),
+                template_identity: intent.wire_template_identity(),
+                generation: intent.wire_generation(),
+                runtime_scope: intent.wire_runtime_scope(),
+                guest_execution: intent.guest_execution.clone(),
+                sandbox_plan: intent.sandbox_plan.clone(),
+                activation_input: intent.activation_input.clone(),
+                role: intent.role,
+                bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
+                runtime_allocations: Vec::new(),
+                tracing_span_id: None,
+                workload_identity: None,
+                inherited_fd_count,
+                network_tap_context: None,
+            }),
+            &inherited_fds,
+        )?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
             return Err(response_error(&frame.response, BrokerOperation::Other));
         };
@@ -868,6 +866,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::IdentityChanged);
         }
         let pidfd = frame.take_fd(response.pidfd_index)?;
+        let controller_bootstrap = response
+            .controller_bootstrap_fd_index
+            .map(|index| frame.take_fd(index))
+            .transpose()?;
         if read_proc_start_time(response.pid)? != Some(response.start_time_ticks) {
             return Err(ProcessEffectError::IdentityChanged);
         }
@@ -883,7 +885,11 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let observation = observed.observation();
         Ok(BackendLaunch::new(
             observation,
-            BrokerPidfdHandle { pidfd, observed },
+            BrokerPidfdHandle {
+                pidfd,
+                observed,
+                controller_bootstrap: Mutex::new(controller_bootstrap),
+            },
         ))
     }
 
@@ -950,10 +956,29 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             return Err(ProcessEffectError::IdentityChanged);
         }
         let pidfd = frame.take_fd(response.pidfd_index)?;
+        let controller_bootstrap = response
+            .controller_bootstrap_fd_index
+            .map(|index| frame.take_fd(index))
+            .transpose()?;
         if read_proc_start_time(response.pid)? != Some(response.verified_start_time_ticks) {
             return Err(ProcessEffectError::IdentityChanged);
         }
-        Ok(BrokerPidfdHandle { pidfd, observed })
+        Ok(BrokerPidfdHandle {
+            pidfd,
+            observed,
+            controller_bootstrap: Mutex::new(controller_bootstrap),
+        })
+    }
+
+    fn take_controller_bootstrap(
+        &self,
+        handle: &Self::Handle,
+    ) -> Result<Option<OwnedFd>, ProcessEffectError> {
+        handle
+            .controller_bootstrap
+            .lock()
+            .map_err(|_| ProcessEffectError::PidfdUnavailable)
+            .map(|mut endpoint| endpoint.take())
     }
 
     fn stop(
@@ -1110,7 +1135,13 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
                 Err(error) => error,
             }
         }
-        BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
+        BrokerResponse::Error(error) => {
+            eprintln!(
+                "process-broker-response-error kind={} reason={}",
+                error.kind, error.message
+            );
+            ProcessEffectError::LaunchFailed
+        }
         _ => ProcessEffectError::LaunchFailed,
     }
 }
@@ -1272,14 +1303,18 @@ mod tests {
             .observe(request)
             .expect("mismatch observation")
             .expect("candidate remains present");
-        assert!(!observation
-            .observed()
-            .verified()
-            .contains(&IdentityBinding::Executable));
-        assert!(observation
-            .observed()
-            .verified()
-            .contains(&IdentityBinding::Cgroup));
+        assert!(
+            !observation
+                .observed()
+                .verified()
+                .contains(&IdentityBinding::Executable)
+        );
+        assert!(
+            observation
+                .observed()
+                .verified()
+                .contains(&IdentityBinding::Cgroup)
+        );
         assert!(backend.take_observation(&observation.identity()).is_ok());
     }
 
@@ -1351,21 +1386,18 @@ mod tests {
         let first = observed(41);
         let mut recreated = first.clone();
         recreated.intent.resource_uid =
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "00000000-0000-4000-8000-000000000002",
-            )
-            .unwrap();
+            d2b_contracts_resource::v3::ResourceUid::parse("00000000-0000-4000-8000-000000000002")
+                .unwrap();
         assert_ne!(first.digest(), recreated.digest());
     }
 }
 
 fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectError> {
-    let contents =
-        match fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(ProcessEffectError::ObserveFailed),
-        };
+    let contents = match fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ProcessEffectError::ObserveFailed),
+    };
     let mut observed = None;
     for line in contents.lines() {
         let Some((name, value)) = line.split_once(':') else {

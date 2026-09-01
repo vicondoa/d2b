@@ -28,15 +28,9 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_provider::v3::{
-    ControllerTargetKind,
-    EffectPortClass,
-    ProviderManifest,
-    ProviderSpec,
+    ControllerTargetKind, EffectPortClass, ProviderManifest, ProviderSpec,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    SchemaFingerprint,
-};
+use d2b_contracts_resource::v3::{ResourceRef, SchemaFingerprint};
 
 use crate::{descriptor::ProviderDescriptor, error::RegistryBuildError};
 
@@ -152,10 +146,7 @@ impl core::fmt::Debug for TargetInstallProfile {
         formatter
             .debug_struct("TargetInstallProfile")
             .field("target_kind", &self.target_kind)
-            .field(
-                "effect_class_count",
-                &self.supported_effect_classes.len(),
-            )
+            .field("effect_class_count", &self.supported_effect_classes.len())
             .finish_non_exhaustive()
     }
 }
@@ -226,10 +217,7 @@ pub fn admit_installation_for_target(
 ) -> Result<InstalledProvider, RegistryBuildError> {
     let installed = admit_installation(spec, manifest, descriptor, required_api, readiness)?;
     manifest
-        .validate_target_effects(
-            profile.target_kind(),
-            profile.supported_effect_classes(),
-        )
+        .validate_target_effects(profile.target_kind(), profile.supported_effect_classes())
         .map_err(|_| RegistryBuildError::ArtifactNotAdmissible)?;
     Ok(installed)
 }
@@ -257,35 +245,18 @@ fn publishes_only_signed_methods(
 mod tests {
     use super::*;
     use d2b_contracts_provider::v3::{
-        ArtifactDigest,
-        ArtifactDigestSet,
-        BinaryRef,
-        ComponentDescriptor,
-        ComponentExecution,
-        ComponentTargetCapability,
-        ComponentType,
-        ControllerInstanceScope,
-        ControllerTargetKind,
-        EffectPortClass,
-        PolicyEvaluation,
-        ResourceApiBinding,
-        RevocationState,
-        SignatureState,
-        StandardCapabilityMatrix,
-        TrustEvidence,
-        TargetRuntimeArtifacts,
-        UpgradeDisposition,
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, ComponentDescriptor, ComponentExecution,
+        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+        EffectPortClass, PolicyEvaluation, ResourceApiBinding, RevocationState, SignatureState,
+        StandardCapabilityMatrix, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
         UpgradePolicy,
     };
+    use d2b_contracts_resource::v3::identity::ServiceName;
     use d2b_contracts_resource::v3::{
-        ArtifactId,
+        ArtifactId, ConfigurationGeneration, ResourceGeneration, ResourceTypeName,
         execution_policy::{BoundedToken, ExecutionDomain},
-        ConfigurationGeneration,
-        ResourceGeneration,
-        ResourceTypeName,
         resource_schema::{PlacementAnchor, SchemaVersion},
     };
-    use d2b_contracts_resource::v3::identity::ServiceName;
     use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
     use crate::identity::{
@@ -393,12 +364,8 @@ mod tests {
         )
         .unwrap()
         .with_target_runtime_artifacts([
-            TargetRuntimeArtifacts::new(
-                ControllerTargetKind::Host,
-                digest.clone(),
-                digest.clone(),
-            )
-            .unwrap(),
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest.clone(), digest.clone())
+                .unwrap(),
             TargetRuntimeArtifacts::new(
                 ControllerTargetKind::Guest,
                 digest.clone(),
@@ -455,10 +422,8 @@ mod tests {
 
     #[test]
     fn target_profile_must_support_every_signed_effect_class() {
-        let profile = TargetInstallProfile::new(
-            ControllerTargetKind::Host,
-            [EffectPortClass::Runtime],
-        );
+        let profile =
+            TargetInstallProfile::new(ControllerTargetKind::Host, [EffectPortClass::Runtime]);
         assert_eq!(
             admit_installation_for_target(
                 &spec("provider-volume-local"),
@@ -472,19 +437,19 @@ mod tests {
             RegistryBuildError::ArtifactNotAdmissible
         );
 
-        let profile = TargetInstallProfile::new(
-            ControllerTargetKind::Host,
-            [EffectPortClass::Storage],
+        let profile =
+            TargetInstallProfile::new(ControllerTargetKind::Host, [EffectPortClass::Storage]);
+        assert!(
+            admit_installation_for_target(
+                &spec("provider-volume-local"),
+                &manifest(trusted()),
+                &descriptor(&["assess-update"]),
+                &required(),
+                ProviderReadiness::Ready,
+                &profile,
+            )
+            .is_ok()
         );
-        assert!(admit_installation_for_target(
-            &spec("provider-volume-local"),
-            &manifest(trusted()),
-            &descriptor(&["assess-update"]),
-            &required(),
-            ProviderReadiness::Ready,
-            &profile,
-        )
-        .is_ok());
     }
 
     #[test]

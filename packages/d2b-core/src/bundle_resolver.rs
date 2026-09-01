@@ -63,12 +63,13 @@
 //!   descriptor-bound private intent emitted by the artifact catalog.
 
 use crate::allocator_config::{AllocatorJson, AllocatorZoneTopology};
-use crate::bundle::Bundle;
+use crate::bundle::{Bundle, BundleGeneration};
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
 use crate::host::{
-    ChNetHandoffMode, HostJson, ModuleRequirement, NetEnv, QemuMediaSourceIntent, TapRole,
-    UsbipBusidLock, VendorProductPair,
+    ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv,
+    NetworkManagerUnmanaged, NftablesModel, OwnershipRule, QemuMediaSourceIntent, SitePolicy,
+    TapRole, UsbipBusidLock, VendorProductPair,
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
@@ -80,23 +81,21 @@ use crate::processes::{
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
+use d2b_contracts::{
+    RealmIdentityConfigJson, controller_config::RealmControllersJson,
+    launcher::RealmWorkloadsLauncherV2Json,
+};
 use d2b_contracts_resource::v3::{
-    IfName,
-    NetworkIfRole,
-    NetworkProvenance,
-    ResourceRef, ResourceUid,
-    derive_network_ifname, derive_network_route_name, network::NetworkSpec,
+    IfName, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
+    derive_network_ifname, derive_network_route_name,
+    network::NetworkSpec,
     resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{
     ARTIFACT_CATALOG_DOMAIN_TAG, ProcessTemplateBinding, ResourceBundle,
 };
-use d2b_contracts::{
-    RealmIdentityConfigJson,
-    controller_config::RealmControllersJson,
-    launcher::RealmWorkloadsLauncherV2Json,
-};
+use serde::Deserialize;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -111,6 +110,7 @@ use std::path::{Path, PathBuf};
 pub struct BundleResolver {
     pub bundle: Bundle,
     pub allocator: Option<AllocatorJson>,
+    zone_topology: Option<AllocatorZoneTopology>,
     pub host: HostJson,
     pub processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
@@ -158,7 +158,10 @@ impl fmt::Debug for BundleResolver {
             .debug_struct("BundleResolver")
             .field("bundle_version", &self.bundle.bundle_version)
             .field("zone_count", &self.zone_resource_bundles.len())
-            .field("guest_descriptor_count", &self.guest_setup_descriptors.len())
+            .field(
+                "guest_descriptor_count",
+                &self.guest_setup_descriptors.len(),
+            )
             .field("guest_vmm_count", &self.guest_vmm_intents.len())
             .field("runner_intent_count", &self.runner_intents.len())
             .finish()
@@ -174,6 +177,7 @@ struct ParsedBundleArtifacts {
     guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
     guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
     guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
+    guest_store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
     provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
@@ -184,6 +188,43 @@ struct ParsedBundleArtifacts {
     unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ZoneNativeBundleIndex {
+    artifact_hashes: BTreeMap<String, String>,
+    bundle_hash: String,
+    bundle_version: u32,
+    schema_version: String,
+    privileges_path: String,
+    #[serde(default)]
+    realm_workloads_launcher_v2_path: Option<String>,
+    zones: Vec<ZoneNativeBundleRef>,
+    generation: BundleGeneration,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ZoneNativeBundleRef {
+    zone: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ZoneNativeIndexDocument {
+    zones: BTreeMap<String, serde_json::Value>,
+    topology: ZoneNativeTopology,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ZoneNativeTopology {
+    sealed: bool,
+    parent_map: BTreeMap<String, Option<String>>,
+    parent_map_digest: String,
+    generation_by_zone: BTreeMap<String, String>,
 }
 
 /// Resolved nft script ready for `live_apply_nftables`.
@@ -1087,6 +1128,80 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+fn normalize_zone_native_ref(bundle_root: &Path, value: &str) -> Result<String, Error> {
+    let path = Path::new(value);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(bundle_root).ok()
+    } else {
+        Some(path)
+    };
+    relative
+        .filter(|relative| {
+            !relative.as_os_str().is_empty()
+                && relative
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+        })
+        .and_then(Path::to_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Error::manifest_parse_error("bundle.json", "artifact path escapes bundle root")
+        })
+}
+
+fn normalize_zone_native_artifact_hashes(
+    bundle_root: &Path,
+    artifact_hashes: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, Error> {
+    artifact_hashes
+        .into_iter()
+        .map(|(path, hash)| Ok((normalize_zone_native_ref(bundle_root, &path)?, hash)))
+        .collect()
+}
+
+fn empty_zone_native_host() -> HostJson {
+    HostJson {
+        schema_version: "v3".to_owned(),
+        site: SitePolicy {
+            allow_unsafe_east_west: false,
+        },
+        environments: Vec::new(),
+        nftables: NftablesModel {
+            family: "inet".to_owned(),
+            table: "d2b".to_owned(),
+            chains: Vec::new(),
+            table_hash_after_apply: None,
+            ownership_id: String::new(),
+        },
+        network_manager: NetworkManagerUnmanaged {
+            file_path: String::new(),
+            match_criteria: Vec::new(),
+            reload_behavior: String::new(),
+            ownership: OwnershipRule {
+                owner: String::new(),
+                group: String::new(),
+                mode: String::new(),
+                drift_policy: String::new(),
+            },
+        },
+        hosts_file: HostsFileOwnership {
+            start_marker: "# d2b-managed begin".to_owned(),
+            end_marker: "# d2b-managed end".to_owned(),
+            rule: String::new(),
+        },
+        kernel_modules: Vec::new(),
+        fd_ownership: Vec::new(),
+        runtime_providers: Vec::new(),
+        vm_runtimes: Vec::new(),
+        qemu_media: None,
+        security_key_selectors: Vec::new(),
+        cloud_hypervisor_capabilities: Vec::new(),
+        if_name_mappings: Vec::new(),
+        ch: None,
+        firewall_coexistence_policy: None,
+    }
+}
+
 impl BundleResolver {
     /// Load the bundle.json at `bundle_path`, verify ownership, mode,
     /// and SHA-256 self-hash, then parse sibling artifacts.
@@ -1107,6 +1222,19 @@ impl BundleResolver {
     ) -> Result<Self, Error> {
         let bundle_bytes = secure_open_and_read(bundle_path, policy)?;
         verify_bundle_hash(bundle_path, &bundle_bytes)?;
+        if serde_json::from_slice::<serde_json::Value>(&bundle_bytes)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("schemaVersion")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("v3")
+        {
+            return Self::load_zone_native_bundle(bundle_path, &bundle_bytes, policy);
+        }
         let bundle: Bundle = serde_json::from_slice(&bundle_bytes).map_err(|e| {
             Error::manifest_parse_error("bundle.json", manifest_parse_reason(&e.to_string()))
         })?;
@@ -1124,6 +1252,117 @@ impl BundleResolver {
             bundle_root,
             policy,
         )
+    }
+
+    fn load_zone_native_bundle(
+        bundle_path: &Path,
+        bundle_bytes: &[u8],
+        policy: &BundleVerifyPolicy,
+    ) -> Result<Self, Error> {
+        let index: ZoneNativeBundleIndex =
+            serde_json::from_slice(bundle_bytes).map_err(|error| {
+                Error::manifest_parse_error(
+                    "bundle.json",
+                    manifest_parse_reason(&error.to_string()),
+                )
+            })?;
+        if index.bundle_version != 1 {
+            return Err(Error::manifest_version_mismatch(
+                "bundle.json",
+                "manifest-version-mismatch",
+            ));
+        }
+        let bundle_root = bundle_path.parent().unwrap_or_else(|| Path::new("/"));
+        let artifact_hashes =
+            normalize_zone_native_artifact_hashes(bundle_root, index.artifact_hashes)?;
+        for zone in &index.zones {
+            let expected = format!("zones/{}/resource-bundle.json", zone.zone);
+            if zone.path != expected || !artifact_hashes.contains_key(&zone.path) {
+                return Err(Error::manifest_parse_error(
+                    "bundle.json",
+                    "Zone resource bundle reference is invalid",
+                ));
+            }
+        }
+        let bundle = Bundle {
+            bundle_version: index.bundle_version,
+            schema_version: index.schema_version,
+            public_manifest_path: bundle_root.join("vms.json").to_string_lossy().into_owned(),
+            host_path: bundle_root.join("host.json").to_string_lossy().into_owned(),
+            processes_path: bundle_root
+                .join("processes.json")
+                .to_string_lossy()
+                .into_owned(),
+            privileges_path: normalize_zone_native_ref(bundle_root, &index.privileges_path)?,
+            storage_path: None,
+            sync_path: None,
+            allocator_path: None,
+            realm_controllers_path: None,
+            realm_identity_path: None,
+            realm_workloads_launcher_v2_path: index
+                .realm_workloads_launcher_v2_path
+                .as_deref()
+                .map(|path| normalize_zone_native_ref(bundle_root, path))
+                .transpose()?,
+            unsafe_local_workloads_path: None,
+            closures: Vec::new(),
+            minijail_profiles: Vec::new(),
+            managed_keys: Default::default(),
+            generation: index.generation,
+            bundle_hash: Some(index.bundle_hash),
+            artifact_hashes: Some(artifact_hashes),
+        };
+        let bundle_hash = stable_digest_bytes(bundle_bytes);
+        let (zone_resource_bundles, provider_controller_templates) =
+            load_zone_resource_bundles(&bundle, bundle_root, policy)?;
+        let (
+            guest_setup_descriptors,
+            guest_setup_descriptor_catalog_keys,
+            guest_vmm_intents,
+            guest_vmm_zone_uids,
+            guest_store_view_intents,
+        ) = load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
+        let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
+        let zone_topology =
+            load_zone_native_topology(&bundle, &zone_resource_bundles, bundle_root, policy)?;
+        let realm_workloads_launcher_v2 =
+            load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
+        let host = empty_zone_native_host();
+        let processes = ProcessesJson {
+            schema_version: "v3".to_owned(),
+            vms: Vec::new(),
+        };
+        let manifest = ManifestV04::from_slice(
+            br#"{"_manifest":{"manifestVersion":7},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""}}"#,
+        )?;
+        let mut resolver = Self::from_parsed_artifacts(
+            bundle,
+            bundle_hash,
+            ParsedBundleArtifacts {
+                allocator: None,
+                host,
+                processes,
+                zone_resource_bundles,
+                guest_setup_descriptors,
+                guest_setup_descriptor_catalog_keys,
+                guest_vmm_intents,
+                guest_vmm_zone_uids,
+                guest_store_view_intents,
+                provider_controller_templates,
+                zone_storage_rows,
+                storage: None,
+                sync: None,
+                realm_controllers: None,
+                realm_identity: None,
+                realm_workloads_launcher_v2,
+                unsafe_local_workloads: None,
+                manifest,
+                closures: Vec::new(),
+            },
+            false,
+        );
+        resolver.zone_topology = zone_topology;
+        Ok(resolver)
     }
 
     /// Construct a resolver from already-parsed artifacts; used by
@@ -1172,6 +1411,7 @@ impl BundleResolver {
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
                 guest_vmm_intents: BTreeMap::new(),
                 guest_vmm_zone_uids: BTreeMap::new(),
+                guest_store_view_intents: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1221,6 +1461,7 @@ impl BundleResolver {
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
                 guest_vmm_intents: BTreeMap::new(),
                 guest_vmm_zone_uids: BTreeMap::new(),
+                guest_store_view_intents: BTreeMap::new(),
                 provider_controller_templates,
                 zone_storage_rows: BTreeMap::new(),
                 storage: None,
@@ -1251,6 +1492,7 @@ impl BundleResolver {
             guest_setup_descriptor_catalog_keys,
             guest_vmm_intents,
             guest_vmm_zone_uids,
+            guest_store_view_intents,
             provider_controller_templates,
             zone_storage_rows,
             storage,
@@ -1262,6 +1504,9 @@ impl BundleResolver {
             manifest,
             closures,
         } = artifacts;
+        let zone_topology = allocator
+            .as_ref()
+            .and_then(|allocator| allocator.zone_topology.clone());
         let installed_generation_identity = build_installed_generation_identity(&bundle);
         let nft_intents = if include_fixture_network_intents {
             build_nft_intents(&host)
@@ -1305,10 +1550,7 @@ impl BundleResolver {
             resource_route_intents,
             resource_sysctl_intents,
             resource_hosts_intents,
-        ) = build_resource_network_intents(
-            &zone_resource_bundles,
-            include_fixture_network_intents,
-        );
+        ) = build_resource_network_intents(&zone_resource_bundles, include_fixture_network_intents);
         let mut nft_projection_intents = nft_projection_intents;
         nft_projection_intents.extend(resource_nft_projection_intents);
         let mut ownership_marker_intents = ownership_marker_intents;
@@ -1328,11 +1570,18 @@ impl BundleResolver {
         runner_intents.extend(build_provider_controller_intents(
             &provider_controller_templates,
         ));
+        runner_intents.extend(
+            guest_vmm_intents
+                .values()
+                .cloned()
+                .map(|intent| (intent.intent_id.clone(), intent)),
+        );
         let socket_intents = build_socket_intents(&processes);
         let installer_intents = build_installer_intents(&bundle);
         let migrate_intents = build_migrate_intents(&processes);
         let activation_intents = build_activation_intents(&closures, &manifest);
-        let store_view_intents = build_store_view_intents(&closures, &manifest);
+        let mut store_view_intents = build_store_view_intents(&closures, &manifest);
+        store_view_intents.extend(guest_store_view_intents);
         let gc_intents = build_gc_intents(&closures);
         let closure_toplevels = closures
             .iter()
@@ -1347,6 +1596,7 @@ impl BundleResolver {
             installed_generation_identity,
             bundle,
             allocator,
+            zone_topology,
             host,
             processes,
             zone_resource_bundles,
@@ -1414,6 +1664,7 @@ impl BundleResolver {
                 guest_setup_descriptor_catalog_keys: BTreeMap::new(),
                 guest_vmm_intents: BTreeMap::new(),
                 guest_vmm_zone_uids: BTreeMap::new(),
+                guest_store_view_intents: BTreeMap::new(),
                 provider_controller_templates: Vec::new(),
                 zone_storage_rows: BTreeMap::new(),
                 storage,
@@ -1465,8 +1716,8 @@ impl BundleResolver {
             guest_setup_descriptor_catalog_keys,
             guest_vmm_intents,
             guest_vmm_zone_uids,
-        ) =
-            load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
+            guest_store_view_intents,
+        ) = load_guest_setup_descriptors(&zone_resource_bundles, bundle_root, policy)?;
         let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
         let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
@@ -1494,6 +1745,7 @@ impl BundleResolver {
                 guest_setup_descriptor_catalog_keys,
                 guest_vmm_intents,
                 guest_vmm_zone_uids,
+                guest_store_view_intents,
                 provider_controller_templates,
                 zone_storage_rows,
                 storage,
@@ -1515,9 +1767,7 @@ impl BundleResolver {
 
     /// Return the sealed Zone topology, when the allocator artifact carries it.
     pub fn zone_topology(&self) -> Option<&AllocatorZoneTopology> {
-        self.allocator
-            .as_ref()
-            .and_then(|allocator| allocator.zone_topology.as_ref())
+        self.zone_topology.as_ref()
     }
 
     /// Return the verified Nix-authored resource bundle bytes for one Zone.
@@ -1543,11 +1793,7 @@ impl BundleResolver {
 
     /// Return the provider-contract fingerprint published beside one private
     /// Guest setup descriptor in the verified artifact catalog.
-    pub fn guest_setup_descriptor_catalog_key(
-        &self,
-        zone: &str,
-        guest: &str,
-    ) -> Option<&str> {
+    pub fn guest_setup_descriptor_catalog_key(&self, zone: &str, guest: &str) -> Option<&str> {
         self.guest_setup_descriptor_catalog_keys
             .get(&(zone.to_owned(), guest.to_owned()))
             .map(String::as_str)
@@ -1575,6 +1821,14 @@ impl BundleResolver {
                 .as_ref()
                 == Some(zone_uid)
         })
+    }
+
+    /// Return the immutable UID bound into one verified Zone resource bundle.
+    pub fn zone_uid(&self, zone: &ZoneId) -> Option<ResourceUid> {
+        self.zone_resource_bundles
+            .get(zone.as_str())
+            .and_then(|bytes| ResourceBundle::from_json(bytes).ok())
+            .and_then(|bundle| bundle.zone_uid)
     }
 
     /// Return the verified broker-owned storage row for one Zone.
@@ -1686,10 +1940,8 @@ impl BundleResolver {
             return None;
         }
         self.find_network_spec(&parts)?;
-        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
-            provenance,
-            "firewall",
-        );
+        let marker =
+            d2b_contracts_resource::v3::derive_network_ownership_marker(provenance, "firewall");
         Some(ResolvedOwnershipMarkerIntent {
             intent_id: id.to_owned(),
             marker,
@@ -1724,10 +1976,8 @@ impl BundleResolver {
             provenance.network_uid().as_str(),
             parts.network_name
         );
-        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
-            provenance,
-            "firewall",
-        );
+        let marker =
+            d2b_contracts_resource::v3::derive_network_ownership_marker(provenance, "firewall");
         let chain = network_firewall_chain_name(provenance.network_uid());
         let script_body = format!(
             "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
@@ -1867,10 +2117,8 @@ impl BundleResolver {
             return None;
         }
         let spec = self.find_network_spec(&parts)?;
-        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
-            provenance,
-            "hosts",
-        );
+        let marker =
+            d2b_contracts_resource::v3::derive_network_ownership_marker(provenance, "hosts");
         let managed_block = format!(
             "# d2b-managed begin\n# d2b managed: {marker}\n# network {} lan {} uplink {}\n# d2b-managed end\n",
             parts.network_name,
@@ -1897,20 +2145,17 @@ impl BundleResolver {
             }
             let resource = bundle.resources.iter().find(|resource| {
                 resource.resource_type().as_str() == "Network"
-                    && network_name_token(resource.metadata().name().as_str())
-                        == parts.network_name
+                    && network_name_token(resource.metadata().name().as_str()) == parts.network_name
                     && resource
                         .metadata()
                         .annotations()
                         .get("networkUid")
                         .is_none_or(|value| {
-                            d2b_contracts_resource::v3::ResourceUid::parse(value.clone())
-                                .ok()
+                            d2b_contracts_resource::v3::ResourceUid::parse(value.clone()).ok()
                                 == Some(parts.network_uid.clone())
                         })
             })?;
-            let mut value =
-                serde_json::to_value(resource.spec()).ok()?;
+            let mut value = serde_json::to_value(resource.spec()).ok()?;
             let object = value.as_object_mut()?;
             for field in ["providerRef", "updatePolicy", "provider"] {
                 object.remove(field);
@@ -2003,10 +2248,8 @@ impl BundleResolver {
         let descriptor = self
             .guest_setup_descriptors
             .get(&(zone.to_owned(), guest_ref.name().as_str().to_owned()))?;
-        let catalog_key = self.guest_setup_descriptor_catalog_key(
-            zone,
-            guest_ref.name().as_str(),
-        )?;
+        let catalog_key =
+            self.guest_setup_descriptor_catalog_key(zone, guest_ref.name().as_str())?;
         let descriptor_value = serde_json::from_slice::<serde_json::Value>(descriptor).ok()?;
         if descriptor_value
             .get("descriptorDigest")
@@ -2283,19 +2526,17 @@ impl BundleResolver {
         provenance: NetworkProvenance,
         attachment_id: ResourceUid,
     ) -> Option<ResolvedTapIntent> {
-        let node = self
-            .find_process_node(vm_id, role_id)
-            .or_else(|| {
-                if matches!(role_id, "ch" | "ch-runner") {
-                    self.find_process_vm(vm_id).and_then(|vm| {
-                        vm.nodes.iter().find(|node| {
-                            matches!(node.role, ProcessRole::CloudHypervisorRunner)
-                        })
-                    })
-                } else {
-                    None
-                }
-            })?;
+        let node = self.find_process_node(vm_id, role_id).or_else(|| {
+            if matches!(role_id, "ch" | "ch-runner") {
+                self.find_process_vm(vm_id).and_then(|vm| {
+                    vm.nodes
+                        .iter()
+                        .find(|node| matches!(node.role, ProcessRole::CloudHypervisorRunner))
+                })
+            } else {
+                None
+            }
+        })?;
         let canonical_role_id = canonical_tap_role_id(role_id);
         let is_net_vm = vm_id
             == d2b_contracts_resource::v3::derive_network_child_name(
@@ -2313,22 +2554,22 @@ impl BundleResolver {
             )
         } else {
             match canonical_role_id {
-            "net-vm-lan" => (
-                NetworkIfRole::LanBridge,
-                NetworkIfRole::NetVmLanTap,
-                TapRoleW3::NetVmLan,
-            ),
-            "uplink" => (
-                NetworkIfRole::UplinkBridge,
-                NetworkIfRole::NetVmUplinkTap,
-                TapRoleW3::UplinkP2P,
-            ),
-            "ch" | "qemu-media" | "workload-lan" | "network-attachment" | "runner-lan" => (
-                NetworkIfRole::LanBridge,
-                NetworkIfRole::WorkloadGuestTap,
-                TapRoleW3::WorkloadLanIsolated,
-            ),
-            _ => return None,
+                "net-vm-lan" => (
+                    NetworkIfRole::LanBridge,
+                    NetworkIfRole::NetVmLanTap,
+                    TapRoleW3::NetVmLan,
+                ),
+                "uplink" => (
+                    NetworkIfRole::UplinkBridge,
+                    NetworkIfRole::NetVmUplinkTap,
+                    TapRoleW3::UplinkP2P,
+                ),
+                "ch" | "qemu-media" | "workload-lan" | "network-attachment" | "runner-lan" => (
+                    NetworkIfRole::LanBridge,
+                    NetworkIfRole::WorkloadGuestTap,
+                    TapRoleW3::WorkloadLanIsolated,
+                ),
+                _ => return None,
             }
         };
         let bridge_ifname = derive_network_ifname(
@@ -3035,10 +3276,7 @@ fn tap_identity_digest(
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
     }
-    for value in [
-        network_generation.get(),
-        attachment_generation.get(),
-    ] {
+    for value in [network_generation.get(), attachment_generation.get()] {
         hasher.update(value.to_be_bytes());
     }
     let bundle = bundle_generation.as_str();
@@ -3169,14 +3407,10 @@ fn parse_network_intent_ref(id: &str) -> Option<ParsedNetworkIntentRef> {
     let (variant, index, key) = match kind {
         NetworkIntentKind::Bridge => (Some(fields[4].to_owned()), None, None),
         NetworkIntentKind::Route => (None, Some(fields[4].parse().ok()?), None),
-        NetworkIntentKind::Sysctl => (
-            Some(fields[4].to_owned()),
-            None,
-            Some(fields[5].to_owned()),
-        ),
-        NetworkIntentKind::Firewall
-        | NetworkIntentKind::Marker
-        | NetworkIntentKind::Hosts => (None, None, None),
+        NetworkIntentKind::Sysctl => (Some(fields[4].to_owned()), None, Some(fields[5].to_owned())),
+        NetworkIntentKind::Firewall | NetworkIntentKind::Marker | NetworkIntentKind::Hosts => {
+            (None, None, None)
+        }
     };
     Some(ParsedNetworkIntentRef {
         kind,
@@ -3294,38 +3528,24 @@ fn build_resource_network_intents(
             let Ok(spec) = serde_json::from_value::<NetworkSpec>(spec_value) else {
                 continue;
             };
-            let Some(lan_bridge) = derive_network_ifname(
-                &zone_uid,
-                &network_uid,
-                NetworkIfRole::LanBridge,
-                None,
-            )
-            .ok()
+            let Some(lan_bridge) =
+                derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None).ok()
             else {
                 continue;
             };
-            let Some(uplink_bridge) = derive_network_ifname(
-                &zone_uid,
-                &network_uid,
-                NetworkIfRole::UplinkBridge,
-                None,
-            )
-            .ok()
+            let Some(uplink_bridge) =
+                derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::UplinkBridge, None)
+                    .ok()
             else {
                 continue;
             };
-            let scope = format!(
-                "network:{}:{}",
-                zone_uid.as_str(),
-                network_uid.as_str()
-            );
+            let scope = format!("network:{}:{}", zone_uid.as_str(), network_uid.as_str());
             let marker = format!(
                 "network:bundle:zone:{}:network:{}",
                 zone_uid.as_str(),
                 network_uid.as_str()
             );
-            let marker_id =
-                intent_id_network_ownership_marker_uids(&zone_uid, &network_uid, name);
+            let marker_id = intent_id_network_ownership_marker_uids(&zone_uid, &network_uid, name);
             markers.insert(
                 marker_id.clone(),
                 ResolvedOwnershipMarkerIntent {
@@ -3335,8 +3555,7 @@ fn build_resource_network_intents(
                 },
             );
 
-            let bridge_id =
-                intent_id_network_bridge_uids(&zone_uid, &network_uid, name, false);
+            let bridge_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, name, false);
             bridges.insert(
                 bridge_id.clone(),
                 ResolvedBridgeIntent {
@@ -3368,8 +3587,7 @@ fn build_resource_network_intents(
                 },
             );
 
-            let projection_id =
-                intent_id_network_projection_uids(&zone_uid, &network_uid, name);
+            let projection_id = intent_id_network_projection_uids(&zone_uid, &network_uid, name);
             let chain = network_firewall_chain_name(&network_uid);
             let script_body = format!(
                 "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
@@ -3442,29 +3660,16 @@ fn build_resource_network_intents(
                         device: Some(uplink_bridge.as_str().to_owned()),
                         table: Some("main".to_owned()),
                         owned: true,
-                        route_name: Some(derive_network_route_name(
-                            &zone_uid,
-                            &network_uid,
-                            0,
-                        )),
+                        route_name: Some(derive_network_route_name(&zone_uid, &network_uid, 0)),
                         provenance: None,
                         ownership_marker: Some(format!("route:{marker}:0")),
                     },
                 );
             }
 
-            for (if_name, role) in [
-                (&lan_bridge, "lan"),
-                (&uplink_bridge, "uplink"),
-            ] {
+            for (if_name, role) in [(&lan_bridge, "lan"), (&uplink_bridge, "uplink")] {
                 let key = "disable-ipv6";
-                let id = intent_id_network_sysctl_uids(
-                    &zone_uid,
-                    &network_uid,
-                    name,
-                    role,
-                    key,
-                );
+                let id = intent_id_network_sysctl_uids(&zone_uid, &network_uid, name, role, key);
                 sysctls.insert(
                     id.clone(),
                     ResolvedSysctlIntent {
@@ -3476,13 +3681,7 @@ fn build_resource_network_intents(
                     },
                 );
                 let key = "accept-ra";
-                let id = intent_id_network_sysctl_uids(
-                    &zone_uid,
-                    &network_uid,
-                    name,
-                    role,
-                    key,
-                );
+                let id = intent_id_network_sysctl_uids(&zone_uid, &network_uid, name, role, key);
                 sysctls.insert(
                     id.clone(),
                     ResolvedSysctlIntent {
@@ -3494,13 +3693,7 @@ fn build_resource_network_intents(
                     },
                 );
                 let key = "autoconf";
-                let id = intent_id_network_sysctl_uids(
-                    &zone_uid,
-                    &network_uid,
-                    name,
-                    role,
-                    key,
-                );
+                let id = intent_id_network_sysctl_uids(&zone_uid, &network_uid, name, role, key);
                 sysctls.insert(
                     id.clone(),
                     ResolvedSysctlIntent {
@@ -4118,6 +4311,7 @@ fn build_provider_controller_intents(
     for binding in templates {
         let vm_name = binding.execution_ref().name().as_str().to_owned();
         let role_id = binding.process_ref().name().as_str().to_owned();
+        let cgroup_subtree = format!("d2b.slice/{vm_name}/{role_id}");
         let profile_id = binding.template().as_str().to_owned();
         let principal = format!(
             "{}:{}:{}",
@@ -4126,11 +4320,6 @@ fn build_provider_controller_intents(
             binding.execution_ref().to_canonical_string()
         );
         let profile_hash = sha2::Sha256::digest(principal.as_bytes());
-        let profile_suffix = profile_hash
-            .iter()
-            .take(8)
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
         let principal_id = 50_000_u32.saturating_add(
             u32::from_be_bytes(
                 profile_hash[..4]
@@ -4155,14 +4344,14 @@ fn build_provider_controller_intents(
             supplementary_groups: Vec::new(),
             capabilities: Vec::new(),
             namespaces: NamespaceSet {
-                mount: true,
+                mount: false,
                 pid: false,
                 net: false,
-                ipc: true,
+                ipc: false,
                 uts: false,
                 user: false,
             },
-            seccomp_policy_ref: Some("provider-controller".to_owned()),
+            seccomp_policy_ref: Some("w1-provider-controller".to_owned()),
             mount_policy: MountPolicy {
                 read_only_paths: vec!["/nix/store".to_owned()],
                 writable_paths: Vec::new(),
@@ -4172,7 +4361,7 @@ fn build_provider_controller_intents(
                 bind_mounts: Vec::new(),
             },
             cgroup_placement: CgroupPlacement {
-                subtree: format!("d2b.slice/provider-controller/{profile_suffix}"),
+                subtree: cgroup_subtree,
                 controllers: vec!["cpu".to_owned(), "memory".to_owned(), "pids".to_owned()],
                 delegated: false,
             },
@@ -4692,12 +4881,14 @@ fn load_guest_setup_descriptors(
         BTreeMap<(String, String), String>,
         BTreeMap<(String, String), ResolvedRunnerIntent>,
         BTreeMap<(String, String), ResourceUid>,
+        BTreeMap<String, ResolvedStoreViewIntent>,
     ),
     Error,
 > {
     let catalog_path = resolve_bundle_ref(bundle_root, "artifact-catalog.json");
     if !catalog_path.exists() {
         return Ok((
+            BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
@@ -4732,10 +4923,7 @@ fn load_guest_setup_descriptors(
         Error::manifest_parse_error("artifact-catalog.json", "artifact catalog is invalid")
     })?;
     let canonical = CanonicalJsonValue::parse(&preimage).map_err(|_| {
-        Error::manifest_parse_error(
-            "artifact-catalog.json",
-            "artifact catalog is not canonical",
-        )
+        Error::manifest_parse_error("artifact-catalog.json", "artifact catalog is not canonical")
     })?;
     let canonical = canonical.to_canonical_bytes();
     if framed_canonical_digest(ARTIFACT_CATALOG_DOMAIN_TAG, &canonical) != catalog_digest {
@@ -4799,7 +4987,9 @@ fn load_guest_setup_descriptors(
         let provider_contract_digest = row
             .get("providerContractDigest")
             .and_then(serde_json::Value::as_str)
-            .filter(|digest| d2b_contracts_resource::v3::resource_schema::is_canonical_digest(digest))
+            .filter(|digest| {
+                d2b_contracts_resource::v3::resource_schema::is_canonical_digest(digest)
+            })
             .ok_or_else(|| {
                 Error::manifest_parse_error(
                     "artifact-catalog.json",
@@ -4831,14 +5021,120 @@ fn load_guest_setup_descriptors(
             ));
         }
     }
-    let (guest_vmm_intents, guest_vmm_zone_uids) =
-        load_guest_vmm_intents(&catalog, &result)?;
+    let (guest_vmm_intents, guest_vmm_zone_uids) = load_guest_vmm_intents(&catalog, &result)?;
+    let guest_store_view_intents = load_guest_store_view_intents(&catalog)?;
     Ok((
         result,
         catalog_keys,
         guest_vmm_intents,
         guest_vmm_zone_uids,
+        guest_store_view_intents,
     ))
+}
+
+fn load_guest_store_view_intents(
+    catalog: &serde_json::Value,
+) -> Result<BTreeMap<String, ResolvedStoreViewIntent>, Error> {
+    let Some(rows) = catalog
+        .get("guestClosures")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let mut intents = BTreeMap::new();
+    for row in rows {
+        let guest = row
+            .get("guest")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure name is invalid",
+                )
+            })?;
+        let toplevel = row
+            .get("toplevel")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .filter(|value| value.is_absolute())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure toplevel is invalid",
+                )
+            })?;
+        let closure_paths = row
+            .get("closurePaths")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure paths are invalid",
+                )
+            })?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .ok_or_else(|| {
+                        Error::manifest_parse_error(
+                            "artifact-catalog.json",
+                            "Guest closure path is invalid",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let hardlink_farm_path = row
+            .get("storeView")
+            .and_then(|value| value.get("root"))
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .filter(|value| value.is_absolute())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest store-view root is invalid",
+                )
+            })?;
+        let db_dump_path = row
+            .get("dbDumpPath")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .filter(|value| value.is_absolute())
+            .ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "artifact-catalog.json",
+                    "Guest closure registration is invalid",
+                )
+            })?;
+        let target_name = toplevel.file_name().ok_or_else(|| {
+            Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "Guest closure toplevel has no basename",
+            )
+        })?;
+        let intent_id = intent_id_store_view(guest);
+        let intent = ResolvedStoreViewIntent {
+            intent_id: intent_id.clone(),
+            vm: guest.to_owned(),
+            generation: 1,
+            target_view_path: hardlink_farm_path.join("live").join(target_name),
+            hardlink_farm_path,
+            closure_paths,
+            db_dump_path,
+        };
+        if intents.insert(intent_id, intent).is_some() {
+            return Err(Error::manifest_parse_error(
+                "artifact-catalog.json",
+                "duplicate Guest store-view intent",
+            ));
+        }
+    }
+    Ok(intents)
 }
 
 fn load_guest_vmm_intents(
@@ -4948,10 +5244,7 @@ fn load_guest_vmm_intents(
             ));
         }
         let vmm = row.get("vmm").ok_or_else(|| {
-            Error::manifest_parse_error(
-                "artifact-catalog.json",
-                "Guest VMM intent is missing",
-            )
+            Error::manifest_parse_error("artifact-catalog.json", "Guest VMM intent is missing")
         })?;
         let execution_ref = vmm
             .get("executionRef")
@@ -4988,9 +5281,9 @@ fn load_guest_vmm_intents(
             .filter(|values| {
                 !values.is_empty()
                     && values.iter().all(|value| {
-                        value
-                            .as_str()
-                            .is_some_and(|argument| !argument.is_empty() && !argument.contains('\0'))
+                        value.as_str().is_some_and(|argument| {
+                            !argument.is_empty() && !argument.contains('\0')
+                        })
                     })
             })
             .map(|values| {
@@ -5001,10 +5294,7 @@ fn load_guest_vmm_intents(
                     .collect::<Vec<_>>()
             })
             .ok_or_else(|| {
-                Error::manifest_parse_error(
-                    "artifact-catalog.json",
-                    "Guest VMM argv is invalid",
-                )
+                Error::manifest_parse_error("artifact-catalog.json", "Guest VMM argv is invalid")
             })?;
         let uid = vmm
             .get("uid")
@@ -5026,7 +5316,9 @@ fn load_guest_vmm_intents(
             .filter(|value| {
                 value.starts_with('/')
                     && !value.contains('\0')
-                    && !value.split('/').any(|segment| matches!(segment, "." | ".."))
+                    && !value
+                        .split('/')
+                        .any(|segment| matches!(segment, "." | ".."))
             })
             .map(|value| value.to_owned())
             .ok_or_else(|| {
@@ -5160,17 +5452,13 @@ fn load_guest_vmm_intents(
             },
             cgroup_placement: CgroupPlacement {
                 subtree: cgroup_subtree.to_owned(),
-                controllers: vec![
-                    "cpu".to_owned(),
-                    "memory".to_owned(),
-                    "pids".to_owned(),
-                ],
+                controllers: vec!["cpu".to_owned(), "memory".to_owned(), "pids".to_owned()],
                 delegated: false,
             },
             root_carve_out: false,
             profile_id: profile_id.as_str().to_owned(),
             user_namespace: None,
-            umask: None,
+            umask: Some(0o022),
         };
         if intents.insert(key.clone(), intent).is_some()
             || zone_uids.insert(key, zone_uid).is_some()
@@ -5196,7 +5484,9 @@ fn cloud_hypervisor_intent_is_complete_values(binary_path: &Path, argv: &[String
     let api_socket = value_for("--api-socket");
     binary_path.is_absolute()
         && binary_path.starts_with("/nix/store/")
-        && binary_path.to_string_lossy().ends_with("/bin/cloud-hypervisor")
+        && binary_path
+            .to_string_lossy()
+            .ends_with("/bin/cloud-hypervisor")
         && !binary_path.starts_with("/run/current-system/sw/")
         && kernel.is_some_and(|value| value.starts_with("/nix/store/"))
         && initrd.is_some_and(|value| value.starts_with("/nix/store/"))
@@ -5204,7 +5494,9 @@ fn cloud_hypervisor_intent_is_complete_values(binary_path: &Path, argv: &[String
         && api_socket.is_some_and(|value| {
             value.starts_with('/')
                 && !value.contains('\0')
-                && !value.split('/').any(|segment| matches!(segment, "." | ".."))
+                && !value
+                    .split('/')
+                    .any(|segment| matches!(segment, "." | ".."))
         })
 }
 
@@ -5247,6 +5539,110 @@ fn load_zone_storage_rows(
     Ok(rows)
 }
 
+fn load_zone_native_topology(
+    bundle: &Bundle,
+    zone_resource_bundles: &BTreeMap<String, Vec<u8>>,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<AllocatorZoneTopology>, Error> {
+    if bundle.schema_version != "v3" {
+        return Ok(None);
+    }
+    let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
+        return Ok(None);
+    };
+    if !artifact_hashes.contains_key("index.json") {
+        return if zone_resource_bundles.is_empty() {
+            Ok(None)
+        } else {
+            Err(Error::manifest_parse_error(
+                "index.json",
+                "Zone topology index is missing",
+            ))
+        };
+    }
+    let index_path = resolve_bundle_ref(bundle_root, "index.json");
+    let bytes = secure_open_and_read(&index_path, policy)?;
+    verify_artifact_hash(
+        &index_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        "index.json",
+    )?;
+    let index: ZoneNativeIndexDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error("index.json", manifest_parse_reason(&error.to_string()))
+    })?;
+    if !index.topology.sealed {
+        return Err(Error::manifest_parse_error(
+            "index.json",
+            "Zone topology is not sealed",
+        ));
+    }
+    let zone_names = zone_resource_bundles
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if index.zones.keys().cloned().collect::<BTreeSet<_>>() != zone_names
+        || index
+            .topology
+            .generation_by_zone
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != zone_names
+        || index
+            .topology
+            .parent_map
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != zone_names
+    {
+        return Err(Error::manifest_parse_error(
+            "index.json",
+            "Zone topology does not cover the committed Zone set",
+        ));
+    }
+    let parent_map_bytes = serde_json::to_vec(&index.topology.parent_map)
+        .map_err(|_| Error::internal_io("zone-topology-canonical"))?;
+    if framed_canonical_digest("d2b:v3:parent-topology", &parent_map_bytes)
+        != index.topology.parent_map_digest
+    {
+        return Err(Error::manifest_parse_error(
+            "index.json",
+            "Zone topology digest does not match",
+        ));
+    }
+    let mut parent_map = BTreeMap::new();
+    let mut roots = Vec::new();
+    for (zone, parent) in index.topology.parent_map {
+        let zone = ZoneId::parse(zone).map_err(|_| {
+            Error::manifest_parse_error("index.json", "Zone topology name is invalid")
+        })?;
+        let parent = parent
+            .map(|parent| {
+                ZoneId::parse(parent).map_err(|_| {
+                    Error::manifest_parse_error("index.json", "Zone topology parent is invalid")
+                })
+            })
+            .transpose()?;
+        if parent.is_none() {
+            roots.push(zone.clone());
+        }
+        parent_map.insert(zone, parent);
+    }
+    let [root] = roots.as_slice() else {
+        return Err(Error::manifest_parse_error(
+            "index.json",
+            "Zone topology must have exactly one root",
+        ));
+    };
+    Ok(Some(AllocatorZoneTopology {
+        root: root.clone(),
+        parent_map,
+    }))
+}
+
 fn load_optional_allocator_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -5264,10 +5660,7 @@ fn load_optional_allocator_artifact(
         allocator_ref,
     )?;
     let allocator: AllocatorJson = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error(
-            "allocator.json",
-            manifest_parse_reason(&error.to_string()),
-        )
+        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
     })?;
     Ok(Some(allocator))
 }
@@ -5591,9 +5984,11 @@ mod tests {
     fn production_bundle_does_not_load_legacy_env_nft_projection() {
         let root = test_root("nft-projection");
         let resolver = build_personal_dev_bundle(&root);
-        assert!(resolver
-            .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
-            .is_none());
+        assert!(
+            resolver
+                .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
+                .is_none()
+        );
         assert!(
             resolver
                 .find_bridge_intent(&intent_id_bridge_env("personal"))
@@ -5808,6 +6203,16 @@ mod tests {
             )
             .expect("private controller intent");
         assert_eq!(resolved.role, ProcessRole::ProviderController);
+        assert_eq!(
+            resolved.cgroup_placement.subtree,
+            "d2b.slice/dev-host/controller-test"
+        );
+        assert!(!resolved.namespaces.mount);
+        assert!(!resolved.namespaces.pid);
+        assert!(!resolved.namespaces.net);
+        assert!(!resolved.namespaces.ipc);
+        assert!(!resolved.namespaces.uts);
+        assert!(!resolved.namespaces.user);
         assert_eq!(
             resolved.binary_path,
             PathBuf::from(
@@ -6240,6 +6645,143 @@ mod tests {
         }
     }
 
+    #[test]
+    fn loads_zone_native_bundle_index_without_legacy_artifacts() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_root("zone-native-bundle-index");
+        fs::create_dir_all(&root).expect("create bundle root");
+        let bundle_path = root.join("bundle.json");
+        let mut bundle = serde_json::json!({
+            "artifactHashes": null,
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
+            "privilegesPath": "privileges.json",
+            "zones": [],
+            "generation": {
+                "generator": "nixos-modules/bundle.nix",
+                "sourceRevision": null,
+                "generatedAt": null
+            }
+        });
+        let hash =
+            sha256_hex(&serde_json::to_vec(&bundle).expect("serialize bundle hash preimage"));
+        bundle["artifactHashes"] = serde_json::json!({});
+        bundle["bundleHash"] = serde_json::Value::String(hash);
+        fs::write(
+            &bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
+
+        let resolver =
+            BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
+                .expect("Zone-native bundle index loads");
+        assert_eq!(resolver.bundle.bundle_version, 1);
+        assert_eq!(resolver.bundle.schema_version, "v3");
+        assert_eq!(
+            Path::new(&resolver.bundle.host_path).parent(),
+            Some(root.as_path())
+        );
+        assert!(resolver.zone_resource_bundles.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zone_native_bundle_index_rejects_artifact_paths_outside_bundle_root() {
+        assert!(normalize_zone_native_ref(Path::new("/etc/d2b"), "../foreign").is_err());
+        assert!(normalize_zone_native_ref(Path::new("/etc/d2b"), "/etc/foreign").is_err());
+    }
+
+    #[test]
+    fn zone_native_index_supplies_sealed_runtime_topology() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_root("zone-native-topology");
+        fs::create_dir_all(&root).expect("create bundle root");
+        let parent_map = BTreeMap::from([
+            ("local-root".to_owned(), None),
+            ("work".to_owned(), Some("local-root".to_owned())),
+        ]);
+        let parent_map_bytes = serde_json::to_vec(&parent_map).expect("serialize parent map");
+        let index = serde_json::json!({
+            "schemaVersion": "v1",
+            "zones": {
+                "local-root": {},
+                "work": {}
+            },
+            "topology": {
+                "sealed": true,
+                "parentMap": parent_map,
+                "parentMapDigest": framed_canonical_digest(
+                    "d2b:v3:parent-topology",
+                    &parent_map_bytes,
+                ),
+                "generationByZone": {
+                    "local-root": format!("sha256:{}", "a".repeat(64)),
+                    "work": format!("sha256:{}", "b".repeat(64))
+                }
+            },
+            "executionIndex": {},
+            "networkIndex": {},
+            "closureIndex": {}
+        });
+        let index_bytes = serde_json::to_vec(&index).expect("serialize index");
+        let index_path = root.join("index.json");
+        fs::write(&index_path, &index_bytes).expect("write index");
+        fs::set_permissions(&index_path, fs::Permissions::from_mode(0o640)).expect("chmod index");
+        let bundle = Bundle {
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+            public_manifest_path: "vms.json".to_owned(),
+            host_path: "host.json".to_owned(),
+            processes_path: "processes.json".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            sync_path: None,
+            allocator_path: None,
+            realm_controllers_path: None,
+            realm_identity_path: None,
+            realm_workloads_launcher_v2_path: None,
+            unsafe_local_workloads_path: None,
+            closures: Vec::new(),
+            minijail_profiles: Vec::new(),
+            managed_keys: Default::default(),
+            generation: BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: None,
+            artifact_hashes: Some(BTreeMap::from([(
+                "index.json".to_owned(),
+                sha256_hex(&index_bytes),
+            )])),
+        };
+        let zone_bundles = BTreeMap::from([
+            ("local-root".to_owned(), Vec::new()),
+            ("work".to_owned(), Vec::new()),
+        ]);
+
+        let topology =
+            load_zone_native_topology(&bundle, &zone_bundles, &root, &current_user_bundle_policy())
+                .expect("load topology")
+                .expect("topology present");
+        assert_eq!(topology.root.as_str(), "local-root");
+        assert_eq!(
+            topology
+                .parent_map
+                .get(&ZoneId::parse("work").unwrap())
+                .and_then(Option::as_ref)
+                .map(ZoneId::as_str),
+            Some("local-root")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn realm_controllers_artifact_value(no_systemd_units_materialized: bool) -> serde_json::Value {
         serde_json::json!({
             "schemaVersion": "v2",
@@ -6599,8 +7141,7 @@ mod tests {
         let network_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("network uid");
         let attachment_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
-                .expect("attachment uid");
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("attachment uid");
         let bundle_generation = d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
@@ -6644,9 +7185,8 @@ mod tests {
                 "corp-vm",
             )
         );
-        let bridge =
-            derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None)
-                .expect("bridge name");
+        let bridge = derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None)
+            .expect("bridge name");
         let tap = derive_network_ifname(
             &zone_uid,
             &network_uid,
@@ -6686,8 +7226,7 @@ mod tests {
         let network_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("network uid");
         let attachment_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
-                .expect("attachment uid");
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("attachment uid");
         let provenance = NetworkProvenance::new(
             zone_uid.clone(),
             network_uid.clone(),
@@ -6707,16 +7246,14 @@ mod tests {
             )
             .expect("v3 TAP intent");
         resolver.host.environments[0].env = "attacker".to_owned();
-        resolver.manifest.vms.get_mut("personal-dev").unwrap().env =
-            Some("attacker".to_owned());
+        resolver.manifest.vms.get_mut("personal-dev").unwrap().env = Some("attacker".to_owned());
         let second = resolver
             .resolve_tap_intent("personal-dev", "ch", provenance, attachment_uid)
             .expect("v3 TAP intent after legacy mutation");
         assert_eq!(first, second);
         assert_eq!(
             first.bridge_ifname,
-            derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None)
-                .unwrap()
+            derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None).unwrap()
         );
         assert_eq!(
             first.tap_ifname,
@@ -6774,10 +7311,8 @@ mod tests {
 
     #[test]
     fn resource_network_intents_use_uid_derived_kernel_names() {
-        let zone_a =
-            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
-        let zone_b =
-            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").expect("zone uid");
+        let zone_a = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let zone_b = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").expect("zone uid");
         let network_a =
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("network uid");
         let network_b =
@@ -6807,7 +7342,8 @@ mod tests {
             ),
         ]);
         let (_, _, bridges, routes, _, _) = build_resource_network_intents(&bundles, true);
-        let first_bridge_id = intent_id_network_bridge_uids(&zone_a, &network_a, "same-name", false);
+        let first_bridge_id =
+            intent_id_network_bridge_uids(&zone_a, &network_a, "same-name", false);
         let second_bridge_id =
             intent_id_network_bridge_uids(&zone_b, &network_b, "same-name", false);
         let first_bridge = bridges.get(&first_bridge_id).expect("first bridge");
@@ -6906,10 +7442,7 @@ mod tests {
                     "d2b managed: {}",
                     d2b_contracts_resource::v3::derive_network_ownership_marker(
                         &provenance,
-                        &format!(
-                            "route:{}",
-                            route.route_name.as_deref().expect("route name"),
-                        ),
+                        &format!("route:{}", route.route_name.as_deref().expect("route name"),),
                     )
                 )
                 .as_str()
@@ -6924,10 +7457,7 @@ mod tests {
         assert_eq!(marker.provenance.as_ref(), Some(&provenance));
         assert_eq!(
             marker.marker,
-            d2b_contracts_resource::v3::derive_network_ownership_marker(
-                &provenance,
-                "firewall",
-            )
+            d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "firewall",)
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -7405,6 +7935,12 @@ mod tests {
                 "zone": "work",
                 "guest": "guest",
                 "artifactId": "guest-system",
+                "toplevel": "/nix/store/guest-system",
+                "closurePaths": ["/nix/store/guest-system"],
+                "dbDumpPath": "/nix/store/guest-registration",
+                "storeView": {
+                    "root": "/var/lib/d2b/zones/work/guests/guest/store-view"
+                },
                 "vmm": {
                     "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
                     "descriptorDigest": descriptor_digest,
@@ -7444,7 +7980,20 @@ mod tests {
             intent,
             "cloud-hypervisor-runner"
         ));
+        assert_eq!(intent.umask, Some(0o022));
         assert!(!process_template_name_matches(intent, "cloud-hypervisor"));
+        let store_intents = load_guest_store_view_intents(&catalog).expect("store-view intent");
+        let store_intent = store_intents
+            .get(&intent_id_store_view("guest"))
+            .expect("Guest store-view intent");
+        assert_eq!(
+            store_intent.hardlink_farm_path,
+            PathBuf::from("/var/lib/d2b/zones/work/guests/guest/store-view")
+        );
+        assert_eq!(
+            store_intent.target_view_path,
+            PathBuf::from("/var/lib/d2b/zones/work/guests/guest/store-view/live/guest-system")
+        );
     }
 
     // v1.2 swtpm broker-pre-NS extension.

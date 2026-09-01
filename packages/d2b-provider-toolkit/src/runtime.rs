@@ -17,9 +17,7 @@ use std::{
 use d2b_contracts_provider::v3::{
     ComponentDescriptor, ComponentExecution, ComponentType, ControllerTargetKind, EffectPortClass,
 };
-use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef,
-};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceGeneration, ResourceRef};
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 const STARTING: u8 = 0;
@@ -532,22 +530,18 @@ impl ProviderEntrypoint {
                 .execution_ref
                 .as_ref()
                 .is_none_or(|expected| route.context().execution_ref() == Some(expected))
-            && self
-                .target_kind
-                .is_none_or(|expected| {
-                    route
-                        .context()
-                        .execution_ref()
-                        .is_some_and(|reference| match expected {
-                            ControllerTargetKind::Host => {
-                                reference.resource_type().as_str() == "Host"
-                            }
-                            ControllerTargetKind::Guest => {
-                                reference.resource_type().as_str() == "Guest"
-                            }
-                            ControllerTargetKind::Zone => false,
-                        })
-                })
+            && self.target_kind.is_none_or(|expected| {
+                route
+                    .context()
+                    .execution_ref()
+                    .is_some_and(|reference| match expected {
+                        ControllerTargetKind::Host => reference.resource_type().as_str() == "Host",
+                        ControllerTargetKind::Guest => {
+                            reference.resource_type().as_str() == "Guest"
+                        }
+                        ControllerTargetKind::Zone => false,
+                    })
+            })
             && self
                 .process_ref
                 .as_ref()
@@ -985,5 +979,4 @@ mod tests {
             Err(ProviderRuntimeError::ControllerDescriptorInvalid)
         ));
     }
-
 }

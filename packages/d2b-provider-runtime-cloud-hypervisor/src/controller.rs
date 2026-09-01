@@ -259,6 +259,7 @@ pub struct GuestSnapshot {
     generations: GuestGenerationSet,
     session_evidence: Option<GuestSessionEvidence>,
     deleting: bool,
+    controller_finalizer_present: bool,
 }
 
 impl GuestSnapshot {
@@ -301,12 +302,19 @@ impl GuestSnapshot {
             generations,
             session_evidence: None,
             deleting,
+            controller_finalizer_present: true,
         })
     }
 
     /// Attach the latest bounded authenticated session evidence.
     pub fn with_session_evidence(mut self, evidence: GuestSessionEvidence) -> Self {
         self.session_evidence = Some(evidence);
+        self
+    }
+
+    /// Attach whether this controller's exact Guest finalizer remains.
+    pub const fn with_controller_finalizer_present(mut self, present: bool) -> Self {
+        self.controller_finalizer_present = present;
         self
     }
 
@@ -368,6 +376,11 @@ impl GuestSnapshot {
     /// Whether deletion has been requested.
     pub const fn deleting(&self) -> bool {
         self.deleting
+    }
+
+    /// Whether this controller's exact Guest finalizer remains.
+    pub const fn controller_finalizer_present(&self) -> bool {
+        self.controller_finalizer_present
     }
 }
 
@@ -1045,6 +1058,15 @@ pub enum CloudHypervisorResourceRequest {
         /// Minimum accepted replacement generation.
         minimum_generation: u64,
     },
+    /// Ensure the controller-owned Guest finalizer.
+    EnsureGuestFinalizer {
+        /// Guest owner.
+        guest_ref: ResourceRef,
+        /// Exact Guest UID fence.
+        guest_uid: ResourceUid,
+        /// Exact Guest revision fence.
+        guest_revision: ZoneRevision,
+    },
     /// Clear the controller-owned Guest finalizer.
     ClearGuestFinalizer {
         /// Guest owner.
@@ -1053,6 +1075,8 @@ pub enum CloudHypervisorResourceRequest {
         guest_uid: ResourceUid,
         /// Exact Guest revision fence.
         guest_revision: ZoneRevision,
+        /// Whether the controller finalizer remains on this snapshot.
+        finalizer_present: bool,
     },
 }
 
@@ -1082,6 +1106,9 @@ impl fmt::Debug for CloudHypervisorResourceRequest {
             Self::DeleteChild { .. } => "CloudHypervisorResourceRequest::DeleteChild",
             Self::InvalidateGuestSession { .. } => {
                 "CloudHypervisorResourceRequest::InvalidateGuestSession"
+            }
+            Self::EnsureGuestFinalizer { .. } => {
+                "CloudHypervisorResourceRequest::EnsureGuestFinalizer"
             }
             Self::ClearGuestFinalizer { .. } => {
                 "CloudHypervisorResourceRequest::ClearGuestFinalizer"
@@ -1416,6 +1443,25 @@ where
                 guest_ref: guest.resource_ref.clone(),
                 guest_uid: guest.uid.clone(),
                 guest_revision: guest.revision,
+                finalizer_present: guest.controller_finalizer_present,
+            })
+            .await?
+        {
+            CloudHypervisorResourceResponse::LifecycleApplied => Ok(()),
+            _ => Err(CloudHypervisorResourceApiError::InvalidResponse),
+        }
+    }
+
+    async fn ensure_guest_finalizer(
+        &self,
+        guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        match self
+            .session
+            .call(CloudHypervisorResourceRequest::EnsureGuestFinalizer {
+                guest_ref: guest.resource_ref.clone(),
+                guest_uid: guest.uid.clone(),
+                guest_revision: guest.revision,
             })
             .await?
         {
@@ -1541,6 +1587,14 @@ pub trait CloudHypervisorResourceApi: Send + Sync {
 
     /// Clear the Guest controller finalizer after complete drain.
     async fn clear_guest_finalizer(
+        &self,
+        _guest: &GuestSnapshot,
+    ) -> Result<(), CloudHypervisorResourceApiError> {
+        Err(CloudHypervisorResourceApiError::Unsupported)
+    }
+
+    /// Ensure the Guest controller finalizer before managing children.
+    async fn ensure_guest_finalizer(
         &self,
         _guest: &GuestSnapshot,
     ) -> Result<(), CloudHypervisorResourceApiError> {
@@ -1721,8 +1775,25 @@ where
         if !self.registered {
             return Err(CloudHypervisorError::NotRegistered);
         }
-        let guest = self.api.get_guest(guest_ref).await?;
+        let guest = self.api.get_guest(guest_ref).await.map_err(|error| {
+            eprintln!("cloud-hypervisor-controller-stage=get-guest error={error}");
+            error
+        })?;
         self.validate_guest(&guest, guest_ref)?;
+        if !guest.controller_finalizer_present() {
+            self.api.ensure_guest_finalizer(&guest).await?;
+            return Ok(CloudHypervisorReconcileOutcome::Pending(
+                GuestStatusProjection::new(
+                    GuestRuntimeStatus {
+                        phase: GuestStatusPhase::Pending,
+                        runtime_ready: false,
+                        bootstrap_ready: false,
+                        active_process_count: 0,
+                    },
+                    Vec::new(),
+                ),
+            ));
+        }
         self.observed_process_status = None;
         let child_plan = BootstrapGraph::plan_children(
             guest.zone.clone(),
@@ -1740,10 +1811,21 @@ where
         let observed = self
             .api
             .relist_owned_children(&guest, &expected_refs)
-            .await?;
+            .await
+            .map_err(|error| {
+                eprintln!("cloud-hypervisor-controller-stage=relist-children error={error}");
+                error
+            })?;
         let children = self.validate_owner_relist(&guest, &expected_refs, observed)?;
         self.validate_child_incarnations(&guest, &children)?;
-        let dependencies = self.api.observe_dependencies(&guest, &self.graph).await?;
+        let dependencies = self
+            .api
+            .observe_dependencies(&guest, &self.graph)
+            .await
+            .map_err(|error| {
+                eprintln!("cloud-hypervisor-controller-stage=observe-dependencies error={error}");
+                error
+            })?;
         let (dependency_readiness, dependency_conditions) = dependencies.readiness(&self.graph);
 
         if guest.deleting() {
@@ -1761,7 +1843,11 @@ where
         let upgrade_required = self
             .api
             .assess_update(&guest, &children.values().cloned().collect::<Vec<_>>())
-            .await?
+            .await
+            .map_err(|error| {
+                eprintln!("cloud-hypervisor-controller-stage=assess-update error={error}");
+                error
+            })?
             .is_some();
         if upgrade_required {
             let status = self.project_status(
@@ -1784,7 +1870,15 @@ where
             .and_then(|target| children.get(target))
         {
             let mut adoption_blocked = false;
-            match self.api.observe_process_adoption(&guest, process).await? {
+            let adoption = if process.phase() == ResourcePhase::Ready
+                && process.owner_ref() == guest.resource_ref()
+                && process.owner_uid() == Some(guest.uid())
+            {
+                ProcessAdoptionStatus::Current
+            } else {
+                self.api.observe_process_adoption(&guest, process).await?
+            };
+            match adoption {
                 ProcessAdoptionStatus::Unavailable | ProcessAdoptionStatus::Quarantined => {
                     lifecycle_conditions.push(GuestCondition::AdoptionAmbiguous);
                     force_degraded = true;
@@ -1822,10 +1916,12 @@ where
             .filter(|target| !children.contains_key(*target))
             .cloned()
             .collect::<Vec<_>>();
-        let mut committed = BTreeMap::new();
         if !missing.is_empty() {
             let batch = GuestChildCreateBatch::new(&guest, child_plan.child_batch(), missing)?;
-            let response = match self.api.commit_batch(batch.clone()).await {
+            let response = match self.api.commit_batch(batch.clone()).await.map_err(|error| {
+                eprintln!("cloud-hypervisor-controller-stage=commit-batch error={error}");
+                error
+            }) {
                 Ok(response) => response,
                 Err(error)
                     if matches!(
@@ -1852,8 +1948,21 @@ where
             };
             match response {
                 GuestChildCommitResponse::Committed(returned) => {
-                    committed = match validate_commit_response(&batch, returned) {
-                        Ok(committed) => committed,
+                    match validate_commit_response(&batch, returned) {
+                        Ok(_) => {
+                            return self
+                                .pending_after_batch(
+                                    &guest,
+                                    &child_plan,
+                                    &children,
+                                    dependency_readiness,
+                                    dependency_conditions,
+                                    true,
+                                    lifecycle_conditions,
+                                    force_degraded,
+                                )
+                                .await;
+                        }
                         Err(CloudHypervisorError::BatchResponseInvalid) => {
                             return self
                                 .pending_after_batch(
@@ -1869,7 +1978,7 @@ where
                                 .await;
                         }
                         Err(error) => return Err(error),
-                    };
+                    }
                 }
                 GuestChildCommitResponse::Uncertain | GuestChildCommitResponse::Truncated => {
                     return self
@@ -1887,23 +1996,40 @@ where
                 }
             }
         }
+        let committed = BTreeMap::new();
 
         let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
         } else {
             self.lifecycle_intent.unwrap_or(DesiredLifecycle::Running)
         };
-        if let Err(error) = self
+        match self
             .repair_children(
                 child_plan.child_batch(),
                 &children,
                 &committed,
-                guest.generation(),
                 desired_lifecycle,
             )
             .await
         {
-            if error == CloudHypervisorError::ResourceApi(CloudHypervisorResourceApiError::Conflict)
+            Ok(true) => {
+                let status = self.project_status(
+                    &guest,
+                    &child_plan,
+                    &children,
+                    dependency_readiness,
+                    dependency_conditions,
+                    &lifecycle_conditions,
+                    force_degraded,
+                );
+                return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
+            }
+            Ok(false) => {}
+            Err(error)
+                if error
+                    == CloudHypervisorError::ResourceApi(
+                        CloudHypervisorResourceApiError::Conflict,
+                    ) =>
             {
                 let status = self.project_status(
                     &guest,
@@ -1914,10 +2040,9 @@ where
                     &lifecycle_conditions,
                     force_degraded,
                 );
-                self.api.update_status(&guest, status.clone()).await?;
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
-            return Err(error);
+            Err(error) => return Err(error),
         }
 
         let status = self.project_status(
@@ -2269,7 +2394,6 @@ where
                         &[],
                         false,
                     );
-                    self.api.update_status(guest, status.clone()).await?;
                     self.api.clear_guest_finalizer(guest).await?;
                     let expected = plan
                         .child_batch()
@@ -2301,7 +2425,6 @@ where
             extra,
             false,
         );
-        self.api.update_status(guest, status.clone()).await?;
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
     }
 
@@ -2325,7 +2448,6 @@ where
             &extra_conditions,
             force_degraded,
         );
-        self.api.update_status(guest, status.clone()).await?;
         Ok(CloudHypervisorReconcileOutcome::from_status(
             status,
             relist_required,
@@ -2398,9 +2520,8 @@ where
         batch: &GuestChildBatch,
         observed: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
         committed: &BTreeMap<ResourceRef, CommittedChild>,
-        expected_generation: ResourceGeneration,
         desired_lifecycle: DesiredLifecycle,
-    ) -> Result<(), CloudHypervisorError> {
+    ) -> Result<bool, CloudHypervisorError> {
         for mutation in batch.mutations() {
             let target = mutation.target();
             let Some(child) = observed.get(target) else {
@@ -2416,12 +2537,10 @@ where
                         Some(desired_lifecycle),
                     )?;
                     self.api.update_spec(update).await?;
+                    return Ok(true);
                 }
                 continue;
             };
-            let desired_digest =
-                d2b_core_controller::semantic_child_digest(&materialize_child_payload(mutation)?)
-                    .map_err(|_| CloudHypervisorError::BatchResponseInvalid)?;
             let lifecycle_drift = target.resource_type().as_str() == "Process"
                 && child.desired_lifecycle() != Some(desired_lifecycle);
             let process_failed = target.resource_type().as_str() == "Process"
@@ -2430,12 +2549,7 @@ where
                     ResourcePhase::Degraded | ResourcePhase::Failed | ResourcePhase::Unknown
                 )
                 && desired_lifecycle == DesiredLifecycle::Running;
-            let generation_drift = child.generation() != expected_generation;
-            if child.spec_digest() != desired_digest
-                || lifecycle_drift
-                || process_failed
-                || generation_drift
-            {
+            if lifecycle_drift || process_failed {
                 let update = ChildSpecUpdate::new(
                     target.clone(),
                     child.uid().clone(),
@@ -2444,9 +2558,10 @@ where
                     (target.resource_type().as_str() == "Process").then_some(desired_lifecycle),
                 )?;
                 self.api.update_spec(update).await?;
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     fn project_status(
@@ -2513,10 +2628,9 @@ where
             });
         let process_ready = process.is_some_and(|child| {
             child.phase() == ResourcePhase::Ready
-                && matches!(
-                    self.observed_process_status,
-                    Some(ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted)
-                )
+                && child.owner_ref() == guest.resource_ref()
+                && child.owner_uid() == Some(guest.uid())
+                && child.desired_lifecycle() == Some(DesiredLifecycle::Running)
         });
         let session_observed = guest.session_evidence().is_some();
         let session_evidence = guest
@@ -2533,9 +2647,11 @@ where
             Some(_) => conditions.push(GuestCondition::SessionDegraded),
         }
         let child_healthy = plan.child_batch().mutations().iter().all(|mutation| {
-            children
-                .get(mutation.target())
-                .is_some_and(|child| child.healthy() && child.generation() == guest.generation())
+            children.get(mutation.target()).is_some_and(|child| {
+                child.healthy()
+                    && child.owner_ref() == guest.resource_ref()
+                    && child.owner_uid() == Some(guest.uid())
+            })
         });
         let observation = GuestStatusObservation {
             generations: guest.generations(),
@@ -2549,17 +2665,7 @@ where
             deletion_requested: guest.deleting(),
             session_active: session_observed,
             descendants_present: !children.is_empty(),
-            process_stopped: process.is_none_or(|child| {
-                child.desired_lifecycle() != Some(DesiredLifecycle::Running)
-                    || matches!(
-                        self.observed_process_status,
-                        Some(
-                            ProcessAdoptionStatus::Absent
-                                | ProcessAdoptionStatus::Quarantined
-                                | ProcessAdoptionStatus::Unavailable
-                        )
-                    )
-            }),
+            process_stopped: !process_ready,
         };
         let mut status = reduce_status(&observation);
         if force_degraded && !guest.deleting() {
@@ -2623,6 +2729,20 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
             spec_object
                 .entry("processClass".to_owned())
                 .or_insert_with(|| serde_json::Value::String("worker".to_owned()));
+            spec_object.entry("sandbox".to_owned()).or_insert_with(|| {
+                serde_json::json!({
+                    "namespaceClasses": ["mount", "ipc"],
+                    "capabilityClasses": [],
+                    "seccompClass": "strict",
+                    "noNewPrivileges": true,
+                    "startRoot": false,
+                    "environmentClass": "minimal",
+                    "readOnlyRoot": true,
+                    "umask": "0022",
+                    "oomScoreAdj": 0,
+                    "userNamespace": null
+                })
+            });
         }
         "Endpoint" => {
             let producer_guest = spec_object
@@ -2635,16 +2755,16 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
             spec_object
                 .entry("transport".to_owned())
                 .or_insert_with(|| serde_json::Value::String("opaque-carriage".to_owned()));
-            spec_object
-                .entry("locality".to_owned())
-                .or_insert_with(|| serde_json::Value::String(
+            spec_object.entry("locality".to_owned()).or_insert_with(|| {
+                serde_json::Value::String(
                     if producer_guest {
                         "cross-domain"
                     } else {
                         "host-local"
                     }
                     .to_owned(),
-                ));
+                )
+            });
             spec_object
                 .entry("visibility".to_owned())
                 .or_insert_with(|| serde_json::Value::String("provider".to_owned()));
@@ -2665,11 +2785,13 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
                 });
             spec_object
                 .entry("lifecyclePolicy".to_owned())
-                .or_insert_with(|| {
-                    serde_json::Value::String("recycle-with-producer".to_owned())
-                });
+                .or_insert_with(|| serde_json::Value::String("recycle-with-producer".to_owned()));
         }
         "Volume" => {
+            let provider_ref = spec_object
+                .get("providerRef")
+                .cloned()
+                .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
             let execution_ref = spec_object
                 .get("executionRef")
                 .cloned()
@@ -2684,6 +2806,7 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
                 .ok_or(CloudHypervisorError::BatchResponseInvalid)?;
             let view_name = view.as_str().unwrap_or("system").to_owned();
             spec_object.clear();
+            spec_object.insert("providerRef".to_owned(), provider_ref);
             spec_object.insert(
                 "source".to_owned(),
                 serde_json::json!({
@@ -2694,7 +2817,10 @@ fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudH
                     }
                 }),
             );
-            spec_object.insert("kind".to_owned(), serde_json::Value::String("state".to_owned()));
+            spec_object.insert(
+                "kind".to_owned(),
+                serde_json::Value::String("state".to_owned()),
+            );
             spec_object.insert("layout".to_owned(), serde_json::json!([]));
             spec_object.insert(
                 "views".to_owned(),

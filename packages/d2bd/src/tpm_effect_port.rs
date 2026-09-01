@@ -11,10 +11,7 @@ use d2b_contracts::types::{BundleOpId, PathClass, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessNode, ProcessRole};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
@@ -204,6 +201,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 resource_uid: None,
                 zone_uid: None,
                 owner_ref: None,
+                owner_uid: None,
                 provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
@@ -1106,9 +1104,7 @@ mod tests {
             owner_resource_uid: Some(uid.as_str().to_owned()),
             zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
             guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
-            guest_generation: Some(
-                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
-            ),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
             provider_assignment_generation: Some(
                 d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             ),
@@ -1119,12 +1115,7 @@ mod tests {
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(
-                Some(&snapshot),
-                &uid,
-                DurableSwtpmLiveness::Missing,
-                None,
-            ),
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Missing, None,),
             Ok(DurableSwtpmAdoption::RemoveAndSpawn)
         );
     }
@@ -1139,9 +1130,7 @@ mod tests {
             owner_resource_uid: None,
             zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
             guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
-            guest_generation: Some(
-                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
-            ),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
             provider_assignment_generation: Some(
                 d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             ),
@@ -1180,9 +1169,7 @@ mod tests {
             owner_resource_uid: Some(uid.as_str().to_owned()),
             zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
             guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
-            guest_generation: Some(
-                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
-            ),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
             provider_assignment_generation: Some(
                 d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             ),
@@ -1214,9 +1201,7 @@ mod tests {
             owner_resource_uid: Some(old_uid.as_str().to_owned()),
             zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
             guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
-            guest_generation: Some(
-                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
-            ),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
             provider_assignment_generation: Some(
                 d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             ),
@@ -1227,7 +1212,12 @@ mod tests {
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(Some(&snapshot), &new_uid, DurableSwtpmLiveness::Live, None),
+            durable_swtpm_adoption_gate(
+                Some(&snapshot),
+                &new_uid,
+                DurableSwtpmLiveness::Live,
+                None
+            ),
             Err(TpmEffectError::StateIntegrity)
         );
     }
@@ -1238,11 +1228,9 @@ mod tests {
         let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
         let snapshot_guest_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap();
-        let current_guest_uid =
-            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174000").unwrap();
+        let current_guest_uid = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174000").unwrap();
         let guest_generation = d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
-        let provider_generation =
-            d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
+        let provider_generation = d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
         let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
             vm: "work-vm".to_owned(),
             role_id: "swtpm".to_owned(),

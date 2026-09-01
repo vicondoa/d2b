@@ -175,10 +175,8 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         .iter()
         .filter_map(|package| package.get("name").and_then(Value::as_str))
         .filter(|name| {
-            !matches!(
-                *name,
-                "d2b-broker" | "d2b-guest-shell-runner" | "xtask"
-            ) && (*name == "d2b" || name.starts_with("d2b-"))
+            !matches!(*name, "d2b-broker" | "d2b-guest-shell-runner" | "xtask")
+                && (*name == "d2b" || name.starts_with("d2b-"))
         })
         .map(str::to_owned)
         .collect::<BTreeSet<_>>()

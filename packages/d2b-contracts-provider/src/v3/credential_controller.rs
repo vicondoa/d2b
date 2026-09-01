@@ -11,11 +11,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use sha2::{Digest, Sha256};
 
-use d2b_contracts_resource::v3::ResourceUid;
 use super::credential::{
     CredentialLeaseState, CredentialMethod, CredentialRevocationPolicy, CredentialRotationPolicy,
     OperationClass, PlacementBinding, RevocationAction, RolePermission, RotationPolicyClass,
 };
+use d2b_contracts_resource::v3::ResourceUid;
 
 /// Fixed interval between Credential metadata observations.
 pub const CREDENTIAL_OBSERVE_INTERVAL_MS: u64 = 30_000;

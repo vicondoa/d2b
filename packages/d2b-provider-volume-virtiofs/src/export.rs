@@ -11,11 +11,9 @@ use sha2::{Digest, Sha256};
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
     validate_mount_path,
-},
 };
 
 use crate::error::VirtiofsExportError;

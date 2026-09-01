@@ -23,8 +23,8 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperPersistentShellSnapshot, HelperScopeKind, HelperScopeState, HelperShellAttachResult,
     HelperShellDetachResponse, HelperShellKillResponse, HelperShellListResponse, HelperShellPolicy,
     HelperShellRequest, HelperShellResponse, HelperSupervisorId, HelperTerminalReady,
-    HelperTerminalTransport, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
-    UnsafeLocalHelperToDaemon, ZoneResourceIdentity,
+    HelperTerminalTransport, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
+    ZoneResourceIdentity,
 };
 use nix::libc;
 use serde::Serialize;

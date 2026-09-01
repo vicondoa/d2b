@@ -30,13 +30,7 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib pkgs; };
-  guestHostTools =
-    if d2bHostToolOverrides == null
-    then d2bHostTools
-    else d2bHostTools // {
-      broker = d2bHostToolOverrides.broker;
-      d2bd = d2bHostToolOverrides.d2bd;
-    };
+  guestHostTools = d2bHostTools;
 
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint -
@@ -76,6 +70,7 @@ let
         // {
           d2bInputs = inputs;
           d2bHostTools = guestHostTools;
+          d2bHostToolOverrides = d2bHostToolOverrides;
           d2bUsePrebuiltHostTools = cfg.site.usePrebuiltHostTools;
         };
       inherit (pkgs.stdenv.hostPlatform) system;

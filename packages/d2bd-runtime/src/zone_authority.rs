@@ -12,8 +12,7 @@ use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use sha2::{Digest, Sha256};
 
 /// Prefix reserved for the durable all-Zone publication operation.
-pub const ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX: &str =
-    "zone-generation-publication:";
+pub const ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX: &str = "zone-generation-publication:";
 
 /// Closed failure while binding a Zone bundle to its immutable store identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,10 +370,7 @@ mod tests {
         .collect();
         let error = complete_generation_set_digest(
             &zones,
-            &BTreeMap::from([(
-                ZoneId::parse("work").unwrap(),
-                digest('a'),
-            )]),
+            &BTreeMap::from([(ZoneId::parse("work").unwrap(), digest('a'))]),
         )
         .expect_err("missing local Zone must fail closed");
         assert_eq!(error, ZoneAuthorityError::IncompleteGeneration);

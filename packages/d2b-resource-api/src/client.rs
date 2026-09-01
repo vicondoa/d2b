@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext;
+use d2b_contracts_resource::v3::{ConfigurationGeneration, identity::AuthenticatedSubjectContext};
 use d2b_core_controller::controller_assignment::ScopedResourceMutation;
 
 use crate::{
@@ -94,6 +94,17 @@ where
         self.service.commit_batch(self.trusted(request)).await
     }
 
+    /// Commit a verified configuration bundle through the internal Core path.
+    pub async fn commit_configuration_batch(
+        &self,
+        request: wire::CommitBatchRequest,
+        configuration_generation: ConfigurationGeneration,
+    ) -> wire::CommitBatchResponse {
+        self.service
+            .commit_configuration_batch(self.trusted(request), configuration_generation)
+            .await
+    }
+
     /// Commit a batch carrying the bus-admitted assignment fence into every
     /// store mutation without opening a second transport.
     pub async fn scoped_commit_batch(
@@ -127,10 +138,7 @@ where
         &self,
         target: d2b_contracts_resource::v3::ResourceRef,
         operation_id: impl Into<String>,
-    ) -> Result<
-        crate::GuestLifecycleAdmission,
-        d2b_contracts_resource::v3::ResourceError,
-    > {
+    ) -> Result<crate::GuestLifecycleAdmission, d2b_contracts_resource::v3::ResourceError> {
         let subject = crate::identity::AuthenticatedSubjectContext::issue(
             Arc::clone(&self.subject),
             self.state.clone(),

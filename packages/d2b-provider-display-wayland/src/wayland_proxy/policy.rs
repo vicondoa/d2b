@@ -321,10 +321,12 @@ impl FilterPolicy {
             title_prefix,
             identity,
             identity_label: target_label,
-            dmabuf_filters: std::sync::Arc::new(crate::wayland_proxy::dmabuf::DmabufFilterList::new(
-                &input.dmabuf_allow,
-                &input.dmabuf_deny,
-            )),
+            dmabuf_filters: std::sync::Arc::new(
+                crate::wayland_proxy::dmabuf::DmabufFilterList::new(
+                    &input.dmabuf_allow,
+                    &input.dmabuf_deny,
+                ),
+            ),
             log_filtered_globals: input.log_filtered_globals,
             warnings,
         }

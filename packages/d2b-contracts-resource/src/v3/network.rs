@@ -11,8 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
     ConditionState, IfName, ManagedBy, ResourceBundleGenerationId, ResourceGeneration,
-    ResourcePhase, ResourceRef, ResourceUid,
-    UpdateState,
+    ResourcePhase, ResourceRef, ResourceUid, UpdateState,
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug,
         require_execution_ref, string_schema,
@@ -82,10 +81,7 @@ impl core::fmt::Debug for NetworkProvenance {
 }
 
 /// Derive the host ownership marker for one Network projection.
-pub fn derive_network_ownership_marker(
-    provenance: &NetworkProvenance,
-    object: &str,
-) -> String {
+pub fn derive_network_ownership_marker(provenance: &NetworkProvenance, object: &str) -> String {
     format!(
         "network:{object}:zone:{}:network:{}:generation:{}:attachment:{}:bundle:{}",
         provenance.zone_uid().as_str(),

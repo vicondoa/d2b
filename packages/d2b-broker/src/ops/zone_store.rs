@@ -20,8 +20,7 @@ use d2b_contracts_resource::v3::storage::{
     ZoneStoreAuxiliaryDirectory, ZoneStoreDescriptorPublicationRequirement,
     ZoneStoreDirectoryRepairOwner, ZoneStoreFilesystemRequirement, ZoneStoreFsyncRequirement,
     ZoneStoreId, ZoneStoreIdentity, ZoneStoreLockingRequirement, ZoneStorePrincipal,
-    ZoneStoreReplacementDetection, ZoneStoreReplacementPublicationRequirement,
-    ZoneStoreStorageRow,
+    ZoneStoreReplacementDetection, ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
 };
 use d2b_core::bundle_resolver::BundleResolver;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};

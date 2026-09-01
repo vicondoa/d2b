@@ -9,8 +9,8 @@ pub mod audit_wire;
 pub mod auth_wire;
 pub mod capability;
 pub mod configured_argv;
-pub mod contract_id;
 pub mod constellation_error;
+pub mod contract_id;
 pub mod controller_config;
 pub mod error;
 pub mod foundation_effects;
@@ -36,12 +36,6 @@ pub mod workload_identity;
 
 pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
 pub use constellation_error::{ConstellationError, ErrorKind};
-pub use identity_config::{
-    KeyFingerprint, RealmIdentityConfigEntry, RealmIdentityConfigError,
-    RealmIdentityConfigInvariants, RealmIdentityConfigJson, RealmIdentityConfigRuntimeState,
-    RealmIdentityConfigSummary, RealmIdentityFingerprint,
-};
-pub use opaque_payload::OpaquePayload;
 pub use error::{Error, SemverRange, Version};
 pub use foundation_effects::{
     CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,
@@ -51,10 +45,16 @@ pub use identity::{
     IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid,
 };
+pub use identity_config::{
+    KeyFingerprint, RealmIdentityConfigEntry, RealmIdentityConfigError,
+    RealmIdentityConfigInvariants, RealmIdentityConfigJson, RealmIdentityConfigRuntimeState,
+    RealmIdentityConfigSummary, RealmIdentityFingerprint,
+};
 pub use ids::{
     AllocatorLeaseId, CorrelationId, ExecutionId, HostResourceId, IdempotencyKey, OperationId,
     PrincipalId, StreamCursor, StreamId,
 };
+pub use opaque_payload::OpaquePayload;
 pub use privileges_w3::W3BrokerOperation;
 pub use token::{ProtocolToken, TokenError};
 pub use workload::{

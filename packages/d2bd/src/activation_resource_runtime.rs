@@ -20,22 +20,13 @@ use d2b_contracts_broker::host_generation::{
 };
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
-    ActivationDetail,
-    ActivationMode,
-    ActivationOutcomeCode,
-    CanonicalJsonValue,
-    NixosGenerationSpec,
-    ResourceEnvelope,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    ActivationDetail, ActivationMode, ActivationOutcomeCode, CanonicalJsonValue,
+    NixosGenerationSpec, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceTypeName,
+    ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_provider_activation_nixos::{
-    activation_runner_ref, activation_runner_spec, ActivationCaller, ActivationController,
-    CallerRole, GenerationObservation, GenerationPhase,
+    ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,
+    activation_runner_ref, activation_runner_spec,
 };
 use d2b_resource_api::watch::ResourceWatch;
 use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
@@ -44,16 +35,11 @@ use d2b_resource_store::{
 };
 use d2b_resource_store_redb::RedbResourceStore;
 
-use crate::{
-    ServerState, dispatch_broker_request_as,
-};
+use crate::{ServerState, dispatch_broker_request_as};
 
 #[async_trait::async_trait]
 pub(crate) trait ActivationResourceClient: Send + Sync {
-    async fn create(
-        &self,
-        request: wire::CreateRequest,
-    ) -> Result<wire::CreateResponse, ()>;
+    async fn create(&self, request: wire::CreateRequest) -> Result<wire::CreateResponse, ()>;
 
     async fn update_status(
         &self,
@@ -69,13 +55,8 @@ pub(crate) trait ActivationResourceClient: Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl ActivationResourceClient
-    for ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>
-{
-    async fn create(
-        &self,
-        request: wire::CreateRequest,
-    ) -> Result<wire::CreateResponse, ()> {
+impl ActivationResourceClient for ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher> {
+    async fn create(&self, request: wire::CreateRequest) -> Result<wire::CreateResponse, ()> {
         Ok(ResourceApiClient::create(self, request).await)
     }
 
@@ -113,10 +94,7 @@ impl GuestActivationResourceClient {
 
 #[async_trait::async_trait]
 impl ActivationResourceClient for GuestActivationResourceClient {
-    async fn create(
-        &self,
-        request: wire::CreateRequest,
-    ) -> Result<wire::CreateResponse, ()> {
+    async fn create(&self, request: wire::CreateRequest) -> Result<wire::CreateResponse, ()> {
         self.session
             .resource_service_client()
             .create(ttrpc::context::Context::default(), &request)
@@ -282,9 +260,7 @@ impl ActivationResourceRuntime {
         execution_ref: &ResourceRef,
     ) -> Option<Arc<dyn ActivationResourceClient>> {
         if execution_ref.resource_type().as_str() == "Guest" {
-            self.guest_clients
-                .get(execution_ref)
-                .cloned()
+            self.guest_clients.get(execution_ref).cloned()
         } else {
             self.status_client.clone()
         }
@@ -1291,8 +1267,8 @@ pub(crate) fn stored_resource_from_wire(
 ) -> Option<StoredResource> {
     let identity = resource.identity.as_ref()?;
     let uid = ResourceUid::parse(identity.uid.as_deref()?).ok()?;
-    let generation = d2b_contracts_resource::v3::ResourceGeneration::new(identity.generation?)
-        .ok()?;
+    let generation =
+        d2b_contracts_resource::v3::ResourceGeneration::new(identity.generation?).ok()?;
     let revision = ZoneRevision::new(identity.revision?);
     let zone = ZoneId::parse(&identity.zone).ok()?;
     let resource_ref_text = format!("{}/{}", identity.resource_type, identity.name);
@@ -1505,8 +1481,7 @@ mod tests {
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .expect("uid"),
-            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1)
-                .expect("generation"),
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: Vec::new(),
             payload_digest: "sha256:".to_owned(),
@@ -1543,8 +1518,7 @@ mod tests {
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .expect("uid"),
-            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1)
-                .expect("generation"),
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: br#"{"status":{"outcome":{"code":"runtime-deadline"}}}"#.to_vec(),
             payload_digest: "sha256:".to_owned(),

@@ -5,11 +5,12 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceUid,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
     execution_policy::BoundedToken,
-    network::{AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkSpec, RoutingSpec},
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
+        MdnsSpec, NetworkSpec, RoutingSpec,
+    },
 };
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},

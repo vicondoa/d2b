@@ -93,14 +93,9 @@ impl RunnerSnapshotRecord {
                 .provider_assignment_generation
                 .is_some_and(|value| value.get() > 0)
             && self.policy_revision.is_some_and(|value| value > 0)
-            && self
-                .operation_id
-                .as_deref()
-                .is_some_and(|value| {
-                    !value.is_empty()
-                        && value.len() <= 128
-                        && !value.chars().any(char::is_control)
-                })
+            && self.operation_id.as_deref().is_some_and(|value| {
+                !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+            })
     }
 
     /// Compare the durable lifecycle identity with the current authoritative
@@ -699,12 +694,10 @@ mod tests {
             role: RunnerRole::CloudHypervisor,
             owner_resource_uid: None,
             zone_uid: Some(
-                ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-                    .expect("Zone UID"),
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
             ),
             guest_uid: Some(
-                ResourceUid::parse("22222222-2222-4222-8222-222222222222")
-                    .expect("Guest UID"),
+                ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
             ),
             guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
             provider_assignment_generation: Some(

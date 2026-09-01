@@ -1,9 +1,6 @@
 //! Shared host-proxy readiness wire contract.
 
-use d2b_contracts::{
-    workload::WorkloadProviderKind,
-    workload_identity::WorkloadTarget,
-};
+use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 use serde::{Deserialize, Serialize};
 
 /// Version of the path-free proxy readiness record.
@@ -115,6 +112,9 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(!json.contains("/run/"));
         assert!(!json.contains("argv"));
-        assert_eq!(serde_json::from_str::<ProxyReadinessEvent>(&json).unwrap(), event);
+        assert_eq!(
+            serde_json::from_str::<ProxyReadinessEvent>(&json).unwrap(),
+            event
+        );
     }
 }

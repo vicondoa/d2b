@@ -188,7 +188,9 @@ struct RouteOwnershipRecord {
 fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> {
     match fs::symlink_metadata(root) {
         Ok(metadata) => {
-            if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.mode() & 0o022 != 0
             {
                 return Err(ApplyWithPreflightError::ForeignRoute);
             }
@@ -202,16 +204,13 @@ fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> 
                     detail: error.to_string(),
                 })
             })?;
-            fs::set_permissions(
-                root,
-                std::os::unix::fs::PermissionsExt::from_mode(0o750),
-            )
-            .map_err(|error| {
-                ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
-                    path: root.display().to_string(),
-                    detail: error.to_string(),
-                })
-            })?;
+            fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o750))
+                .map_err(|error| {
+                    ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                        path: root.display().to_string(),
+                        detail: error.to_string(),
+                    })
+                })?;
             Ok(())
         }
         Err(error) => Err(ApplyWithPreflightError::RouteQuery(
@@ -245,24 +244,21 @@ fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflight
         l_len: 0,
         l_pid: 0,
     };
-    nix::fcntl::fcntl(
-        file.as_raw_fd(),
-        nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock),
-    )
-    .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
+    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
+        .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
     Ok(file)
 }
 
-fn read_route_record(
-    path: &Path,
-) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
+fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
     match fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(path)
     {
         Ok(file) => {
-            let metadata = file.metadata().map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
+            let metadata = file
+                .metadata()
+                .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
             if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
                 return Err(ApplyWithPreflightError::ForeignRoute);
             }
@@ -548,14 +544,10 @@ mod tests {
 
     fn route_provenance() -> d2b_contracts_resource::v3::NetworkProvenance {
         d2b_contracts_resource::v3::NetworkProvenance::new(
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "123e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap(),
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "223e4567-e89b-42d3-a456-426614174001",
-            )
-            .unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .unwrap(),
             d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
             d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
             d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
@@ -593,8 +585,7 @@ mod tests {
                 via: Some("192.0.2.2".to_owned()),
                 device: Some("d2b-b12345678".to_owned()),
                 table: Some("main".to_owned()),
-                route_spec: "10.20.0.0/24 via 192.0.2.2 dev d2b-b12345678 table main"
-                    .to_owned(),
+                route_spec: "10.20.0.0/24 via 192.0.2.2 dev d2b-b12345678 table main".to_owned(),
                 owned: false,
                 route_name: Some(route_name),
                 provenance: Some(provenance.clone()),
@@ -607,11 +598,7 @@ mod tests {
     fn fake_ip(root: &std::path::Path, routes: &str) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
         let path = root.join("ip");
-        std::fs::write(
-            &path,
-            format!("#!/bin/sh\nprintf '%s' '{routes}'\n"),
-        )
-        .unwrap();
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{routes}'\n")).unwrap();
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&path, permissions).unwrap();
@@ -662,14 +649,7 @@ mod tests {
         for destroy in [false, true] {
             let exec = FakeReconcileExecutor::new();
             assert_eq!(
-                apply_with_preflight_owned(
-                    &exec,
-                    &ip,
-                    &root,
-                    &intent,
-                    &provenance,
-                    destroy,
-                ),
+                apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, destroy,),
                 Err(ApplyWithPreflightError::ForeignRoute)
             );
             assert!(exec.take_log().is_empty());
@@ -695,14 +675,7 @@ mod tests {
         let (intent, provenance) = owned_network_route();
         let exec = FakeReconcileExecutor::new();
         assert_eq!(
-            apply_with_preflight_owned(
-                &exec,
-                &ip,
-                &root,
-                &intent,
-                &provenance,
-                false,
-            ),
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
             Err(ApplyWithPreflightError::ForeignRoute)
         );
         assert!(exec.take_log().is_empty());
@@ -721,14 +694,7 @@ mod tests {
         intent.ownership_marker = Some("d2b managed: forged".to_owned());
         let exec = FakeReconcileExecutor::new();
         assert_eq!(
-            apply_with_preflight_owned(
-                &exec,
-                &ip,
-                &root,
-                &intent,
-                &provenance,
-                false,
-            ),
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
             Err(ApplyWithPreflightError::ForeignRoute)
         );
         assert!(exec.take_log().is_empty());
@@ -745,15 +711,7 @@ mod tests {
         let ip = fake_ip(&root, "[]");
         let (intent, provenance) = owned_network_route();
         let exec = FakeReconcileExecutor::new();
-        apply_with_preflight_owned(
-            &exec,
-            &ip,
-            &root,
-            &intent,
-            &provenance,
-            false,
-        )
-        .unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -766,15 +724,7 @@ mod tests {
             &root,
             r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
         );
-        apply_with_preflight_owned(
-            &exec,
-            &ip,
-            &root,
-            &intent,
-            &provenance,
-            false,
-        )
-        .unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -783,15 +733,7 @@ mod tests {
             }]
         ));
 
-        apply_with_preflight_owned(
-            &exec,
-            &ip,
-            &root,
-            &intent,
-            &provenance,
-            true,
-        )
-        .unwrap();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, true).unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -830,14 +772,7 @@ mod tests {
         for destroy in [false, true] {
             let exec = FakeReconcileExecutor::new();
             assert_eq!(
-                apply_with_preflight_owned(
-                    &exec,
-                    &ip,
-                    &root,
-                    &foreign,
-                    &provenance,
-                    destroy,
-                ),
+                apply_with_preflight_owned(&exec, &ip, &root, &foreign, &provenance, destroy,),
                 Err(ApplyWithPreflightError::ForeignRoute)
             );
             assert!(exec.take_log().is_empty());

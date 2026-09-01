@@ -2,13 +2,13 @@
 
 use d2b_audit::{AuditHash, OperationIdentity};
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, FinalizerId, RESOURCE_ENVELOPE_DOMAIN_TAG,
     ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
     RetryClass, Timestamp, ZoneId, ZoneRevision, canonical_digest,
     is_resource_activation_operation_id,
 };
-use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_resource_store::{
     AdmittedAuthorization, ExpectedRevision, MutationOrdinal, PolicySnapshot,
     ResourceAssignmentFence, ResourceAssignmentScope, ResourceMutationKind, StoreCommitResult,
@@ -1311,8 +1311,9 @@ pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError
                     assignment.phase.as_str(),
                     "assigned" | "draining" | "revoked" | "stale" | "quarantined" | "released"
                 )
-                || ResourceRef::parse(&assignment.controller_role)
-                    .map_or(true, |role| role.resource_type().as_str() != PROCESS_RESOURCE_TYPE)
+                || ResourceRef::parse(&assignment.controller_role).map_or(true, |role| {
+                    role.resource_type().as_str() != PROCESS_RESOURCE_TYPE
+                })
                 || ResourceRef::parse(&assignment.target).is_err()
             {
                 return Err(integrity("stored-assignment-invalid"));
@@ -2388,9 +2389,7 @@ fn replayed_operation_failure(operation: &OperationRecord) -> StoreError {
             | Some("assignment-owner-missing")
             | Some("owner-child-binding-mismatch")
             | Some("same-batch-create-followup-unsupported")
-            | Some("same-batch-delete-recreate-unsupported") => {
-                StoreErrorKind::ResourceConflict
-            }
+            | Some("same-batch-delete-recreate-unsupported") => StoreErrorKind::ResourceConflict,
             Some("resource-schema-invalid") => StoreErrorKind::ResourceSchemaInvalid,
             Some("resource-ref-invalid") => StoreErrorKind::ResourceRefInvalid,
             Some("resource-owner-cycle") => StoreErrorKind::ResourceOwnerCycle,
@@ -2946,7 +2945,11 @@ fn apply_prepared(
         let old_record = previous.as_ref().expect("previous resource was checked");
         let old_envelope = ResourceEnvelope::from_json(&old_record.canonical_json)
             .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
-        if !deletion_requested(&old_record.canonical_json)? {
+        if !deletion_requested(&old_record.canonical_json)?
+            && (has_finalizers(&old_record.canonical_json)?
+                || owned_children_remain(write, &mutation.target)?
+                || produced_endpoints_remain(write, &old.uid)?)
+        {
             let canonical_json = merge_deletion_request(&old_record.canonical_json, revision)?;
             let envelope = ResourceEnvelope::from_json(&canonical_json)
                 .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
@@ -2957,9 +2960,10 @@ fn apply_prepared(
                 owner_uid: old_record.owner_uid.clone(),
                 controller_binding_id: old_record.controller_binding_id.clone(),
                 payload_digest: payload_digest.clone(),
-                assignment: old_record.assignment.as_ref().map(|assignment| {
-                    assignment_rebound_to_revision(assignment, revision)
-                }),
+                assignment: old_record
+                    .assignment
+                    .as_ref()
+                    .map(|assignment| assignment_rebound_to_revision(assignment, revision)),
             };
             write
                 .open_table(RESOURCES)
@@ -3078,14 +3082,14 @@ fn apply_prepared(
         return Err(integrity("finalized-payload-digest-mismatch"));
     }
     let assignment = match mutation.assignment.as_ref() {
-        Some(fence) if matches!(&fence.scope, ResourceAssignmentScope::Primary) => Some(
-            assignment_record(
+        Some(fence) if matches!(&fence.scope, ResourceAssignmentScope::Primary) => {
+            Some(assignment_record(
                 fence,
                 &uid,
                 revision,
                 previous_resource.as_ref().map(|resource| resource.revision),
-            )?,
-        ),
+            )?)
+        }
         Some(_) | None => previous
             .as_ref()
             .and_then(|record| record.assignment.clone()),
@@ -3098,6 +3102,38 @@ fn apply_prepared(
         payload_digest: payload_digest.clone(),
         assignment,
     };
+    if mutation.kind == ResourceMutationKind::UpdateFinalizers
+        && deletion_requested(&canonical_json)?
+        && !has_finalizers(&canonical_json)?
+        && !owned_children_remain(write, &mutation.target)?
+        && !produced_endpoints_remain(write, &uid)?
+    {
+        write
+            .open_table(RESOURCES)
+            .map_err(integrity)?
+            .remove(resource_key(&mutation.target)?.as_slice())
+            .map_err(integrity)?;
+        let resource = stored_resource(&mutation.zone, &mutation.target, &record)?;
+        return Ok((
+            resource.clone(),
+            ChangeEntry::new(
+                ordinal,
+                mutation.target.resource_type().clone(),
+                mutation.target.name().clone(),
+                uid,
+                ChangeEvent::Deleted,
+                previous_resource
+                    .as_ref()
+                    .map(|resource| resource.generation),
+                None,
+                parse_optional_uid(owner_uid.as_deref())?,
+                payload_digest,
+                None,
+                operation_id.to_owned(),
+                correlation_id.to_owned(),
+            )?,
+        ));
+    }
     let producer = endpoint_producer(&envelope)?;
     insert_resource_and_indexes(
         write,
@@ -3148,14 +3184,14 @@ fn staged_state_after_mutation(
     let envelope = ResourceEnvelope::from_json(&finalized.canonical_json)
         .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
     let assignment = match prepared.mutation().assignment.as_ref() {
-        Some(fence) if matches!(&fence.scope, ResourceAssignmentScope::Primary) => Some(
-            assignment_record(
+        Some(fence) if matches!(&fence.scope, ResourceAssignmentScope::Primary) => {
+            Some(assignment_record(
                 fence,
                 uid,
                 revision,
                 previous.map(|(_, envelope)| envelope.metadata().revision()),
-            )?,
-        ),
+            )?)
+        }
         Some(_) | None => previous.and_then(|(record, _)| record.assignment.clone()),
     }
     .map(|assignment| assignment_rebound_to_revision(&assignment, revision));
@@ -3391,15 +3427,9 @@ fn validate_verified_write(
                     "resource-uid-changed",
                 ));
             }
-            let previous = current_state
-                .as_ref()
-                .map(|(record, _)| record.clone());
-            let finalized_mutation = finalize_authorized_mutation(
-                prepared,
-                previous.as_ref(),
-                revision,
-                &uid,
-            )?;
+            let previous = current_state.as_ref().map(|(record, _)| record.clone());
+            let finalized_mutation =
+                finalize_authorized_mutation(prepared, previous.as_ref(), revision, &uid)?;
             let staged_state = staged_state_after_mutation(
                 prepared,
                 &finalized_mutation,
@@ -3482,16 +3512,10 @@ fn validate_verified_write(
         let previous = if mutation.kind == ResourceMutationKind::Create {
             None
         } else {
-            current_state
-                .as_ref()
-                .map(|(record, _)| record.clone())
+            current_state.as_ref().map(|(record, _)| record.clone())
         };
-        let finalized_mutation = finalize_authorized_mutation(
-            prepared,
-            previous.as_ref(),
-            revision,
-            &uid,
-        )?;
+        let finalized_mutation =
+            finalize_authorized_mutation(prepared, previous.as_ref(), revision, &uid)?;
         let staged_state = staged_state_after_mutation(
             prepared,
             &finalized_mutation,
@@ -3558,11 +3582,7 @@ fn validate_owner_child_assignment_fence(
         || fence.resource_uid != *owner_uid
         || fence.resource_revision != owner_revision
     {
-        return Err(conflict(
-            current_revision,
-            ordinal,
-            "stale-assignment",
-        ));
+        return Err(conflict(current_revision, ordinal, "stale-assignment"));
     }
     // The owner fence is captured before the batch starts. A preceding
     // status/finalizer write may rebind the staged assignment revision, but it
@@ -4107,13 +4127,27 @@ fn merge_authorized_mutation(
         metadata.insert("deletionRequestedAt".to_owned(), CanonicalJsonValue::Null);
         metadata.insert(
             "managedBy".to_owned(),
-            CanonicalJsonValue::String("api".to_owned()),
+            CanonicalJsonValue::String(
+                if mutation.configuration_generation.is_some() {
+                    "configuration"
+                } else {
+                    "api"
+                }
+                .to_owned(),
+            ),
         );
-        for field in [
-            "configurationGeneration",
-            "controllerGeneration",
-            "providerGeneration",
-        ] {
+        if let Some(configuration_generation) = mutation.configuration_generation {
+            metadata.insert(
+                "configurationGeneration".to_owned(),
+                CanonicalJsonValue::Integer(
+                    i64::try_from(configuration_generation.get())
+                        .map_err(|_| integrity("configuration-generation-out-of-range"))?,
+                ),
+            );
+        } else {
+            metadata.remove("configurationGeneration");
+        }
+        for field in ["controllerGeneration", "providerGeneration"] {
             metadata.remove(field);
         }
         let CanonicalJsonValue::Object(root) = &mut value else {
@@ -4491,7 +4525,10 @@ fn assignment_matches(record: &AssignmentRecord, fence: &ResourceAssignmentFence
         && record.phase == "assigned"
 }
 
-fn assignment_rebound_to_revision(assignment: &AssignmentRecord, revision: u64) -> AssignmentRecord {
+fn assignment_rebound_to_revision(
+    assignment: &AssignmentRecord,
+    revision: u64,
+) -> AssignmentRecord {
     let mut rebound = assignment.clone();
     rebound.resource_revision = revision;
     rebound
@@ -4989,8 +5026,7 @@ mod tests {
     };
     use d2b_resource_store::{
         AdmittedAuthorizationTarget, AdmittedVerb, ResourceAssignmentFence,
-        ResourceAssignmentScope, ResourceMutationKind,
-        StoreSlot,
+        ResourceAssignmentScope, ResourceMutationKind, StoreSlot,
     };
     use redb::ReadableTableMetadata;
     use std::fs::OpenOptions;
@@ -5013,10 +5049,7 @@ mod tests {
             "name".to_owned(),
             CanonicalJsonValue::String("wayland-endpoint".to_owned()),
         );
-        root.insert(
-            "spec".to_owned(),
-            CanonicalJsonValue::parse(spec).unwrap(),
-        );
+        root.insert("spec".to_owned(), CanonicalJsonValue::parse(spec).unwrap());
         value
     }
 
@@ -5111,6 +5144,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
+            configuration_generation: None,
             assignment: None,
         }
     }
@@ -5137,10 +5171,9 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_slice(RESOURCE).unwrap();
         value["type"] = serde_json::Value::String("Guest".to_owned());
         value["metadata"]["name"] = serde_json::Value::String(name.to_owned());
-        value["spec"] = serde_json::to_value(
-            d2b_contracts_resource::v3::guest::GuestSpec::system_default(),
-        )
-        .unwrap();
+        value["spec"] =
+            serde_json::to_value(d2b_contracts_resource::v3::guest::GuestSpec::system_default())
+                .unwrap();
         canonical_resource(value)
     }
 
@@ -5254,6 +5287,85 @@ mod tests {
             .insert(key.as_slice(), value.as_slice())
             .unwrap();
         write.commit().unwrap();
+    }
+
+    #[test]
+    fn configuration_provenance_applies_only_when_creating_a_resource() {
+        let (_directory, database, _identity) = fixture();
+        let configured_target = ResourceRef::parse("Host/configured").unwrap();
+        let configured_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174010").unwrap();
+        let configured_body = String::from_utf8(RESOURCE.to_vec())
+            .unwrap()
+            .replace("host-system", "configured")
+            .into_bytes();
+        let mut configured_create =
+            create_mutation_with_body(configured_target.clone(), configured_body);
+        configured_create.configuration_generation = Some(ConfigurationGeneration::new(9).unwrap());
+        apply_group(
+            &database,
+            vec![verified(
+                "create-configured",
+                configured_create,
+                configured_uid,
+            )],
+        )
+        .unwrap()
+        .results[0]
+            .as_ref()
+            .unwrap();
+        let configured = stored_envelope(&database, &configured_target);
+        assert_eq!(
+            configured.metadata().managed_by(),
+            d2b_contracts_resource::v3::ManagedBy::Configuration
+        );
+        assert_eq!(
+            configured.metadata().configuration_generation(),
+            Some(ConfigurationGeneration::new(9).unwrap())
+        );
+
+        let api_target = ResourceRef::parse("Host/api-owned").unwrap();
+        let api_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174011").unwrap();
+        let api_body = String::from_utf8(RESOURCE.to_vec())
+            .unwrap()
+            .replace("host-system", "api-owned")
+            .into_bytes();
+        apply_group(
+            &database,
+            vec![verified(
+                "create-api-owned",
+                create_mutation_with_body(api_target.clone(), api_body),
+                api_uid,
+            )],
+        )
+        .unwrap()
+        .results[0]
+            .as_ref()
+            .unwrap();
+        let api = stored_envelope(&database, &api_target);
+        let mut update =
+            create_mutation_with_body(api_target.clone(), api.canonical_bytes().unwrap());
+        update.kind = ResourceMutationKind::UpdateSpec;
+        update.expected = ExpectedRevision::Exact(api.metadata().revision());
+        update.expected_uid = Some(api.metadata().uid().clone());
+        update.configuration_generation = Some(ConfigurationGeneration::new(10).unwrap());
+        apply_group(
+            &database,
+            vec![verified(
+                "update-api-owned",
+                update,
+                api.metadata().uid().clone(),
+            )],
+        )
+        .unwrap()
+        .results[0]
+            .as_ref()
+            .unwrap();
+        let updated = stored_envelope(&database, &api_target);
+        assert_eq!(
+            updated.metadata().managed_by(),
+            d2b_contracts_resource::v3::ManagedBy::Api
+        );
+        assert_eq!(updated.metadata().configuration_generation(), None);
     }
 
     #[test]
@@ -5709,8 +5821,7 @@ mod tests {
         );
 
         let unrelated_target = ResourceRef::parse("Host/unrelated").unwrap();
-        let unrelated_uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap();
+        let unrelated_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap();
         apply_group(
             &database,
             vec![verified(
@@ -5751,11 +5862,7 @@ mod tests {
         });
         let sequential_commit = apply_group(
             &database,
-            vec![verified(
-                "assignment-sequential",
-                sequential,
-                uid.clone(),
-            )],
+            vec![verified("assignment-sequential", sequential, uid.clone())],
         )
         .unwrap();
         assert_eq!(
@@ -5784,8 +5891,7 @@ mod tests {
         successor.expected = ExpectedRevision::Exact(ZoneRevision::new(4));
         successor.expected_uid = Some(uid.clone());
         successor.canonical_resource = None;
-        successor.add_finalizers =
-            vec![FinalizerId::parse("core.controller-successor").unwrap()];
+        successor.add_finalizers = vec![FinalizerId::parse("core.controller-successor").unwrap()];
         successor.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(4),
             epoch: 2,
@@ -5847,12 +5953,15 @@ mod tests {
         assignment_seed.expected = ExpectedRevision::Exact(ZoneRevision::new(1));
         assignment_seed.expected_uid = Some(uid.clone());
         assignment_seed.canonical_resource = None;
-        assignment_seed.add_finalizers =
-            vec![FinalizerId::parse("core.controller-seed").unwrap()];
+        assignment_seed.add_finalizers = vec![FinalizerId::parse("core.controller-seed").unwrap()];
         assignment_seed.assignment = Some(fence.clone());
         apply_group(
             &database,
-            vec![verified("multi-assignment-bind", assignment_seed, uid.clone())],
+            vec![verified(
+                "multi-assignment-bind",
+                assignment_seed,
+                uid.clone(),
+            )],
         )
         .unwrap();
 
@@ -5890,8 +5999,7 @@ mod tests {
         finalizers.expected = ExpectedRevision::Exact(ZoneRevision::new(3));
         finalizers.expected_uid = Some(uid.clone());
         finalizers.canonical_resource = None;
-        finalizers.add_finalizers =
-            vec![FinalizerId::parse("core.controller-batch").unwrap()];
+        finalizers.add_finalizers = vec![FinalizerId::parse("core.controller-batch").unwrap()];
         finalizers.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(3),
             scope: ResourceAssignmentScope::Primary,
@@ -5924,10 +6032,7 @@ mod tests {
         assert_eq!(envelope.metadata().revision(), ZoneRevision::new(3));
         let read = database.begin_read().unwrap();
         assert_eq!(read.open_table(TYPE_INDEX).unwrap().len().unwrap(), 1);
-        assert_eq!(
-            read.open_table(CONTROLLER_INDEX).unwrap().len().unwrap(),
-            1
-        );
+        assert_eq!(read.open_table(CONTROLLER_INDEX).unwrap().len().unwrap(), 1);
         assert_eq!(read.open_table(REVISION_LOG).unwrap().len().unwrap(), 3);
         validate_consistency(&database).unwrap();
     }
@@ -5992,8 +6097,7 @@ mod tests {
         stale.expected = ExpectedRevision::Exact(ZoneRevision::new(3));
         stale.expected_uid = Some(uid.clone());
         stale.canonical_resource = None;
-        stale.add_finalizers =
-            vec![FinalizerId::parse("core.controller-epoch-stale").unwrap()];
+        stale.add_finalizers = vec![FinalizerId::parse("core.controller-epoch-stale").unwrap()];
         stale.assignment = Some(fence);
 
         let mut batch = verified("multi-epoch-batch", successor, uid.clone());
@@ -6246,12 +6350,6 @@ mod tests {
             vec![verified("remove-finalizer", remove, uid.clone())],
         )
         .unwrap();
-        let mut finish = create_mutation(target.clone());
-        finish.kind = ResourceMutationKind::Delete;
-        finish.expected = ExpectedRevision::Exact(ZoneRevision::new(4));
-        finish.expected_uid = Some(uid.clone());
-        finish.canonical_resource = None;
-        apply_group(&database, vec![verified("finish-delete", finish, uid)]).unwrap();
         let read = database.begin_read().unwrap();
         assert!(
             read.open_table(RESOURCES)
@@ -6452,11 +6550,7 @@ mod tests {
         let valid = ResourceEnvelope::from_json(&valid_value.to_canonical_bytes()).unwrap();
         assert_eq!(valid.spec().canonical_bytes().unwrap(), ENDPOINT_SPEC);
         assert_eq!(
-            valid
-                .spec()
-                .provider_ref()
-                .unwrap()
-                .to_canonical_string(),
+            valid.spec().provider_ref().unwrap().to_canonical_string(),
             "Provider/display-wayland"
         );
         assert!(valid.spec().base().get("providerRef").is_none());
@@ -6524,16 +6618,12 @@ mod tests {
         mutation.canonical_resource = Some(endpoint_value.to_canonical_bytes());
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174002").unwrap();
 
-        let committed = apply_group(&database, vec![verified("create-endpoint", mutation, uid)])
-            .unwrap();
+        let committed =
+            apply_group(&database, vec![verified("create-endpoint", mutation, uid)]).unwrap();
         committed.results[0].as_ref().unwrap();
         let stored = stored_envelope(&database, &target);
         assert_eq!(
-            stored
-                .spec()
-                .provider_ref()
-                .unwrap()
-                .to_canonical_string(),
+            stored.spec().provider_ref().unwrap().to_canonical_string(),
             "Provider/display-wayland"
         );
         assert!(stored.spec().base().get("providerRef").is_none());
@@ -6722,8 +6812,7 @@ mod tests {
     fn owner_child_process_mutations_use_the_parent_assignment_and_owner_index() {
         let (_directory, database, _identity) = fixture();
         let owner_ref = ResourceRef::parse("Guest/guest").unwrap();
-        let owner_placeholder =
-            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let owner_placeholder = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let owner = apply_group(
             &database,
             vec![verified(
@@ -6761,8 +6850,7 @@ mod tests {
         let owner_generation = ResourceGeneration::new(1).unwrap();
 
         let child_ref = ResourceRef::parse("Process/guest-vmm").unwrap();
-        let child_placeholder =
-            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
+        let child_placeholder = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
         let mut create = create_mutation_with_body(
             child_ref.clone(),
             process_body("guest-vmm", Some(&owner_ref)),
@@ -6848,43 +6936,25 @@ mod tests {
             owner_generation,
             target.clone(),
         ));
-        let deleting = apply_group(
-            &database,
-            vec![verified("child-delete-request", request_delete, child.uid.clone())],
-        )
-        .unwrap()
-        .results[0]
-            .as_ref()
-            .unwrap()
-            .resources[0]
-            .clone();
-
-        let mut delete = create_mutation(child_ref.clone());
-        delete.kind = ResourceMutationKind::Delete;
-        delete.expected = ExpectedRevision::Exact(deleting.revision);
-        delete.expected_uid = Some(child.uid.clone());
-        delete.canonical_resource = None;
-        delete.assignment = Some(owner_child_fence(
-            owner_ref,
-            owner_uid,
-            owner_revision,
-            owner_generation,
-            target,
-        ));
         apply_group(
             &database,
-            vec![verified("child-delete", delete, child.uid)],
+            vec![verified(
+                "child-delete-request",
+                request_delete,
+                child.uid.clone(),
+            )],
         )
         .unwrap();
 
         let read = database.begin_read().unwrap();
         assert_eq!(read.open_table(OWNER_INDEX).unwrap().len().unwrap(), 0);
-        assert!(read
-            .open_table(RESOURCES)
-            .unwrap()
-            .get(resource_key(&child_ref).unwrap().as_slice())
-            .unwrap()
-            .is_none());
+        assert!(
+            read.open_table(RESOURCES)
+                .unwrap()
+                .get(resource_key(&child_ref).unwrap().as_slice())
+                .unwrap()
+                .is_none()
+        );
         validate_consistency(&database).unwrap();
     }
 
@@ -6927,60 +6997,52 @@ mod tests {
 
         let owner_revision = ZoneRevision::new(2);
         let owner_generation = ResourceGeneration::new(1).unwrap();
-        let make_batch =
-            |operation_id: &str,
-             child_name: &str,
-             child_uid: &ResourceUid,
-             follow_up: ResourceMutationKind| {
-                let child_ref = ResourceRef::parse(&format!(
-                    "{}/{}",
-                    PROCESS_RESOURCE_TYPE,
-                    child_name
-                ))
-                .unwrap();
-                let mut create = create_mutation_with_body(
-                    child_ref.clone(),
-                    process_body(child_name, Some(&owner_ref)),
-                );
-                create.owner = Some(owner_ref.clone());
-                create.assignment = Some(owner_child_fence(
-                    owner_ref.clone(),
-                    owner_uid.clone(),
-                    owner_revision,
-                    owner_generation,
-                    assignment_target.clone(),
-                ));
-                let mut follow = create_mutation_with_body(
-                    child_ref,
-                    process_body_with_uid(child_name, Some(&owner_ref), child_uid),
-                );
-                follow.kind = follow_up;
-                follow.expected = ExpectedRevision::Exact(ZoneRevision::new(3));
-                follow.expected_uid = Some(child_uid.clone());
-                follow.owner = None;
-                follow.canonical_resource = (follow_up != ResourceMutationKind::Delete)
-                    .then_some(process_body_with_uid(
-                        child_name,
-                        Some(&owner_ref),
-                        child_uid,
-                    ));
-                follow.assignment = Some(owner_child_fence(
-                    owner_ref.clone(),
-                    owner_uid.clone(),
-                    owner_revision,
-                    owner_generation,
-                    assignment_target.clone(),
-                ));
+        let make_batch = |operation_id: &str,
+                          child_name: &str,
+                          child_uid: &ResourceUid,
+                          follow_up: ResourceMutationKind| {
+            let child_ref =
+                ResourceRef::parse(&format!("{}/{}", PROCESS_RESOURCE_TYPE, child_name)).unwrap();
+            let mut create = create_mutation_with_body(
+                child_ref.clone(),
+                process_body(child_name, Some(&owner_ref)),
+            );
+            create.owner = Some(owner_ref.clone());
+            create.assignment = Some(owner_child_fence(
+                owner_ref.clone(),
+                owner_uid.clone(),
+                owner_revision,
+                owner_generation,
+                assignment_target.clone(),
+            ));
+            let mut follow = create_mutation_with_body(
+                child_ref,
+                process_body_with_uid(child_name, Some(&owner_ref), child_uid),
+            );
+            follow.kind = follow_up;
+            follow.expected = ExpectedRevision::Exact(ZoneRevision::new(3));
+            follow.expected_uid = Some(child_uid.clone());
+            follow.owner = None;
+            follow.canonical_resource = (follow_up != ResourceMutationKind::Delete).then_some(
+                process_body_with_uid(child_name, Some(&owner_ref), child_uid),
+            );
+            follow.assignment = Some(owner_child_fence(
+                owner_ref.clone(),
+                owner_uid.clone(),
+                owner_revision,
+                owner_generation,
+                assignment_target.clone(),
+            ));
 
-                let mut batch = verified(operation_id, create, child_uid.clone());
-                let follow_batch = verified(operation_id, follow, child_uid.clone());
-                batch
-                    .authorization
-                    .targets
-                    .extend(follow_batch.authorization.targets);
-                batch.mutations.extend(follow_batch.mutations);
-                batch
-            };
+            let mut batch = verified(operation_id, create, child_uid.clone());
+            let follow_batch = verified(operation_id, follow, child_uid.clone());
+            batch
+                .authorization
+                .targets
+                .extend(follow_batch.authorization.targets);
+            batch.mutations.extend(follow_batch.mutations);
+            batch
+        };
         for (operation_id, child_name, follow_up) in [
             (
                 "staged-owner-update",
@@ -6999,8 +7061,8 @@ mod tests {
                 "523e4567-e89b-42d3-a456-426614174004"
             })
             .unwrap();
-            let child_ref = ResourceRef::parse(&format!("{PROCESS_RESOURCE_TYPE}/{child_name}"))
-                .unwrap();
+            let child_ref =
+                ResourceRef::parse(&format!("{PROCESS_RESOURCE_TYPE}/{child_name}")).unwrap();
             let revision_before = current_meta(&database).unwrap().current_revision;
             let batch = make_batch(operation_id, child_name, &child_uid, follow_up);
 
@@ -7016,14 +7078,16 @@ mod tests {
                 current_meta(&database).unwrap().current_revision,
                 revision_before
             );
-            assert!(database
-                .begin_read()
-                .unwrap()
-                .open_table(RESOURCES)
-                .unwrap()
-                .get(resource_key(&child_ref).unwrap().as_slice())
-                .unwrap()
-                .is_none());
+            assert!(
+                database
+                    .begin_read()
+                    .unwrap()
+                    .open_table(RESOURCES)
+                    .unwrap()
+                    .get(resource_key(&child_ref).unwrap().as_slice())
+                    .unwrap()
+                    .is_none()
+            );
 
             let replay = apply_group(
                 &database,
@@ -7037,14 +7101,16 @@ mod tests {
                 current_meta(&database).unwrap().current_revision,
                 revision_before
             );
-            assert!(database
-                .begin_read()
-                .unwrap()
-                .open_table(RESOURCES)
-                .unwrap()
-                .get(resource_key(&child_ref).unwrap().as_slice())
-                .unwrap()
-                .is_none());
+            assert!(
+                database
+                    .begin_read()
+                    .unwrap()
+                    .open_table(RESOURCES)
+                    .unwrap()
+                    .get(resource_key(&child_ref).unwrap().as_slice())
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
@@ -7065,8 +7131,7 @@ mod tests {
         let original_body = stored_envelope(&database, &target)
             .canonical_bytes()
             .unwrap();
-        let replacement_uid =
-            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
+        let replacement_uid = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
         let make_batch = || {
             let mut delete = create_mutation(target.clone());
             delete.kind = ResourceMutationKind::Delete;
@@ -7191,7 +7256,10 @@ mod tests {
 
         let mut foreign = create_mutation_with_body(
             child_target.clone(),
-            process_body("rejected", Some(&ResourceRef::parse("Guest/sibling").unwrap())),
+            process_body(
+                "rejected",
+                Some(&ResourceRef::parse("Guest/sibling").unwrap()),
+            ),
         );
         foreign.owner = Some(ResourceRef::parse("Guest/sibling").unwrap());
         foreign.assignment = Some(owner_child_fence(
@@ -7204,7 +7272,11 @@ mod tests {
         let foreign_replay = foreign.clone();
         let rejected = apply_group(
             &database,
-            vec![verified("failure-foreign-owner", foreign, owner_uid.clone())],
+            vec![verified(
+                "failure-foreign-owner",
+                foreign,
+                owner_uid.clone(),
+            )],
         )
         .unwrap();
         assert_eq!(
@@ -7251,8 +7323,7 @@ mod tests {
             "stale-assignment"
         );
 
-        let forged_uid =
-            ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
+        let forged_uid = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
         let mut stale_uid = create_mutation_with_body(
             ResourceRef::parse("Process/stale-uid").unwrap(),
             process_body("stale-uid", Some(&owner_ref)),
@@ -7306,10 +7377,8 @@ mod tests {
         );
 
         let ownerless_target = ResourceRef::parse("Process/ownerless").unwrap();
-        let ownerless = create_mutation_with_body(
-            ownerless_target.clone(),
-            process_body("ownerless", None),
-        );
+        let ownerless =
+            create_mutation_with_body(ownerless_target.clone(), process_body("ownerless", None));
         apply_group(
             &database,
             vec![verified(
@@ -7319,10 +7388,8 @@ mod tests {
             )],
         )
         .unwrap();
-        let mut ownerless_update = create_mutation_with_body(
-            ownerless_target.clone(),
-            process_body("ownerless", None),
-        );
+        let mut ownerless_update =
+            create_mutation_with_body(ownerless_target.clone(), process_body("ownerless", None));
         ownerless_update.kind = ResourceMutationKind::UpdateSpec;
         ownerless_update.expected = ExpectedRevision::Exact(ZoneRevision::new(3));
         ownerless_update.expected_uid = Some(
@@ -7398,7 +7465,11 @@ mod tests {
             .clone();
         let mut sibling_update = create_mutation_with_body(
             sibling_child_target,
-            process_body_with_uid("sibling-child", Some(&ResourceRef::parse("Guest/sibling").unwrap()), &sibling_child_uid),
+            process_body_with_uid(
+                "sibling-child",
+                Some(&ResourceRef::parse("Guest/sibling").unwrap()),
+                &sibling_child_uid,
+            ),
         );
         sibling_update.kind = ResourceMutationKind::UpdateSpec;
         sibling_update.expected = ExpectedRevision::Exact(ZoneRevision::new(5));

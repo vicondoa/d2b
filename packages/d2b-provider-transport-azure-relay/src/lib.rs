@@ -24,8 +24,8 @@ pub use credential_client::{
 pub use guest_credential::{
     CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
     GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
-    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort,
-    MintedRelaySendToken, SealingKey,
+    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort, MintedRelaySendToken,
+    SealingKey,
 };
 pub use guest_zone_link::{GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime};
 pub use metrics::{RelayMetricEvent, RelayMetricOutcome};
