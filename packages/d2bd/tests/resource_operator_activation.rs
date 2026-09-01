@@ -1071,18 +1071,16 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
         "delete Endpoint failed: {:?}",
         delete_endpoint.error
     );
-    let delete_endpoint = client
-        .delete(delete_request(
+    let removed_endpoint = client
+        .get(get_request(
             "Endpoint",
             "display-host-endpoint",
-            delete_endpoint.revision,
-            "delete-drained-display-host-endpoint",
+            "get-deleted-display-host-endpoint",
         ))
         .await;
     assert!(
-        delete_endpoint.error.is_none(),
-        "delete drained Endpoint failed: {:?}",
-        delete_endpoint.error
+        removed_endpoint.resource.is_none() && removed_endpoint.error.is_some(),
+        "finalizer-free Endpoint must be removed by the deletion request"
     );
 
     let process = client
@@ -1178,19 +1176,6 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
         remove_finalizer.error.is_none(),
         "remove Process finalizer failed: {:?}",
         remove_finalizer.error
-    );
-    let delete_drained = client
-        .delete(delete_request(
-            "Process",
-            "display-host-proxy",
-            remove_finalizer.revision,
-            "delete-drained-display-host-proxy",
-        ))
-        .await;
-    assert!(
-        delete_drained.error.is_none(),
-        "delete drained Process failed: {:?}",
-        delete_drained.error
     );
     let removed = client
         .get(get_request(
@@ -1492,31 +1477,16 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
             "Endpoint deletion request failed: {:?}",
             requested.error
         );
-        let retained = client
+        let removed = client
             .get(get_request(
                 resource_type,
                 name,
-                &format!("get-deleting-{operation_id}"),
-            ))
-            .await;
-        let retained = retained.resource.as_ref().expect("deleting Endpoint");
-        let drained = client
-            .delete(delete_request(
-                resource_type,
-                name,
-                retained
-                    .identity
-                    .as_ref()
-                    .expect("deleting Endpoint identity")
-                    .revision
-                    .expect("deleting Endpoint revision"),
-                &format!("drain-{operation_id}"),
+                &format!("get-deleted-{operation_id}"),
             ))
             .await;
         assert!(
-            drained.error.is_none(),
-            "Endpoint drain failed: {:?}",
-            drained.error
+            removed.resource.is_none() && removed.error.is_some(),
+            "finalizer-free Endpoint must be removed by the deletion request"
         );
     }
 
@@ -1546,33 +1516,16 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
             "Process deletion request failed: {:?}",
             requested.error
         );
-        let retained = client
+        let removed = client
             .get(get_request(
                 "Process",
                 name,
-                &format!("get-deleting-{operation_id}"),
-            ))
-            .await;
-        let drained = client
-            .delete(delete_request(
-                "Process",
-                name,
-                retained
-                    .resource
-                    .as_ref()
-                    .expect("deleting Process")
-                    .identity
-                    .as_ref()
-                    .expect("deleting Process identity")
-                    .revision
-                    .expect("deleting Process revision"),
-                &format!("drain-{operation_id}"),
+                &format!("get-deleted-{operation_id}"),
             ))
             .await;
         assert!(
-            drained.error.is_none(),
-            "Process drain failed: {:?}",
-            drained.error
+            removed.resource.is_none() && removed.error.is_some(),
+            "finalizer-free Process must be removed by the deletion request"
         );
     }
 

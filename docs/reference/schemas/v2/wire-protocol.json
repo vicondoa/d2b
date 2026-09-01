@@ -8567,6 +8567,15 @@
         "vmId"
       ],
       "properties": {
+        "controllerBootstrapFdIndex": {
+          "description": "Broker-retained Provider-controller bootstrap endpoint, when present.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "pid": {
           "type": "integer",
           "format": "int32"
@@ -12463,6 +12472,17 @@
             }
           ]
         },
+        "ownerUid": {
+          "description": "Immutable semantic-owner UID for owner-scoped runtime bootstrap.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "providerIdentity": {
           "description": "Provider/template identity expected by the daemon.",
           "type": [
@@ -12634,6 +12654,15 @@
         },
         "consoleFdIndex": {
           "description": "Optional index into the SCM_RIGHTS fd vector for a provider-specific console stream. qemu-media uses this for the daemon-owned peer of the socketpair whose other end was passed to QEMU.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "controllerBootstrapFdIndex": {
+          "description": "Provider-controller bootstrap endpoint created and retained by the broker.",
           "type": [
             "integer",
             "null"

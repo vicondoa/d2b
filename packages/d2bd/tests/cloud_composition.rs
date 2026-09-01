@@ -302,6 +302,7 @@ fn cloud_children(
     guest: &GuestSnapshot,
     expected_refs: &[ResourceRef],
     owner_uid: &ResourceUid,
+    process_ready: bool,
 ) -> Vec<OwnedChildSnapshot> {
     expected_refs
         .iter()
@@ -315,7 +316,11 @@ fn cloud_children(
                 guest.generation(),
                 guest.revision(),
                 "ready",
-                ResourcePhase::Ready,
+                if resource_ref.resource_type().as_str() == "Process" && !process_ready {
+                    ResourcePhase::Pending
+                } else {
+                    ResourcePhase::Ready
+                },
                 (resource_ref.resource_type().as_str() == "Process")
                     .then_some(DesiredLifecycle::Running),
                 true,
@@ -360,10 +365,13 @@ impl AuthenticatedResourceSession for FakeCloudSession {
                     CloudMode::Ambiguous => {
                         let wrong_owner =
                             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
-                        cloud_children(&guest, &expected_refs[..1], &wrong_owner)
+                        cloud_children(&guest, &expected_refs[..1], &wrong_owner, true)
                     }
-                    CloudMode::Ready | CloudMode::ProcessAbsent | CloudMode::Failed => {
-                        cloud_children(&guest, &expected_refs, guest.uid())
+                    CloudMode::ProcessAbsent => {
+                        cloud_children(&guest, &expected_refs, guest.uid(), false)
+                    }
+                    CloudMode::Ready | CloudMode::Failed => {
+                        cloud_children(&guest, &expected_refs, guest.uid(), true)
                     }
                 };
                 Ok(CloudHypervisorResourceResponse::OwnedChildren(children))

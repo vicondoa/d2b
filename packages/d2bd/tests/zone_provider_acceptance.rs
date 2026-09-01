@@ -1327,10 +1327,10 @@ async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_proce
         .await
         .unwrap();
     assert_eq!(pending.status().status().phase, GuestStatusPhase::Pending);
-    assert!(matches!(
-        pending,
-        CloudHypervisorReconcileOutcome::Pending(_)
-    ));
+    assert!(
+        pending.is_pending(),
+        "unexpected dependency-gated outcome: {pending:?}"
+    );
     assert!(
         session.lifecycle_updates().unwrap().is_empty(),
         "dependency-pending reconcile must not force the VMM Process Running"

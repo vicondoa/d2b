@@ -190,7 +190,7 @@ fn dead_session_needs_process_and_volume_absence_proof() {
     .unwrap();
     assert_eq!(
         plan_finalization(pending_child).unwrap().disposition(),
-        FinalizationDisposition::Blocked(FinalizationBlockReason::ChildFinalizer)
+        FinalizationDisposition::Progressing
     );
 }
 

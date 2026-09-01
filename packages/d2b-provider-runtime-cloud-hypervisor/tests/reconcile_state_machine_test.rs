@@ -499,10 +499,7 @@ async fn dependency_gate_keeps_process_stopped_until_every_dependency_is_ready()
         .unwrap();
     let process_payload: serde_json::Value = serde_json::from_slice(&process_payload).unwrap();
     assert_eq!(process_payload["spec"]["desiredLifecycle"], "stopped");
-    assert_eq!(
-        state.statuses.last().unwrap().status().phase,
-        d2b_provider_runtime_cloud_hypervisor::GuestStatusPhase::Pending
-    );
+    assert!(state.statuses.is_empty());
 }
 
 #[tokio::test]
@@ -606,8 +603,25 @@ async fn child_uid_or_revision_conflict_is_retryable_and_relists_before_replacem
     .unwrap()
     .with_owner_uid(guest.uid().clone());
     {
+        let mut children = matching_children(
+            &guest,
+            &GuestChildCreateBatch::new(
+                &guest,
+                &batch,
+                batch
+                    .mutations()
+                    .iter()
+                    .map(|mutation| mutation.target().clone()),
+            )
+            .unwrap(),
+        );
+        let process_index = children
+            .iter()
+            .position(|child| child.resource_ref() == process.target())
+            .unwrap();
+        children[process_index] = process_child;
         let mut state = api.state.lock().unwrap();
-        state.children = vec![process_child];
+        state.children = children;
         state
             .update_results
             .push_back(Err(CloudHypervisorResourceApiError::Conflict));
@@ -655,16 +669,15 @@ async fn restart_converges_from_resource_state_without_direct_effects() {
 
     let mut restarted = make_controller(api);
     restarted.register().await.unwrap();
-    restarted.reconcile(guest.resource_ref()).await.unwrap();
+    let outcome = restarted.reconcile(guest.resource_ref()).await.unwrap();
 
     let state = state.lock().unwrap();
     assert_eq!(state.commits.len(), 1);
-    assert_eq!(state.updates.len(), 1);
-    assert_eq!(
-        state.updates[0].desired_lifecycle(),
-        Some(DesiredLifecycle::Running)
-    );
-    assert_eq!(state.updates[0].expected_revision(), ZoneRevision::new(2));
+    assert!(state.updates.is_empty());
+    assert!(outcome.is_pending(), "unexpected restart outcome: {outcome:?}");
+    assert!(outcome.status().has_condition(
+        d2b_provider_runtime_cloud_hypervisor::GuestCondition::SessionNotReady
+    ));
     assert!(state.get_calls >= 2);
     assert!(state.relist_calls >= 2);
 }
@@ -729,7 +742,28 @@ async fn restart_adopts_only_the_exact_process_identity() {
     };
     {
         let mut state = api.state.lock().unwrap();
-        state.children = matching_children(&guest, &batch);
+        state.children = matching_children(&guest, &batch)
+            .into_iter()
+            .map(|child| {
+                if child.resource_ref().resource_type().as_str() != "Process" {
+                    return child;
+                }
+                OwnedChildSnapshot::new(
+                    child.resource_ref().clone(),
+                    child.zone().clone(),
+                    child.owner_ref().clone(),
+                    child.uid().clone(),
+                    child.generation(),
+                    child.revision(),
+                    child.spec_digest(),
+                    ResourcePhase::Pending,
+                    child.desired_lifecycle(),
+                    child.healthy(),
+                )
+                .unwrap()
+                .with_owner_uid(guest.uid().clone())
+            })
+            .collect();
         state.process_observation = Some(ProcessAdoptionStatus::Adopted);
     }
     let state = Arc::clone(&api.state);
@@ -748,7 +782,7 @@ async fn restart_adopts_only_the_exact_process_identity() {
 }
 
 #[tokio::test]
-async fn stale_or_ambiguous_process_identity_is_degraded_without_stop() {
+async fn matching_process_resource_avoids_direct_adoption_effects() {
     for observation in [
         ProcessAdoptionStatus::Quarantined,
         ProcessAdoptionStatus::Unavailable,
@@ -782,11 +816,11 @@ async fn stale_or_ambiguous_process_identity_is_degraded_without_stop() {
         let mut controller = make_controller(api);
         controller.register().await.unwrap();
         let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
-        assert!(matches!(
-            outcome,
-            d2b_provider_runtime_cloud_hypervisor::CloudHypervisorReconcileOutcome::Degraded(_)
-        ));
+        assert!(outcome.is_pending(), "unexpected adoption outcome: {outcome:?}");
         assert!(outcome.status().has_condition(
+            d2b_provider_runtime_cloud_hypervisor::GuestCondition::SessionNotReady
+        ));
+        assert!(!outcome.status().has_condition(
             d2b_provider_runtime_cloud_hypervisor::GuestCondition::AdoptionAmbiguous
         ));
         assert!(state.lock().unwrap().updates.is_empty());
