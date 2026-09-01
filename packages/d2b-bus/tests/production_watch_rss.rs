@@ -209,6 +209,7 @@ fn mutation(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                configuration_generation: None,
                 assignment: None,
             },
             None,
