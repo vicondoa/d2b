@@ -623,6 +623,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         vm_id,
         zone_uid: None,
         owner_ref: None,
+        owner_uid: None,
         runtime_scope: None,
         typed_identity: false,
         provider_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-minijail")

@@ -1203,6 +1203,7 @@ mod tests {
                 vm_id: VmId::new("corp-vm"),
                 zone_uid: None,
                 owner_ref: None,
+                owner_uid: None,
                 runtime_scope: None,
                 typed_identity: false,
                 provider_ref: ResourceRef::parse("Provider/system-minijail").unwrap(),
