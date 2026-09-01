@@ -13,3 +13,5 @@
   across status-only revision changes.
 - Make eligible Resource deletion and final-finalizer cleanup complete through
   foreground store garbage collection.
+- Keep inherited controller-session descriptors and bootstrap readiness probes
+  compatible with the static Guest build's safe-Rust policy.

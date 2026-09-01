@@ -368,12 +368,10 @@ fn duplicate_inherited_fd(raw_fd: RawFd) -> Result<OwnedFd, UnixSessionError> {
     if raw_fd < 0 {
         return Err(UnixSessionError::InvalidSocket);
     }
-    use nix::fcntl::{FcntlArg, fcntl};
-    use std::os::fd::FromRawFd;
 
-    let duplicated = fcntl(raw_fd, FcntlArg::F_DUPFD_CLOEXEC(3)).map_err(nix_io_error)?;
-    // SAFETY: F_DUPFD_CLOEXEC returned a new owned descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
+    uapi::fcntl_dupfd_cloexec(raw_fd, 3)
+        .map(Into::into)
+        .map_err(|error| io_error(io::Error::from(error)))
 }
 
 fn nix_io_error(error: nix::errno::Errno) -> UnixSessionError {

@@ -7,7 +7,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, OwnedFd},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -1494,17 +1494,16 @@ impl ProductionProcessProviders {
         else {
             return false;
         };
-        let mut descriptor = nix::libc::pollfd {
-            fd: endpoint.daemon_endpoint.as_raw_fd(),
-            events: nix::libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: poll receives one valid stack-allocated pollfd for a
-        // descriptor retained by the marker lock for the duration of the call.
-        let result = unsafe { nix::libc::poll(&mut descriptor, 1, 0) };
-        result > 0
-            && descriptor.revents & (nix::libc::POLLIN | nix::libc::POLLERR | nix::libc::POLLHUP)
-                != 0
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        let interests = PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP;
+        let mut descriptors = [PollFd::new(
+            endpoint.daemon_endpoint.as_fd(),
+            interests,
+        )];
+        matches!(poll(&mut descriptors, PollTimeout::ZERO), Ok(count) if count > 0)
+            && descriptors[0]
+                .revents()
+                .is_some_and(|events| events.intersects(interests))
     }
 
     pub(crate) fn controller_bootstrap_contexts(
