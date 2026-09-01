@@ -19,9 +19,7 @@
 
 use std::collections::HashMap;
 
-use d2b_core::{
-    realm_controller_config::RealmControllersJson, workload_identity::WorkloadIdentity,
-};
+use d2b_contracts::{controller_config::RealmControllersJson, workload_identity::WorkloadIdentity};
 
 /// Result of resolving an incoming target string to a legacy VM name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +210,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    use d2b_core::realm_controller_config::RealmControllersJson;
+    use d2b_contracts::controller_config::RealmControllersJson;
 
     /// Minimal realm-controllers JSON with no local_runtime workloads.
     fn controllers_json_no_workloads() -> RealmControllersJson {
@@ -675,7 +673,7 @@ mod tests {
         // Round-trip the config through JSON (mirrors the filesystem serialization
         // the daemon performs before restart reads it back).
         let config_json = serde_json::to_string(&config).expect("serialize config");
-        let config_reloaded: d2b_core::realm_controller_config::RealmControllersJson =
+        let config_reloaded: d2b_contracts::controller_config::RealmControllersJson =
             serde_json::from_str(&config_json).expect("deserialize config");
         let index_after = WorkloadTargetIndex::build_from_controllers(&config_reloaded);
         let after_identity = index_after

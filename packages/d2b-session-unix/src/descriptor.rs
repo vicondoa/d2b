@@ -3,10 +3,8 @@ use crate::{
     error::{UnixSessionError, io_error},
     pidfd::{PidfdEvidence, PidfdIdentityVerifier, verify_pidfd},
 };
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentAccess, AttachmentKind, AttachmentPacket, AttachmentPolicy, KernelObjectType,
-},
 };
 use d2b_session::OwnedAttachment;
 use rustix::{
@@ -281,6 +279,40 @@ impl ReceivedPacket {
 
     pub fn control_count(&self) -> usize {
         self.controls.len()
+    }
+
+    /// Consume the first bootstrap packet that carries exactly one file
+    /// descriptor and one SCM credential record.
+    ///
+    /// The caller must validate the bounded payload marker separately. Any
+    /// missing, duplicate, or unexpected control is rejected before the
+    /// descriptor can be used.
+    pub fn into_single_file_and_credentials(
+        self,
+    ) -> Result<(OwnedFd, PeerCredentials), UnixSessionError> {
+        if !self.first_on_socket {
+            return Err(UnixSessionError::ControlMismatch);
+        }
+        if self.unknown_control {
+            return Err(UnixSessionError::UnknownControl);
+        }
+        let mut file = None;
+        let mut credentials = None;
+        for control in self.controls {
+            match control {
+                ReceivedControl::File(fd) if file.is_none() => file = Some(fd),
+                ReceivedControl::Credentials(value) if credentials.is_none() => {
+                    credentials = Some(value);
+                }
+                ReceivedControl::File(_) | ReceivedControl::Credentials(_) => {
+                    return Err(UnixSessionError::ControlMismatch);
+                }
+            }
+        }
+        match (file, credentials) {
+            (Some(file), Some(credentials)) => Ok((file, credentials)),
+            _ => Err(UnixSessionError::ControlMismatch),
+        }
     }
 
     pub fn verify_first_packet_credentials(
@@ -611,5 +643,42 @@ fn access_mode(flags: OFlags) -> AttachmentAccess {
         OFlags::WRONLY => AttachmentAccess::WriteOnly,
         OFlags::RDWR => AttachmentAccess::ReadWrite,
         _ => AttachmentAccess::ReadOnly,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PeerCredentials, ReceivedControl, ReceivedPacket};
+    use crate::credit::CreditBundle;
+    use rustix::{
+        net::UCred,
+        process::{getgid, getpid, getuid},
+    };
+
+    #[test]
+    fn first_packet_credentials_require_exact_pid_uid_and_gid() {
+        let expected = PeerCredentials::from_ucred(UCred {
+            pid: getpid(),
+            uid: getuid(),
+            gid: getgid(),
+        });
+        let actual = PeerCredentials::from_ucred(UCred {
+            pid: rustix::process::Pid::from_raw(getpid().as_raw_nonzero().get().saturating_add(1))
+                .unwrap(),
+            uid: getuid(),
+            gid: getgid(),
+        });
+        let packet = ReceivedPacket {
+            payload: b"preface".to_vec(),
+            controls: vec![ReceivedControl::Credentials(actual)],
+            unknown_control: false,
+            first_on_socket: true,
+            credits: CreditBundle::empty(),
+        };
+
+        assert_eq!(
+            packet.verify_first_packet_credentials(expected),
+            Err(crate::UnixSessionError::CredentialMismatch)
+        );
     }
 }

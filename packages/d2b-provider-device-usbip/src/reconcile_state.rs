@@ -4304,12 +4304,16 @@ mod tests {
                 .completed
                 .contains(&UsbipVmCarrierCleanupAction::DetachGuestImport)
         );
-        assert!(!report
-            .completed
-            .contains(&UsbipVmCarrierCleanupAction::HostUnbind));
-        assert!(!report
-            .completed
-            .contains(&UsbipVmCarrierCleanupAction::ReleaseDurableClaim));
+        assert!(
+            !report
+                .completed
+                .contains(&UsbipVmCarrierCleanupAction::HostUnbind)
+        );
+        assert!(
+            !report
+                .completed
+                .contains(&UsbipVmCarrierCleanupAction::ReleaseDurableClaim)
+        );
         assert_eq!(
             err,
             UsbipVmCarrierCleanupExecutionError::ActionFailed {
@@ -4628,8 +4632,11 @@ mod tests {
             UsbipLifecycleFailureKind::GuestFailed,
         );
 
-        let report =
-            reconcile_usbip_vm_start_claims(&[lifecycle_claim()], &lifecycle_attempt(), &mut executor);
+        let report = reconcile_usbip_vm_start_claims(
+            &[lifecycle_claim()],
+            &lifecycle_attempt(),
+            &mut executor,
+        );
 
         assert!(report.fatal());
         assert_eq!(report.degraded_count(), 1);

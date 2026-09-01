@@ -22,8 +22,6 @@ pub mod privileges_w3;
 pub mod processes;
 pub mod provider_artifact;
 pub mod provider_capabilities;
-pub mod realm_controller_config;
-pub mod realm_workloads_launcher;
 pub mod runtime;
 pub mod static_invariants;
 pub mod storage;

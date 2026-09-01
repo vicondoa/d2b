@@ -1,3 +1,5 @@
+> **Compatibility or historical reference.** Current product configuration and lifecycle use Zone-owned Resources, the Guest controller, d2bd, and the typed broker. Any older VM, environment, Realm, or service names on this page are retained only as implementation or migration evidence; do not copy them into new configuration.
+
 # Runner-shape audit
 
 ## Scope and method

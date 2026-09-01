@@ -39,7 +39,6 @@ rust_binary(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
-        "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -194,8 +193,6 @@ rust_test(
         "//packages/d2b-controller-toolkit:BUILD.bazel",
         "//packages/d2b-core:BUILD.bazel",
         "//packages/d2b-core-controller:BUILD.bazel",
-        "//packages/d2b-gateway:BUILD.bazel",
-        "//packages/d2b-gateway-runtime:BUILD.bazel",
         "//packages/d2b-host-activation-helper:BUILD.bazel",
         "//packages/d2b-process:BUILD.bazel",
         "//packages/d2b-process-conformance:BUILD.bazel",
@@ -229,7 +226,6 @@ rust_test(
         "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-volume-local:BUILD.bazel",
         "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
-        "//packages/d2b-realm-core:BUILD.bazel",
         "//packages/d2b-resource-api:BUILD.bazel",
         "//packages/d2b-resource-client:BUILD.bazel",
         "//packages/d2b-resource-compiler:BUILD.bazel",

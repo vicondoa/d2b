@@ -334,6 +334,7 @@ impl From<&ProcessRole> for RuntimeServiceRole {
     fn from(role: &ProcessRole) -> Self {
         match role {
             ProcessRole::HostReconcile => Self::Host,
+            ProcessRole::ProviderController => Self::ComponentSession,
             ProcessRole::StoreVirtiofsPreflight | ProcessRole::Virtiofsd => Self::Storage,
             ProcessRole::SwtpmPreStartFlush | ProcessRole::Swtpm => Self::Tpm,
             ProcessRole::Video => Self::Video,

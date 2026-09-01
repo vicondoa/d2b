@@ -22,8 +22,6 @@ let
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
 
-  inherit (d2bLib) stablePrincipalId;
-
   brokerSourcePackage = d2bHostTools.broker.overrideAttrs (_: {
     meta.description = "d2b privileged broker (uid 0 host-mutation surface)";
   });
@@ -39,128 +37,6 @@ let
     cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json";
 
   auditRetentionDays = cfg.site.audit.retentionDays or 14;
-  hostLocalBrokerRealms =
-    lib.filter
-      (realm:
-        realm.placement == "host-local"
-        && realm.controller.broker.materializedSocket
-        && realm.controller.broker.materializedService)
-      cfg._index.realms.enabledList;
-  serviceAttrName = unitName: lib.removeSuffix ".service" unitName;
-  socketAttrName = unitName: lib.removeSuffix ".socket" unitName;
-  realmBrokerSocket = realm: {
-    description = "d2b host-local realm privileged broker socket";
-    wantedBy = [ "sockets.target" ];
-    requires = [ "systemd-tmpfiles-setup.service" ];
-    after = [ "systemd-tmpfiles-setup.service" ];
-    socketConfig = {
-      ListenSequentialPacket = realm.controller.broker.socketPath;
-      SocketUser = "root";
-      SocketGroup = realm.controller.broker.group;
-      SocketMode = "0660";
-      Accept = false;
-      FileDescriptorName = "priv.sock";
-    };
-  };
-  realmBrokerService = realm: {
-    description = "d2b host-local realm privileged broker";
-    documentation = [
-      "https://github.com/vicondoa/d2b/blob/main/docs/adr/0002-non-root-daemon-and-privileged-broker.md"
-      "https://github.com/vicondoa/d2b/blob/main/docs/reference/privileges.md"
-    ];
-    requires = [
-      realm.controller.broker.socketUnitName
-      "systemd-tmpfiles-setup.service"
-    ];
-    after = [
-      realm.controller.broker.socketUnitName
-      "systemd-tmpfiles-setup.service"
-      "local-fs.target"
-    ];
-    environment = {
-      RUST_LOG = lib.mkDefault "info";
-      D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
-      D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
-      D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
-    };
-    path = with pkgs; [
-      nftables
-      acl
-      iproute2
-      util-linux
-    ];
-    serviceConfig = {
-      Type = "notify";
-      NotifyAccess = "main";
-      User = "root";
-      Group = realm.controller.broker.group;
-      CapabilityBoundingSet = [
-        "CAP_NET_ADMIN"
-        "CAP_NET_RAW"
-        "CAP_DAC_OVERRIDE"
-        "CAP_DAC_READ_SEARCH"
-        "CAP_SYS_ADMIN"
-        "CAP_SETUID"
-        "CAP_SETGID"
-        "CAP_FOWNER"
-        "CAP_SETPCAP"
-        "CAP_CHOWN"
-        "CAP_FSETID"
-        "CAP_MKNOD"
-        "CAP_SETFCAP"
-        "CAP_SYS_RESOURCE"
-        "CAP_IPC_LOCK"
-        "CAP_LEASE"
-        "CAP_KILL"
-      ];
-      AmbientCapabilities = [ "" ];
-      NoNewPrivileges = false;
-      Slice = "d2b.slice";
-      Delegate = true;
-      KillMode = "process";
-      PrivateTmp = true;
-      ProtectHome = false;
-      ProtectClock = true;
-      ProtectProc = "invisible";
-      RestrictAddressFamilies = [
-        "AF_UNIX"
-        "AF_NETLINK"
-        "AF_VSOCK"
-        "AF_INET"
-        "AF_INET6"
-      ];
-      SystemCallArchitectures = "native";
-      UMask = "0027";
-      ExecStart =
-        "${brokerPackage}/bin/d2b-broker host " +
-        "--authority-id realm-${realm.id} " +
-        "--audit-dir ${realm.controller.broker.auditDir} " +
-        "--audit-retention-days ${toString auditRetentionDays} " +
-        "--bundle-path ${bundleManifestPath} " +
-        "--realm-controllers-path /etc/d2b/realm-controllers.json " +
-        "--realm-identity-path /etc/d2b/realm-identity.json " +
-        "--state-dir ${realm.paths.stateDir} " +
-        "--d2bd-uid ${toString (stablePrincipalId realm.controller.daemon.user)} " +
-        "--d2bd-gid ${toString (stablePrincipalId realm.controller.daemon.group)}";
-      Restart = "on-failure";
-      RestartSec = "2s";
-      StandardOutput = "journal";
-      StandardError = "journal";
-      SyslogIdentifier = "d2b-realm-broker";
-    };
-  };
-  realmBrokerSockets = lib.listToAttrs (map
-    (realm: {
-      name = socketAttrName realm.controller.broker.socketUnitName;
-      value = realmBrokerSocket realm;
-    })
-    hostLocalBrokerRealms);
-  realmBrokerServices = lib.listToAttrs (map
-    (realm: {
-      name = serviceAttrName realm.controller.broker.serviceUnitName;
-      value = realmBrokerService realm;
-    })
-    hostLocalBrokerRealms);
 in
 
 {
@@ -229,7 +105,7 @@ in
         FileDescriptorName = "priv.sock";
       };
       };
-    } // realmBrokerSockets;
+    };
 
     systemd.services = {
       d2b-broker = {
@@ -402,8 +278,6 @@ in
           "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
-          "--realm-controllers-path /etc/d2b/realm-controllers.json " +
-          "--realm-identity-path /etc/d2b/realm-identity.json " +
           "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";
@@ -434,6 +308,6 @@ in
         wants = [ "d2b-broker.socket" ];
         after = [ "d2b-broker.socket" ];
       };
-    } // realmBrokerServices;
+    };
   };
 }

@@ -19,8 +19,8 @@ use d2b_contracts_broker::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposit
 use d2b_contracts_resource::v3::storage::{
     ZoneStoreAuxiliaryDirectory, ZoneStoreDescriptorPublicationRequirement,
     ZoneStoreDirectoryRepairOwner, ZoneStoreFilesystemRequirement, ZoneStoreFsyncRequirement,
-    ZoneStoreId, ZoneStoreLockingRequirement, ZoneStorePrincipal, ZoneStoreReplacementDetection,
-    ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
+    ZoneStoreId, ZoneStoreIdentity, ZoneStoreLockingRequirement, ZoneStorePrincipal,
+    ZoneStoreReplacementDetection, ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
 };
 use d2b_core::bundle_resolver::BundleResolver;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -100,6 +100,7 @@ pub struct ZoneStoreOutcome {
 #[derive(Debug, Clone)]
 struct ResolvedZoneStoreRow {
     zone_store_id: ZoneStoreId,
+    identity: ZoneStoreIdentity,
     parent_directory: PathBuf,
     database_name: &'static str,
     marker_name: &'static str,
@@ -126,6 +127,7 @@ struct StoreIdentityMarker {
     zone_store_id: String,
     identity_marker_id: String,
     store_identity: String,
+    identity: ZoneStoreIdentity,
     device: u64,
     inode: u64,
     owner_uid: u32,
@@ -213,6 +215,7 @@ fn resolve_signed_row(
 
     Ok(ResolvedZoneStoreRow {
         zone_store_id: requested_id.clone(),
+        identity: row.identity.clone(),
         parent_directory: state_root.join("zones").join(zone),
         database_name: DATABASE_NAME,
         marker_name: MARKER_NAME,
@@ -604,6 +607,7 @@ fn new_marker(
         zone_store_id: row.zone_store_id.as_str().to_owned(),
         identity_marker_id: row.identity_marker_id.clone(),
         store_identity,
+        identity: row.identity.clone(),
         device: posture.device,
         inode: posture.inode,
         owner_uid: posture.owner_uid,
@@ -703,6 +707,11 @@ fn validate_marker(
     if marker.zone_store_id != row.zone_store_id.as_str() {
         return Err(ZoneStoreError::MarkerMismatch(
             "identity-marker-store-id-mismatch",
+        ));
+    }
+    if marker.identity != row.identity {
+        return Err(ZoneStoreError::MarkerMismatch(
+            "identity-marker-zone-store-mismatch",
         ));
     }
     if marker.identity_marker_id != row.identity_marker_id {
@@ -927,6 +936,12 @@ mod tests {
             temp,
             ResolvedZoneStoreRow {
                 zone_store_id: id,
+                identity: serde_json::from_value(serde_json::json!({
+                    "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+                    "storeUid": "223e4567-e89b-42d3-a456-426614174001",
+                    "storeEpoch": 1
+                }))
+                .expect("identity"),
                 parent_directory: parent,
                 database_name: DATABASE_NAME,
                 marker_name: MARKER_NAME,
@@ -952,6 +967,11 @@ mod tests {
 
     fn signed_row() -> ZoneStoreStorageRow {
         serde_json::from_value(serde_json::json!({
+            "identity": {
+                "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+                "storeUid": "223e4567-e89b-42d3-a456-426614174001",
+                "storeEpoch": 1
+            },
             "zoneStoreId": "zone-store-local-root",
             "storageOwnerPrincipal": "d2b-zonert",
             "parentDirectoryId": "zone-store-parent-local-root",

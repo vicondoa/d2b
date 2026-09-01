@@ -1,8 +1,5 @@
 use d2b_contracts_resource::v3::{
-    ResourceUid,
-    SchemaFingerprint,
-    SchemaVersion,
-    VolumeStateSchemaId,
+    ResourceUid, SchemaFingerprint, SchemaVersion, VolumeStateSchemaId,
 };
 use d2b_provider_volume_local::marker::{
     MarkerBinding, MarkerDisposition, MarkerError, MarkerStore, VerifiedMarkerFile,

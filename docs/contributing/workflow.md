@@ -47,10 +47,10 @@ outer workflow that supplies an implementation-ready plan and owns the
 shipping tail.
 
 Ponytail supplies minimal safe implementation discipline. Caveman is for
-transient communication only. Advanced planning, orchestration, and review
-prefer `gpt-5.6-sol` with xhigh reasoning and long context (`long_context`);
-implementation prefers `gpt-5.6-luna` with xhigh reasoning. If unavailable,
-use the strongest
+transient communication only. Planning, orchestration, and implementation use
+`gpt-5.6-luna` with max reasoning and long context (`long_context`).
+Independent review uses `grok-4.6` with high reasoning and long context and
+does not run tests. If unavailable, use the strongest
 native role-equivalent model and record the substitution only in a transient
 handoff. Shipped prose never attributes a model or tool.
 

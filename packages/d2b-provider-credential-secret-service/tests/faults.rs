@@ -5,17 +5,11 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialServiceErrorCode, PlacementBinding,
-},
 };
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,

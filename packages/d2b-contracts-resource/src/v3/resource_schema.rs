@@ -536,6 +536,21 @@ pub fn is_canonical_digest(value: &str) -> bool {
     })
 }
 
+/// Stable operation identity for the store-owned Zone bootstrap mutation.
+pub const SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID: &str = "system-core-bootstrap-zone";
+
+/// Prefix for content-addressed resource-bundle materialization operations.
+pub const RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX: &str =
+    "resource-bundle-materialization:";
+
+/// Return whether an operation is one of the resource activation operations.
+pub fn is_resource_activation_operation_id(operation_id: &str) -> bool {
+    operation_id == SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID
+        || operation_id
+            .strip_prefix(RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX)
+            .is_some_and(is_canonical_digest)
+}
+
 /// Compute a digest over an explicitly framed textual canonical-JSON object.
 ///
 /// Bundle and artifact-catalog hashes cross the Nix/Rust/Python boundary.
@@ -1572,6 +1587,26 @@ mod tests {
     }
 
     #[test]
+    fn resource_activation_operation_ids_are_exact_and_content_addressed() {
+        assert!(is_resource_activation_operation_id(
+            SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID
+        ));
+        assert!(is_resource_activation_operation_id(&format!(
+            "{RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX}sha256:{}",
+            "a".repeat(64)
+        )));
+        for operation_id in [
+            "system-core-bootstrap-zone-extra",
+            "system-core-bootstrap-zone ",
+            "resource-bundle-materialization:",
+            "resource-bundle-materialization:sha256:ABC",
+            "resource-bundle-materialization:sha256:invalid",
+        ] {
+            assert!(!is_resource_activation_operation_id(operation_id));
+        }
+    }
+
+    #[test]
     fn framed_digest_separates_domain_and_payload_boundaries() {
         let left = framed_canonical_digest("ab", br#"c"#);
         let right = framed_canonical_digest("a", br#"bc"#);
@@ -1668,8 +1703,7 @@ key":1}"#,
         let generation =
             ResourceTypeName::parse("activation-nixos.d2bus.org.NixosGeneration").unwrap();
         let shell = ResourceTypeName::parse("shell-terminal.d2bus.org.ShellSession").unwrap();
-        let wayland =
-            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+        let wayland = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
 
         assert_eq!(
             PlacementAnchor::canonical_for(&process),

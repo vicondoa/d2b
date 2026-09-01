@@ -1,11 +1,9 @@
 mod common;
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
     SensitiveDeliveryRecord,
-},
 };
 use d2b_provider_credential_managed_identity::ManagedIdentityCredentialProvider;
 

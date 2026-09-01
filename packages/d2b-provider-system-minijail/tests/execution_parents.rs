@@ -226,44 +226,44 @@ fn controller_launch_and_assignment_authority_remain_disjoint_on_each_parent() {
     for execution_ref in [host_ref(), guest_ref()] {
         let launch = bind_guest(
             fixtures::ticket_builder()
-            .selected_provider(PROVIDER_NAME)
-            .execution_ref(execution_ref.clone())
-            .without_guest_execution_binding()
-            .build()
-            .expect("conformant ticket"),
+                .selected_provider(PROVIDER_NAME)
+                .execution_ref(execution_ref.clone())
+                .without_guest_execution_binding()
+                .build()
+                .expect("conformant ticket"),
             &execution_ref,
             guest_binding(2, 4, 1),
         )
-            .with_resource_revision(ZoneRevision::new(1))
-            .expect("revision binding")
-            .with_controller_launch_binding(
-                ResourceGeneration::new(2).expect("provider generation"),
-                ReconnectGeneration::new(4).expect("session generation"),
-                ConfigurationDigest::from_bytes([1; 32]),
-                ConfigurationDigest::from_bytes([2; 32]),
-            )
-            .expect("controller launch binding");
+        .with_resource_revision(ZoneRevision::new(1))
+        .expect("revision binding")
+        .with_controller_launch_binding(
+            ResourceGeneration::new(2).expect("provider generation"),
+            ReconnectGeneration::new(4).expect("session generation"),
+            ConfigurationDigest::from_bytes([1; 32]),
+            ConfigurationDigest::from_bytes([2; 32]),
+        )
+        .expect("controller launch binding");
         d2b_process_conformance::suite::assert_controller_launch_has_no_resource_client(&launch);
 
         let assignment = bind_guest(
             fixtures::ticket_builder()
-            .selected_provider(PROVIDER_NAME)
-            .execution_ref(execution_ref.clone())
-            .without_guest_execution_binding()
-            .build()
-            .expect("conformant ticket"),
+                .selected_provider(PROVIDER_NAME)
+                .execution_ref(execution_ref.clone())
+                .without_guest_execution_binding()
+                .build()
+                .expect("conformant ticket"),
             &execution_ref,
             guest_binding(2, 4, 9),
         )
-            .with_resource_revision(ZoneRevision::new(1))
-            .expect("revision binding")
-            .with_assignment_binding(
-                ResourceGeneration::new(2).expect("provider generation"),
-                ReconnectGeneration::new(4).expect("session generation"),
-                9,
-                ConfigurationDigest::from_bytes([3; 32]),
-            )
-            .expect("assignment binding");
+        .with_resource_revision(ZoneRevision::new(1))
+        .expect("revision binding")
+        .with_assignment_binding(
+            ResourceGeneration::new(2).expect("provider generation"),
+            ReconnectGeneration::new(4).expect("session generation"),
+            9,
+            ConfigurationDigest::from_bytes([3; 32]),
+        )
+        .expect("assignment binding");
         d2b_process_conformance::suite::assert_assignment_is_session_fenced(&assignment, 4, 9);
     }
 }

@@ -1,57 +1,58 @@
-# Configure a work realm gateway
+# Configure gateway-backed Zone transport
 
-**Diataxis category:** how-to.
+Gateway-backed isolation uses one Gateway Guest per Zone. The Gateway Guest
+is an execution context, not a second d2b control plane. Separate Zones never
+share a Gateway Guest or L2 bridge.
 
-Use a dedicated gateway guest for each work or provider realm. Do not share a
-gateway guest, d2b env, or L2 bridge with personal realms.
-
-## Declare the realm and gateway
+## Declare the Zone resources
 
 ```nix
-d2b.envs.work = {
-  lanSubnet = "10.44.0.0/24";
-  uplinkSubnet = "192.0.2.0/30";
-};
-
-d2b.gateways.work = {
-  realm = "work";
-  env = "work";
-  index = 20;
-  relay.namespace = "relns-example.servicebus.windows.net";
-  relay.entity = "hc-d2b-work";
-};
+{
+  d2b.zones.work = {
+    parentZone = "local-root";
+    resources = {
+      host = {
+        type = "Host";
+        spec.providerRef = "Provider/system-core";
+      };
+      gateway = {
+        type = "Guest";
+        spec = {
+          providerRef = "Provider/runtime-cloud-hypervisor";
+          systemArtifactId = "gateway-guest-system";
+        };
+      };
+      zone-link = {
+        type = "ZoneLink";
+        spec = {
+          childZoneName = "work";
+          transportProviderRef = "Provider/transport-unix";
+          transportSettings = { };
+          transportCredentials = [ ];
+        };
+      };
+    };
+  };
+}
 ```
 
-Then start the gateway like any other VM:
+Supply the matching evaluator through
+`d2b.guestSystems.work.gateway`. The Guest controller creates and reconciles
+its direct child Resources; the ZoneLink controller owns transport effects.
+
+## Credential custody
+
+Relay credentials, remote registries, Provider configuration, and Zone audit
+remain inside the Gateway Guest execution context. The host declaration and
+public Resource API carry only typed references and bounded metadata.
 
 ```bash
-d2b guest start sys-work-gateway --apply
+d2b guest status gateway --zone work
+d2b guest start gateway --zone work --apply
+d2b zone status Zone/work --json
 ```
 
-## Inspect the policy
-
-```bash
-d2b realm list
-d2b realm inspect work
-```
-
-The output reports whether a realm is host-resident or gateway-backed, the
-gateway VM when present, its local lifecycle state, and the default-deny
-cross-realm posture.
-
-## Enroll credentials inside the gateway
-
-Realm relay/provider credentials are enrolled from inside the gateway guest.
-The host declaration contains only non-secret coordinates and never parses or
-stores credential material.
-
-```bash
-d2b realm enter work
-sudo -u d2bd D2B_GATEWAY_STATE_DIR=<gateway-state-dir> \
-  d2b-gateway-enroll enroll \
-  <gateway-state-dir>/credential.sealed.json \
-  <gateway-state-dir>/seal.key < enrollment.json
-```
-
-Use placeholder or test credentials only in examples and fixtures. Do not
-commit live provider ids, tokens, keys, host paths, or user identifiers.
+Do not put tokens, raw socket paths, remote node names, or enrollment keys in
+Nix Resource specs, examples, or CLI output. A missing session, stale
+generation, or forged relay identity fails closed rather than falling back to
+host-held credentials.

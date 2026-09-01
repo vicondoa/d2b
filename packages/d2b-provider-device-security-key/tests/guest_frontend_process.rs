@@ -37,10 +37,7 @@ fn binding_children_require_authored_service_and_are_deleted_endpoint_first() {
             .iter()
             .map(|child| child.kind())
             .collect::<Vec<_>>(),
-            vec![
-                BindingChildKind::Endpoint,
-                BindingChildKind::Process,
-            ]
+        vec![BindingChildKind::Endpoint, BindingChildKind::Process,]
     );
     assert!(
         SecurityKeyController::child_resources(

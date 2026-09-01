@@ -680,7 +680,9 @@ mod tests {
             }
         ));
         assert!(matches!(
-            map_component_session_shell_error(ExecOpError::Guest(ProcessOpError::StdinBackpressure)),
+            map_component_session_shell_error(ExecOpError::Guest(
+                ProcessOpError::StdinBackpressure
+            )),
             TypedError::ComponentSessionShellFailed {
                 kind: ComponentSessionShellErrorKind::Capacity
             }

@@ -1,3 +1,5 @@
+> **Historical or compatibility reference.** Current product behavior uses Zone-owned Resources, the Guest controller, d2bd, and typed Providers. Older VM, environment, and lifecycle names on this page are retained for migration or evidence only.
+
 # vhost-user-video status
 
 ## Current status

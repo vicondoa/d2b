@@ -7,22 +7,10 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    ComponentTargetCapability,
-    CompatibilityRange,
-    ComponentDescriptor,
-    ComponentType,
-    ControllerInstanceScope,
-    ControllerTargetKind,
-    EffectPortClass,
-    PolicyEvaluation,
-    ProviderManifest,
-    ResourceApiBinding,
-    RevocationState,
-    SignatureState,
-    StandardCapabilityMatrix,
-    TrustEvidence,
+    ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor,
+    ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+    EffectPortClass, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState,
+    SignatureState, StandardCapabilityMatrix, TrustEvidence,
     provider::{
         BinaryRef, ComponentExecution, TargetRuntimeArtifacts, UpgradeDisposition, UpgradePolicy,
     },
@@ -33,15 +21,18 @@ use d2b_contracts_resource::v3::{
     identity::SchemaFingerprint,
     resource_schema::{PlacementAnchor, SchemaVersion},
 };
+use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::provider_artifact::{
     AnchoredDir, Argv, Envp, ExecutableFile, LaunchError, LayoutDir, LayoutError, LayoutPath,
     ProcessLauncher, ReadableFile,
 };
 use d2b_resource_compiler::{
-    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_artifact,
-    executable_set_digest, sha256_digest,
+    ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys,
+    VerifiedProviderArtifact, compile_artifact, executable_set_digest,
+    project_static_controller_processes, sha256_digest,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use sha2::{Digest, Sha256};
 
 const ARTIFACT: &str = "provider-test";
 const PUBLISHER: &str = "first-party";
@@ -238,10 +229,10 @@ fn digest(value: &str) -> ArtifactDigest {
 
 fn manifest(
     artifact_id: &str,
+    binary_digest: ArtifactDigest,
     executable_digest: ArtifactDigest,
     config_digest: ArtifactDigest,
     execution: ComponentExecution,
-    package_digest: ArtifactDigest,
 ) -> ProviderManifest {
     let component = ComponentDescriptor::new(
         BoundedToken::parse("test-controller").unwrap(),
@@ -264,14 +255,14 @@ fn manifest(
     .with_target_capabilities([
         ComponentTargetCapability::new(
             ControllerTargetKind::Host,
-            config_digest.clone(),
-            [EffectPortClass::Storage],
+            binary_digest.clone(),
+            [EffectPortClass::Process],
         )
         .unwrap(),
         ComponentTargetCapability::new(
             ControllerTargetKind::Guest,
-            config_digest.clone(),
-            [EffectPortClass::Storage],
+            binary_digest,
+            [EffectPortClass::Process],
         )
         .unwrap(),
     ])
@@ -291,12 +282,7 @@ fn manifest(
     ProviderManifest::new(
         ArtifactId::parse(artifact_id).unwrap(),
         ArtifactDigestSet {
-            package: package_digest,
             executable: executable_digest.clone(),
-            manifest: ArtifactDigest::parse(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-            )
-            .unwrap(),
             config: config_digest,
             schema: digest(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000001",
@@ -385,19 +371,22 @@ fn fixture_for_artifact(
     Vec<u8>,
 ) {
     let binary = elf();
+    let launchable = matches!(&execution, ComponentExecution::Launchable { .. });
     let binary_digest = sha256_digest(&binary);
     let mut executable_digests = BTreeMap::new();
-    executable_digests.insert("test-controller".to_owned(), binary_digest);
+    if launchable {
+        executable_digests.insert("test-controller".to_owned(), binary_digest.clone());
+    }
     let executable_set = executable_set_digest(&executable_digests).unwrap();
     let schema = schema();
     let schema_digest = sha256_digest(&schema);
     let package_digest = sha256_digest(b"selected-output-nar");
     let provider_manifest = manifest(
         artifact_id,
+        binary_digest.clone(),
         executable_set.clone(),
         schema_digest.clone(),
         execution,
-        package_digest.clone(),
     );
     let manifest_bytes = canonical_json_bytes(&provider_manifest).unwrap();
     let manifest_digest = sha256_digest(&manifest_bytes);
@@ -409,9 +398,13 @@ fn fixture_for_artifact(
         .file(MANIFEST_PATH, manifest_bytes.clone(), 0o644)
         .file(SIGNATURE_PATH, signature, 0o644)
         .file(SCHEMA_PATH, schema, 0o644)
-        .file("bin/test-controller", binary, 0o755)
-        .node("share/d2b/provider", Node::Directory)
-        .node("bin", Node::Directory);
+        .node("share/d2b/provider", Node::Directory);
+    let tree = if launchable {
+        tree.file("bin/test-controller", binary, 0o755)
+            .node("bin", Node::Directory)
+    } else {
+        tree
+    };
     let entry = ArtifactCatalogEntry::new(
         ArtifactId::parse(artifact_id).unwrap(),
         "/nix/store/test-provider",
@@ -437,6 +430,235 @@ fn compile(
 
 fn kind(result: Result<d2b_resource_compiler::CompiledArtifact, Diagnostic>) -> &'static str {
     result.unwrap_err().code()
+}
+
+#[test]
+fn signed_provider_controller_projects_to_an_ordinary_process() {
+    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("test-controller").unwrap(),
+    });
+    let compiled = compile(&entry, &tree, &keys).expect("verified provider artifact");
+    let resources = vec![
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Host",
+            "metadata": {"name": "host", "zone": "dev"},
+            "spec": {}
+        }),
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Provider",
+            "metadata": {"name": "provider-test", "zone": "dev"},
+            "spec": {
+                "artifactId": "provider-test",
+                "config": {"controllerExecutionRef": "Host/host"}
+            }
+        }),
+    ];
+    let projection = project_static_controller_processes(
+        "dev",
+        &resources,
+        &[VerifiedProviderArtifact::new(
+            entry.artifact_id().clone(),
+            entry.store_path().to_path_buf(),
+            compiled,
+        )],
+    )
+    .expect("static controller projection");
+    assert_eq!(projection.resources.len(), 1);
+    assert_eq!(projection.resources[0]["type"], "Process");
+    assert_eq!(
+        projection.resources[0]["metadata"]["ownerRef"],
+        "Provider/provider-test"
+    );
+    assert_eq!(
+        projection.resources[0]["spec"]["providerRef"],
+        "Provider/system-minijail"
+    );
+    assert_eq!(projection.resources[0]["spec"]["executionRef"], "Host/host");
+    assert_eq!(
+        projection.resources[0]["spec"]["processClass"],
+        "controller"
+    );
+    assert!(projection.resources[0]["spec"].get("binaryPath").is_none());
+    assert!(projection.resources[0]["spec"].get("argv").is_none());
+    assert!(projection.resources[0]["metadata"].get("uid").is_none());
+    assert_eq!(projection.templates.len(), 1);
+    assert_eq!(
+        projection.templates[0].binary_ref().as_str(),
+        "test-controller"
+    );
+    let bundle_resources = resources
+        .iter()
+        .cloned()
+        .chain(projection.resources.iter().cloned())
+        .map(|resource| {
+            serde_json::from_value::<BundleResource>(resource).expect("bundle resource")
+        })
+        .collect::<Vec<_>>();
+    let bundle = ResourceBundle::new(
+        d2b_contracts_resource::v3::ZoneId::parse("dev").unwrap(),
+        bundle_resources,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+    )
+    .expect("resource bundle")
+    .with_process_templates(projection.templates)
+    .expect("template bindings");
+    let parsed =
+        ResourceBundle::from_json(&serde_json::to_vec(&bundle).expect("serialize resource bundle"))
+            .expect("parse compiled Zone bundle");
+    assert!(
+        parsed
+            .resources
+            .iter()
+            .any(|resource| resource.resource_type().as_str() == "Process")
+    );
+}
+
+fn projection_resources(execution_ref: serde_json::Value) -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Host",
+            "metadata": {"name": "host", "zone": "dev"},
+            "spec": {}
+        }),
+        serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Provider",
+            "metadata": {"name": "provider-test", "zone": "dev"},
+            "spec": {
+                "artifactId": "provider-test",
+                "config": execution_ref
+            }
+        }),
+    ]
+}
+
+fn verified_projection_artifact() -> d2b_resource_compiler::VerifiedProviderArtifact {
+    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("test-controller").unwrap(),
+    });
+    let compiled = compile(&entry, &tree, &keys).expect("verified provider artifact");
+    VerifiedProviderArtifact::new(
+        entry.artifact_id().clone(),
+        entry.store_path().to_path_buf(),
+        compiled,
+    )
+}
+
+#[test]
+fn static_controller_projection_rejects_invalid_execution_refs() {
+    let artifact = verified_projection_artifact();
+    let missing = project_static_controller_processes(
+        "dev",
+        &projection_resources(serde_json::json!({})),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("missing controllerExecutionRef");
+    assert_eq!(missing.code(), "provider-controller-execution-ref-missing");
+
+    let invalid = project_static_controller_processes(
+        "dev",
+        &projection_resources(serde_json::json!({"controllerExecutionRef": "not-a-ref"})),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("invalid controllerExecutionRef");
+    assert_eq!(invalid.code(), "provider-controller-execution-ref-invalid");
+
+    let invalid_type = project_static_controller_processes(
+        "dev",
+        &projection_resources(serde_json::json!({"controllerExecutionRef": 7})),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("non-string controllerExecutionRef");
+    assert_eq!(
+        invalid_type.code(),
+        "provider-controller-execution-ref-invalid"
+    );
+
+    let unsupported = project_static_controller_processes(
+        "dev",
+        &projection_resources(serde_json::json!({"controllerExecutionRef": "Zone/dev"})),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("unsupported target kind");
+    assert_eq!(
+        unsupported.code(),
+        "provider-controller-target-kind-unsupported"
+    );
+
+    let missing_target = project_static_controller_processes(
+        "dev",
+        &projection_resources(serde_json::json!({
+            "controllerExecutionRef": "Host/missing"
+        })),
+        std::slice::from_ref(&artifact),
+    )
+    .expect_err("missing controller target");
+    assert_eq!(missing_target.code(), "provider-controller-target-missing");
+}
+
+#[test]
+fn static_controller_projection_rejects_duplicate_process_names() {
+    let artifact = verified_projection_artifact();
+    let mut resources = projection_resources(serde_json::json!({
+        "controllerExecutionRef": "Host/host"
+    }));
+    let mut digest = Sha256::new();
+    digest.update(b"d2b:v3:static-controller-process-v1");
+    digest.update([0]);
+    digest.update(b"dev");
+    digest.update([0]);
+    digest.update(b"Provider/provider-test");
+    digest.update([0]);
+    digest.update(b"test-controller");
+    digest.update([0]);
+    digest.update(b"Host/host");
+    let suffix = digest
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    resources.push(serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Process",
+        "metadata": {"name": format!("controller-{suffix}"), "zone": "dev"},
+        "spec": {}
+    }));
+    let error =
+        project_static_controller_processes("dev", &resources, std::slice::from_ref(&artifact))
+            .expect_err("duplicate generated Process name");
+    assert_eq!(error.code(), "provider-controller-process-name-duplicate");
+}
+
+#[test]
+fn static_controller_projection_keeps_bootstrap_components_in_process() {
+    let (entry, tree, keys, _) =
+        fixture_for_artifact("system-core", ComponentExecution::InProcessBootstrap);
+    let compiled = compile(&entry, &tree, &keys).expect("verified bootstrap artifact");
+    let resources = vec![serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Provider",
+        "metadata": {"name": "system-core", "zone": "dev"},
+        "spec": {"artifactId": "system-core", "config": {}}
+    })];
+    let projection = project_static_controller_processes(
+        "dev",
+        &resources,
+        &[VerifiedProviderArtifact::new(
+            entry.artifact_id().clone(),
+            entry.store_path().to_path_buf(),
+            compiled,
+        )],
+    )
+    .expect("bootstrap exception");
+    assert!(projection.resources.is_empty());
+    assert!(projection.templates.is_empty());
 }
 
 #[test]
@@ -724,6 +946,47 @@ fn nix_build_manifest_binary_ref_wire_compatible() {
     let parsed: ProviderManifest = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(canonical_json_bytes(&parsed).unwrap(), manifest_bytes);
     assert!(compile(&entry, &tree, &keys).is_ok());
+}
+
+#[test]
+fn nix_build_manifest_installation_contract_is_enforced() {
+    let (mut entry, mut tree, keys, manifest_bytes) = fixture(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("test-controller").unwrap(),
+    });
+    let mut manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    manifest["components"][0]["instanceScope"] =
+        serde_json::Value::String("zone-singleton".to_owned());
+    let encoded = serde_json::to_vec(&manifest).unwrap();
+    let canonical = canonical_json_bytes(&CanonicalJsonValue::parse(&encoded).unwrap()).unwrap();
+    let keypair = Ed25519KeyPair::from_seed_unchecked(&[7_u8; 32]).unwrap();
+    let signature = keypair.sign(&canonical).as_ref().to_vec();
+    tree.nodes.insert(
+        MANIFEST_PATH.to_owned(),
+        Node::File {
+            bytes: canonical.clone(),
+            mode: 0o644,
+        },
+    );
+    tree.nodes.insert(
+        SIGNATURE_PATH.to_owned(),
+        Node::File {
+            bytes: signature,
+            mode: 0o644,
+        },
+    );
+    let package_digest = entry.digests().package().clone();
+    let executable_digest = entry.digests().executable().clone();
+    let config_schema_digest = entry.digests().config_schema().clone();
+    entry = entry.with_digests(CatalogDigests::new(
+        package_digest,
+        executable_digest,
+        sha256_digest(&canonical),
+        config_schema_digest,
+    ));
+    assert_eq!(
+        kind(compile(&entry, &tree, &keys)),
+        "provider-component-execution-invalid"
+    );
 }
 
 #[test]

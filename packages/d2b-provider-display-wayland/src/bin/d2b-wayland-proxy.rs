@@ -21,7 +21,7 @@ use std::{
 };
 
 use clap::Parser;
-use d2b_core::workload_identity::WorkloadTarget;
+use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 use d2b_provider_display_wayland::wayland_proxy::filter::{
     FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,
 };
@@ -34,7 +34,6 @@ use d2b_provider_display_wayland::wayland_proxy::{
     policy::{FilterPolicy, PolicyInput},
     readiness::{ProxyReadinessFailure, ProxyReadinessStage, ReadinessReporter},
 };
-use d2b_realm_core::WorkloadProviderKind;
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
 use smallvec::{SmallVec, smallvec};
@@ -53,10 +52,6 @@ struct Args {
     #[arg(long)]
     connect: Option<String>,
 
-    /// Legacy VM name retained during compatibility migration.
-    #[arg(long, value_name = "VM")]
-    vm_name: Option<String>,
-
     /// Canonical workload target, e.g. `tools.host.d2b`.
     #[arg(long, value_name = "TARGET")]
     target: Option<String>,
@@ -65,15 +60,11 @@ struct Args {
     #[arg(long, value_name = "KIND")]
     provider_kind: Option<String>,
 
-    /// Override the xdg_toplevel app-id prefix (default: `d2b.<vm>.`).
+    /// Override the xdg_toplevel app-id prefix.
     #[arg(long)]
     app_id_prefix: Option<String>,
 
-    /// Canonical d2b realm target asserted by host metadata.
-    #[arg(long = "realm-target", value_name = "TARGET")]
-    realm_target: Option<String>,
-
-    /// Override the xdg_toplevel title prefix (default: `[<vm>] `).
+    /// Override the xdg_toplevel title prefix.
     #[arg(long)]
     title_prefix: Option<String>,
 
@@ -105,7 +96,7 @@ struct Args {
     #[arg(long = "clipd-bridge-socket", value_name = "PATH")]
     clipd_bridge_socket: Option<PathBuf>,
 
-    /// Root used to derive `/run/d2b/clipd/<uid>/bridge/<vm>/clip.sock`.
+    /// Root used to derive the per-identity clipboard bridge path.
     #[arg(
         long = "clipd-bridge-root",
         value_name = "PATH",
@@ -228,36 +219,18 @@ fn parse_provider_kind(value: &str) -> Result<WorkloadProviderKind, String> {
 }
 
 fn resolve_identity(args: &Args) -> Result<ProxyIdentity, String> {
-    if let Some(raw_target) = &args.target {
-        let target = WorkloadTarget::parse(raw_target)
-            .map_err(|_| "--target must be a canonical workload target".to_owned())?;
-        let provider = args
-            .provider_kind
-            .as_deref()
-            .ok_or_else(|| "--provider-kind is required with --target".to_owned())
-            .and_then(parse_provider_kind)?;
-        return match &args.vm_name {
-            Some(vm_name) => ProxyIdentity::legacy_vm(vm_name, target, provider)
-                .map_err(|error| error.to_string()),
-            None => Ok(ProxyIdentity::canonical(target, provider)),
-        };
-    }
-
-    if args.provider_kind.is_some() {
-        return Err("--provider-kind requires --target".to_owned());
-    }
-    let vm_name = args
-        .vm_name
+    let raw_target = args
+        .target
         .as_deref()
-        .ok_or_else(|| "either --target or compatibility --vm-name is required".to_owned())?;
-    let target = match args.realm_target.as_deref() {
-        Some(target) => WorkloadTarget::parse(target)
-            .map_err(|_| "--realm-target must be a canonical workload target".to_owned())?,
-        None => WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
-            .map_err(|_| "--vm-name cannot form a canonical workload target".to_owned())?,
-    };
-    ProxyIdentity::legacy_vm(vm_name, target, WorkloadProviderKind::LocalVm)
-        .map_err(|error| error.to_string())
+        .ok_or_else(|| "--target is required".to_owned())?;
+    let target = WorkloadTarget::parse(raw_target)
+        .map_err(|_| "--target must be a canonical workload target".to_owned())?;
+    let provider = args
+        .provider_kind
+        .as_deref()
+        .ok_or_else(|| "--provider-kind is required".to_owned())
+        .and_then(parse_provider_kind)?;
+    Ok(ProxyIdentity::canonical(target, provider))
 }
 
 fn configured_first_client_timeout(args: &Args, identity: &ProxyIdentity) -> Option<Duration> {
@@ -330,10 +303,8 @@ fn main() {
     });
 
     let input = PolicyInput {
-        identity: Some(identity.clone()),
-        vm_name: identity.log_label(),
+        identity: identity.clone(),
         app_id_prefix: args.app_id_prefix.clone(),
-        realm_target: Some(identity.canonical_target()),
         title_prefix: args.title_prefix.clone(),
         deny_globals: args.deny_globals.clone(),
         allow_globals: args.allow_globals.clone(),
@@ -540,8 +511,8 @@ fn accept_loop(
     }
 
     let policy = Rc::new(policy);
-    let vm = policy.vm_name.clone();
-    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
+    let identity_label = policy.identity_label.clone();
+    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(identity_label.clone())));
     let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(
         policy.identity.clone(),
         diag.clone(),
@@ -618,7 +589,7 @@ fn accept_loop(
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(error) => {
-                    log::warn!("[d2b-wlproxy] target={vm} poll error: {error}");
+                    log::warn!("[d2b-wlproxy] target={identity_label} poll error: {error}");
                     break;
                 }
             }
@@ -642,7 +613,7 @@ fn accept_loop(
                                 "client-nonblocking-failed",
                                 || {
                                     format!(
-                                        "[d2b-wlproxy] target={vm} event=client-accept reason=client-nonblocking-failed error={error}"
+                                        "[d2b-wlproxy] target={identity_label} event=client-accept reason=client-nonblocking-failed error={error}"
                                     )
                                 },
                             );
@@ -660,7 +631,7 @@ fn accept_loop(
                                     "add-client-failed",
                                     || {
                                         format!(
-                                            "[d2b-wlproxy] target={vm} event=client-accept reason=add-client-failed client={client_id} error={error}"
+                                            "[d2b-wlproxy] target={identity_label} event=client-accept reason=add-client-failed client={client_id} error={error}"
                                         )
                                     },
                                 );
@@ -694,7 +665,7 @@ fn accept_loop(
                             "recoverable-accept-error",
                             || {
                                 format!(
-                                    "[d2b-wlproxy] target={vm} event=client-accept reason=recoverable-accept-error error={error}"
+                                    "[d2b-wlproxy] target={identity_label} event=client-accept reason=recoverable-accept-error error={error}"
                                 )
                             },
                         );
@@ -721,7 +692,7 @@ fn accept_loop(
             Ok(_) => {}
             Err(e) => {
                 log::warn!(
-                    "[d2b-wlproxy] target={vm} dispatch error: {}",
+                    "[d2b-wlproxy] target={identity_label} dispatch error: {}",
                     error_source_chain(&e)
                 );
                 break;
@@ -816,8 +787,10 @@ mod tests {
             "target/test.sock",
             "--connect",
             "wayland-1",
-            "--vm-name",
-            "work",
+            "--target",
+            "work.local.d2b",
+            "--provider-kind",
+            "local-vm",
         ])
         .expect("parse args");
 
@@ -837,10 +810,10 @@ mod tests {
             "target/test.sock",
             "--connect",
             "wayland-1",
-            "--vm-name",
-            "work",
-            "--realm-target",
+            "--target",
             "work.local.d2b",
+            "--provider-kind",
+            "local-vm",
             "--border-enable",
             "--border-color-active",
             "#112233",
@@ -864,21 +837,21 @@ mod tests {
         assert_eq!(args.border_thickness, 9);
         assert_eq!(args.border_label.as_deref(), Some("work vm"));
         assert_eq!(args.border_label_position, LabelPosition::TopCenter);
-        assert_eq!(args.realm_target.as_deref(), Some("work.local.d2b"));
     }
 
     #[test]
-    fn regular_proxy_still_requires_explicit_listen_and_connect() {
-        let args = Args::try_parse_from(["d2b-wayland-proxy", "--vm-name", "work"])
+    fn regular_proxy_requires_explicit_identity_listen_and_connect() {
+        let args = Args::try_parse_from(["d2b-wayland-proxy"])
             .expect("deferred validation keeps clap errors friendly");
         assert!(args.listen.is_none());
+        assert!(resolve_identity(&args).is_err());
 
         assert!(resolve_listen_path(&args).is_err());
         assert!(resolve_upstream(&args).is_err());
     }
 
     #[test]
-    fn canonical_unsafe_local_cli_requires_explicit_upstream_and_has_no_vm_identity() {
+    fn canonical_unsafe_local_cli_requires_explicit_upstream_and_identity() {
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
             "--target",
@@ -890,10 +863,8 @@ mod tests {
         ])
         .expect("parse canonical args");
         let identity = resolve_identity(&args).expect("canonical identity");
-
         assert_eq!(identity.canonical_target(), "browser.host.d2b");
         assert_eq!(identity.provider_kind(), WorkloadProviderKind::UnsafeLocal);
-        assert!(identity.legacy_vm_name().is_none());
         assert!(
             resolve_upstream(&args)
                 .expect_err("unsafe-local never guesses a compositor")
@@ -902,19 +873,10 @@ mod tests {
     }
 
     #[test]
-    fn canonical_unsafe_local_rejects_vm_compatibility_identity() {
-        let args = Args::try_parse_from([
-            "d2b-wayland-proxy",
-            "--target",
-            "browser.host.d2b",
-            "--provider-kind",
-            "unsafe-local",
-            "--vm-name",
-            "browser",
-        ])
-        .expect("parse args");
+    fn retired_identity_flags_are_rejected() {
+        let args = Args::try_parse_from(["d2b-wayland-proxy", "--vm-name", "browser"]);
 
-        assert!(resolve_identity(&args).is_err());
+        assert!(args.is_err());
     }
 
     #[test]
@@ -970,11 +932,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_long_lived_vm_proxy_does_not_gain_an_initial_client_deadline() {
+    fn local_proxy_does_not_gain_an_initial_client_deadline() {
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
-            "--vm-name",
-            "work",
+            "--target",
+            "work.local.d2b",
+            "--provider-kind",
+            "local-vm",
             "--listen",
             "target/test.sock",
             "--connect",

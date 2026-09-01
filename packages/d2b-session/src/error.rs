@@ -1,10 +1,8 @@
 use std::{error::Error, fmt};
 
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     BinaryError, ContractError, FragmentSequenceError, HandshakeRejectReason, Remediation,
     SequenceError, SessionErrorCode,
-},
 };
 
 use crate::TransportError;

@@ -1,5 +1,5 @@
 {
-  description = "d2b example: desktop workstation VM with graphics, audio, and YubiKey USBIP.";
+  description = "d2b example: Wayland host with one Zone Guest.";
 
   inputs = {
     # Pin d2b to a published release tag for real-world use:
@@ -21,15 +21,8 @@
   };
 
   outputs = { self, nixpkgs, d2b, ... }: {
-    # Single x86_64-linux desktop host. The example deliberately
-    # pins `system` here rather than parameterising over
-    # `forAllSystems`: graphics + audio components transitively
-    # depend on x86_64-only packages (pkgs/spectrum-ch,
-    # pkgs/crosvm-patched, pkgs/vhost-device-sound), and the
-    # framework's `checkVmPlatform` gate in `nixos-modules/host.nix`
-    # throws an eval-time error if a VM with `graphics.enable` or
-    # `audio.enable` is evaluated against a non-x86_64-linux host.
-    # See README.md → "Why this example is x86_64-linux-only".
+    # Single x86_64-linux desktop host. Provider packages and the
+    # consumer Guest evaluator are selected by the Zone resource graph.
     nixosConfigurations.demo = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [

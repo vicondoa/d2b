@@ -1,7 +1,4 @@
-use d2b_contracts_resource::v3::{
-    ResourceUid,
-    device::DeviceArbitration,
-};
+use d2b_contracts_resource::v3::{ResourceUid, device::DeviceArbitration};
 use d2b_provider_device_usbip::{PhysicalUsbBackingToken, UsbipArbitrator, UsbipClaimError};
 
 fn uid(value: &str) -> ResourceUid {

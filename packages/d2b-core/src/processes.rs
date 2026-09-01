@@ -218,6 +218,8 @@ pub enum SpawnRunnerPlanOp {
 pub enum ProcessRole {
     /// Host reconciliation before VM-specific startup.
     HostReconcile,
+    /// A static Provider controller launched from a signed Process template.
+    ProviderController,
     /// Store and virtiofs preflight validation.
     StoreVirtiofsPreflight,
     /// swtpm pre-start flush step.

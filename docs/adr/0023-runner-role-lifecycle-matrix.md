@@ -109,7 +109,7 @@ line ~247; companion ADR 0004.
 | umask value | `inherit` (broker default; no socket-binding constraint) |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** - `d2b.slice/<vm>/cloud-hypervisor` |
+| CLONE_INTO_CGROUP usage | **yes** - `d2b.slice/<zone>/<vm>/cloud-hypervisor` |
 
 **Note ①**: CH's published behaviour is to drop `CAP_NET_ADMIN`
 before entering its main loop (after device-init and TAP

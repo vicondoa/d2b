@@ -206,6 +206,7 @@ fn all_known_policy_refs_compile_to_some() {
         "w1-qemu-media",
         "w1-virtiofsd",
         "w1-host-reconcile",
+        "w1-provider-controller",
         "w1-store-virtiofs-preflight",
         "w1-component-session-health",
         "w1-swtpm",

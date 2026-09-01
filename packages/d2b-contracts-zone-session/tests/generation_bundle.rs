@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceName, ResourceTypeName, SchemaFingerprint, ZoneId,
+    CanonicalJsonObject, ResourceName, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId,
 };
 use d2b_contracts_zone_session::v3::{
-    generation_bundle::{
-    BundleMetadata, BundleResource, ZoneBundle, ZoneBundleError,
-},
+    generation_bundle::{BundleMetadata, BundleResource, ZoneBundle, ZoneBundleError},
+    resource_bundle::ResourceBundle,
 };
 
 fn digest(byte: char) -> SchemaFingerprint {
@@ -39,6 +38,23 @@ fn bundle() -> ZoneBundle {
     .unwrap()
 }
 
+#[test]
+fn zone_uid_is_an_immutable_bundle_identity_anchor() {
+    let zone_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("zone uid");
+    let original = bundle().with_zone_uid(zone_uid.clone());
+    let bytes = original.canonical_bytes().unwrap();
+    let decoded = ZoneBundle::from_json(&bytes).unwrap();
+
+    assert_eq!(decoded.zone_uid(), Some(&zone_uid));
+    assert_eq!(decoded.canonical_bytes().unwrap(), bytes);
+
+    let mut tampered: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    tampered["zoneUid"] = serde_json::json!("223e4567-e89b-42d3-a456-426614174001");
+    let decoded_tampered = ZoneBundle::from_json(&serde_json::to_vec(&tampered).unwrap())
+        .expect("identity binding is checked by the Zone authority, not bundle parsing");
+    assert_ne!(decoded_tampered.zone_uid(), Some(&zone_uid));
+}
+
 fn contains_key(value: &serde_json::Value, key: &str) -> bool {
     match value {
         serde_json::Value::Array(values) => values.iter().any(|value| contains_key(value, key)),
@@ -69,6 +85,26 @@ fn input_bundle_round_trips_with_stable_content_hash_and_provider_digests() {
 
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(value.get("providerSchemaDigests").is_some());
+}
+
+#[test]
+fn rendered_zone_resource_bundle_fixture_round_trips() {
+    let Some(root) = std::env::var_os("D2B_FIXTURES") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(root)
+        .join("zones")
+        .join("local-root")
+        .join("resource-bundle.json");
+    let bytes = std::fs::read(&path).expect("rendered Zone resource bundle fixture");
+    let bundle = ResourceBundle::from_json(bytes.trim_ascii_end())
+        .expect("rendered Zone resource bundle contract");
+    assert_eq!(bundle.zone.as_str(), "local-root");
+    assert!(bundle.zone_uid().is_some());
+    assert_eq!(
+        ResourceBundle::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap(),
+        bundle
+    );
 }
 
 #[test]

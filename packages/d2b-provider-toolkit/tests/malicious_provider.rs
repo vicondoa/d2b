@@ -13,52 +13,23 @@
 
 use d2b_contracts_provider::v3::semantic_services::catalog;
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    BinaryRef,
-    BindingTargetType,
-    CapabilitySupport,
-    CompatibilityRange,
-    ComponentDescriptor,
-    ComponentExecution,
-    ComponentTargetCapability,
-    ComponentType,
-    ControllerInstanceScope,
-    ControllerTargetKind,
-    DependencyAlias,
-    DependencyDeclaration,
-    EffectPortClass,
-    Exportability,
-    ExtensionSchemaRegistration,
-    PolicyEvaluation,
-    ProjectionFactory,
-    ProviderContractError,
-    ProviderManifest,
-    ResourceApiBinding,
-    RevocationState,
-    SignatureState,
-    StandardCapabilityMatrix,
-    TrustEvidence,
-    TargetRuntimeArtifacts,
-    UpgradeDisposition,
-    UpgradePolicy,
+    ArtifactDigest, ArtifactDigestSet, BinaryRef, BindingTargetType, CapabilitySupport,
+    CompatibilityRange, ComponentDescriptor, ComponentExecution, ComponentTargetCapability,
+    ComponentType, ControllerInstanceScope, ControllerTargetKind, DependencyAlias,
+    DependencyDeclaration, EffectPortClass, Exportability, ExtensionSchemaRegistration,
+    PolicyEvaluation, ProjectionFactory, ProviderContractError, ProviderManifest,
+    ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix,
+    TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition, UpgradePolicy,
 };
-use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::identity::{Locality, SessionPurpose, TransportBinding};
 use d2b_contracts_resource::v3::{
-    ResourceEnvelope,
-    ResourceRef,
+    ResourceEnvelope, ResourceRef, ResourceTypeName, SchemaFingerprint,
     execution_policy::{BoundedToken, ExecutionDomain},
-    ResourceTypeName,
-    SchemaFingerprint,
     resource_schema::{ExtensionSchemaId, PlacementAnchor, SchemaVersion, canonical_json_bytes},
 };
-use d2b_contracts_resource::v3::identity::{
-    Locality,
-    TransportBinding,
-    SessionPurpose,
-};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_provider_toolkit::conformance::{CapabilityMatrix, ConformanceError};
 use d2b_provider_toolkit::fakes::{FakeBus, FakePortError, FakeResourceStore};
 use d2b_provider_toolkit::{AllocatorSessionBinding, ProviderAgentBootstrap, ProviderToolkitError};
@@ -89,9 +60,7 @@ fn trusted() -> TrustEvidence {
 fn digests() -> ArtifactDigestSet {
     let digest = ArtifactDigest::parse(DIGEST).expect("valid digest");
     ArtifactDigestSet {
-        package: digest.clone(),
         executable: digest.clone(),
-        manifest: digest.clone(),
         config: digest.clone(),
         schema: digest.clone(),
         service: digest,

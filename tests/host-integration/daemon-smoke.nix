@@ -36,11 +36,11 @@ pkgs.testers.runNixOSTest {
 
     # 1. Broker socket is created + listening before its service (socket
     #    activation): systemd binds/ACLs the AF_UNIX socket up front.
-    machine.wait_for_unit("d2b-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket", timeout=30)
 
     # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test \"$(systemctl show -P Type d2bd.service)\" = notify")
     machine.succeed("test \"$(systemctl show -P NotifyAccess d2bd.service)\" = main")
     machine.succeed("test \"$(systemctl show -P KillMode d2bd.service)\" = process")
@@ -49,26 +49,20 @@ pkgs.testers.runNixOSTest {
     )
 
     # 3. The live public wire surface: d2bd binds its AF_UNIX socket.
-    machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed(
-        "tmp=$(mktemp) && "
-        "jq --arg path \"$D2B_MANIFEST_PATH\" "
-        "'.artifacts.publicManifestPath = $path' "
-        "/etc/d2b/daemon-config.json > \"$tmp\" && "
-        "install -m 0640 -o root -g d2bd \"$tmp\" /etc/d2b/daemon-config.json && "
-        "rm -f \"$tmp\" && "
         "systemctl restart d2bd.service"
     )
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
 
     # 3b. Service restart readiness + cgroup survival. The synthetic process is
     # moved into d2bd.service's cgroup so this verifies systemd KillMode
     # behavior directly without requiring a nested Cloud Hypervisor guest in this
-    # fast smoke test. The actual VM runner-survival test lives in
-    # daemon-restart-vm-survival.nix.
+    # fast smoke test. The actual Cloud Hypervisor runner-survival test lives in
+    # runtime-cloud-hypervisor-guest-preflight.nix.
     survivor_pid = machine.succeed(
         "set -euo pipefail; "
         "cg=$(systemctl show -P ControlGroup d2bd.service); "
@@ -84,7 +78,7 @@ pkgs.testers.runNixOSTest {
         "echo \"$pid\""
     ).strip()
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2bd.service", timeout=180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     machine.succeed(f"test -d /proc/{survivor_pid}")

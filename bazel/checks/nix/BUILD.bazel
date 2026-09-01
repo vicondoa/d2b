@@ -6,14 +6,10 @@ _SURFACES = {
     "daemon": {
         "cases": [],
         "modules": [
-            "nixos-modules/activation-nixos-cleanup.nix",
-            "nixos-modules/host-activation.nix",
             "nixos-modules/host-broker.nix",
             "nixos-modules/host-daemon.nix",
-            "nixos-modules/manifest.nix",
-            "nixos-modules/observability-host-secrets.nix",
             "nixos-modules/options-daemon.nix",
-            "nixos-modules/processes-json.nix",
+            "nixos-modules/host-users.nix",
         ],
     },
     "broker-profiles": {
@@ -23,6 +19,7 @@ _SURFACES = {
             "bazel/checks/fixtures/BUILD.bazel",
             "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
             "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+            "flake.nix",
             "nixos-modules/rust-host-tools.nix",
             "nixos-modules/vm-evaluator.nix",
             "nix/prebuilt.json",
@@ -41,21 +38,7 @@ _SURFACES = {
         "modules": [
             "nixos-modules/component-session.nix",
             "nixos-modules/guest-broker.nix",
-            "nixos-modules/processes-json.nix",
             "nixos-modules/vm-guest-base.nix",
-        ],
-    },
-    "network": {
-        "cases": ["net-vm-network"],
-        "package": "packages/d2b-provider-network-local",
-        "files": [
-            "packages/d2b-provider-network-local/nix/net-mdns.nix",
-            "packages/d2b-provider-network-local/nix/net.nix",
-        ],
-        "modules": [
-            "packages/d2b-provider-network-local/nix/network.nix",
-            "nixos-modules/options-envs.nix",
-            "packages/d2b-provider-network-local/nix/resources-network.nix",
         ],
     },
     "storage-volume": {
@@ -71,40 +54,53 @@ _SURFACES = {
             "packages/d2b-provider-volume-local/nix/zone-storage-json.nix",
         ],
     },
-    "process-sandbox": {
-        "cases": [],
+    "network": {
+        "cases": ["net-vm-network"],
+        "package": "packages/d2b-provider-network-local",
+        "modules": [
+            "packages/d2b-provider-network-local/nix/net.nix",
+        ],
+    },
+    "zone-control": {
+        "cases": ["zone-control", "zone-link"],
+        "package": "packages/d2b-provider-volume-local",
         "files": [
-            "nixos-modules/vm-evaluator.nix",
+            "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/zone-resources-json.nix",
         ],
         "modules": [
-            "nixos-modules/minijail-profiles.nix",
-            "nixos-modules/options-vms.nix",
-            "nixos-modules/unsafe-local-helper.nix",
-            "nixos-modules/unsafe-local-workloads-json.nix",
-        ],
-    },
-    "realm-zone": {
-        "cases": [],
-        "modules": [
+            "nixos-modules/bundle-artifacts.nix",
             "nixos-modules/bundle-zones.nix",
-            "nixos-modules/options-realms.nix",
-            "nixos-modules/options-realms-network.nix",
-            "nixos-modules/options-realms-workloads.nix",
-            "nixos-modules/realm-controller-config-json.nix",
-            "nixos-modules/realm-identity-config-json.nix",
-            "nixos-modules/realm-workloads-launcher-json.nix",
-            "nixos-modules/realm-workloads-launcher-v2-json.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/options-resources.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/provider-runtime-contracts.nix",
+            "nixos-modules/resources-zones-processes.nix",
             "nixos-modules/resources-zone-control.nix",
+            "nixos-modules/zone-resources.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
         ],
     },
-    "desktop-interaction": {
-        "cases": [],
+    "zone-only": {
+        "cases": ["zone-only"],
+        "package": "packages/d2b-provider-runtime-qemu-media",
         "modules": [
-            "nixos-modules/ui-colors.nix",
+            "nixos-modules/options.nix",
+            "nixos-modules/options-site.nix",
+            "nixos-modules/options-host-sccache.nix",
+            "nixos-modules/options-host.nix",
+            "nixos-modules/options-daemon.nix",
+            "nixos-modules/options-observability.nix",
+            "packages/d2b-provider-runtime-qemu-media/nix/default.nix",
         ],
     },
     "provider-catalog": {
-        "cases": ["provider-catalog", "provider-elf-shim"],
+        "cases": ["provider-catalog", "provider-elf-shim", "provider-runtime-contracts"],
         "package": "packages/d2b-provider-activation-nixos",
         "files": [
             "nix/provider-elf-shim.nix",
@@ -118,16 +114,6 @@ _SURFACES = {
             "packages/d2b-provider-activation-nixos/nix/default.nix",
             "nixos-modules/providers/system-minijail.nix",
             "nixos-modules/providers/system-systemd.nix",
-        ],
-    },
-    "examples": {
-        "cases": [],
-        "modules": [
-            "nixos-modules/components/observability/default.nix",
-            "nixos-modules/components/observability/guest.nix",
-            "nixos-modules/components/observability/host.nix",
-            "nixos-modules/components/observability/stack.nix",
-            "nixos-modules/observability-vm.nix",
         ],
     },
     "eval-jobs": {
@@ -153,6 +139,8 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-network-local:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-network-local/nix/artifacts.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
         ],
         "modules": [
             "packages/d2b-provider-network-local/nix/default.nix",
@@ -169,7 +157,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-usbip:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/usbip.nix",
+            "packages/d2b-provider-device-usbip/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-usbip/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-usbip",
         "raw_cases": True,
@@ -183,7 +174,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-security-key:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/security-key-guest.nix",
+            "packages/d2b-provider-device-security-key/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-security-key/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-security-key",
         "raw_cases": True,
@@ -197,7 +191,10 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-tpm:nix/tests/default.nix",
         "modules": [
-            "nixos-modules/components/tpm.nix",
+            "packages/d2b-provider-device-tpm/nix/guest.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-device-tpm/nix/default.nix",
         ],
         "package": "packages/d2b-provider-device-tpm",
         "raw_cases": True,
@@ -211,10 +208,11 @@ nix_surface_test(
         "cases": [],
         "expression": "//packages/d2b-provider-device-gpu:nix/tests/default.nix",
         "files": [
+            "packages/d2b-provider-device-gpu/nix/default.nix",
             "pkgs/virtio-media-driver/default.nix",
         ],
         "modules": [
-            "nixos-modules/components/video/guest.nix",
+            "packages/d2b-provider-device-gpu/nix/video-guest.nix",
         ],
         "package": "packages/d2b-provider-device-gpu",
         "raw_cases": True,
@@ -230,6 +228,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-audio-pipewire:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-audio-pipewire/nix/default.nix",
+            "packages/d2b-provider-audio-pipewire/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-audio-pipewire",
         "raw_cases": True,
@@ -261,6 +260,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-clipboard-wayland:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-clipboard-wayland/nix/default.nix",
+            "packages/d2b-provider-clipboard-wayland/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-clipboard-wayland",
         "raw_cases": True,
@@ -273,9 +273,11 @@ nix_surface_test(
     spec = {
         "cases": [],
         "expression": "//packages/d2b-provider-activation-nixos:nix/tests/default.nix",
-        "files": [],
         "modules": [
             "packages/d2b-provider-activation-nixos/nix/default.nix",
+        ],
+        "files": [
+            "packages/d2b-provider-activation-nixos/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-activation-nixos",
         "raw_cases": True,
@@ -289,8 +291,105 @@ nix_surface_test(
         "cases": [],
         "modules": ["packages/d2b-provider-runtime-qemu-media/nix/default.nix"],
         "expression": "//packages/d2b-provider-runtime-qemu-media:nix/tests/default.nix",
-        "files": [],
+        "files": [
+            "packages/d2b-provider-runtime-qemu-media/nix/projection.nix",
+        ],
         "package": "packages/d2b-provider-runtime-qemu-media",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-cloud-hypervisor",
+    surface = "provider-runtime-cloud-hypervisor",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-cloud-hypervisor:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix",
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources-zones-processes.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-cloud-hypervisor",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-azure-container-apps",
+    surface = "provider-runtime-azure-container-apps",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-azure-container-apps:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-azure-container-apps/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-azure-container-apps",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-azure-virtual-machine",
+    surface = "provider-runtime-azure-virtual-machine",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-runtime-azure-virtual-machine:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-runtime-azure-virtual-machine/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-runtime-azure-virtual-machine",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-volume-virtiofs",
+    surface = "provider-volume-virtiofs",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-volume-virtiofs:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-volume-virtiofs/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-volume-virtiofs",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-observability-otel",
+    surface = "provider-observability-otel",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-observability-otel:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-observability-otel/nix/default.nix",
+            "packages/d2b-provider-observability-otel/nix/projection.nix",
+        ],
+        "package": "packages/d2b-provider-observability-otel",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-shell-terminal",
+    surface = "provider-shell-terminal",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-shell-terminal:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-shell-terminal/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-shell-terminal",
         "raw_cases": True,
     },
 )
@@ -304,6 +403,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-display-wayland:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-display-wayland/nix/default.nix",
+            "packages/d2b-provider-display-wayland/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-display-wayland",
         "raw_cases": True,
@@ -319,6 +419,7 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-notification-desktop:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-notification-desktop/nix/default.nix",
+            "packages/d2b-provider-notification-desktop/nix/projection.nix",
         ],
         "package": "packages/d2b-provider-notification-desktop",
         "raw_cases": True,
@@ -327,7 +428,7 @@ nix_surface_test(
 
 nix_native_test(
     name = "flake-eval-x86",
-    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.x86_64-linux.eval-minimal.drvPath" >/dev/null',
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.x86_64-linux.eval-zone.drvPath" >/dev/null',
     lane = "flake",
     max_kib = 14665373,
     data = ["//:flake.lock"],
@@ -342,15 +443,6 @@ nix_native_test(
 )
 
 nix_native_test(
-    name = "flake-eval-x86-realized-video",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" >/dev/null',
-    lane = "flake-realized-video",
-    max_kib = 14665373,
-    data = ["//:flake.lock"],
-    timeout = "eternal",
-)
-
-nix_native_test(
     name = "flake-eval-x86-realized-supply-chain",
     command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null',
     lane = "flake-realized-supply-chain",
@@ -360,9 +452,9 @@ nix_native_test(
 )
 
 nix_native_test(
-    name = "flake-eval-x86-realized-package-output",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#packages.x86_64-linux.d2b-resource-compiler" >/dev/null',
-    lane = "flake-realized-package-output",
+    name = "flake-eval-x86-realized-provider-catalog",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.provider-catalog-determinism" >/dev/null',
+    lane = "flake-realized-provider-catalog",
     max_kib = 14665373,
     data = ["//:flake.lock"],
     timeout = "eternal",
@@ -370,16 +462,15 @@ nix_native_test(
 
 nix_native_test(
     name = "flake-eval-x86-realized-guest-static",
-    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-elf" >/dev/null',
-    lane = "flake-realized-guest-static",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-consumption" >/dev/null',
+    lane = "flake-guest-static-consumption",
     max_kib = 14665373,
     data = ["//:flake.lock"],
-    timeout = "eternal",
 )
 
 nix_native_test(
     name = "flake-eval-aarch64",
-    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.aarch64-linux.eval-minimal.drvPath" >/dev/null',
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.aarch64-linux.eval-zone.drvPath" >/dev/null',
     lane = "flake-aarch64",
     max_kib = 14665373,
     data = ["//:flake.lock"],
@@ -393,9 +484,8 @@ test_suite(
 test_suite(
     name = "nix_realized",
     tests = [
-        ":flake-eval-x86-realized-video",
         ":flake-eval-x86-realized-supply-chain",
-        ":flake-eval-x86-realized-package-output",
+        ":flake-eval-x86-realized-provider-catalog",
         ":flake-eval-x86-realized-guest-static",
     ],
 )

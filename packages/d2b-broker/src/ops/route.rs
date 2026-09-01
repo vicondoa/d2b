@@ -1,116 +1,19 @@
 //! `ApplyRoute` op.
 //!
-//! Deterministic owner table over [`RouteIntent`]; the actual netlink
-//! mutations are delegated to a backend trait so the L1c canary
-//! matrix can drive `route-preflight-no-default-route` and
-//! `route-preflight-foreign-default-route` without `CAP_NET_ADMIN`.
+//! The broker resolves each route from a trusted Network intent, compares it
+//! with observable kernel tuples, and records the exact ownership provenance
+//! required for later replacement or deletion.
 
 use crate::live_handlers::LiveHandlerError;
 use crate::ops::exec_reconcile::{IpRouteVerb, ReconcileExecError, ReconcileExecutor};
 use d2b_core::bundle_resolver::ResolvedRouteIntent;
-use d2b_core::host_w3::RouteIntent;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::fs;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
-
-#[derive(Debug, Clone)]
-pub struct ApplyRouteRequest {
-    pub intents: Vec<RouteIntent>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApplyRouteDiff {
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    pub unchanged: Vec<String>,
-}
-
-/// Owner-table snapshot: every d2b-owned route key currently
-/// installed. Routes outside this set are foreign and never touched.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OwnerTable {
-    pub owned: BTreeMap<String, RouteIntent>,
-}
-
-impl OwnerTable {
-    pub fn from_intents(intents: &[RouteIntent]) -> Self {
-        let mut owned = BTreeMap::new();
-        for intent in intents.iter().filter(|i| i.owned) {
-            owned.insert(route_key(intent), intent.clone());
-        }
-        Self { owned }
-    }
-
-    pub fn diff_against(&self, next: &OwnerTable) -> ApplyRouteDiff {
-        let mut added = Vec::new();
-        let mut removed = Vec::new();
-        let mut unchanged = Vec::new();
-        for (key, intent) in &next.owned {
-            match self.owned.get(key) {
-                Some(prev) if prev == intent => unchanged.push(key.clone()),
-                Some(_) => {
-                    removed.push(key.clone());
-                    added.push(key.clone());
-                }
-                None => added.push(key.clone()),
-            }
-        }
-        for key in self.owned.keys() {
-            if !next.owned.contains_key(key) {
-                removed.push(key.clone());
-            }
-        }
-        added.sort();
-        added.dedup();
-        removed.sort();
-        removed.dedup();
-        unchanged.sort();
-        ApplyRouteDiff {
-            added,
-            removed,
-            unchanged,
-        }
-    }
-}
-
-pub fn route_key(intent: &RouteIntent) -> String {
-    format!(
-        "{dest}|via={via}|dev={dev}|table={table}",
-        dest = intent.destination,
-        via = intent.via.as_deref().unwrap_or("-"),
-        dev = intent.device.as_ref().map(|d| d.as_str()).unwrap_or("-"),
-        table = intent.table.as_deref().unwrap_or("main"),
-    )
-}
-
-/// `ApplyRoute` entry: re-runs the shared `d2b_host::routes`
-/// preflight before producing the route diff. The runtime calls this
-/// from the broker dispatcher for the `ApplyRoute` op and the
-/// pre-VM-start hook. The preflight call is shared with
-/// [`d2b_host::routes::run_route_preflight_for_vm`] so neither path
-/// can skip the firewall coexistence predicate.
-pub fn apply(
-    request: &ApplyRouteRequest,
-    preflight: &d2b_host::routes::RoutePreflightInput<'_>,
-) -> Result<ApplyRouteDiff, d2b_host::routes::RoutePreflightError> {
-    d2b_host::routes::run_route_preflight(preflight)?;
-    let next = OwnerTable::from_intents(&request.intents);
-    let prev = OwnerTable::default();
-    Ok(prev.diff_against(&next))
-}
-
-/// Pre-VM-start hook: re-runs the shared preflight via
-/// [`d2b_host::routes::run_route_preflight_for_vm`]. The broker
-/// dispatcher calls this from the `Up` request path before any VM
-/// startup so a foreign actor that mutated routes/nft after
-/// `host prepare --apply` cannot let the VM come up.
-pub fn pre_vm_start(
-    vm_id: &str,
-    preflight: &d2b_host::routes::RoutePreflightInput<'_>,
-) -> Result<(), d2b_host::routes::RoutePreflightError> {
-    d2b_host::routes::run_route_preflight_for_vm(vm_id, preflight)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteConflictKey {
@@ -125,10 +28,8 @@ pub struct RouteConflictKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyWithPreflightError {
     RouteQuery(ReconcileExecError),
-    ConflictingRoute {
-        existing: RouteConflictKey,
-        requested: RouteConflictKey,
-    },
+    /// A Network route was not marked as d2b-owned.
+    ForeignRoute,
     ReconcileExec(ReconcileExecError),
 }
 
@@ -136,16 +37,7 @@ impl std::fmt::Display for ApplyWithPreflightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RouteQuery(err) => write!(f, "apply-route query: {err}"),
-            Self::ConflictingRoute {
-                existing,
-                requested,
-            } => write!(
-                f,
-                "apply-route preflight conflict for {}: existing {}, requested {}",
-                requested.destination,
-                format_route_conflict_key(existing),
-                format_route_conflict_key(requested)
-            ),
+            Self::ForeignRoute => write!(f, "apply-route: foreign route"),
             Self::ReconcileExec(err) => write!(f, "apply-route: {err}"),
         }
     }
@@ -153,66 +45,347 @@ impl std::fmt::Display for ApplyWithPreflightError {
 
 impl std::error::Error for ApplyWithPreflightError {}
 
-/// Runtime entry-point for `ApplyRoute`.
+/// Production route entry-point with a durable ownership ledger.
 ///
-/// Keep the live dispatcher anchored on `ops::route` so future route
-/// ownership/coexistence work can harden this surface without another
-/// runtime refactor. Today we preflight the current route set, refuse a
-/// conflicting override, then call the live handler with `replace` for
-/// owned intents and `add` for foreign ones. Host destroy sets
-/// `destroy=true`, which skips the add/replace preflight and translates
-/// directly to `ip route del`.
-pub fn apply_with_preflight(
+/// Kernel routes have no portable arbitrary ownership marker. The broker
+/// therefore records the exact UID-bound route tuple and marker before it
+/// will replace or delete an existing route. A present route without a
+/// matching record is foreign and remains untouched.
+pub fn apply_with_preflight_owned(
     executor: &dyn ReconcileExecutor,
     ip_binary: &Path,
+    state_dir: &Path,
     intent: &ResolvedRouteIntent,
+    provenance: &d2b_contracts_resource::v3::NetworkProvenance,
     destroy: bool,
 ) -> Result<(), ApplyWithPreflightError> {
+    let Some(route_name) = intent.route_name.as_deref() else {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    };
+    let Some(marker) = intent.ownership_marker.as_deref() else {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    };
+    if intent.provenance.as_ref() != Some(provenance) {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    if route_name.is_empty()
+        || route_name.len() > 64
+        || !route_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    let expected_marker = format!(
+        "d2b managed: {}",
+        d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            &format!("route:{route_name}"),
+        )
+    );
+    if marker != expected_marker {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    let intent_provenance = intent
+        .provenance
+        .as_ref()
+        .ok_or(ApplyWithPreflightError::ForeignRoute)?;
+    let root = state_dir.join("network-routes");
+    let record_path = root.join(format!("{route_name}.json"));
+    let expected = RouteOwnershipRecord {
+        route_name: route_name.to_owned(),
+        marker: marker.to_owned(),
+        destination: intent.destination.clone(),
+        via: intent.via.clone(),
+        device: intent.device.clone(),
+        table: intent.table.clone().unwrap_or_else(|| "main".to_owned()),
+        provenance: intent_provenance.clone(),
+    };
+    let current = read_route_record(&record_path)?;
+    let observed_routes = read_existing_routes(ip_binary, intent)?;
+    let requested = requested_route_conflict_key(intent);
+    let conflict = observed_routes
+        .iter()
+        .find(|route| route_conflicts(route, &requested));
+    validate_route_state(current.as_ref(), &expected, conflict)?;
+
+    // A destroy of an already-absent route needs no ledger creation or
+    // mutation. In particular, an unmarked pre-Zone route must not leave a
+    // broker-side artifact behind while refusing the request.
+    if destroy && current.is_none() && conflict.is_none() {
+        return Ok(());
+    }
+
+    ensure_route_ledger_root(&root)?;
+    let _lock = acquire_route_ledger_lock(&root)?;
+    let current = read_route_record(&record_path)?;
+    let observed_routes = read_existing_routes(ip_binary, intent)?;
+    let exact = observed_routes.iter().any(|route| {
+        route.destination == requested.destination
+            && route.via == requested.via
+            && route.device == requested.device
+            && route.table == requested.table
+    });
+    let conflict = observed_routes
+        .iter()
+        .find(|route| route_conflicts(route, &requested));
+    validate_route_state(current.as_ref(), &expected, conflict)?;
+
     if destroy {
-        return crate::live_handlers::live_apply_route(
+        if conflict.is_some() {
+            crate::live_handlers::live_apply_route(
+                executor,
+                ip_binary,
+                IpRouteVerb::Del,
+                &intent.route_spec,
+            )
+            .map_err(map_live_route_error)?;
+            remove_route_record(&record_path)?;
+        } else if current.is_some() {
+            remove_route_record(&record_path)?;
+        }
+        return Ok(());
+    }
+
+    if conflict.is_some() {
+        crate::live_handlers::live_apply_route(
             executor,
             ip_binary,
-            IpRouteVerb::Del,
+            IpRouteVerb::Replace,
             &intent.route_spec,
         )
-        .map_err(map_live_route_error);
-    }
-    let observed_routes = read_existing_routes(ip_binary, intent)?;
-    apply_with_preflight_from_routes(executor, ip_binary, intent, &observed_routes)
-}
-
-fn apply_with_preflight_from_routes(
-    executor: &dyn ReconcileExecutor,
-    ip_binary: &Path,
-    intent: &ResolvedRouteIntent,
-    observed_routes: &[RouteConflictKey],
-) -> Result<(), ApplyWithPreflightError> {
-    let requested = requested_route_conflict_key(intent);
-    if let Some(existing) = observed_routes
-        .iter()
-        .find(|route| route_conflicts(route, &requested))
-    {
-        return Err(ApplyWithPreflightError::ConflictingRoute {
-            existing: existing.clone(),
-            requested,
-        });
+        .map_err(map_live_route_error)?;
+        write_route_record(&record_path, &expected)?;
+        return Ok(());
     }
 
-    let verb = if intent.owned {
+    let verb = if exact {
         IpRouteVerb::Replace
     } else {
         IpRouteVerb::Add
     };
     crate::live_handlers::live_apply_route(executor, ip_binary, verb, &intent.route_spec)
-        .map_err(map_live_route_error)
+        .map_err(map_live_route_error)?;
+    // A route has no kernel ownership marker. If the durable marker cannot
+    // be recorded, do not issue an unproven delete that could race with a
+    // foreign route; the next reconcile will fail closed on the tuple.
+    write_route_record(&record_path, &expected)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RouteOwnershipRecord {
+    route_name: String,
+    marker: String,
+    destination: String,
+    via: Option<String>,
+    device: Option<String>,
+    table: String,
+    provenance: d2b_contracts_resource::v3::NetworkProvenance,
+}
+
+fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) => {
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err(ApplyWithPreflightError::ForeignRoute);
+            }
+
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(root).map_err(|error| {
+                ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                    path: root.display().to_string(),
+                    detail: error.to_string(),
+                })
+            })?;
+            fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o750))
+                .map_err(|error| {
+                    ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                        path: root.display().to_string(),
+                        detail: error.to_string(),
+                    })
+                })?;
+            Ok(())
+        }
+        Err(error) => Err(ApplyWithPreflightError::RouteQuery(
+            ReconcileExecError::Io {
+                path: root.display().to_string(),
+                detail: error.to_string(),
+            },
+        )),
+    }
+}
+
+fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflightError> {
+    let path = root.join(".lock");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .mode(0o640)
+        .open(&path)
+        .map_err(|error| {
+            ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                path: path.display().to_string(),
+                detail: error.to_string(),
+            })
+        })?;
+    let lock = nix::libc::flock {
+        l_type: nix::libc::F_WRLCK as _,
+        l_whence: nix::libc::SEEK_SET as _,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
+        .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
+    Ok(file)
+}
+
+fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
+    match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => {
+            let metadata = file
+                .metadata()
+                .map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
+            if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
+                return Err(ApplyWithPreflightError::ForeignRoute);
+            }
+            serde_json::from_reader(file)
+                .map(Some)
+                .map_err(|_| ApplyWithPreflightError::ForeignRoute)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ApplyWithPreflightError::RouteQuery(
+            ReconcileExecError::Io {
+                path: path.display().to_string(),
+                detail: error.to_string(),
+            },
+        )),
+    }
+}
+
+fn write_route_record(
+    path: &Path,
+    record: &RouteOwnershipRecord,
+) -> Result<(), ApplyWithPreflightError> {
+    let bytes = serde_json::to_vec(record).map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
+    let temp = path.with_extension("json.tmp");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .mode(0o640)
+        .open(&temp)
+        .map_err(|error| {
+            ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                path: temp.display().to_string(),
+                detail: error.to_string(),
+            })
+        })?;
+    use std::io::Write as _;
+    if file.write_all(&bytes).is_err() || file.sync_data().is_err() {
+        let _ = fs::remove_file(&temp);
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    drop(file);
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+            path: path.display().to_string(),
+            detail: error.to_string(),
+        })
+    })?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                    path: parent.display().to_string(),
+                    detail: error.to_string(),
+                })
+            })?;
+    }
+    Ok(())
+}
+
+fn remove_route_record(path: &Path) -> Result<(), ApplyWithPreflightError> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| {
+                        ApplyWithPreflightError::RouteQuery(ReconcileExecError::Io {
+                            path: parent.display().to_string(),
+                            detail: error.to_string(),
+                        })
+                    })?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ApplyWithPreflightError::RouteQuery(
+            ReconcileExecError::Io {
+                path: path.display().to_string(),
+                detail: error.to_string(),
+            },
+        )),
+    }
+}
+
+fn route_matches_record(route: &RouteConflictKey, record: &RouteOwnershipRecord) -> bool {
+    route.destination == record.destination
+        && route.via == record.via
+        && route.device == record.device
+        && route.table == normalize_table_name(&record.table)
+}
+
+fn validate_route_state(
+    current: Option<&RouteOwnershipRecord>,
+    expected: &RouteOwnershipRecord,
+    conflict: Option<&RouteConflictKey>,
+) -> Result<(), ApplyWithPreflightError> {
+    if current.is_some_and(|record| record != expected) {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    if conflict.is_some_and(|existing| {
+        current != Some(expected) || !route_matches_record(existing, expected)
+    }) {
+        return Err(ApplyWithPreflightError::ForeignRoute);
+    }
+    Ok(())
 }
 
 fn route_conflicts(existing: &RouteConflictKey, requested: &RouteConflictKey) -> bool {
-    existing.destination == requested.destination
-        && (existing.via != requested.via
-            || existing.device != requested.device
-            || existing.metric != requested.metric
-            || existing.table != requested.table)
+    if existing.table != requested.table {
+        return false;
+    }
+    if existing.destination == requested.destination {
+        return true;
+    }
+    let Some(existing_cidr) =
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse(existing.destination.clone()).ok()
+    else {
+        return false;
+    };
+    let Some(requested_cidr) =
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse(requested.destination.clone()).ok()
+    else {
+        return false;
+    };
+    d2b_contracts_resource::v3::network::cidr_overlaps(&existing_cidr, &requested_cidr)
 }
 
 fn map_live_route_error(err: LiveHandlerError) -> ApplyWithPreflightError {
@@ -329,13 +502,6 @@ fn route_uses_ipv6(intent: &ResolvedRouteIntent) -> bool {
         .any(|value| value.contains(':'))
 }
 
-fn format_route_conflict_key(route: &RouteConflictKey) -> String {
-    format!(
-        "via={:?} dev={:?} metric={:?} proto={:?} table={}",
-        route.via, route.device, route.metric, route.protocol, route.table
-    )
-}
-
 fn route_spec_value(tokens: &[&str], key: &str) -> Option<String> {
     tokens.windows(2).find_map(|pair| {
         if pair[0] == key {
@@ -374,159 +540,191 @@ fn normalize_table_name(table: &str) -> String {
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    use d2b_contracts_resource::v3::IfName;
+    use std::os::unix::fs::PermissionsExt;
 
-    fn ri(dest: &str, dev: Option<&str>) -> RouteIntent {
-        RouteIntent {
-            destination: dest.into(),
-            via: None,
-            device: dev.map(|d| IfName::new(d).unwrap()),
-            table: None,
-            owned: true,
-        }
-    }
-
-    fn resolved_route_intent(owned: bool, via: Option<&str>) -> ResolvedRouteIntent {
-        ResolvedRouteIntent {
-            intent_id: if owned {
-                "route:owned"
-            } else {
-                "route:foreign"
-            }
-            .to_owned(),
-            destination: "10.0.0.0/24".to_owned(),
-            via: via.map(ToOwned::to_owned),
-            device: Some("tap0".to_owned()),
-            table: Some("main".to_owned()),
-            route_spec: match via {
-                Some(gateway) => format!("10.0.0.0/24 via {gateway} dev tap0"),
-                None => "10.0.0.0/24 dev tap0".to_owned(),
-            },
-            owned,
-        }
-    }
-
-    fn observed_route(
-        via: Option<&str>,
-        dev: &str,
-        metric: Option<&str>,
-        proto: &str,
-    ) -> RouteConflictKey {
-        RouteConflictKey {
-            destination: "10.0.0.0/24".to_owned(),
-            via: via.map(ToOwned::to_owned),
-            device: Some(dev.to_owned()),
-            metric: metric.map(ToOwned::to_owned),
-            protocol: Some(proto.to_owned()),
-            table: "main".to_owned(),
-        }
-    }
-
-    #[test]
-    fn diff_detects_add_remove_unchanged() {
-        let prev = OwnerTable::from_intents(&[ri("10.0.0.0/24", Some("d2b-bX"))]);
-        let next = OwnerTable::from_intents(&[
-            ri("10.0.0.0/24", Some("d2b-bX")),
-            ri("10.0.1.0/24", Some("d2b-bY")),
-        ]);
-        let d = prev.diff_against(&next);
-        assert_eq!(d.added.len(), 1);
-        assert!(d.removed.is_empty());
-        assert_eq!(d.unchanged.len(), 1);
-    }
-
-    #[test]
-    fn route_key_is_deterministic() {
-        let a = ri("10.0.0.0/24", Some("d2b-bX"));
-        let b = ri("10.0.0.0/24", Some("d2b-bX"));
-        assert_eq!(route_key(&a), route_key(&b));
-    }
-
-    #[test]
-    fn only_owned_intents_are_tracked() {
-        let mut intent = ri("0.0.0.0/0", Some("wlp0"));
-        intent.owned = false;
-        let table = OwnerTable::from_intents(&[intent]);
-        assert!(table.owned.is_empty());
-    }
-
-    #[test]
-    fn apply_with_preflight_uses_replace_for_owned_intents() {
-        let exec = FakeReconcileExecutor::new();
-        let intent = resolved_route_intent(true, Some("10.0.0.1"));
-        apply_with_preflight_from_routes(&exec, Path::new("/usr/sbin/ip"), &intent, &[]).unwrap();
-        let log = exec.take_log();
-        assert_eq!(log.len(), 1);
-        match &log[0] {
-            ReconcileOp::IpRoute {
-                binary,
-                verb,
-                route_spec,
-            } => {
-                assert!(binary.ends_with("ip"));
-                assert_eq!(*verb, IpRouteVerb::Replace);
-                assert_eq!(route_spec, &intent.route_spec);
-            }
-            other => panic!("unexpected op: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn apply_with_preflight_uses_add_for_non_owned_intents() {
-        let exec = FakeReconcileExecutor::new();
-        let intent = resolved_route_intent(false, Some("10.0.0.1"));
-        apply_with_preflight_from_routes(&exec, Path::new("/usr/sbin/ip"), &intent, &[]).unwrap();
-        let log = exec.take_log();
-        assert_eq!(log.len(), 1);
-        match &log[0] {
-            ReconcileOp::IpRoute { verb, .. } => assert_eq!(*verb, IpRouteVerb::Add),
-            other => panic!("unexpected op: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn apply_with_preflight_refuses_conflicting_route_attributes() {
-        let exec = FakeReconcileExecutor::new();
-        let mut intent = resolved_route_intent(true, Some("10.0.0.1"));
-        intent.route_spec =
-            "10.0.0.0/24 via 10.0.0.1 dev tap0 metric 100 proto static table main".to_owned();
-        let err = apply_with_preflight_from_routes(
-            &exec,
-            Path::new("/usr/sbin/ip"),
-            &intent,
-            &[observed_route(
-                Some("10.0.0.1"),
-                "eth0",
-                Some("50"),
-                "static",
-            )],
+    fn route_provenance() -> d2b_contracts_resource::v3::NetworkProvenance {
+        d2b_contracts_resource::v3::NetworkProvenance::new(
+            d2b_contracts_resource::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
         )
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            ApplyWithPreflightError::ConflictingRoute { existing, requested }
-                if existing.device.as_deref() == Some("eth0")
-                    && existing.metric.as_deref() == Some("50")
-                    && requested.device.as_deref() == Some("tap0")
-                    && requested.metric.as_deref() == Some("100")
-                    && requested.protocol.as_deref() == Some("static")
-                    && requested.table == "main"
-        ));
-        assert!(exec.take_log().is_empty());
     }
 
-    #[test]
-    fn apply_with_preflight_replaces_same_route_when_only_protocol_differs() {
-        let exec = FakeReconcileExecutor::new();
-        let mut intent = resolved_route_intent(true, None);
-        intent.route_spec = "10.0.0.0/24 dev br-work-up proto static table main".to_owned();
-        apply_with_preflight_from_routes(
-            &exec,
-            Path::new("/usr/sbin/ip"),
-            &intent,
-            &[observed_route(None, "br-work-up", None, "boot")],
+    fn owned_network_route() -> (
+        ResolvedRouteIntent,
+        d2b_contracts_resource::v3::NetworkProvenance,
+    ) {
+        let provenance = route_provenance();
+        let route_name = d2b_contracts_resource::v3::derive_network_route_name(
+            provenance.zone_uid(),
+            provenance.network_uid(),
+            0,
+        );
+        let marker = format!(
+            "d2b managed: {}",
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                &provenance,
+                &format!("route:{route_name}"),
+            )
+        );
+        (
+            ResolvedRouteIntent {
+                intent_id: format!(
+                    "network-route:{}:{}:aaaaaaaaaaaaaaaa:0",
+                    provenance.zone_uid().as_str(),
+                    provenance.network_uid().as_str()
+                ),
+                destination: "10.20.0.0/24".to_owned(),
+                via: Some("192.0.2.2".to_owned()),
+                device: Some("d2b-b12345678".to_owned()),
+                table: Some("main".to_owned()),
+                route_spec: "10.20.0.0/24 via 192.0.2.2 dev d2b-b12345678 table main".to_owned(),
+                owned: false,
+                route_name: Some(route_name),
+                provenance: Some(provenance.clone()),
+                ownership_marker: Some(marker),
+            },
+            provenance,
+        )
+    }
+
+    fn fake_ip(root: &std::path::Path, routes: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(root).unwrap();
+        let path = root.join("ip");
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{routes}'\n")).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
+    fn seed_route_record(
+        state_dir: &std::path::Path,
+        intent: &ResolvedRouteIntent,
+        provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+    ) {
+        let root = state_dir.join("network-routes");
+        ensure_route_ledger_root(&root).unwrap();
+        let route_name = intent.route_name.as_deref().unwrap();
+        let marker = intent.ownership_marker.as_deref().unwrap();
+        write_route_record(
+            &root.join(format!("{route_name}.json")),
+            &RouteOwnershipRecord {
+                route_name: route_name.to_owned(),
+                marker: marker.to_owned(),
+                destination: intent.destination.clone(),
+                via: intent.via.clone(),
+                device: intent.device.clone(),
+                table: intent.table.clone().unwrap_or_else(|| "main".to_owned()),
+                provenance: provenance.clone(),
+            },
         )
         .unwrap();
+    }
+
+    fn cleanup_route_test(root: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unmarked_route_is_unchanged_on_replace_and_delete() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("route-unmarked-{}", std::process::id()));
+        cleanup_route_test(&root);
+        let ip_root = root.join("fake-ip");
+        let ip = fake_ip(
+            &ip_root,
+            r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
+        );
+        let (intent, provenance) = owned_network_route();
+        for destroy in [false, true] {
+            let exec = FakeReconcileExecutor::new();
+            assert_eq!(
+                apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, destroy,),
+                Err(ApplyWithPreflightError::ForeignRoute)
+            );
+            assert!(exec.take_log().is_empty());
+        }
+        assert!(
+            !root.join("network-routes").exists(),
+            "a foreign route must not create an ownership ledger"
+        );
+        cleanup_route_test(&root);
+    }
+
+    #[test]
+    fn matching_synthetic_route_id_without_observable_record_is_foreign() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("route-synthetic-id-{}", std::process::id()));
+        cleanup_route_test(&root);
+        let ip = fake_ip(
+            &root,
+            r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
+        );
+        let (intent, provenance) = owned_network_route();
+        let exec = FakeReconcileExecutor::new();
+        assert_eq!(
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
+            Err(ApplyWithPreflightError::ForeignRoute)
+        );
+        assert!(exec.take_log().is_empty());
+        cleanup_route_test(&root);
+    }
+
+    #[test]
+    fn forged_route_marker_is_rejected_before_creation() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("route-forged-marker-{}", std::process::id()));
+        cleanup_route_test(&root);
+        let ip = fake_ip(&root, "[]");
+        let (mut intent, provenance) = owned_network_route();
+        intent.ownership_marker = Some("d2b managed: forged".to_owned());
+        let exec = FakeReconcileExecutor::new();
+        assert_eq!(
+            apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false,),
+            Err(ApplyWithPreflightError::ForeignRoute)
+        );
+        assert!(exec.take_log().is_empty());
+        cleanup_route_test(&root);
+    }
+
+    #[test]
+    fn matching_route_marker_preserves_add_replace_delete_semantics() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("route-owned-{}", std::process::id()));
+        cleanup_route_test(&root);
+        let ip = fake_ip(&root, "[]");
+        let (intent, provenance) = owned_network_route();
+        let exec = FakeReconcileExecutor::new();
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
+        assert!(matches!(
+            exec.take_log().as_slice(),
+            [ReconcileOp::IpRoute {
+                verb: IpRouteVerb::Add,
+                ..
+            }]
+        ));
+
+        fake_ip(
+            &root,
+            r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
+        );
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, false).unwrap();
         assert!(matches!(
             exec.take_log().as_slice(),
             [ReconcileOp::IpRoute {
@@ -534,6 +732,53 @@ mod tests {
                 ..
             }]
         ));
+
+        apply_with_preflight_owned(&exec, &ip, &root, &intent, &provenance, true).unwrap();
+        assert!(matches!(
+            exec.take_log().as_slice(),
+            [ReconcileOp::IpRoute {
+                verb: IpRouteVerb::Del,
+                ..
+            }]
+        ));
+        assert!(
+            !root
+                .join("network-routes")
+                .join(format!("{}.json", intent.route_name.as_deref().unwrap()))
+                .exists()
+        );
+        cleanup_route_test(&root);
+    }
+
+    #[test]
+    fn mismatched_route_record_is_unchanged_on_replace_and_delete() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("route-mismatched-record-{}", std::process::id()));
+        cleanup_route_test(&root);
+        let ip = fake_ip(
+            &root,
+            r#"[{"dst":"10.20.0.0/24","gateway":"192.0.2.2","dev":"d2b-b12345678","table":254}]"#,
+        );
+        let (intent, provenance) = owned_network_route();
+        seed_route_record(&root, &intent, &provenance);
+        let record_path = root
+            .join("network-routes")
+            .join(format!("{}.json", intent.route_name.as_deref().unwrap()));
+        let before = std::fs::read(&record_path).unwrap();
+        let mut foreign = intent.clone();
+        foreign.ownership_marker = Some("d2b managed: foreign".to_owned());
+        for destroy in [false, true] {
+            let exec = FakeReconcileExecutor::new();
+            assert_eq!(
+                apply_with_preflight_owned(&exec, &ip, &root, &foreign, &provenance, destroy,),
+                Err(ApplyWithPreflightError::ForeignRoute)
+            );
+            assert!(exec.take_log().is_empty());
+            assert_eq!(std::fs::read(&record_path).unwrap(), before);
+        }
+        cleanup_route_test(&root);
     }
 
     #[test]

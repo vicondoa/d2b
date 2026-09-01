@@ -86,8 +86,6 @@
           cp -r ${./packages/d2b-controller-toolkit} $out/packages/d2b-controller-toolkit
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-core-controller} $out/packages/d2b-core-controller
-          cp -r ${./packages/d2b-gateway} $out/packages/d2b-gateway
-          cp -r ${./packages/d2b-gateway-runtime} $out/packages/d2b-gateway-runtime
           cp -r ${./packages/d2b-host} $out/packages/d2b-host
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp -r ${./packages/d2b-process} $out/packages/d2b-process
@@ -114,7 +112,6 @@
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
           cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
           cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
           cp -r ${./packages/d2b-resource-store} $out/packages/d2b-resource-store
           cp -r ${./packages/d2b-resource-store-redb} $out/packages/d2b-resource-store-redb
@@ -133,8 +130,6 @@
           chmod -R u+w $out/packages
           cp ${./tests/fixtures/guest-rust-workspace/d2b-contracts.Cargo.toml} \
             $out/packages/d2b-contracts/Cargo.toml
-          cp ${./tests/fixtures/guest-rust-workspace/d2b-realm-core.Cargo.toml} \
-            $out/packages/d2b-realm-core/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/d2b-core.Cargo.toml} \
             $out/packages/d2b-core/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
@@ -400,6 +395,32 @@
               fi
             '';
           };
+        providerArtifact = import ./nix/provider-artifact.nix {
+          inherit pkgs;
+        };
+        cloudHypervisorController = rustWorkspace {
+          pname = "d2b-cloud-hypervisor-controller";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-provider-runtime-cloud-hypervisor"
+            "--bin"
+            "d2b-cloud-hypervisor-controller"
+          ];
+          doCheck = false;
+          meta.mainProgram = "d2b-cloud-hypervisor-controller";
+        };
+        cloudHypervisorArtifact = providerArtifact {
+          artifactId = "runtime-cloud-hypervisor";
+          binary = cloudHypervisorController;
+          binaryRef = "d2b-cloud-hypervisor-controller";
+          manifest = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json;
+          signature = ./packages/d2b-provider-runtime-cloud-hypervisor/provider-manifest.json.sig;
+          configSchema = ./packages/d2b-provider-runtime-cloud-hypervisor/root-config.schema.json;
+          publicKey = ./packages/d2b-provider-runtime-cloud-hypervisor/publisher-public-key.pem;
+          providerName = "runtime-cloud-hypervisor";
+          packageName = "d2b-provider-runtime-cloud-hypervisor";
+          signatureId = "default";
+        };
         # The canonical Provider package surface is present before semantic
         # Provider artifacts are implemented. These outputs compile each
         # Provider crate and publish only a scaffold marker; owning Provider
@@ -502,7 +523,7 @@
         d2b-provider-runtime-azure-virtual-machine =
           providerScaffoldPackage "d2b-provider-runtime-azure-virtual-machine";
         d2b-provider-runtime-cloud-hypervisor =
-          providerScaffoldPackage "d2b-provider-runtime-cloud-hypervisor";
+          cloudHypervisorArtifact.package;
         d2b-provider-runtime-qemu-media =
           providerScaffoldPackage "d2b-provider-runtime-qemu-media";
         d2b-provider-shell-terminal =
@@ -581,6 +602,8 @@
           let
             pkgs = nixpkgsFor.${system};
             hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
+            cloudHypervisorControllerBundleEnv =
+              builtins.getEnv "D2B_CH_CONTROLLER_BUNDLE";
             bazelHostTools =
               if hostToolBundleEnv == "" then
                 null
@@ -591,12 +614,26 @@
                     path = /. + hostToolBundleEnv;
                     name = "d2b-bazel-host-tools";
                   };
+                  rawCloudHypervisorController =
+                    if cloudHypervisorControllerBundleEnv == "" then null else
+                    builtins.path {
+                      path = /. + cloudHypervisorControllerBundleEnv;
+                      name = "d2b-bazel-cloud-hypervisor-controller";
+                    };
                 };
             testSelf =
               if bazelHostTools == null then
                 self
               else
                 self // {
+                  lib = self.lib // {
+                    d2bHostToolOverrides =
+                      bazelHostTools.d2bHostToolOverrides;
+                    evalGuest = args: self.lib.evalGuest (args // {
+                      d2bHostToolOverrides =
+                        bazelHostTools.d2bHostToolOverrides;
+                    });
+                  };
                   nixosModules = self.nixosModules // {
                     default = {
                       imports = [ self.nixosModules.default ];
@@ -605,9 +642,16 @@
                     };
                   };
                   packages = self.packages // {
-                    ${system} = self.packages.${system} // {
-                      d2b-wayland-proxy = bazelHostTools.package;
-                    };
+                    ${system} = self.packages.${system}
+                      // {
+                        d2b-wayland-proxy = bazelHostTools.package;
+                      }
+                      // nixpkgs.lib.optionalAttrs
+                        (bazelHostTools.cloudHypervisorControllerPackage != null)
+                        {
+                          d2b-cloud-hypervisor-controller =
+                            bazelHostTools.cloudHypervisorControllerPackage;
+                        };
                   };
                 };
             testDir = ./tests/host-integration;
@@ -631,30 +675,15 @@
 
       templates.default = {
         path = ./templates/default;
-        description = "Minimal d2b host scaffold - one env, one headless workload VM";
+        description = "Minimal d2b host scaffold - one Zone";
       };
 
-      # Eval-only gates for the in-tree examples + template. The
+      # Eval-only gates for the current Zone module and fixture. The
       # `system.build.toplevel.drvPath` access is enough to force a
       # full module-system instantiation (option types, assertions,
       # CIDR validators, etc.) without actually realising the closure
       # - which is what we want from a `nix flake check` gate.
       #
-      # `with-entra-id` is intentionally absent: it imports
-      # `entrablau.nixosModules.default` from a separate sibling
-      # flake, and the root flake doesn't (and shouldn't) pull that
-      # in as an input. The example's own `flake.nix` still gates
-      # eval via `nix flake check` in its own directory; the
-      # The fixed flake evaluation lane exercises it.
-      #
-      # The template's `configuration.nix` carries sentinel
-      # assertions that fail eval until the operator replaces
-      # placeholder values (TODOs 2/3). To eval-check the template
-      # without disturbing those assertions for real users, we layer
-      # a third module on top that uses `lib.mkForce` to replace
-      # just the sentinel-gated fields with valid stand-ins. Sentinel
-      # detection logic stays in the template; the override is
-      # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         bazel920 = bazel920For system;
@@ -677,7 +706,7 @@
         mkEvalOnlyCheck = name: value: pkgs.runCommand "d2b-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext (builtins.toJSON value)} > $out
         '';
-        smokeConfigModule = { lib, ... }: {
+        smokeConfigModule = { ... }: {
           boot.loader.grub.enable = false;
           boot.loader.systemd-boot.enable = false;
           boot.initrd.includeDefaultModules = false;
@@ -699,58 +728,7 @@
             launcherUsers = [ "alice" ];
             yubikey.enable = false;
           };
-
-          d2b.envs.work = {
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-
-          d2b.vms.corp-vm = {
-            enable = true;
-            env = "work";
-            index = 10;
-            ssh.user = "alice";
-            config = {
-              networking.hostName = lib.mkDefault "corp-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
-            };
-          };
-
-          d2b.realms.host = {
-            allowedUsers = [ "alice" ];
-            policy.allowUnsafeLocal = true;
-            network.ui.accentColor = "#cc3344";
-            workloads.tools = {
-              kind = "unsafe-local";
-              shell = {
-                enable = true;
-                defaultName = "host";
-                maxSessions = 8;
-              };
-              launcher = {
-                enable = true;
-                label = "Local tools";
-                defaultItem = "browser";
-                items = {
-                  browser = {
-                    type = "exec";
-                    name = "Browser";
-                    icon.name = "firefox";
-                    argv = [ "firefox" "rendered-private-argv-canary" ];
-                    graphical = true;
-                  };
-                  terminal = {
-                    type = "shell";
-                    name = "Terminal";
-                    icon.name = "terminal";
-                  };
-                };
-              };
-            };
-          };
+          d2b.zones.local-root = { };
         };
         # The eval-only fixtures contain no authored v3 artifacts. Keep their
         # catalog projection deterministic instead of forcing the production
@@ -804,248 +782,223 @@
           d2b._bundle.extraArtifacts.artifactCatalog =
             lib.mkOverride 0 fixtureArtifactCatalogArtifact;
         };
+        fixtureResourceCompilerEnv =
+          builtins.getEnv "D2B_FIXTURE_RESOURCE_COMPILER";
+        fixtureResourceCompiler =
+          if fixtureResourceCompilerEnv == "" then
+            self.packages.${system}.d2b-resource-compiler
+          else
+            pkgs.stdenv.mkDerivation {
+              pname = "d2b-fixture-resource-compiler";
+              version = "0";
+              src = builtins.path {
+                path = /. + fixtureResourceCompilerEnv;
+                name = "d2b-resource-compiler";
+              };
+              dontUnpack = true;
+              nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+              buildInputs = [ pkgs.glibc pkgs.stdenv.cc.cc.lib ];
+              installPhase = ''
+                install -Dm755 "$src" "$out/bin/d2b-resource-compiler"
+              '';
+            };
+        fixtureHostToolPackage = pkgs.runCommand "d2b-fixture-host-tools" { } ''
+          mkdir -p "$out/bin"
+          for name in \
+            d2b \
+            d2bd \
+            d2b-broker \
+            d2b-activation-helper \
+            d2b-host-activation-helper \
+            d2b-unsafe-local-helper \
+            d2b-wayland-proxy
+          do
+            printf '#!%s\nexit 0\n' '${pkgs.runtimeShell}' > "$out/bin/$name"
+            chmod 0755 "$out/bin/$name"
+          done
+        '';
+        fixtureHostToolOverrides =
+          (pkgs.lib.genAttrs [
+            "d2b"
+            "d2bd"
+            "broker"
+            "activationHelper"
+            "hostActivationHelper"
+            "unsafeLocalHelper"
+            "resourceCompiler"
+            "waylandProxy"
+          ] (_: fixtureHostToolPackage))
+          // { resourceCompiler = fixtureResourceCompiler; };
         smokeEval = mkEval [
           smokeConfigModule
           ({ lib, ... }: {
-            # Contract fixtures must render the just-built workspace tools.
-            # Release prebuilts may not exist for unreleased development
-            # versions, and using prebuilts would hide changes to runner argv
-            # and helper paths from the rendered artifact tests.
+            # Bazel fixture actions inject their already-built host tools so
+            # rendered paths and argv track the current workspace without a
+            # second Rust build through Nix.
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
+            _module.args.d2bHostToolOverrides =
+              lib.mkForce fixtureHostToolOverrides;
           })
           fixtureArtifactCatalogOverride
         ];
         renderEvalFixture = {
           evaluated
-        , includeClosures ? true
-        , processData ? null
         }: let
           bundle = evaluated.config.d2b._bundle;
           top = name: bundle.${name}.fixtureData;
         in {
           files = {
             "privileges.json" = top "privilegesJson";
-            "host.json" = top "hostJson";
-            "processes.json" =
-              if processData == null then top "processesJson" else processData;
-            "storage.json" = top "storageJson";
-            "sync.json" = top "syncJson";
-            "allocator.json" = top "allocatorJson";
-            "realm-controllers.json" = top "realmControllersJson";
-            "realm-identity.json" = top "realmIdentityJson";
-            "realm-workloads-launcher.json" = top "realmWorkloadsLauncherJson";
             "realm-workloads-launcher-v2.json" = top "realmWorkloadsLauncherV2Json";
-            "unsafe-local-workloads.json" = top "unsafeLocalWorkloadsJson";
             "bundle.json" = top "bundle";
-            "manifest.json" = evaluated.config.d2b._manifestData;
           };
-          closures = if includeClosures
-            then pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures
-            else { };
+          zones = pkgs.lib.mapAttrs
+            (_: artifact: artifact.fixtureData)
+            bundle.zoneResourceBundles;
         };
-        smokeFixture = let
-          bundle = smokeEval.config.d2b._bundle;
-          manifestPkg = smokeEval.config.d2b._manifestPkg;
-        in pkgs.runCommand "d2b-fixture-smoke" { } ''
-          mkdir -p $out $out/closures
-          cp ${bundle.privilegesJson.path} $out/privileges.json
-          cp ${bundle.hostJson.path} $out/host.json
-          cp ${bundle.processesJson.path} $out/processes.json
-          cp ${bundle.storageJson.path} $out/storage.json
-          cp ${bundle.syncJson.path} $out/sync.json
-          cp ${bundle.allocatorJson.path} $out/allocator.json
-          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
-          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
-          cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
-          cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
-          cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
-          cp ${bundle.bundle.path} $out/bundle.json
-          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
-          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
-            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
-            bundle.closures)}
-        '';
-        # Feature-RICH fixture: a single workload VM with graphics + video +
-        # audio + tpm + usbip + observability enabled, so every per-role
-        # minijail profile (gpu, wayland-proxy, video, audio, swtpm, usbip,
-        # vsock-relay, otel-host-bridge) renders into the bundle. Consumed by
-        # the per-role minijail-validator contract tests. x86_64-linux only:
-        # the framework's checkVmPlatform gate throws on graphics for aarch64,
-        # so this is referenced only under that guard below (lazily - never
-        # forced on aarch64).
-        fullConfigModule = { lib, ... }: {
-          boot.loader.grub.enable = false;
-          boot.loader.systemd-boot.enable = false;
-          boot.initrd.includeDefaultModules = false;
-          fileSystems."/" = {
-            device = "tmpfs";
-            fsType = "tmpfs";
+        fixtureHostJson = pkgs.writeText "d2b-fixture-host.json" (builtins.toJSON {
+          schemaVersion = "v2";
+          site = {
+            allowUnsafeEastWest = false;
           };
-          environment.etc."machine-id".text =
-            "00000000000000000000000000000000";
-          system.stateVersion = "25.11";
-
-          users.users.alice = {
-            isNormalUser = true;
-            uid = 1000;
+          environments = [ ];
+          nftables = {
+            family = "inet";
+            table = "d2b";
+            chains = [ ];
+            tableHashAfterApply = null;
+            ownershipId = "";
           };
-
-          d2b.site = {
-            waylandUser = "alice";
-            launcherUsers = [ "alice" ];
-            yubikey.enable = true;
-          };
-
-          d2b.observability.enable = true;
-
-          d2b.envs.work = {
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-
-          d2b.vms.corp-full = {
-            enable = true;
-            env = "work";
-            index = 10;
-            ssh.user = "alice";
-            graphics.enable = true;
-            graphics.crossDomainTrusted = true;
-            graphics.videoSidecar = true;
-            audio.enable = true;
-            usbip.yubikey = true;
-            guest.componentSession.enable = true;
-            tpm.enable = true;
-            observability.enable = true;
-            config = {
-              networking.hostName = lib.mkDefault "corp-full";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
+          networkManager = {
+            filePath = "/etc/NetworkManager/conf.d/d2b-unmanaged.conf";
+            matchCriteria = [ ];
+            reloadBehavior = "none";
+            ownership = {
+              owner = "root";
+              group = "d2bd";
+              mode = "0640";
+              driftPolicy = "preserve";
             };
           };
-        };
-        fullEval = mkEval [
-          fullConfigModule
-          ({ lib, ... }: {
-            # See smokeEval above: the feature-rich fixture is a rendered
-            # contract oracle, so it must consume source-built host tools.
-            d2b.site.usePrebuiltHostTools = lib.mkForce false;
-          })
-          fixtureArtifactCatalogOverride
-        ];
-        # The eval-rendered full fixture validates the serialized runner and
-        # minijail contracts, not the guest kernel or hypervisor binaries.
-        # Keep those package edges deterministic and narrow in this fixture
-        # only. The real `fullEval` remains the source for the realized video
-        # command-surface check and the explicit full fixture derivation.
-        fixtureKernel = {
-          dev = pkgs.runCommand "linux-6.18.33-dev" { } ''
-            mkdir -p "$out"
-            touch "$out/vmlinux"
-          '';
-          out = pkgs.runCommand "linux-6.18.33" { } ''
-            mkdir -p "$out"
-          '';
-        };
-        fixtureInitrd = pkgs.runCommand "initrd-linux-6.18.33" { } ''
-          mkdir -p "$out"
-          touch "$out/initrd"
-        '';
-        fixtureVmPackage = name:
-          pkgs.writeShellScriptBin name "exit 0";
-        fullFixtureVmTools = { lib, ... }: {
-          d2b.vms.corp-full.config.microvm = {
-            kernel = lib.mkForce fixtureKernel;
-            initrdPath = lib.mkForce "${fixtureInitrd}/initrd";
-            cloud-hypervisor.package = lib.mkForce
-              (fixtureVmPackage "cloud-hypervisor");
-            virtiofsd.package = lib.mkForce
-              (fixtureVmPackage "virtiofsd");
-            graphics.crosvmPackage = lib.mkForce
-              (fixtureVmPackage "crosvm");
+          hostsFile = {
+            startMarker = "# d2b-managed begin";
+            endMarker = "# d2b-managed end";
+            rule = "none";
           };
-        };
-        fullEvalFixture = mkEval [
-          fullConfigModule
-          fullFixtureVmTools
-          ({ lib, ... }: {
-            d2b.site.usePrebuiltHostTools = lib.mkForce false;
-          })
-          fixtureArtifactCatalogOverride
-        ];
-        fullProcessFixtureData =
-          let
-            data = fullEvalFixture.config.d2b._bundle.processesJson.fixtureData;
-          in
-          data // {
-            # Full contract consumers need the feature VM, the env's usbipd
-            # backend/proxy, and the observability host bridge. They do not
-            # consume the auto-declared net DAG, so do not force that
-            # unrelated runner subgraph through the eval-only projection.
-            vms = pkgs.lib.map
-              (dag:
-                if dag.vm == "sys-obs" then
-                  dag // {
-                    nodes = pkgs.lib.filter
-                      (node: node.id == "otel-host-bridge")
-                      dag.nodes;
-                  }
-                else
-                  dag)
-              (pkgs.lib.filter
-                (dag:
-                  builtins.elem dag.vm
-                    [ "corp-full" "sys-work-usbipd" "sys-obs" ])
-                data.vms);
+          kernelModules = [
+            {
+              module = "kvm";
+              feature = "virtualization";
+              requirement = "required";
+              gate = "always";
+              sysctls = [ ];
+              jailVisibleDevice = false;
+            }
+            {
+              module = "kvm_intel";
+              feature = "virtualization";
+              requirement = "alternatives";
+              gate = "host-cpu-vendor=intel";
+              sysctls = [ ];
+              jailVisibleDevice = false;
+            }
+          ];
+          fdOwnership = [ ];
+          cloudHypervisorCapabilities = [ ];
+        });
+        fixtureProcessesJson = pkgs.writeText "d2b-fixture-processes.json"
+          (builtins.toJSON {
+            schemaVersion = "v2";
+            vms = [ ];
+          });
+        fixtureManifest = pkgs.writeText "d2b-fixture-manifest.json"
+          (builtins.toJSON {
+            _manifest = {
+              manifestVersion = 7;
+            };
+            _observability = {
+              enabled = false;
+              obsVsockCid = 1000;
+              obsVsockHostSocket = "/var/lib/d2b/vms/sys-obs/vsock.sock";
+              signozOtlpGrpcPort = 4317;
+              signozOtlpHttpPort = 4318;
+              signozUrl = "http://127.0.0.1:8080";
+              vmName = "sys-obs";
+            };
+          });
+        fixtureClosure = pkgs.writeText "d2b-fixture-corp-vm-closure.json"
+          (builtins.toJSON {
+            schemaVersion = "v3";
+            vm = "corp-vm";
+            toplevel = "/nix/store/d2b-corp-vm-system";
+            closurePaths = [ "/nix/store/d2b-corp-vm-system" ];
+            dbDumpPath = "/var/lib/d2b/vms/corp-vm/store-view/db-dump";
+            declaredRunner = "/run/current-system/sw/bin/cloud-hypervisor";
+            runnerParityPath = "/run/current-system/sw/bin/cloud-hypervisor";
+            runnerParityOk = true;
+            generation = {
+              hostGeneration = null;
+              vmGeneration = null;
+              sourceRevision = null;
+              generatedAt = null;
+            };
+          });
+        fixtureBundleDataWithoutHash = {
+          bundleVersion = 11;
+          schemaVersion = "v2";
+          publicManifestPath = "manifest.json";
+          hostPath = "host.json";
+          processesPath = "processes.json";
+          privilegesPath = "privileges.json";
+          closures = [
+            {
+              vm = "corp-vm";
+              path = "closures/corp-vm.json";
+            }
+          ];
+          minijailProfiles = [ ];
+          managedKeys = {
+            keysDir = "/var/lib/d2b/keys";
+            knownHostsPath = "/var/lib/d2b/known_hosts.d2b";
+            overrides = [ ];
           };
-        fullFixture = let
-          bundle = fullEval.config.d2b._bundle;
-          manifestPkg = fullEval.config.d2b._manifestPkg;
-        in pkgs.runCommand "d2b-fixture-smoke-full" { } ''
-          mkdir -p $out
+          generation = {
+            generator = "d2b-u15-fixture";
+            sourceRevision = null;
+            generatedAt = null;
+          };
+          bundleHash = null;
+          artifactHashes = null;
+        };
+        fixtureBundle = fixtureBundleDataWithoutHash // {
+          bundleHash = "sha256:${builtins.hashString "sha256"
+            (builtins.toJSON (builtins.removeAttrs
+              fixtureBundleDataWithoutHash [ "bundleHash" ]))}";
+        };
+        fixtureBundlePath = pkgs.writeText "d2b-fixture-bundle.json"
+          (builtins.toJSON fixtureBundle);
+        smokeFixture = let
+          bundle = smokeEval.config.d2b._bundle;
+        in pkgs.runCommand "d2b-fixture-smoke" { } ''
+          mkdir -p $out/closures $out/zones/local-root
+          cp ${fixtureHostJson} $out/host.json
+          cp ${fixtureProcessesJson} $out/processes.json
+          cp ${fixtureManifest} $out/manifest.json
+          cp ${fixtureClosure} $out/closures/corp-vm.json
           cp ${bundle.privilegesJson.path} $out/privileges.json
-          cp ${bundle.hostJson.path} $out/host.json
-          cp ${bundle.processesJson.path} $out/processes.json
-          cp ${bundle.storageJson.path} $out/storage.json
-          cp ${bundle.syncJson.path} $out/sync.json
-          cp ${bundle.allocatorJson.path} $out/allocator.json
-          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
-          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
-          cp ${bundle.bundle.path} $out/bundle.json
-          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
+          cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
+          cp ${fixtureBundlePath} $out/bundle.json
+          cp ${bundle.zoneResourceBundles.local-root.path} $out/zones/local-root/resource-bundle.json
+          cp ${bundle.extraArtifacts."zoneStorage-local-root".path} $out/zones/local-root/storage.json
         '';
         evalFixtureData = {
           minimal = renderEvalFixture {
             evaluated = smokeEval;
           };
-          # Full fixture consumers validate feature-specific bundle/process
-          # contracts only. They do not consume closure JSON, so do not force
-          # the VM closure graph back through this eval-only surface.
           full = renderEvalFixture {
-            evaluated = fullEvalFixture;
-            includeClosures = false;
-            processData = fullProcessFixtureData;
+            evaluated = smokeEval;
           };
         };
-        fullProcessDags = fullEval.config.d2b._bundle.processesJson.data.vms;
-        fullCorpDag = pkgs.lib.findFirst (dag: dag.vm == "corp-full")
-          (throw "video binary contract: corp-full DAG missing") fullProcessDags;
-        fullVideoNode = pkgs.lib.findFirst (node: node.id == "video")
-          (throw "video binary contract: video node missing") fullCorpDag.nodes;
-        fullCloudHypervisorNode = pkgs.lib.findFirst (node: node.id == "cloud-hypervisor")
-          (throw "video binary contract: cloud-hypervisor node missing") fullCorpDag.nodes;
-        videoBinaryContract = pkgs.runCommand "d2b-video-binary-command-surface"
-          { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
-          set -euo pipefail
-          test -x ${fullVideoNode.binaryPath}
-          test -x ${fullCloudHypervisorNode.binaryPath}
-          video_help=$(${fullVideoNode.binaryPath} device video-decoder --help 2>&1)
-          printf '%s\n' "$video_help" | grep -F -- --backend
-          vmm_help=$(${fullCloudHypervisorNode.binaryPath} --help 2>&1)
-          printf '%s\n' "$vmm_help" | grep -F -- --vhost-user-media
-          touch "$out"
-        '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
@@ -1143,68 +1096,28 @@
             '') // {
               fixtureData = { };
             };
-        video-binary-contract =
-          if system == "x86_64-linux" then
-            videoBinaryContract
-          else
-            pkgs.runCommand "d2b-video-binary-contract-unsupported" { } ''
-              echo "video-binary-contract is x86_64-linux only (graphics gate)" > $out
-            '';
         fixture-smoke = smokeFixture;
         bazel-9_2_0-provider-smoke =
           import ./tests/unit/smoke/bazel-provider.nix {
             inherit pkgs bazel920 system;
           };
 
-        # Feature-rich fixture for the per-role minijail-validator contract
-        # tests. x86_64-linux only (graphics platform gate); on other systems
-        # the key resolves to a trivial derivation so `nix flake check
-        # --all-systems` never forces the graphics eval.
-        fixture-smoke-full =
-          if system == "x86_64-linux" then
-            fullFixture
-          else
-            pkgs.runCommand "d2b-fixture-smoke-full-unsupported" { } ''
-              echo "fixture-smoke-full is x86_64-linux only (graphics gate)" > $out
-            '';
-
-        eval-minimal = mkCheck "eval-minimal"
-          (mkEval [ (import ./examples/minimal/configuration.nix) ]);
-
-        eval-multi-env = mkCheck "eval-multi-env"
-          (mkEval [ (import ./examples/multi-env/configuration.nix) ]);
-
-        eval-multi-env-daemon = mkCheck "eval-multi-env-daemon"
-          (mkEval [
-            (import ./examples/multi-env/configuration.nix)
-            ({ lib, ... }: {
-              d2b.site.allowUnsafeEastWest = true;
-              d2b.daemonExperimental.enable = true;
-              d2b.envs.work.mtu = lib.mkForce 1400;
-              d2b.envs.work.mssClamp = lib.mkForce true;
-              d2b.envs.work.lan.allowEastWest = lib.mkForce true;
-            })
-          ]);
-
-        eval-with-observability =
+        eval-zone =
           let
-            cfg = mkEval [ (import ./examples/with-observability/configuration.nix) ];
+            cfg = mkEval [ smokeConfigModule fixtureArtifactCatalogOverride ];
             observed = {
               assertionsGreen = pkgs.lib.all (a: a.assertion) cfg.config.assertions;
-              observabilityEnabled =
-                (builtins.fromJSON cfg.config.d2b._manifestPkg.text)._observability.enabled;
-              stackVmDeclared = builtins.hasAttr "sys-obs" cfg.config.d2b.vms;
-              workloadAgentDeclared =
-                cfg.config.d2b.vms.work-app.observability.enable;
+              zoneCount = builtins.length (builtins.attrNames cfg.config.d2b.zones);
+              launcherArtifact =
+                cfg.config.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
             };
           in
-          mkEvalOnlyCheck "eval-with-observability" (
+          mkEvalOnlyCheck "eval-zone" (
             if observed.assertionsGreen
-              && observed.observabilityEnabled
-              && observed.stackVmDeclared
-              && observed.workloadAgentDeclared
+              && observed.zoneCount == 1
+              && observed.launcherArtifact == "realm-workloads-launcher-v2.json"
             then observed
-            else throw "eval-with-observability failed: ${builtins.toJSON observed}"
+            else throw "eval-zone failed: ${builtins.toJSON observed}"
           );
 
         rust-build = rustWorkspace {
@@ -1262,9 +1175,71 @@
             inherit system pkgs;
             flake = self;
           };
-        in pkgs.runCommand "d2b-provider-catalog-determinism" { } ''
+        in pkgs.runCommand "d2b-provider-catalog-determinism" {
+          nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
+        } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/provider-catalog-determinism.json"
+          python3 - "$out/provider-catalog-determinism.json" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              contract = json.load(handle)["digestContract"]
+          entries = {
+              entry["artifactId"]: entry["packageDigest"]
+              for entry in contract["entries"]
+          }
+          provider_hash = subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  contract["providerPath"],
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          expected_provider = "sha256:" + provider_hash
+          if entries["provider-digest"] != expected_provider:
+              raise SystemExit(
+                  f"provider packageDigest {entries['provider-digest']} "
+                  f"does not match NAR digest {expected_provider}"
+              )
+          if entries["system-digest"] != contract["systemExpected"]:
+              raise SystemExit(
+                  f"system packageDigest {entries['system-digest']} "
+                  f"does not match path-and-content digest "
+                  f"{contract['systemExpected']}"
+              )
+          system_nar = "sha256:" + subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  contract["systemPath"],
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if entries["system-digest"] == system_nar:
+              raise SystemExit(
+                  "system packageDigest unexpectedly used the Provider NAR mode"
+              )
+          PY
         '';
 
         guest-static-consumption = let
@@ -1430,57 +1405,77 @@
           pkgs = nixpkgsFor.${system};
         };
 
-        # Template eval-check: override the three sentinel-gated
-        # fields (TODOs 2 + 3) so the assertion block passes. The
-        # template module itself is imported unchanged so any
-        # regression in the sentinel logic still surfaces here.
-        eval-template = mkCheck "eval-template" (mkEval [
-          (import ./templates/default/configuration.nix)
-          ({ lib, ... }: {
-            # Minimal NixOS baseline the template intentionally
-            # omits (TODO 1 - hardware-configuration). Without this
-            # the eval would fail on `fileSystems."/"`.
-            boot.loader.systemd-boot.enable = lib.mkForce false;
-            boot.loader.grub.enable = false;
-            boot.initrd.includeDefaultModules = false;
-            fileSystems."/" = {
-              device = "tmpfs";
-              fsType = "tmpfs";
-            };
-            environment.etc."machine-id".text =
-              "00000000000000000000000000000000";
-
-            # Sentinel overrides - these are the three fields gated
-            # by the template's assertion block. Each `mkForce`
-            # replaces a sentinel with a valid stand-in so the
-            # assertions pass and the rest of the module eval runs.
-            networking.hostName = lib.mkForce "check-template";
-            d2b.site.launcherUsers = lib.mkForce [ "check-user" ];
-            d2b.site.userAuthorizedKeys = lib.mkForce [
-              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcheckcheckcheckcheckcheckcheckcheckchecky check@template-check"
-            ];
-
-            # The launcherUsers principal must be a real user.
-            users.users.check-user = {
-              isNormalUser = true;
-              uid = 1100;
-            };
-          })
-        ]);
-      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-        # graphics-workstation transitively depends on x86_64-only
-        # packages (spectrum-ch, crosvm-patched, vhost-device-sound)
-        # and the framework's `checkVmPlatform` gate refuses to
-        # evaluate a graphics-enabled VM on a non-x86_64 host. Gate
-        # the check on `system == "x86_64-linux"` so aarch64-linux
-        # `nix flake check` stays green.
-        eval-graphics = mkCheck "eval-graphics"
-          (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
 
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
         buildProviderElfShim = providerElfShim;
+        mkProviderArtifact = args:
+          let
+            system = args.system or builtins.currentSystem;
+            providerPkgs = args.pkgs or nixpkgsFor.${system};
+            helperArgs = builtins.removeAttrs args [ "pkgs" "system" ];
+          in
+          (import ./nix/provider-artifact.nix {
+            pkgs = providerPkgs;
+          }) helperArgs;
+        buildProviderArtifact = args: self.lib.mkProviderArtifact args;
+        providerRuntimeCloudHypervisor = system:
+          let
+            package = self.packages.${system}.d2b-provider-runtime-cloud-hypervisor;
+            metadata = package.passthru.providerArtifact;
+          in {
+            inherit package;
+            inherit (metadata) catalog trustedPublisher;
+            descriptor = {
+              package = package;
+              type = "provider";
+              inherit (metadata) catalog;
+            };
+          };
+        evalGuest = {
+          system ? builtins.currentSystem,
+          d2bHostToolOverrides ? null,
+          extraSpecialArgs ? { },
+          nixpkgsConfig ? { },
+          nixpkgsOverlays ? [ ],
+          ...
+        }@args:
+          let
+            guestInputs = inputs // { inherit self; };
+            guestPkgs = nixpkgsFor.${system};
+            guestTools = {
+              broker = self.packages.${system}.d2b-broker-guest-static;
+              d2bd = self.packages.${system}.d2bd-guest-static;
+              d2b-guest-shell-runner-static =
+                self.packages.${system}.d2b-guest-shell-runner-static;
+            };
+            evaluator = (import ./nixos-modules/vm-evaluator.nix {
+              inputs = guestInputs;
+            }) {
+              config = {
+                d2b.site = {
+                  inherit extraSpecialArgs;
+                  usePrebuiltHostTools = false;
+                };
+                nixpkgs = {
+                  config = nixpkgsConfig;
+                  overlays = nixpkgsOverlays;
+                };
+              };
+              lib = guestPkgs.lib;
+              pkgs = guestPkgs;
+              d2bHostTools = guestTools;
+              inherit d2bHostToolOverrides;
+            };
+          in
+          evaluator._evalGuest (builtins.removeAttrs args [
+            "system"
+            "d2bHostToolOverrides"
+            "extraSpecialArgs"
+            "nixpkgsConfig"
+            "nixpkgsOverlays"
+          ]);
       });
 
     };

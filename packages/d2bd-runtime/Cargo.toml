@@ -28,7 +28,6 @@ d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
 d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", features = ["host-socket", "native-vsock"] }
 libc = "0.2"

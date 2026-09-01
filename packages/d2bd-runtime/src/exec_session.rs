@@ -502,7 +502,9 @@ where
         match kind {
             NamedProcessStreamErrorKind::Authorization => ExecOpError::Auth,
             NamedProcessStreamErrorKind::StaleSession => ExecOpError::StaleSession,
-            NamedProcessStreamErrorKind::NotFound => ExecOpError::Guest(ProcessOpError::ExecNotFound),
+            NamedProcessStreamErrorKind::NotFound => {
+                ExecOpError::Guest(ProcessOpError::ExecNotFound)
+            }
             NamedProcessStreamErrorKind::Backpressure => {
                 ExecOpError::Guest(ProcessOpError::StdinBackpressure)
             }

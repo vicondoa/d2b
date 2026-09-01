@@ -14,8 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
+use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 use serde::Serialize;
 
 use crate::wayland_proxy::identity::ProxyIdentity;
@@ -37,20 +36,6 @@ impl BridgeConfig {
             socket_path: None,
             reconnect: BridgeReconnectPolicy::default(),
         }
-    }
-
-    pub fn from_parts(
-        explicit_socket: Option<PathBuf>,
-        root: &Path,
-        user_uid: Option<u32>,
-        vm_name: &str,
-        reconnect: BridgeReconnectPolicy,
-    ) -> Result<Self, BridgeConfigError> {
-        let target = WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
-            .map_err(|_| BridgeConfigError::InvalidEndpointComponent)?;
-        let identity = ProxyIdentity::legacy_vm(vm_name, target, WorkloadProviderKind::LocalVm)
-            .map_err(|_| BridgeConfigError::InvalidEndpointComponent)?;
-        Self::from_identity_parts(explicit_socket, root, user_uid, &identity, reconnect)
     }
 
     pub fn from_identity_parts(
@@ -100,19 +85,6 @@ impl Default for BridgeReconnectPolicy {
     }
 }
 
-pub fn path_for_user_vm(
-    root: &Path,
-    user_uid: u32,
-    vm_name: &str,
-) -> Result<PathBuf, BridgeConfigError> {
-    validate_vm_path_component(vm_name)?;
-    Ok(root
-        .join(user_uid.to_string())
-        .join("bridge")
-        .join(vm_name)
-        .join("clip.sock"))
-}
-
 pub fn path_for_user_identity(
     root: &Path,
     user_uid: u32,
@@ -125,10 +97,6 @@ pub fn path_for_user_identity(
         .join("bridge")
         .join(component)
         .join("clip.sock"))
-}
-
-fn validate_vm_path_component(vm_name: &str) -> Result<(), BridgeConfigError> {
-    validate_bridge_path_component(vm_name)
 }
 
 fn validate_bridge_path_component(value: &str) -> Result<(), BridgeConfigError> {
@@ -377,8 +345,6 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
         WorkloadPasteRequest {
             canonical_target: &'a WorkloadTarget,
             provider_kind: WorkloadProviderKind,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            legacy_vm_name: Option<&'a str>,
             mime_type: &'a str,
             source_id: u64,
             source_attribution: &'static str,
@@ -386,8 +352,6 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
         WorkloadCopySelection {
             canonical_target: &'a WorkloadTarget,
             provider_kind: WorkloadProviderKind,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            legacy_vm_name: Option<&'a str>,
             mime_type: &'a str,
             source_id: u64,
             source_attribution: &'static str,
@@ -397,7 +361,6 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
     let common = (
         metadata.identity.target(),
         metadata.identity.provider_kind(),
-        metadata.identity.legacy_vm_name(),
         metadata.mime_type.as_str(),
         metadata.source_id,
     );
@@ -405,17 +368,15 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
         BridgeTransferKind::PasteRequest => Frame::WorkloadPasteRequest {
             canonical_target: common.0,
             provider_kind: common.1,
-            legacy_vm_name: common.2,
-            mime_type: common.3,
-            source_id: common.4,
+            mime_type: common.2,
+            source_id: common.3,
             source_attribution: "exact_client",
         },
         BridgeTransferKind::CopySelection => Frame::WorkloadCopySelection {
             canonical_target: common.0,
             provider_kind: common.1,
-            legacy_vm_name: common.2,
-            mime_type: common.3,
-            source_id: common.4,
+            mime_type: common.2,
+            source_id: common.3,
             source_attribution: "exact_client",
         },
     };
@@ -427,7 +388,15 @@ fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
     use std::io::{IoSliceMut, Read};
+
+    fn local_identity() -> ProxyIdentity {
+        ProxyIdentity::canonical(
+            WorkloadTarget::parse("work.local.d2b").unwrap(),
+            WorkloadProviderKind::LocalVm,
+        )
+    }
 
     fn assert_peer_observes_local_close(status: HandoffStatus) {
         let (local, mut peer) = UnixStream::pair().expect("socket pair");
@@ -440,12 +409,13 @@ mod tests {
     }
 
     #[test]
-    fn bridge_path_uses_per_user_per_vm_layout() {
-        let path = path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "work").expect("valid path");
+    fn bridge_path_uses_per_user_per_identity_layout() {
+        let path = path_for_user_identity(Path::new("/run/d2b/clipd"), 1000, &local_identity())
+            .expect("valid path");
 
         assert_eq!(
             path,
-            PathBuf::from("/run/d2b/clipd/1000/bridge/work/clip.sock")
+            PathBuf::from("/run/d2b/clipd/1000/bridge/endpoint-8b555a7dbefa45d6213de81a/clip.sock")
         );
     }
 
@@ -466,11 +436,11 @@ mod tests {
 
     #[test]
     fn explicit_bridge_socket_path_wins() {
-        let config = BridgeConfig::from_parts(
+        let config = BridgeConfig::from_identity_parts(
             Some(PathBuf::from("/run/d2b/clipd/1000/bridge/work/custom.sock")),
             Path::new("/run/d2b/clipd"),
             Some(1001),
-            "other",
+            &local_identity(),
             BridgeReconnectPolicy::default(),
         )
         .expect("valid config");
@@ -483,11 +453,11 @@ mod tests {
 
     #[test]
     fn bridge_config_can_be_disabled_until_nix_renders_socket() {
-        let config = BridgeConfig::from_parts(
+        let config = BridgeConfig::from_identity_parts(
             None,
             Path::new("/run/d2b/clipd"),
             None,
-            "work",
+            &local_identity(),
             BridgeReconnectPolicy::default(),
         )
         .expect("disabled config");
@@ -496,28 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_path_rejects_invalid_vm_component() {
-        assert!(matches!(
-            path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "bad/vm"),
-            Err(BridgeConfigError::InvalidEndpointComponent)
-        ));
-        assert!(matches!(
-            path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "."),
-            Err(BridgeConfigError::InvalidEndpointComponent)
-        ));
-        assert!(matches!(
-            path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, ".."),
-            Err(BridgeConfigError::InvalidEndpointComponent)
-        ));
-    }
-
-    #[test]
     fn reconnect_state_machine_recovers_after_failure() {
-        let config = BridgeConfig::from_parts(
+        let config = BridgeConfig::from_identity_parts(
             Some(PathBuf::from("/run/d2b/clipd/1000/bridge/work/clip.sock")),
             Path::new("/run/d2b/clipd"),
             None,
-            "work",
+            &local_identity(),
             BridgeReconnectPolicy::default(),
         )
         .expect("enabled config");
@@ -607,7 +561,7 @@ mod tests {
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
         let local = LocalTransferFd::new(local.into());
         let metadata = BridgeTransferMetadata {
-            identity: ProxyIdentity::from("work"),
+            identity: local_identity(),
             mime_type: "text/plain".to_owned(),
             source_id: 7,
             kind: BridgeTransferKind::PasteRequest,
@@ -648,7 +602,7 @@ mod tests {
         assert!(frame.contains("\"source_attribution\":\"exact_client\""));
         assert!(frame.contains("\"canonical_target\":\"work.local.d2b\""));
         assert!(frame.contains("\"provider_kind\":\"local-vm\""));
-        assert!(frame.contains("\"legacy_vm_name\":\"work\""));
+        assert!(!frame.contains("legacy_vm_name"));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
     }

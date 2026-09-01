@@ -11,12 +11,13 @@
 //! [`ZoneRouteEngine::admit_relay_hop`], which this crate reuses rather than
 //! restates.
 
+use d2b_bus::session::{RouteAdmissionEvidence, RouteAdmissionVerifier};
+use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName};
 use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceTypeName,
+use d2b_zone_routing::engine::{
+    ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
+    ZoneRouteEngine,
 };
-use d2b_zone_routing::engine::{ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteEngine};
 
 pub use d2b_contracts_zone_session::v3::zone_routing::ZoneRouteFailClosedReason;
 
@@ -72,48 +73,64 @@ impl std::fmt::Debug for ForwardTarget {
 
 /// What an authenticated Provider session asks a hop to forward.
 ///
-/// There is deliberately no grant field on this type. A Provider states where
-/// it wants to go; it never states that it is allowed to relay. The grants
-/// are a separate argument that only the local RBAC engine produces.
-#[derive(Clone)]
+/// A request carries the two runtime-issued admissions only after the local
+/// runtime has verified them. There is no caller-populated policy or
+/// connectivity claim and no grant boolean that a Provider can assert.
 pub struct ProviderForwardRequest {
     identity: SessionIdentity,
     target: ForwardTarget,
     next_hop: ZoneLabelId,
-    arrived_remaining_hops: u32,
-    zone_link_connected: bool,
-    offers_attachment: bool,
+    hop: ZoneRelayRequest,
 }
 
 impl ProviderForwardRequest {
-    /// A forward request with refusing defaults for connectivity.
-    pub const fn new(
+    /// A forward request with no route admissions.
+    pub fn new(
         identity: SessionIdentity,
         target: ForwardTarget,
         next_hop: ZoneLabelId,
         arrived_remaining_hops: u32,
     ) -> Self {
+        let hop = ZoneRelayRequest::new(arrived_remaining_hops)
+            .with_forward_binding(identity.zone().clone(), next_hop.clone());
         Self {
             identity,
             target,
             next_hop,
-            arrived_remaining_hops,
-            zone_link_connected: false,
-            offers_attachment: false,
+            hop,
         }
     }
 
-    /// Record that the route-selected uplink is established.
-    #[must_use]
-    pub fn with_zone_link_connected(mut self, connected: bool) -> Self {
-        self.zone_link_connected = connected;
+    /// Attach the independently verified target and relay admissions.
+    pub fn with_admissions(
+        mut self,
+        target_admission: ZoneRouteAdmission,
+        relay_admission: ZoneRouteAdmission,
+    ) -> Self {
+        self.hop = self.hop.with_admissions(target_admission, relay_admission);
         self
+    }
+
+    /// Consume and verify the target and relay admissions for this hop.
+    pub fn with_runtime_admissions(
+        self,
+        target_verifier: RouteAdmissionVerifier,
+        target_evidence: RouteAdmissionEvidence,
+        target_expected: &ZoneRouteAdmissionExpectation,
+        relay_verifier: RouteAdmissionVerifier,
+        relay_evidence: RouteAdmissionEvidence,
+        relay_expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        Ok(self.with_admissions(
+            ZoneRouteAdmission::verify(target_verifier, target_evidence, target_expected)?,
+            ZoneRouteAdmission::verify(relay_verifier, relay_evidence, relay_expected)?,
+        ))
     }
 
     /// Record that the inbound frame offered a descriptor attachment.
     #[must_use]
     pub fn with_attachment_offer(mut self, offers_attachment: bool) -> Self {
-        self.offers_attachment = offers_attachment;
+        self.hop = self.hop.with_attachment_offer(offers_attachment);
         self
     }
 
@@ -134,7 +151,7 @@ impl ProviderForwardRequest {
 
     /// The hop budget the inbound frame arrived with.
     pub const fn arrived_remaining_hops(&self) -> u32 {
-        self.arrived_remaining_hops
+        self.hop.arrived_remaining_hops()
     }
 }
 
@@ -142,52 +159,8 @@ impl std::fmt::Debug for ProviderForwardRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ProviderForwardRequest")
-            .field("arrived_remaining_hops", &self.arrived_remaining_hops)
-            .field("zone_link_connected", &self.zone_link_connected)
-            .field("offers_attachment", &self.offers_attachment)
+            .field("arrived_remaining_hops", &self.arrived_remaining_hops())
             .finish_non_exhaustive()
-    }
-}
-
-/// The two independent decisions the local RBAC engine reached for one hop.
-///
-/// The `relay` decision is evaluated against the authenticated inbound Zone
-/// transport subject and the route-selected next hop. The target decision is
-/// evaluated against the immutable ResourceType, name, and target verb. One
-/// never supplies the other, and the only constructors are
-/// [`LocalHopGrants::denied`] and [`LocalHopGrants::evaluated`], both of which
-/// take the answers the local engine already produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalHopGrants {
-    relay_granted: bool,
-    target_verb_granted: bool,
-}
-
-impl LocalHopGrants {
-    /// The refusing default, used when policy state is missing.
-    pub const fn denied() -> Self {
-        Self {
-            relay_granted: false,
-            target_verb_granted: false,
-        }
-    }
-
-    /// Record two independently evaluated local decisions.
-    pub const fn evaluated(relay_granted: bool, target_verb_granted: bool) -> Self {
-        Self {
-            relay_granted,
-            target_verb_granted,
-        }
-    }
-
-    /// Whether the local engine granted `relay` for this next hop.
-    pub const fn relay_granted(self) -> bool {
-        self.relay_granted
-    }
-
-    /// Whether the local engine granted the immutable target verb.
-    pub const fn target_verb_granted(self) -> bool {
-        self.target_verb_granted
     }
 }
 
@@ -227,18 +200,13 @@ impl std::fmt::Debug for ForwardedCall {
 
 /// Decide whether one hop may forward an authenticated Provider call.
 ///
-/// Both grants are required and are evaluated independently by the caller's
-/// own RBAC engine. Nothing on `request` can supply either one.
+/// Both runtime-issued admissions are required and are independently verified
+/// before the hop can be forwarded. Nothing on `request` can supply either
+/// one.
 pub fn admit_provider_forward(
     request: &ProviderForwardRequest,
-    grants: LocalHopGrants,
 ) -> Result<ForwardedCall, ZoneRouteFailClosedReason> {
-    let mut hop = ZoneRelayRequest::new(request.arrived_remaining_hops);
-    hop.relay_granted = grants.relay_granted;
-    hop.target_verb_granted = grants.target_verb_granted;
-    hop.zone_link_connected = request.zone_link_connected;
-    hop.offers_attachment = request.offers_attachment;
-    match ZoneRouteEngine::admit_relay_hop(&hop) {
+    match ZoneRouteEngine::admit_relay_hop(&request.hop) {
         ZoneRelayAdmission::Admitted {
             forwarded_remaining_hops,
         } => Ok(ForwardedCall {

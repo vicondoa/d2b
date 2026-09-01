@@ -6,13 +6,13 @@
 //! of raw device paths) and the `BrokerRequest`/`BrokerResponse` wire
 //! contract round-trip via `serde_json`.
 
+use d2b_broker::ops::audit_op::OperationFields;
+use d2b_broker::{fd_passing::recv_fds, protocol::send_json_frame_with_fds};
 use d2b_contracts::types::VmId;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest, OpenHidrawSecurityKeyResponse,
 };
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_broker::ops::audit_op::OperationFields;
-use d2b_broker::{fd_passing::recv_fds, protocol::send_json_frame_with_fds};
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 use nix::unistd::close;
 use std::os::fd::{AsRawFd, OwnedFd};

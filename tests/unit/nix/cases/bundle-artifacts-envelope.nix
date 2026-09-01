@@ -99,6 +99,11 @@ in
     };
     expected = {
       data = {
+        identity = {
+          zoneUid = "97a9f4b4-e951-4708-897a-7fcc0d2eb6ed";
+          storeUid = "72183a11-2e88-4a24-80a1-2cc6bec5a661";
+          storeEpoch = 1;
+        };
         zoneStoreId = "zone-store-work";
         storageOwnerPrincipal = "d2b-zonert";
         parentDirectoryId = "zone-store-parent-work";

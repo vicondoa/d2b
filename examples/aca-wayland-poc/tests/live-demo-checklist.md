@@ -1,5 +1,9 @@
 # Live demo checklist - ACA sandbox + Wayland forwarding (ADR 0032)
 
+> Deferred acceptance: this checklist is historical POC material and must not
+> be cited as U19 or U20 evidence. Run ACA testing only after U20 completes
+> the `/etc/nixos` host switch, d2b startup, and Cloud Hypervisor Guest boot.
+
 This is a **Layer 2, manual** procedure (it provisions real Azure resources
 and needs a live Wayland compositor). It is the reproducible record behind
 the acceptance bar: a Wayland-native app running inside an **Azure

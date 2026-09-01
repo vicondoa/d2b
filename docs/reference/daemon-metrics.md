@@ -2,244 +2,44 @@
 
 **Diataxis category:** reference.
 
-> Canonical metric inventory maintained by `d2bd`.
-> Implementation: [`packages/d2bd-runtime/src/metrics.rs`](../../packages/d2bd-runtime/src/metrics.rs).
-> Policy coverage remains in the daemon's owner-local tests and generated
-> artifact checks.
+The daemon registry is an in-process, bounded metric surface. It is owned by
+`d2bd` and does not imply an unauthenticated HTTP endpoint. Operators use the
+configured observability Provider or `d2b op inspect` until an authenticated
+scrape transport exists.
 
-## Endpoint status
+## Metric rules
 
-The daemon's in-process registry is wired and exercised, but `d2bd` does not
-currently expose an HTTP `/metrics` listener. The registry is a library
-surface for the daemon and its tests; operators must use the configured
-observability Provider until a dedicated, authenticated scrape transport is
-introduced. `d2b host doctor` reports the endpoint as unavailable rather than
-claiming that the public `SOCK_SEQPACKET` socket is an HTTP endpoint.
+Metric names use the `d2b_daemon_` prefix. Labels are closed enums or bounded
+provider/component values. Never label a metric with a Zone name, Guest name,
+Resource UID, operation ID, shell name, path, credential, PID, or error text.
 
-## Metric inventory
+## Current families
 
-Every metric below ships with the `d2b_daemon_` name prefix so
-collector relabeling can scope-match the daemon without enumerating
-each metric individually. Label cardinality is bounded by the
-declared schema; see "Cardinality bounds" below.
+| Family | Meaning |
+| --- | --- |
+| `d2b_daemon_resource_state` | Count of observed Resource phases by closed ResourceType/state. |
+| `d2b_daemon_resource_reconcile_total` | Controller reconcile outcomes by Provider, operation, and closed result. |
+| `d2b_daemon_provider_request_total` | Typed Provider/controller request outcomes. |
+| `d2b_daemon_broker_request_total` | Broker operation outcomes by closed op and result. |
+| `d2b_daemon_broker_request_duration_seconds` | Broker round-trip latency. |
+| `d2b_daemon_guest_lifecycle_total` | Guest start/stop/restart/deletion outcomes. |
+| `d2b_daemon_guest_lifecycle_duration_seconds` | Guest lifecycle duration by closed operation/result. |
+| `d2b_daemon_session_total` | ComponentSession and shell session outcomes. |
+| `d2b_daemon_ownership_drift_total` | Count of ownership-marker drift observations. |
+| `d2b_daemon_pidfd_table_size` | Number of broker runner pidfds currently observed. |
+| `d2b_daemon_uptime_seconds` | Seconds since d2bd started. |
 
-### `d2b_daemon_vm_state`
+Provider, ResourceType, operation, phase, and outcome values are defined by
+the corresponding Rust enums and generated contracts. Free-form diagnostics
+remain in logs and redacted audit records, not metric labels.
 
-- **Type:** gauge
-- **Labels:** `state`
-- **State values:** `running`, `stopped`, `degraded`
-- **Meaning:** Aggregate lifecycle state. Resource identity is kept out
-  of metric labels; operators graph `sum by (state) (...)`.
+## Inspection
 
-### `d2b_daemon_vm_start_duration_seconds`
+```bash
+d2b op inspect --json
+d2b host doctor --read-only
+```
 
-- **Type:** histogram
-- **Labels:** `outcome`
-- **Outcome values:** `success`, `failure`
-- **Buckets (seconds):** `0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300`
-- **Meaning:** Wall-clock duration of `d2b guest start <name>` as
-  observed by the daemon's supervisor DAG, from the moment the
-  start intent is accepted to the moment the runner is either
-  ready or declared failed.
-
-### `d2b_daemon_host_prep_step_duration_seconds`
-
-- **Type:** histogram
-- **Labels:** `step`
-- **Step values:** one of the host-prepare DAG step IDs documented
-  in [`docs/reference/host-prep-dag.md`](./host-prep-dag.md)
-  (e.g. `nft`, `route`, `sysctl`, `hosts`, `nm-unmanaged`,
-  `usbip-firewall`, `cgroup-delegate`).
-- **Buckets (seconds):** `0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10`
-- **Meaning:** Per-step duration of a single host-prepare reconcile
-  pass. The label space is closed: only documented step IDs are
-  emitted.
-
-### `d2b_daemon_broker_request_total`
-
-- **Type:** counter
-- **Labels:** `op`, `outcome`
-- **Op values:** every `broker_wire` request name documented in
-  [`docs/reference/daemon-api.md`](./daemon-api.md#broker-operations)
-  (e.g. `ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
-  `UpdateHostsFile`, `OpenPidfd`, `SpawnRunner`, `RunActivation`,
-  `RunGc`, `RunHostInstall`, `RunHostKeyTrust`,
-  `RunKeysRotate`, `RunMigrate`, `RunRotateKnownHost`,
-  `UsbipBind`, `UsbipUnbind`, `UsbipProxyReconcile`,
-  `ValidateBundle`, `ExportBrokerAudit`).
-- **Outcome values:** `ok`, `denied`, `error`
-- **Meaning:** Cumulative count of broker requests issued by the
-  daemon, partitioned by the wire op name and the broker's typed
-  disposition. `denied` corresponds to the broker's
-  `denied-refused` / `denied-unknown` disposition; `error`
-  corresponds to `errored`.
-
-### `d2b_daemon_broker_request_duration_seconds`
-
-- **Type:** histogram
-- **Labels:** `op`
-- **Op values:** same set as `d2b_daemon_broker_request_total`.
-- **Buckets (seconds):** `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5`
-- **Meaning:** Round-trip latency of a single broker request
-  (send → receive → typed-decode) as measured by the daemon.
-
-### `d2b_daemon_vm_shutdown_total`
-
-- **Type:** counter
-- **Labels:** `vmm`, `outcome`
-- **VMM values:** `cloud_hypervisor`, `qemu_media`, `unknown`
-- **Outcome values:** bounded daemon enum such as `clean_guest_shutdown`,
-  `clean_vmm_cleanup`, `api_unavailable`, `timeout_exceeded`,
-  `force_requested`, `disabled`, and `forced_cleanup`.
-- **Meaning:** Cumulative count of VM stop attempts by provider graceful
-  shutdown outcome. Labels never include human summaries or provider error
-  text.
-
-### `d2b_daemon_vm_shutdown_duration_seconds`
-
-- **Type:** histogram
-- **Labels:** `vmm`, `outcome`
-- **Buckets (seconds):** `0.5, 1, 2, 5, 10, 30, 60, 90, 120, 300, 600`
-- **Meaning:** Elapsed provider graceful-shutdown wait time. Explicit
-  force and config-disabled paths record near-zero observations with their
-  bounded outcomes.
-
-### `d2b_daemon_activation_phase_duration_seconds`
-
-- **Type:** histogram
-- **Labels:** `phase`, `mode`, `status`
-- **Phase values:** `prepare`, `marker-write`, `guest`, `commit`,
-  `metadata-only`
-- **Mode values:** `switch`, `boot`, `test`, `rollback`
-- **Status values:** bounded daemon outcomes such as `success`, `failure`,
-  `indeterminate`, `broker-error`, `protocol-error`, and
-  `dispatch-error`
-- **Buckets (seconds):** `0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 30,
-  120, 600`
-- **Meaning:** Wall-clock duration for the daemon-owned VM activation
-  orchestration phases. Labels never include activation ids, store paths,
-  switch script paths, guest output, or error text.
-
-### `d2b_daemon_vm_degraded`
-
-- **Type:** gauge
-- **Labels:** `reason`
-- **Reason values:** currently `activation_pending`
-- **Meaning:** Aggregate degraded-state indicator for bounded daemon reasons
-  that should be visible to operators even when lifecycle state remains
-  `Running` or `Stopped`. Activation sets this gauge while a host pending
-  marker is unresolved and clears it after a successful commit or
-  definitive guest activation failure.
-
-### `d2b_daemon_ownership_drift_total`
-
-- **Type:** counter
-- **Labels:** *(none)*
-- **Meaning:** Number of ownership preflight drift observations. Resource
-  identity is intentionally absent from labels.
-
-### `d2b_daemon_ssh_host_key_drift_total`
-
-- **Type:** counter
-- **Labels:** *(none)*
-- **Meaning:** Number of SSH host-key preflight drift observations.
-  Resource identity is intentionally absent from labels.
-
-### `d2b_daemon_pidfd_table_size`
-
-- **Type:** gauge
-- **Labels:** *(none)*
-- **Meaning:** Current number of live pidfd entries the supervisor
-  holds for child runners (cloud-hypervisor processes and per-VM
-  sidecars). Tracks the supervisor pidfd table documented in the
-  Control-plane row of [`AGENTS.md`](../../AGENTS.md).
-
-### `d2b_daemon_uptime_seconds`
-
-- **Type:** gauge
-- **Labels:** *(none)*
-- **Meaning:** Wall-clock seconds since the daemon process started.
-  Resets to zero on every restart; pair with
-  `changes(d2b_daemon_uptime_seconds[5m]) > 0` for a restart
-  alert.
-
-### `d2b_daemon_component_session_shell_total`
-
-- **Type:** counter
-- **Labels:** `subsystem`, `outcome`, `error_kind`
-- **Meaning:** Cumulative count of ComponentSession persistent-shell management and
-  attached-owner outcomes. Shell names, session ids, terminal session handles, attach ids,
-  terminal stream ids, provider/resource ids, provider endpoints,
-  provider credentials, process environments, working directories, helper
-  diagnostics, and terminal bytes are never metric labels.
-
-### `d2b_daemon_shell_lifecycle_total`
-
-- **Type:** counter
-- **Labels:** `provider`, `component`, `operation`, `outcome`, `error_kind`
-- **Meaning:** Provider-neutral persistent-shell lifecycle outcomes. Providers
-  are `component-session` and `unsafe-local`; component is the closed value `shell`;
-  operations are `list`, `create`, `attach`, `detach`, `kill`, and `close`.
-  Outcomes and error kinds are closed daemon enums. No uid, target, shell name,
-  operation/session id, supervisor metadata, terminal bytes, helper diagnostic,
-  path, environment, or cwd is a label.
-
-### `d2b_daemon_workload_availability`
-
-- **Type:** gauge
-- **Labels:** `provider`, `component`, `state`
-- **Meaning:** Count of workloads in the most recently observed inventory
-  snapshot for each closed provider/component/state tuple. An authorized
-  workload list or status request refreshes the complete inventory atomically,
-  including zero values for tuples no longer present. For unsafe-local
-  workloads, the snapshot reflects the requesting launcher's helper posture.
-  Components are `helper`, `scope`, `proxy`, `launcher`, and `shell`; provider
-  and state are closed enums (`not-applicable` is used where a provider has no
-  component). Workload ids and runtime details are not labels.
-
-### `d2b_daemon_workload_lifecycle_total`
-
-- **Type:** counter
-- **Labels:** `provider`, `operation`, `outcome`
-- **Meaning:** Configured workload lifecycle outcomes. Values are bounded
-  provider/operation/outcome enums and never include argv, environment, cwd,
-  paths, process ids, unit names, or helper diagnostics.
-
-## Cardinality bounds
-
-| Label | Source | Bound |
-| --- | --- | --- |
-| `vm` | declared `d2b.vms.<vm>` + auto-declared `sys-*` VMs | one series per declared VM |
-| `state` | closed enum | 3 |
-| `outcome` (vm start) | closed enum | 2 |
-| `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
-| `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
-| `outcome` (broker) | closed enum | 3 |
-| `provider` (workload) | closed runtime-provider enum | 4 |
-| `component` (workload) | closed prerequisite enum | 5 |
-| `operation` (workload) | closed lifecycle-operation enum | 2 |
-| `state` (workload) | closed availability enum plus `not-applicable` | 9 |
-| `outcome` (workload) | closed lifecycle-result enum | 3 |
-| `vmm` | closed VM shutdown runtime enum | 3 |
-| `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
-| `phase` | closed activation orchestration enum | 5 |
-| `mode` | closed activation mode enum | 4 |
-| `status` | closed activation phase outcome enum | bounded by daemon code |
-| `reason` | closed degraded reason enum | bounded by daemon code |
-| `subsystem` | closed ComponentSession subsystem enum | bounded by daemon code |
-| `outcome` (ComponentSession) | closed enum | bounded by daemon code |
-| `error_kind` | normalized daemon error bucket | bounded by daemon code |
-| `provider` (shell) | closed shell backend enum | 2 |
-| `component` (shell) | constant `shell` | 1 |
-| `operation` (shell) | closed lifecycle-operation enum | 6 |
-| `outcome` (shell) | closed lifecycle-result enum | 5 |
-
-No label carries free-form text (no error messages, no store paths,
-no activation ids, no command output, no shell session names, no
-terminal handles, no terminal stream ids, and no provider resource ids). The
-[observability panel's cardinality + PII rules](../../AGENTS.md#default-observability-panel)
-apply.
-
-No scrape configuration is provided while the daemon has no authenticated
-metrics transport. A future transport must define its socket trust boundary
-before a collector configuration is documented here.
+If metrics are unavailable, the daemon reports that condition explicitly. It
+does not claim that the public `SOCK_SEQPACKET` socket is an HTTP endpoint or
+read private bundle state to synthesize labels.

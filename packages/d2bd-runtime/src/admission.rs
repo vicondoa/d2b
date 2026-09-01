@@ -1,6 +1,4 @@
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_control::public_wire;
-use d2b_realm_core::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
 use uzers::get_group_by_name;
@@ -49,8 +47,7 @@ pub struct PeerOverride {
 #[cfg(any(test, feature = "test-support"))]
 // Compiled out unless test-support is enabled by d2bd's test targets; release
 // binaries contain no peer-identity override path.
-pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
-    std::sync::Mutex::new(None);
+pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> = std::sync::Mutex::new(None);
 
 #[cfg(any(test, feature = "test-support"))]
 pub static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -197,33 +194,21 @@ pub fn verb_allowed_for_host_shutdown(verb: &str) -> bool {
     matches!(verb, "vmStop")
 }
 
-pub fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
-    matches!(
-        op,
-        public_wire::GatewayDisplayOp::Start(_) | public_wire::GatewayDisplayOp::Stop(_)
-    )
-}
-
-pub fn gateway_display_peer_principal(peer: &PeerIdentity) -> PrincipalId {
-    PrincipalId::parse(format!("uid-{}", peer.uid))
-        .expect("trusted display principal derived from numeric uid is valid")
-}
-
-pub fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
-    gateway_display_peer_principal(peer).to_string()
-}
-
 pub fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
     match peer.role {
         PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
         PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
-        PeerRole::HostShutdown => BrokerCallerRole::AdminUid { uid: peer.uid },
+        PeerRole::HostShutdown => BrokerCallerRole::HostShutdownUid { uid: peer.uid },
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::lifecycle_group_member;
+    use super::{
+        PeerIdentity, PeerRole, broker_caller_role_for_peer, lifecycle_group_member,
+        verb_allowed_for_host_shutdown,
+    };
+    use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 
     #[test]
     fn only_the_configured_lifecycle_group_grants_group_authority() {
@@ -235,4 +220,22 @@ mod tests {
         assert!(!lifecycle_group_member("", &groups));
     }
 
+    #[test]
+    fn host_shutdown_is_not_encoded_as_admin() {
+        assert!(matches!(
+            broker_caller_role_for_peer(&PeerIdentity {
+                role: PeerRole::HostShutdown,
+                uid: 0,
+            }),
+            BrokerCallerRole::HostShutdownUid { uid: 0 }
+        ));
+    }
+
+    #[test]
+    fn host_shutdown_allowlist_is_stop_only() {
+        assert!(verb_allowed_for_host_shutdown("vmStop"));
+        for verb in ["vmStart", "vmRestart", "exec", "hostPrepare", "usbipBind"] {
+            assert!(!verb_allowed_for_host_shutdown(verb));
+        }
+    }
 }

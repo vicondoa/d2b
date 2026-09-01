@@ -176,7 +176,7 @@ fn systemd_good() -> SystemdProcessProvider<ProviderSupervisor<DeterministicBack
 }
 
 struct ScriptedBackend {
-    port: ScriptedEffectPort,
+    port: Arc<ScriptedEffectPort>,
 }
 
 impl ProcessEffectBackend for ScriptedBackend {
@@ -255,13 +255,17 @@ fn effect_error(error: ProcessConformanceError) -> ProcessEffectError {
 fn scripted_minijail(
     port: ScriptedEffectPort,
 ) -> MinijailProcessProvider<ProviderSupervisor<ScriptedBackend>> {
-    MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend { port }))
+    MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::new(port),
+    }))
 }
 
 fn scripted_systemd(
     port: ScriptedEffectPort,
 ) -> SystemdProcessProvider<ProviderSupervisor<ScriptedBackend>> {
-    SystemdProcessProvider::new(ProviderSupervisor::new(ScriptedBackend { port }))
+    SystemdProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::new(port),
+    }))
 }
 
 #[test]
@@ -279,6 +283,42 @@ fn shared_conformance_runs_through_the_production_adapter() {
     suite::assert_status_is_redacted(&systemd_good(), SYSTEMD);
     suite::assert_incomplete_launch_identity_fails_closed(scripted_systemd, SYSTEMD);
     suite::assert_adoption_verifies_identity_before_opening_a_pidfd(scripted_systemd, SYSTEMD);
+}
+
+#[test]
+fn stale_minijail_candidate_is_stopped_exactly_before_replacement_launch() {
+    let stale = minijail_bindings()
+        .into_iter()
+        .filter(|binding| *binding != IdentityBinding::Executable)
+        .collect::<Vec<_>>();
+    let port = Arc::new(
+        ScriptedEffectPort::launching(minijail_bindings(), WaitReapOwner::Local)
+            .with_candidate(stale, WaitReapOwner::Local),
+    );
+    let provider = MinijailProcessProvider::new(ProviderSupervisor::new(ScriptedBackend {
+        port: Arc::clone(&port),
+    }));
+    let ticket = fixtures::ticket_builder()
+        .selected_provider(MINIJAIL)
+        .expected_identity(minijail_bindings())
+        .build()
+        .unwrap();
+
+    let candidate = match block_on(provider.adopt(&ticket)).unwrap() {
+        AdoptionOutcome::Stale { candidate } => candidate,
+        other => panic!("expected stale candidate, observed {other:?}"),
+    };
+    block_on(provider.stop_stale(&candidate)).unwrap();
+    block_on(provider.launch(&ticket)).unwrap();
+    assert_eq!(
+        port.calls(),
+        vec![
+            d2b_process_conformance::testing::PortCall::Observe,
+            d2b_process_conformance::testing::PortCall::OpenPidfd,
+            d2b_process_conformance::testing::PortCall::Stop(StopClass::Terminate),
+            d2b_process_conformance::testing::PortCall::Launch,
+        ]
+    );
 }
 
 #[test]
@@ -475,9 +515,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         BrokerRequest, BrokerRequestEnvelope, BrokerResponse, RunnerRole, SpawnRunnerResponse,
     };
     use rustix::net::{
-        AddressFamily, RecvAncillaryBuffer, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage,
-        SendFlags, SocketAddrUnix, SocketFlags, SocketType, accept, bind_unix, listen, recvmsg,
-        sendmsg, socket_with,
+        AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
+        SendAncillaryMessage, SendFlags, SocketAddrUnix, SocketFlags, SocketType, accept,
+        bind_unix, listen, recvmsg, sendmsg, socket_with,
     };
 
     let directory = tempfile::tempdir().unwrap();
@@ -501,7 +541,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let connection = accept(&listener).unwrap();
         let mut payload = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
         let mut iov = [IoSliceMut::new(&mut payload)];
-        let mut ancillary_bytes = [];
+        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
         let received = recvmsg(
             &connection,
@@ -510,17 +550,30 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             RecvFlags::CMSG_CLOEXEC,
         )
         .unwrap();
+        let mut request_fd_count = 0;
+        for message in ancillary.drain() {
+            if let RecvAncillaryMessage::ScmRights(fds) = message {
+                request_fd_count += fds.len();
+            }
+        }
+        assert_eq!(request_fd_count, 1);
         let request: BrokerRequestEnvelope =
             d2b_contracts::decode_frame("BrokerRequestEnvelope", &payload[..received.bytes])
                 .unwrap();
-        match request.request {
+        let (provider_identity, template_identity, generation) = match request.request {
             BrokerRequest::SpawnRunner(request) => {
                 assert_eq!(request.vm_id, server_vm);
                 assert_eq!(request.role_id, server_role);
-                assert_eq!(request.role, RunnerRole::Virtiofsd);
+                assert_eq!(request.role, RunnerRole::ProviderController);
+                assert_eq!(request.inherited_fd_count, 1);
+                (
+                    request.provider_identity,
+                    request.template_identity,
+                    request.generation,
+                )
             }
             _ => panic!("expected SpawnRunner"),
-        }
+        };
 
         let pid = i32::try_from(std::process::id()).unwrap();
         let start_time_ticks = read_self_start_time();
@@ -530,10 +583,16 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         let response = BrokerResponse::SpawnRunner(SpawnRunnerResponse {
             vm_id: server_vm,
             role_id: server_role,
-            role: RunnerRole::Virtiofsd,
+            role: RunnerRole::ProviderController,
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            runtime_scope: None,
             pid: pid.as_raw_nonzero().get(),
             start_time_ticks,
             pidfd_index: 0,
+            controller_bootstrap_fd_index: None,
             console_fd_index: None,
             execution_ref: Some(
                 d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
@@ -543,9 +602,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             ),
             user_ref: None,
             guest_execution: None,
-            provider_identity: Some([0x11; 32]),
-            template_identity: Some([0x22; 32]),
-            generation: Some(1),
+            provider_identity,
+            template_identity,
+            generation,
             bundle_content_identity: Some("bundle-content-test".to_owned()),
         });
         let frame = d2b_contracts::encode_frame(&response).unwrap();
@@ -562,11 +621,18 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
+        zone_uid: None,
+        owner_ref: None,
+        owner_uid: None,
+        runtime_scope: None,
+        typed_identity: false,
+        provider_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-minijail")
+            .unwrap(),
         execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
         domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,
         role_id,
-        role: RunnerRole::Virtiofsd,
+        role: RunnerRole::ProviderController,
         bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),
         provider_identity: [0x11; 32],
         template_identity: [0x22; 32],
@@ -593,8 +659,11 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         .selected_provider(MINIJAIL)
         .expected_identity(minijail_bindings())
         .build()
+        .unwrap()
+        .with_inherited_fd_count(1)
         .unwrap();
-    let report = block_on(provider.launch(&ticket)).unwrap();
+    let inherited_fd: std::os::fd::OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+    let report = block_on(provider.launch_with_inherited_fds(&ticket, vec![inherited_fd])).unwrap();
     assert_eq!(report.wait_reap_owner, WaitReapOwner::Local);
     drop(provider);
     server.join().unwrap();
@@ -766,15 +835,10 @@ impl ProcessEffectBackend for ParallelLaunchBackend {
 }
 
 fn parallel_ticket(index: usize) -> d2b_process::LaunchTicket {
+    use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
     use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
-    use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-};
+        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+    };
     use d2b_process::{LaunchTicket, OperationBinding};
 
     let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{index:04x}"))

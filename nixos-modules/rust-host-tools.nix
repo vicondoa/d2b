@@ -119,7 +119,6 @@ let
     "d2b"
     "d2b-host"
     "d2b-host-activation-helper"
-    "d2b-gateway-runtime"
     "d2b-unsafe-local-helper"
     "d2b-resource-compiler"
     "d2b-provider-display-wayland"
@@ -244,10 +243,6 @@ in
   hostActivationHelper = mkMainPackage {
     package = "d2b-host-activation-helper";
     binaries = [ "d2b-host-activation-helper" ];
-  };
-  gatewayRuntime = mkMainPackage {
-    package = "d2b-gateway-runtime";
-    binaries = [ "d2b-gateway-enroll" "d2b-gateway-relay" ];
   };
   unsafeLocalHelper = mkMainPackage {
     package = "d2b-unsafe-local-helper";

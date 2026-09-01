@@ -85,9 +85,9 @@ Hard invariants:
    never required.
 3. **Single slice name; per-VM-interior + per-role-leaf
    hierarchy.** The slice is `d2b.slice` literally - not
-   configurable. Per-VM **intermediate** directories live at
-   `d2b.slice/<vm-id>/` (process-free) with **per-role leaves**
-   at `d2b.slice/<vm-id>/<role>/`. Host-scoped roles split
+   configurable. Zone/Guest **intermediate** directories live at
+   `d2b.slice/<zone>/<guest>/` (process-free) with **per-role leaves**
+   at `d2b.slice/<zone>/<guest>/<role>/`. Host-scoped roles split
    into two patterns, both `path_class: host-scoped-leaf`:
    per-env (e.g., USBIP) at `d2b.slice/sys-<env>/<role>/`
    with `sys-<env>/` process-free interior; host singletons
@@ -241,9 +241,13 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 - `ApplyNmUnmanaged { bundle_nm_intent_ref, scope_id, destroy }`
 - `ApplySysctl { bundle_sysctl_intent_ref, key, destroy }`
 - `UpdateHostsFile { bundle_hosts_intent_ref, destroy }`
-- `OpenPidfd { pid, expected_start_time_ticks }`
+- `OpenPidfd { exact runner identity }` - process IDs and start-time values
+  stay broker-local and are omitted from audit.
 - `SignalRunner { vm_id, role_id, signal }`
-- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, runtime_allocations }`
+- `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, resource
+  identity, private runtime scope }` - typed Process runners use a
+  Zone/resource-incarnation-derived cgroup leaf; paths, argv, environment,
+  credentials, allocations, and cgroup paths are omitted from audit.
 - `RunHostInstall { bundle_installer_intent_ref, enable, start, no_start }`
 - `RunMigrate { bundle_migrate_intent_ref }`
 - `RunActivation { bundle_activation_intent_ref, mode, vm }`

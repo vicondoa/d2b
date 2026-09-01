@@ -17,16 +17,17 @@ mod process;
 mod production;
 pub mod reconcile_state;
 pub mod state_machine;
-mod workers;
 pub mod usbip_argv;
+mod workers;
 
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
 pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
 pub use controller::{
-    NetworkDependency, ScopedResourceUid, UsbipController, UsbipControllerError, UsbipMetricLabels,
-    UsbipOperation, UsbipOutcome, UsbipServicePhase, UsbipBindingController,
-    UsbipBindingControllerError, UsbipBindingPhase, UsbipBindingReconcileResult,
+    NetworkDependency, ScopedResourceUid, UsbipBindingController, UsbipBindingControllerError,
+    UsbipBindingPhase, UsbipBindingReconcileResult, UsbipController, UsbipControllerError,
+    UsbipMetricLabels, UsbipOperation, UsbipOutcome, UsbipServicePhase,
 };
+pub use d2b_contracts::usbip::validate_bus_id;
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
@@ -36,7 +37,8 @@ pub use lifecycle::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
     BindingLifecycleError, BindingPhase, BindingPort, BindingProxyLease, BindingSlotLease,
     OwnedBusBinding, PhysicalAuthorityLease, ServiceLifecycle, ServiceLifecycleError, ServicePhase,
-    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor, binding_child_resources,
+    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
+    binding_child_resources,
 };
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use production::{ProductionPort, UsbipBrokerDispatcher};
@@ -45,10 +47,7 @@ pub use state_machine::{
     UsbipPlanError, UsbipStepExecutor, build_usbip_explicit_plan, build_usbip_plan,
     execute_usbip_plan,
 };
-pub use d2b_contracts::usbip::validate_bus_id;
-pub use usbip_argv::{
-    UsbipArgvError, UsbipArgvInput, UsbipSubcommand, generate_usbip_argv,
-};
+pub use usbip_argv::{UsbipArgvError, UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };

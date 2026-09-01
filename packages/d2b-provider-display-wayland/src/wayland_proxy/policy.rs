@@ -12,9 +12,6 @@
 
 use std::collections::HashMap;
 
-use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
-
 use crate::wayland_proxy::identity::ProxyIdentity;
 
 const MAX_REWRITTEN_LABEL_CHARS: usize = 256;
@@ -144,19 +141,15 @@ pub struct GlobalOverride {
 }
 
 /// Input configuration for policy construction.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PolicyInput {
-    /// Typed canonical identity. New callers must set this.
-    pub identity: Option<ProxyIdentity>,
-    /// Legacy VM name retained for compatibility callers.
-    pub vm_name: String,
+    /// Typed canonical workload identity.
+    pub identity: ProxyIdentity,
     /// Prefix prepended to `xdg_toplevel.set_app_id` values.
-    /// Default: `d2b.<vm>.`
+    /// Default: the identity's provider-specific prefix.
     pub app_id_prefix: Option<String>,
-    /// Canonical d2b realm target asserted by host metadata.
-    pub realm_target: Option<String>,
     /// Prefix prepended to `xdg_toplevel.set_title` values.
-    /// Default: `[<vm>] `
+    /// Default: the identity's provider-specific prefix.
     pub title_prefix: Option<String>,
     /// Additional explicit deny rules (appended after defaults).
     pub deny_globals: Vec<String>,
@@ -172,16 +165,32 @@ pub struct PolicyInput {
     pub log_filtered_globals: bool,
 }
 
+impl PolicyInput {
+    /// Construct policy input for one authenticated identity with secure defaults.
+    pub fn new(identity: ProxyIdentity) -> Self {
+        Self {
+            identity,
+            app_id_prefix: None,
+            title_prefix: None,
+            deny_globals: Vec::new(),
+            allow_globals: Vec::new(),
+            max_versions: Vec::new(),
+            dmabuf_allow: Vec::new(),
+            dmabuf_deny: Vec::new(),
+            log_filtered_globals: false,
+        }
+    }
+}
+
 /// Fully resolved policy ready for use by filter handlers.
 #[derive(Debug, Clone)]
 pub struct FilterPolicy {
     entries: HashMap<String, PolicyEntry>,
     pub app_id_prefix: String,
-    pub realm_target: Option<String>,
     pub title_prefix: String,
     pub identity: ProxyIdentity,
-    /// Compatibility/logging label. Canonical callers receive the full target.
-    pub vm_name: String,
+    /// Bounded display label derived from the authenticated identity.
+    pub identity_label: String,
     pub dmabuf_filters: std::sync::Arc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
     /// Runtime advisories emitted by the filter process at startup.
@@ -191,23 +200,11 @@ pub struct FilterPolicy {
 impl FilterPolicy {
     /// Build a policy from operator input layered on top of secure defaults.
     pub fn build(input: PolicyInput) -> Self {
-        let identity = input.identity.unwrap_or_else(|| {
-            let target = input
-                .realm_target
-                .as_deref()
-                .and_then(|target| WorkloadTarget::parse(target).ok())
-                .unwrap_or_else(|| {
-                    WorkloadTarget::parse(&format!("{}.local.d2b", input.vm_name))
-                        .expect("legacy VM identity must form a canonical target")
-                });
-            ProxyIdentity::legacy_vm(input.vm_name.clone(), target, WorkloadProviderKind::LocalVm)
-                .expect("legacy VM identity must be valid")
-        });
+        let identity = input.identity;
         let target_label = identity.log_label();
         let app_id_prefix = input
             .app_id_prefix
             .unwrap_or_else(|| identity.default_app_id_prefix());
-        let realm_target = Some(identity.canonical_target());
         let title_prefix = input
             .title_prefix
             .unwrap_or_else(|| identity.default_title_prefix());
@@ -321,14 +318,15 @@ impl FilterPolicy {
         Self {
             entries,
             app_id_prefix,
-            realm_target,
             title_prefix,
             identity,
-            vm_name: target_label,
-            dmabuf_filters: std::sync::Arc::new(crate::wayland_proxy::dmabuf::DmabufFilterList::new(
-                &input.dmabuf_allow,
-                &input.dmabuf_deny,
-            )),
+            identity_label: target_label,
+            dmabuf_filters: std::sync::Arc::new(
+                crate::wayland_proxy::dmabuf::DmabufFilterList::new(
+                    &input.dmabuf_allow,
+                    &input.dmabuf_deny,
+                ),
+            ),
             log_filtered_globals: input.log_filtered_globals,
             warnings,
         }
@@ -572,12 +570,20 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 
-    fn policy_for(vm: &str) -> FilterPolicy {
-        FilterPolicy::build(PolicyInput {
-            vm_name: vm.to_owned(),
-            ..Default::default()
-        })
+    fn policy_for(workload: &str) -> FilterPolicy {
+        FilterPolicy::build(PolicyInput::new(ProxyIdentity::canonical(
+            WorkloadTarget::parse(&format!("{workload}.local.d2b")).unwrap(),
+            WorkloadProviderKind::LocalVm,
+        )))
+    }
+
+    fn local_policy_input() -> PolicyInput {
+        PolicyInput::new(ProxyIdentity::canonical(
+            WorkloadTarget::parse("work.local.d2b").unwrap(),
+            WorkloadProviderKind::LocalVm,
+        ))
     }
 
     #[test]
@@ -591,14 +597,9 @@ mod tests {
     }
 
     #[test]
-    fn realm_target_is_d2b_asserted_metadata_not_app_id_authority() {
-        let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
-            realm_target: Some("work.local.d2b".to_owned()),
-            ..Default::default()
-        });
+    fn identity_target_is_not_overridden_by_app_id_metadata() {
+        let p = FilterPolicy::build(local_policy_input());
 
-        assert_eq!(p.realm_target.as_deref(), Some("work.local.d2b"));
         assert_eq!(
             p.rewrite_app_id("org.example.App"),
             "d2b.work.org.example.App"
@@ -611,13 +612,9 @@ mod tests {
             WorkloadTarget::parse("tools.host.d2b").unwrap(),
             WorkloadProviderKind::UnsafeLocal,
         );
-        let p = FilterPolicy::build(PolicyInput {
-            identity: Some(identity.clone()),
-            ..Default::default()
-        });
+        let p = FilterPolicy::build(PolicyInput::new(identity.clone()));
 
         assert_eq!(p.identity, identity);
-        assert_eq!(p.realm_target.as_deref(), Some("tools.host.d2b"));
         assert_eq!(p.app_id_prefix, "d2b.tools.host.d2b.");
         assert_eq!(p.title_prefix, "[unsafe-local tools.host.d2b] ");
         assert_eq!(
@@ -703,9 +700,8 @@ mod tests {
     #[test]
     fn deny_required_global_produces_warning() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             deny_globals: vec!["wl_compositor".to_owned()],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
@@ -717,9 +713,8 @@ mod tests {
     #[test]
     fn deny_accelerated_rendering_produces_warning() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             deny_globals: vec!["zwp_linux_dmabuf_v1".to_owned()],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
@@ -744,12 +739,11 @@ mod tests {
         assert!(p.is_allowed("wl_eglstream_controller"));
 
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             deny_globals: vec![
                 "wl_eglstream_display".to_owned(),
                 "wl_eglstream_controller".to_owned(),
             ],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
@@ -766,9 +760,8 @@ mod tests {
     #[test]
     fn enable_high_risk_global_produces_warning() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             allow_globals: vec!["zwlr_screencopy_manager_v1".to_owned()],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
@@ -790,12 +783,11 @@ mod tests {
             "xdg_toplevel_drag_manager_v1",
         ];
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             allow_globals: boundary_globals
                 .iter()
                 .map(|iface| (*iface).to_owned())
                 .collect(),
-            ..Default::default()
+            ..local_policy_input()
         });
         for iface in boundary_globals {
             assert!(
@@ -816,14 +808,13 @@ mod tests {
     #[test]
     fn warning_messages_include_stable_codes_and_order() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             deny_globals: vec!["wl_compositor".to_owned()],
             allow_globals: vec![
                 "wl_data_device_manager".to_owned(),
                 "zwlr_screencopy_manager_v1".to_owned(),
                 "completely_unknown_v1".to_owned(),
             ],
-            ..Default::default()
+            ..local_policy_input()
         });
         let messages = p
             .warnings
@@ -849,9 +840,8 @@ mod tests {
     #[test]
     fn allow_unclassified_global_produces_warning() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             allow_globals: vec!["completely_unknown_v1".to_owned()],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
@@ -864,7 +854,6 @@ mod tests {
     fn warnings_are_advisory_not_panics() {
         // Building a policy with multiple warning conditions must succeed.
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             deny_globals: vec!["wl_compositor".to_owned(), "zwp_linux_dmabuf_v1".to_owned()],
             allow_globals: vec![
                 "zwlr_screencopy_manager_v1".to_owned(),
@@ -872,7 +861,7 @@ mod tests {
             ],
             app_id_prefix: Some(String::new()),
             title_prefix: Some(String::new()),
-            ..Default::default()
+            ..local_policy_input()
         });
         // Some warnings are expected but the policy must be built successfully.
         assert!(!p.warnings.is_empty());
@@ -897,10 +886,10 @@ mod tests {
     }
 
     #[test]
-    fn app_id_cross_vm_spoof_gets_double_prefix() {
+    fn app_id_cross_identity_spoof_gets_double_prefix() {
         let p = policy_for("work");
-        // Guest sends a value pre-prefixed for a different VM - must not be
-        // accepted as already-prefixed for this VM.
+        // Guest sends a value pre-prefixed for a different identity - must not
+        // be accepted as already-prefixed for this identity.
         let spoof = "d2b.personal.org.example.app";
         assert_eq!(
             p.rewrite_app_id(spoof),
@@ -911,10 +900,9 @@ mod tests {
     #[test]
     fn app_id_prefix_empty_passthrough() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             app_id_prefix: Some(String::new()),
             title_prefix: Some("[work] ".to_owned()),
-            ..Default::default()
+            ..local_policy_input()
         });
         assert_eq!(p.rewrite_app_id("org.example.app"), "org.example.app");
     }
@@ -944,9 +932,8 @@ mod tests {
     #[test]
     fn title_prefix_empty_passthrough() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             title_prefix: Some(String::new()),
-            ..Default::default()
+            ..local_policy_input()
         });
         assert_eq!(p.rewrite_title("Firefox"), "Firefox");
     }
@@ -967,9 +954,8 @@ mod tests {
     #[test]
     fn version_cap_applied() {
         let p = FilterPolicy::build(PolicyInput {
-            vm_name: "work".to_owned(),
             max_versions: vec![("xdg_wm_base".to_owned(), 3)],
-            ..Default::default()
+            ..local_policy_input()
         });
         assert_eq!(p.advertised_version("xdg_wm_base", 6), 3);
         assert_eq!(p.advertised_version("xdg_wm_base", 2), 2);

@@ -6,10 +6,8 @@
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeSpec,
-},
 };
 use sha2::{Digest, Sha256};
 

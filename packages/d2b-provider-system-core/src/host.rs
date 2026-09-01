@@ -25,12 +25,8 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use std::{collections::BTreeSet, future::Future, future::ready};
 
-use d2b_contracts_resource::v3::{
-    execution_policy::{BudgetSpec, ExecutionDomain},
-};
-use d2b_contracts_resource::v3::{
-    host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture},
-};
+use d2b_contracts_resource::v3::execution_policy::{BudgetSpec, ExecutionDomain};
+use d2b_contracts_resource::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use serde::Serialize;
 
@@ -101,17 +97,17 @@ pub struct MinijailPlatformGate {
     pub kernel_major: u16,
     /// Minor Linux kernel version observed by the probe.
     pub kernel_minor: u16,
-    /// Whether a delegated leaf exposes a writable cgroup.kill.
-    pub cgroup_kill_writable: bool,
+    /// Whether the runtime cgroup exposes cgroup.kill.
+    pub cgroup_kill_available: bool,
 }
 
 impl MinijailPlatformGate {
     /// Build the gate snapshot.
-    pub const fn new(kernel_major: u16, kernel_minor: u16, cgroup_kill_writable: bool) -> Self {
+    pub const fn new(kernel_major: u16, kernel_minor: u16, cgroup_kill_available: bool) -> Self {
         Self {
             kernel_major,
             kernel_minor,
-            cgroup_kill_writable,
+            cgroup_kill_available,
         }
     }
 
@@ -125,7 +121,7 @@ impl MinijailPlatformGate {
         if !self.kernel_supported() {
             return Err(SystemCoreError::KernelTooOld);
         }
-        if !self.cgroup_kill_writable {
+        if !self.cgroup_kill_available {
             return Err(SystemCoreError::CgroupKillUnavailable);
         }
         Ok(())
@@ -444,7 +440,7 @@ impl HostReconciler {
             user_manager_available: snapshot.user_manager_available(),
             active_process_count: snapshot.active_process_count(),
             minijail_ready: snapshot.minijail_gate().kernel_supported()
-                && snapshot.minijail_gate().cgroup_kill_writable,
+                && snapshot.minijail_gate().cgroup_kill_available,
         })
     }
 

@@ -11,10 +11,7 @@ use d2b_contracts::types::{BundleOpId, PathClass, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessNode, ProcessRole};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
@@ -26,6 +23,8 @@ use d2b_provider_device_tpm::{
     build_swtpm_process_spec, build_tpm_state_volume_resource,
 };
 use sha2::{Digest, Sha256};
+
+use crate::provider_effects::{GuestLifecycleOperation, LifecycleAuthorization};
 
 #[allow(dead_code)]
 fn map_legacy_migration_outcome(
@@ -85,7 +84,9 @@ impl Drop for SwtpmSpawnReservation<'_> {
     }
 }
 
-/// Concrete daemon-side TPM effect executor.
+/// Concrete daemon-side TPM effect executor for the retained legacy TPM
+/// connector. v3 Cloud Hypervisor lifecycle reaches swtpm through its owned
+/// Process resources instead of this process-DAG lookup.
 ///
 /// All host paths, binaries, state markers, and pidfds remain inside the
 /// trusted bundle/broker boundary. The Provider sees only the opaque tickets
@@ -96,10 +97,12 @@ pub(crate) struct LiveTpmEffectExecutor<'a> {
     vm_id: VmId,
     caller_role: BrokerCallerRole,
     device_uid: ResourceUid,
+    lifecycle_authorization: LifecycleAuthorization,
     legacy_migration_required: bool,
     prepared_flush_ticket: Option<FlushLaunchTicket>,
     prepared_swtpm_ticket: Option<SwtpmStartLaunchTicket>,
     adopted_live_worker: bool,
+    lifecycle_lease_consumed: bool,
 }
 
 impl<'a> LiveTpmEffectExecutor<'a> {
@@ -109,6 +112,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         vm_id: VmId,
         caller_role: BrokerCallerRole,
         device_uid: ResourceUid,
+        lifecycle_authorization: LifecycleAuthorization,
         legacy_migration_required: bool,
     ) -> Self {
         Self {
@@ -117,11 +121,28 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             vm_id,
             caller_role,
             device_uid,
+            lifecycle_authorization,
             legacy_migration_required,
             prepared_flush_ticket: None,
             prepared_swtpm_ticket: None,
             adopted_live_worker: false,
+            lifecycle_lease_consumed: false,
         }
+    }
+
+    fn consume_lifecycle_lease(&mut self) -> Result<(), TpmEffectError> {
+        if self.lifecycle_lease_consumed {
+            return Ok(());
+        }
+        crate::consume_lifecycle_lease(
+            self.state,
+            &self.lifecycle_authorization,
+            GuestLifecycleOperation::Start,
+            &self.caller_role,
+        )
+        .map_err(|_| TpmEffectError::SpawnRejected)?;
+        self.lifecycle_lease_consumed = true;
+        Ok(())
     }
 
     fn ticket_bytes(&self, domain: &str, intent: &StateDirIntent) -> [u8; 16] {
@@ -140,7 +161,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
     }
 
     fn runner_intent(&self, role: &str) -> Result<BundleOpId, TpmEffectError> {
-        let intent_id = crate::intent_id_runner(self.vm_id.as_str(), role);
+        let intent_id = crate::intent_id_legacy_runner(self.vm_id.as_str(), role);
         self.resolver
             .find_runner_intent(&intent_id)
             .map(|intent| BundleOpId::new(intent.intent_id.clone()))
@@ -178,10 +199,15 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 role_id: RoleId::new(role_id),
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                owner_uid: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 role,
@@ -193,6 +219,8 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
+                network_tap_context: None,
             }),
             self.caller_role.clone(),
             timeout,
@@ -285,7 +313,19 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         } else {
             DurableSwtpmLiveness::Missing
         };
-        match durable_swtpm_adoption_gate(snapshot.as_ref(), &self.device_uid, liveness)? {
+        match durable_swtpm_adoption_gate(
+            snapshot.as_ref(),
+            &self.device_uid,
+            liveness,
+            Some((
+                self.lifecycle_authorization.zone_uid(),
+                self.lifecycle_authorization.guest_uid(),
+                self.lifecycle_authorization.guest_generation(),
+                self.lifecycle_authorization
+                    .provider_assignment_generation(),
+                self.lifecycle_authorization.policy_revision(),
+            )),
+        )? {
             DurableSwtpmAdoption::Adopted => {
                 self.adopted_live_worker = true;
                 Ok(true)
@@ -361,6 +401,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     }
 
     fn flush(&mut self, ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+        self.consume_lifecycle_lease()?;
         if !self.adopted_live_worker && self.adopt_live_worker_if_present()? {
             return Ok(());
         }
@@ -402,6 +443,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         settings: SwtpmSettings,
         binary: &SignedBinaryRef,
     ) -> Result<(), TpmEffectError> {
+        self.consume_lifecycle_lease()?;
         if self.prepared_swtpm_ticket.as_ref() != Some(ticket)
             || binary.kind() != BinaryKind::Swtpm
             || d2b_provider_device_tpm::SwtpmArgv::for_settings(settings).is_err()
@@ -430,7 +472,19 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         } else {
             DurableSwtpmLiveness::Missing
         };
-        match durable_swtpm_adoption_gate(snapshot.as_ref(), &self.device_uid, liveness)? {
+        match durable_swtpm_adoption_gate(
+            snapshot.as_ref(),
+            &self.device_uid,
+            liveness,
+            Some((
+                self.lifecycle_authorization.zone_uid(),
+                self.lifecycle_authorization.guest_uid(),
+                self.lifecycle_authorization.guest_generation(),
+                self.lifecycle_authorization
+                    .provider_assignment_generation(),
+                self.lifecycle_authorization.policy_revision(),
+            )),
+        )? {
             DurableSwtpmAdoption::Adopted => {
                 self.adopted_live_worker = true;
                 return Ok(());
@@ -529,7 +583,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
                 TpmEffectError::Transient
             });
         }
-        if let Err(error) = crate::write_runner_snapshot_owned(
+        if let Err(error) = crate::write_runner_snapshot_with_authorization(
             self.state,
             self.vm_id.as_str(),
             "swtpm",
@@ -537,6 +591,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             response.pid,
             response.start_time_ticks,
             Some(self.device_uid.as_str()),
+            Some(&self.lifecycle_authorization),
         ) {
             self.cleanup_failed_start(&response, &fds);
             tracing::warn!(error = %error, "TPM runner snapshot persistence failed");
@@ -671,6 +726,7 @@ pub(crate) struct AdmittedTpmDevice {
     device_ref: ResourceRef,
     zone: String,
     execution_ref: ResourceRef,
+    lifecycle_authorization: LifecycleAuthorization,
 }
 
 impl AdmittedTpmDevice {
@@ -679,12 +735,14 @@ impl AdmittedTpmDevice {
         device_ref: ResourceRef,
         zone: impl Into<String>,
         execution_ref: ResourceRef,
+        lifecycle_authorization: LifecycleAuthorization,
     ) -> Self {
         Self {
             device_uid,
             device_ref,
             zone: zone.into(),
             execution_ref,
+            lifecycle_authorization,
         }
     }
 }
@@ -707,6 +765,7 @@ pub(crate) fn reconcile_device_tpm(
         device_ref,
         zone,
         execution_ref,
+        lifecycle_authorization,
     } = admitted_device;
     let executor = LiveTpmEffectExecutor::new(
         state,
@@ -714,6 +773,7 @@ pub(crate) fn reconcile_device_tpm(
         vm_id.clone(),
         caller_role,
         device_uid.clone(),
+        lifecycle_authorization,
         migration_decision.requires_migration(),
     );
     let effect = ProductionTpmEffectPort::new(
@@ -948,14 +1008,37 @@ fn durable_swtpm_adoption_gate(
     snapshot: Option<&d2bd_runtime::supervisor::state::RunnerSnapshotRecord>,
     device_uid: &ResourceUid,
     liveness: DurableSwtpmLiveness,
+    expected_lifecycle: Option<(
+        &ResourceUid,
+        &ResourceUid,
+        d2b_contracts_resource::v3::ResourceGeneration,
+        d2b_contracts_resource::v3::ResourceGeneration,
+        u64,
+    )>,
 ) -> Result<DurableSwtpmAdoption, TpmEffectError> {
     let Some(snapshot) = snapshot else {
-        return Ok(if liveness == DurableSwtpmLiveness::Live {
-            DurableSwtpmAdoption::Adopted
-        } else {
-            DurableSwtpmAdoption::Spawn
-        });
+        return match liveness {
+            DurableSwtpmLiveness::Missing => Ok(DurableSwtpmAdoption::Spawn),
+            DurableSwtpmLiveness::Live | DurableSwtpmLiveness::Ambiguous => {
+                Err(TpmEffectError::StateIntegrity)
+            }
+        };
     };
+    if !snapshot.has_complete_lifecycle_identity() {
+        return Err(TpmEffectError::StateIntegrity);
+    }
+    if let Some((zone_uid, guest_uid, guest_generation, provider_generation, policy_revision)) =
+        expected_lifecycle
+        && !snapshot.matches_lifecycle_identity(
+            zone_uid,
+            guest_uid,
+            guest_generation,
+            provider_generation,
+            policy_revision,
+        )
+    {
+        return Err(TpmEffectError::StateIntegrity);
+    }
     if liveness == DurableSwtpmLiveness::Ambiguous {
         return Err(TpmEffectError::Transient);
     }
@@ -1019,12 +1102,20 @@ mod tests {
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
             owner_resource_uid: Some(uid.as_str().to_owned()),
+            zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
+            provider_assignment_generation: Some(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("tpm-test-operation".to_owned()),
             pid: 123,
             start_time_ticks: 456,
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Missing,),
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Missing, None,),
             Ok(DurableSwtpmAdoption::RemoveAndSpawn)
         );
     }
@@ -1037,22 +1128,34 @@ mod tests {
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
             owner_resource_uid: None,
+            zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
+            provider_assignment_generation: Some(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("tpm-test-operation".to_owned()),
             pid: 123,
             start_time_ticks: 456,
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Live),
+            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Live, None),
             Ok(DurableSwtpmAdoption::ClaimAndAdopt)
         );
     }
 
     #[test]
-    fn live_pidfd_without_snapshot_is_adopted() {
+    fn live_pidfd_without_snapshot_is_not_adopted() {
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         assert_eq!(
-            durable_swtpm_adoption_gate(None, &uid, DurableSwtpmLiveness::Live),
-            Ok(DurableSwtpmAdoption::Adopted)
+            durable_swtpm_adoption_gate(None, &uid, DurableSwtpmLiveness::Live, None),
+            Err(TpmEffectError::StateIntegrity)
+        );
+        assert_eq!(
+            durable_swtpm_adoption_gate(None, &uid, DurableSwtpmLiveness::Missing, None),
+            Ok(DurableSwtpmAdoption::Spawn)
         );
     }
 
@@ -1064,12 +1167,25 @@ mod tests {
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
             owner_resource_uid: Some(uid.as_str().to_owned()),
+            zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
+            provider_assignment_generation: Some(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("tpm-test-operation".to_owned()),
             pid: 123,
             start_time_ticks: 456,
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(Some(&snapshot), &uid, DurableSwtpmLiveness::Ambiguous,),
+            durable_swtpm_adoption_gate(
+                Some(&snapshot),
+                &uid,
+                DurableSwtpmLiveness::Ambiguous,
+                None,
+            ),
             Err(TpmEffectError::Transient)
         );
     }
@@ -1083,12 +1199,66 @@ mod tests {
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
             owner_resource_uid: Some(old_uid.as_str().to_owned()),
+            zone_uid: Some(ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_uid: Some(ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap()),
+            guest_generation: Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
+            provider_assignment_generation: Some(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("tpm-test-operation".to_owned()),
             pid: 123,
             start_time_ticks: 456,
             snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
         };
         assert_eq!(
-            durable_swtpm_adoption_gate(Some(&snapshot), &new_uid, DurableSwtpmLiveness::Live),
+            durable_swtpm_adoption_gate(
+                Some(&snapshot),
+                &new_uid,
+                DurableSwtpmLiveness::Live,
+                None
+            ),
+            Err(TpmEffectError::StateIntegrity)
+        );
+    }
+
+    #[test]
+    fn durable_snapshot_refuses_stale_guest_lifecycle_identity() {
+        let device_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let snapshot_guest_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap();
+        let current_guest_uid = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174000").unwrap();
+        let guest_generation = d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
+        let provider_generation = d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap();
+        let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
+            vm: "work-vm".to_owned(),
+            role_id: "swtpm".to_owned(),
+            role: RunnerRole::Swtpm,
+            owner_resource_uid: Some(device_uid.as_str().to_owned()),
+            zone_uid: Some(zone_uid.clone()),
+            guest_uid: Some(snapshot_guest_uid),
+            guest_generation: Some(guest_generation),
+            provider_assignment_generation: Some(provider_generation),
+            policy_revision: Some(1),
+            operation_id: Some("tpm-test-operation".to_owned()),
+            pid: 123,
+            start_time_ticks: 456,
+            snapshotted_at: "2026-08-15T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            durable_swtpm_adoption_gate(
+                Some(&snapshot),
+                &device_uid,
+                DurableSwtpmLiveness::Live,
+                Some((
+                    &zone_uid,
+                    &current_guest_uid,
+                    guest_generation,
+                    provider_generation,
+                    1,
+                )),
+            ),
             Err(TpmEffectError::StateIntegrity)
         );
     }

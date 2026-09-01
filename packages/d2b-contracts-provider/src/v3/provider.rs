@@ -30,21 +30,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    semantic_services::{LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion},
+use super::semantic_services::{
+    LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+    SemanticProjectionProtocolVersion,
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId,
-    ResourceRef,
-    execution_policy::{BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema},
-    ResourceTypeName,
-    SchemaFingerprint,
-    resource::ResourceEnvelope,
-    resource_schema::{
-        CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion,
+    ArtifactId, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    execution_policy::{
+        BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
     },
+    resource::ResourceEnvelope,
+    resource_schema::{CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion},
     volume::{MAX_VIEWS, ViewRight, ViewSpec},
-    volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId},
+    volume_state::{
+        MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId,
+    },
 };
 
 /// The canonical ResourceType name for this module.
@@ -418,20 +418,15 @@ impl PolicyEvaluation {
     }
 }
 
-/// The exact digests a catalog entry pins for one artifact.
+/// The digests a signed Provider manifest can carry without self-reference.
 ///
-/// The package, executable, manifest, config, schema, and service digests
-/// are separate because a Provider may ship several component binaries and
-/// a change to any one of them is a different artifact.
+/// Package and manifest digests are computed over documents that contain the
+/// manifest or its package, so they remain operator/Nix catalog values.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArtifactDigestSet {
-    /// The signed package digest.
-    pub package: ArtifactDigest,
     /// The component executable set digest.
     pub executable: ArtifactDigest,
-    /// The signed manifest digest.
-    pub manifest: ArtifactDigest,
     /// The root config projection digest.
     pub config: ArtifactDigest,
     /// The exported schema set digest.
@@ -1615,10 +1610,7 @@ impl ComponentDescriptor {
                     }
                 }
                 if matches!(self.execution, ComponentExecution::InProcessBootstrap)
-                    && !matches!(
-                        artifact_id.as_str(),
-                        "system-core" | "system-minijail"
-                    )
+                    && !matches!(artifact_id.as_str(), "system-core" | "system-minijail")
                 {
                     return Err(ProviderContractError::ComponentExecutionInvalid);
                 }
@@ -2467,9 +2459,10 @@ impl ProviderManifest {
                 return Err(ProviderContractError::MissingRequiredField);
             }
         }
-        if owned_types.iter().any(|resource_type| {
-            !bound_types.contains(resource_type)
-        }) {
+        if owned_types
+            .iter()
+            .any(|resource_type| !bound_types.contains(resource_type))
+        {
             return Err(ProviderContractError::MissingRequiredField);
         }
         for factory in &projection_factories {
@@ -2743,9 +2736,7 @@ impl<'de> Deserialize<'de> for ProviderManifest {
             wire.projection_factories,
             wire.upgrade_policy,
         )
-        .and_then(|manifest| {
-            manifest.with_target_runtime_artifacts(wire.runtime_artifacts)
-        })
+        .and_then(|manifest| manifest.with_target_runtime_artifacts(wire.runtime_artifacts))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -2840,9 +2831,7 @@ mod tests {
 
     fn digests() -> ArtifactDigestSet {
         ArtifactDigestSet {
-            package: ArtifactDigest::parse(DIGEST_A).unwrap(),
             executable: ArtifactDigest::parse(DIGEST_A).unwrap(),
-            manifest: ArtifactDigest::parse(DIGEST_A).unwrap(),
             config: ArtifactDigest::parse(DIGEST_B).unwrap(),
             schema: ArtifactDigest::parse(DIGEST_B).unwrap(),
             service: ArtifactDigest::parse(DIGEST_B).unwrap(),
@@ -3195,7 +3184,10 @@ mod tests {
             PlacementAnchor::ExecutionRef,
         )
         .unwrap();
-        assert_eq!(valid.placement_anchor(), Some(&PlacementAnchor::ExecutionRef));
+        assert_eq!(
+            valid.placement_anchor(),
+            Some(&PlacementAnchor::ExecutionRef)
+        );
 
         assert_eq!(
             ResourceApiBinding::new_with_placement(
@@ -3274,8 +3266,7 @@ mod tests {
     #[test]
     fn per_resource_target_cannot_own_zone_resources() {
         let mut subject = manifest();
-        let wayland =
-            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+        let wayland = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
         subject.components[0].exported_resource_types = BTreeSet::from([wayland.clone()]);
         subject.api_bindings[0].resource_type = wayland;
         subject.api_bindings[0].placement_anchor = Some(PlacementAnchor::Zone);
@@ -4293,6 +4284,26 @@ mod tests {
         // A manifest carries digests and identifiers, never a location.
         assert!(!rendered.contains("/nix/store"));
         assert!(!rendered.contains(".sock"));
+    }
+
+    #[test]
+    fn artifact_digest_set_does_not_self_reference_package_or_manifest() {
+        let value = serde_json::to_value(digests()).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["config", "executable", "schema", "service"]
+        );
+        let mut legacy = value;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("package".to_owned(), serde_json::json!(DIGEST_A));
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("manifest".to_owned(), serde_json::json!(DIGEST_A));
+        assert!(serde_json::from_value::<ArtifactDigestSet>(legacy).is_err());
     }
 
     #[test]

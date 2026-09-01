@@ -1,15 +1,15 @@
-# `realm-workloads-launcher-v2.json` schema (`v2`)
+# `realm-workloads-launcher-v2.json` compatibility schema
 
-Schema: [`realm-workloads-launcher-v2.json`](./realm-workloads-launcher-v2.json)
+This generated schema documents the argv-free launcher metadata artifact
+retained for current daemon bridge compatibility. It is daemon-served
+metadata, not a lifecycle authority.
 
-This argv-free artifact describes provider-neutral workload launcher items,
-execution posture, and realm presentation metadata. It is installed
-`0640 root:d2bd`; authorized unprivileged clients consume it through the public
-daemon API rather than reading the bundle directly.
+Current launch requests carry a typed Zone/Guest target, item ID, and
+operation ID. Provider configuration, credentials, argv, and private runtime
+locators remain inside the owning execution context.
 
-## Contract notes
+Regenerate the JSON schema from the Rust DTOs:
 
-- `runtimeState` remains `contract-only` until daemon dispatch is enabled.
-- `items` contains generic `exec` and `shell` metadata, never configured argv.
-- `realmAccentColor` is presentation metadata and never an authorization input.
-- `invariants` freezes the no-secrets, provider-neutral, typed-posture boundary.
+```bash
+bazel run //packages/xtask:xtask -- gen-schemas
+```

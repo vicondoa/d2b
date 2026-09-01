@@ -1,9 +1,11 @@
 //! Core-owned process effect backend contract.
 
 use std::fmt;
+use std::os::fd::OwnedFd;
 
 use d2b_process_conformance::{
-    LaunchTicket, ObservedIdentity, ProcessIdentityDigest, WaitReapOwner,
+    LaunchTicket, MAX_INHERITED_FDS, ObservedIdentity, ProcessConformanceError,
+    ProcessIdentityDigest, WaitReapOwner,
 };
 
 /// One owned request passed from the async adapter to a blocking effect owner.
@@ -25,6 +27,57 @@ impl ProcessRequest {
     /// Borrow the validated launch ticket.
     pub const fn ticket(&self) -> &LaunchTicket {
         &self.ticket
+    }
+}
+
+/// Launch-only request carrying the ticket and owned descriptors to inherit.
+///
+/// The descriptor vector never crosses the Provider boundary as metadata. It
+/// is consumed by the effect backend and is intentionally absent from the
+/// clonable [`ProcessRequest`], ticket, diagnostics, and status types.
+pub struct ProcessLaunchRequest {
+    request: ProcessRequest,
+    inherited_fds: Vec<OwnedFd>,
+}
+
+impl ProcessLaunchRequest {
+    /// Build a launch request whose owned descriptors exactly match the
+    /// ticket's private inherited-fd table.
+    pub fn new(
+        request: ProcessRequest,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> Result<Self, ProcessConformanceError> {
+        let count = u16::try_from(inherited_fds.len())
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+        let expected = request.ticket().inherited_fd_table().count();
+        let broker_escrowed_controller = count == 2 && expected == 1;
+        if count > MAX_INHERITED_FDS || (count != expected && !broker_escrowed_controller) {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        Ok(Self {
+            request,
+            inherited_fds,
+        })
+    }
+
+    /// Build an ordinary descriptor-free launch request.
+    pub fn empty(request: ProcessRequest) -> Result<Self, ProcessConformanceError> {
+        Ok(Self {
+            request,
+            inherited_fds: Vec::new(),
+        })
+    }
+
+    /// Consume this launch-only request into its ordinary request and owned
+    /// descriptor vector.
+    pub fn into_parts(self) -> (ProcessRequest, Vec<OwnedFd>) {
+        (self.request, self.inherited_fds)
+    }
+}
+
+impl fmt::Debug for ProcessLaunchRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProcessLaunchRequest(<redacted>)")
     }
 }
 
@@ -204,6 +257,22 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         request: ProcessRequest,
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError>;
 
+    /// Launch with owned descriptors that must be inherited by the child.
+    ///
+    /// Existing effect owners remain descriptor-free by default. A concrete
+    /// owner must opt in explicitly before it can receive a non-empty
+    /// launch-only descriptor vector.
+    fn launch_with_inherited_fds(
+        &self,
+        request: ProcessLaunchRequest,
+    ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
+        let (request, inherited_fds) = request.into_parts();
+        if !inherited_fds.is_empty() {
+            return Err(ProcessEffectError::LaunchFailed);
+        }
+        self.launch(request)
+    }
+
     /// Observe a candidate without opening a new local descriptor.
     fn observe(
         &self,
@@ -227,6 +296,14 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
         &self,
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError>;
+
+    /// Take a broker-retained Provider-controller bootstrap endpoint.
+    fn take_controller_bootstrap(
+        &self,
+        _handle: &Self::Handle,
+    ) -> Result<Option<OwnedFd>, ProcessEffectError> {
+        Ok(None)
+    }
 
     /// Stop only the exact process represented by `handle`.
     ///
@@ -253,6 +330,24 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
 mod tests {
     use super::*;
     use d2b_process_conformance::testing::fixtures;
+
+    #[test]
+    fn launch_request_rejects_inherited_fd_count_mismatch() {
+        let ticket = fixtures::ticket_builder().build().expect("ticket");
+        let read_fd: OwnedFd = std::fs::File::open("/dev/null")
+            .expect("open test descriptor")
+            .into();
+        let error = ProcessLaunchRequest::new(ProcessRequest::new(ticket), vec![read_fd])
+            .expect_err("descriptor count must match the ticket");
+        assert_eq!(error, ProcessConformanceError::InvalidTicket);
+    }
+
+    #[test]
+    fn launch_request_debug_redacts_owned_descriptors() {
+        let ticket = fixtures::ticket_builder().build().expect("ticket");
+        let request = ProcessLaunchRequest::empty(ProcessRequest::new(ticket)).expect("request");
+        assert_eq!(format!("{request:?}"), "ProcessLaunchRequest(<redacted>)");
+    }
 
     #[test]
     fn diagnostics_are_value_free() {

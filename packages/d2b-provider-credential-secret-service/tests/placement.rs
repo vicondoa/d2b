@@ -1,8 +1,5 @@
 use d2b_contracts_provider::v3::credential::PlacementBinding;
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{SecretServicePlacement, SecretServiceProviderError};
 
 #[test]

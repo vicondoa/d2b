@@ -6,14 +6,12 @@
 //! `d2b-session`; it only consumes the redacted route binding and dispatches
 //! frames through the bounded Provider adapter.
 
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken,
+};
 use d2b_contracts_zone_session::v3::{
     component_session::RequestId,
     zone_routing::{ZoneLabelId, ZonePath},
-};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceRef,
-    execution_policy::BoundedToken,
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,

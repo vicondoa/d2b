@@ -1,12 +1,10 @@
 mod common;
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialInteractionState, CredentialLeaseHandle,
     CredentialLeaseStatus, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, CredentialStatus, PlacementBinding,
     dispatch_authorized_provider, encode_outer,
-},
 };
 use d2b_contracts_resource::v3::ResourceRef;
 

@@ -71,21 +71,31 @@ returns `Duplicate`; a pending operation is reconciled against the real effect
 boundary after restart before another effect can run. Authorization refusal
 does not mutate the downstream state.
 
-## Provider acceptance boundaries
+## Layer-1 Provider contract boundaries
 
-The production controller and effect-port boundaries are covered without
-mocking the layers they exercise:
+The controller and effect-port boundaries are covered by hermetic owner-local
+tests without mocking the layers they exercise:
 
-| Resource | Production boundary exercised | Acceptance guarantees |
+| Resource | Hermetic boundary exercised | Layer-1 guarantees |
 | --- | --- | --- |
 | `Volume` | `VolumeLocalController` with a real temporary filesystem | activation, layout readiness, restart reconstruction, cleanup policy |
 | `Network` | `NetworkReconciler` with a filesystem-backed network effect/resource boundary | dependency wait, policy refusal before effects, and ordered finalization |
 | TPM `Device` | `TpmResourceController` with a real state directory and `swtpm`-shaped child process | state-volume creation, process/endpoint readiness, flush, and retained state on removal |
-| Cloud Hypervisor `Guest` | `CloudHypervisorController` with `/proc` identity inspection, a real child process, pidfd, and persisted recovery state | dependency gating, readiness, restart adoption, and finalization |
+| Cloud Hypervisor `Guest` | `CloudHypervisorController` with typed Process Provider adoption outcomes and Resource API lifecycle snapshots | dependency gating, readiness, restart adoption, disruptive recycle, and finalization |
 
-These adapters persist or inspect real state; they are not call-recording
-mocks. Host mutation and hardware/KVM prerequisites remain separate from this
-hermetic acceptance contract.
+These adapters persist or inspect fixture state; they are not call-recording
+mocks. This table is Layer-1 contract evidence only. It is not evidence of a
+real `/etc/nixos` switch, d2b startup, Cloud Hypervisor boot, or ACA behavior.
+Those host and remote acceptance lanes are separate; U20 owns only the
+`/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot. ACA testing
+is deferred until after U20.
+
+The daemon composition loads the semantic Guest setup descriptor from the
+integrity-pinned artifact catalog and binds the controller to an authenticated
+Resource API session. A v3 Guest start, stop, or restart changes the
+controller-owned VMM `Process` child; the Process Provider remains the only
+launch, adoption, and stop effect owner. The retained VM/TPM/security-key/audio
+connectors are legacy-only and cannot satisfy that v3 path.
 
 ## Store restart, backup, and restore
 
@@ -102,11 +112,8 @@ preserves each ResourceRef, UID, generation, canonical JSON, and payload
 digest; the restored store keeps the same store identity and advances
 `backup_generation`. Runtime adoption occurs only after that publication.
 
-When a live legacy TPM adoption is requested, the production Device admission
-path first captures this logical backup and refuses the adoption if capture
-fails. Physical schema advancement uses the equivalent
-`upgrade_owned_after_backup` boundary, which consumes an identity-validated
-backup before staging.
+Current schema advancement uses the identity-validated backup boundary before
+staging. It does not promise conversion or retention of v1/v2 host state.
 
 Logical restore does not support schema downgrade. A backup whose physical
 schema is not the current registered schema returns `upgrade-required` before

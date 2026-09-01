@@ -10,12 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourcePhase,
-    ResourceRef,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
+    ResourceName, ResourcePhase, ResourceRef, ResourceUid, Timestamp, ZoneId,
     execution_policy::redacted_debug,
 };
 
@@ -395,7 +390,7 @@ pub enum ZoneConditionType {
 #[allow(clippy::too_many_arguments)]
 pub fn validate_self_resource(
     store_zone: &ZoneId,
-    store_uid: &ResourceUid,
+    zone_uid: &ResourceUid,
     resource_name: &ResourceName,
     resource_zone: &ZoneId,
     resource_uid: &ResourceUid,
@@ -406,7 +401,7 @@ pub fn validate_self_resource(
     if resource_name.as_str() != store_zone.as_str() || resource_zone != store_zone {
         return Err(ZoneContractError::SelfIdentityMismatch);
     }
-    if resource_uid != store_uid {
+    if resource_uid != zone_uid {
         return Err(ZoneContractError::UidMismatch);
     }
     if owner_ref.is_some() {
@@ -425,7 +420,9 @@ pub fn validate_self_resource(
 }
 
 /// Validate the only allowed Zone finalizer shape.
-pub fn validate_finalizer(finalizer: &d2b_contracts_resource::v3::FinalizerId) -> Result<(), ZoneContractError> {
+pub fn validate_finalizer(
+    finalizer: &d2b_contracts_resource::v3::FinalizerId,
+) -> Result<(), ZoneContractError> {
     if finalizer.as_str() == ZONE_DRAIN_FINALIZER {
         Ok(())
     } else {

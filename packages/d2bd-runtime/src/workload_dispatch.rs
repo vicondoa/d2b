@@ -4,6 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use d2b_contracts::{
+    LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState,
+    controller_config::RealmControllerPlacement,
+    launcher::LauncherWorkloadSummary,
+    workload_identity::{WorkloadIdentity, WorkloadTarget},
+};
 use d2b_contracts_control::{
     public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
     unsafe_local_wire::{HelperShellPolicy, RealmAccentColor},
@@ -11,14 +17,10 @@ use d2b_contracts_control::{
 use d2b_core::{
     bundle_resolver::BundleResolver,
     configured_argv::ConfiguredArgv,
-    realm_controller_config::RealmControllerPlacement,
-    realm_workloads_launcher::LauncherWorkloadSummary,
     unsafe_local_workloads::{
         UnsafeLocalLauncherItem, UnsafeLocalShellPolicy, UnsafeLocalWorkloadsJson,
     },
-    workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
-use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState};
 
 use crate::typed_error::{TypedError, WorkloadLaunchErrorKind};
 use crate::unsafe_local_helper::{HelperAvailability, HelperRegistryError};
@@ -621,6 +623,13 @@ fn controller_matches_direct_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{
+        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+        IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
+        WorkloadExecutionPosture,
+        ids::{RealmId, WorkloadId},
+        realm::RealmPath,
+    };
     use d2b_core::{
         configured_argv::ConfiguredArgv,
         contract_id::ContractId,
@@ -629,13 +638,6 @@ mod tests {
             UnsafeLocalShellItem, UnsafeLocalShellPolicy, UnsafeLocalWorkload,
             UnsafeLocalWorkloadsJson,
         },
-    };
-    use d2b_realm_core::{
-        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
-        IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
-        WorkloadExecutionPosture,
-        ids::{RealmId, WorkloadId},
-        realm::RealmPath,
     };
 
     fn workload_identity(realm: &str) -> WorkloadIdentity {

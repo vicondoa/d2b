@@ -58,6 +58,8 @@ pub trait GracefulVmShutdown: Send + Sync {
     async fn request_vmm_exit(&self, target: &ProviderShutdownTarget) -> ProviderVmmExitOutcome;
 }
 
+/// Legacy daemon VM-stop adapter. v3 Guest lifecycle uses the owned VMM
+/// `Process` child and does not enter this direct CH API path.
 #[derive(Debug, Clone, Copy)]
 pub struct CloudHypervisorShutdown {
     pub io_timeout: Duration,

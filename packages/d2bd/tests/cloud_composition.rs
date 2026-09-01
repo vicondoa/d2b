@@ -4,10 +4,16 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_provider::v3::credential::CredentialLeaseHandle;
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    credential::{CredentialLeaseHandle, OpaqueAzureRef},
+};
 use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
+    ArtifactId, DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
+    SchemaFingerprint, SchemaVersion, ZoneId, ZoneRevision,
+};
+use d2b_provider_runtime_azure_container_apps::{
+    AcaClock, AcaController, AcaPhase, AcaReconcileOutcome,
 };
 use d2b_provider_runtime_azure_container_apps::{
     AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
@@ -17,16 +23,14 @@ use d2b_provider_runtime_azure_container_apps::{
     AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding, AcaRuntimeConfig,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
 };
-use d2b_provider_runtime_azure_container_apps::{
-    AcaClock, AcaController, AcaPhase, AcaReconcileOutcome,
-};
 use d2b_provider_runtime_cloud_hypervisor::{
-    CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
-    CloudHypervisorEffectPort, CloudHypervisorError, CloudHypervisorGuestSettings,
-    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionError,
-    GuestSessionEvidence, GuestSessionEvidenceProbe,
-    adoption::ProcessIdentity,
-    bootstrap_graph::{AttachmentRef, BootstrapGraph},
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
+    BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorError,
+    CloudHypervisorReconcileOutcome, CloudHypervisorResourceApiError,
+    CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, CommittedChild,
+    DescriptorSignature, GuestChildCommitResponse, GuestGenerationSet, GuestSeedContract,
+    GuestSessionEvidence, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
+    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm, health::GuestSessionEvidenceBinding,
 };
 
 #[derive(Default)]
@@ -199,145 +203,269 @@ fn aca_controller(state: Arc<Mutex<AcaState>>) -> AcaController<FakeAcaControl, 
     .with_clock(Arc::new(FixedAcaClock))
 }
 
-struct FakeCloudEffect {
-    identity: Mutex<Option<ProcessIdentity>>,
-    fail_launch: bool,
-}
+const CLOUD_ARTIFACT_DIGEST: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const CLOUD_SCHEMA_FINGERPRINT: &str =
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const CLOUD_GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+const CLOUD_ZONE_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
 
-#[async_trait]
-impl CloudHypervisorEffectPort for FakeCloudEffect {
-    async fn launch(
+struct AcceptingCloudDescriptorVerifier;
+
+impl GuestSetupDescriptorVerifier for AcceptingCloudDescriptorVerifier {
+    fn verify(
         &self,
-        _: &BootstrapGraph,
-        _: &CloudHypervisorConfig,
-        _: &CloudHypervisorGuestSettings,
-    ) -> Result<ProcessIdentity, CloudHypervisorError> {
-        if self.fail_launch {
-            return Err(CloudHypervisorError::Effect);
-        }
-        let identity = cloud_identity();
-        *self.identity.lock().unwrap() = Some(identity);
-        Ok(identity)
-    }
-
-    async fn observe(&self) -> Result<Option<ProcessIdentity>, CloudHypervisorError> {
-        Ok(*self.identity.lock().unwrap())
-    }
-
-    async fn open_pidfd(&self, identity: &ProcessIdentity) -> Result<(), CloudHypervisorError> {
-        if self.identity.lock().unwrap().as_ref() != Some(identity) {
-            return Err(CloudHypervisorError::AdoptionAmbiguous);
-        }
-        Ok(())
-    }
-
-    async fn stop(&self, identity: &ProcessIdentity) -> Result<(), CloudHypervisorError> {
-        let mut current = self.identity.lock().unwrap();
-        if current.as_ref() != Some(identity) {
-            return Err(CloudHypervisorError::AdoptionAmbiguous);
-        }
-        *current = None;
-        Ok(())
+        _key_fingerprint: &SchemaFingerprint,
+        _descriptor_digest: &SchemaFingerprint,
+        signature: &str,
+    ) -> bool {
+        signature == "signature-sentinel"
     }
 }
 
-fn cloud_identity() -> ProcessIdentity {
-    ProcessIdentity {
-        pid: 41,
-        start_time_ticks: 7,
-        cgroup_digest: [1; 32],
-        executable_digest: [2; 32],
-        template_digest: [3; 32],
-        generation: 1,
-    }
+fn cloud_descriptor() -> d2b_provider_runtime_cloud_hypervisor::VerifiedGuestSetupDescriptor {
+    GuestSetupDescriptor::new(
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        ResourceGeneration::new(3).unwrap(),
+        ArtifactId::parse("guest-system").unwrap(),
+        ArtifactDigest::parse(CLOUD_ARTIFACT_DIGEST).unwrap(),
+        GuestSeedContract::new(
+            "guest-resource-seed",
+            SchemaVersion::new(1, 0).unwrap(),
+            SchemaFingerprint::parse(CLOUD_SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
+        DescriptorSignature::new(
+            SignatureAlgorithm::Ed25519Blake3,
+            SchemaFingerprint::parse(CLOUD_SCHEMA_FINGERPRINT).unwrap(),
+            "signature-sentinel",
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .verify_with(&AcceptingCloudDescriptorVerifier)
+    .unwrap()
 }
 
-struct FakeGuestSession;
+fn cloud_guest() -> GuestSnapshot {
+    let guest_ref = ResourceRef::parse("Guest/gateway").unwrap();
+    let evidence = GuestSessionEvidence::current_bound(
+        guest_ref.clone(),
+        format!("sha256:{}", "0".repeat(64)),
+        Vec::<String>::new(),
+        true,
+        true,
+        true,
+        GuestSessionEvidenceBinding::new(
+            CLOUD_GUEST_UID,
+            CLOUD_SCHEMA_FINGERPRINT,
+            CLOUD_SCHEMA_FINGERPRINT,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    GuestSnapshot::new(
+        ZoneId::parse("work").unwrap(),
+        ResourceUid::parse(CLOUD_ZONE_UID).unwrap(),
+        guest_ref,
+        ResourceUid::parse(CLOUD_GUEST_UID).unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(7),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(1),
+        false,
+    )
+    .unwrap()
+    .with_session_evidence(evidence)
+}
+
+fn cloud_graph() -> BootstrapGraph {
+    BootstrapGraph::new(
+        vec![ResourceRef::parse("Device/kvm").unwrap()],
+        vec![ResourceRef::parse("Network/cloud").unwrap()],
+        vec![ResourceRef::parse("Volume/state").unwrap()],
+        vec![],
+    )
+    .unwrap()
+}
+
+fn cloud_children(
+    guest: &GuestSnapshot,
+    expected_refs: &[ResourceRef],
+    owner_uid: &ResourceUid,
+    process_ready: bool,
+) -> Vec<OwnedChildSnapshot> {
+    expected_refs
+        .iter()
+        .enumerate()
+        .map(|(index, resource_ref)| {
+            OwnedChildSnapshot::new(
+                resource_ref.clone(),
+                guest.zone().clone(),
+                guest.resource_ref().clone(),
+                ResourceUid::parse(format!("323e4567-e89b-42d3-a456-42661417{index:04}")).unwrap(),
+                guest.generation(),
+                guest.revision(),
+                "ready",
+                if resource_ref.resource_type().as_str() == "Process" && !process_ready {
+                    ResourcePhase::Pending
+                } else {
+                    ResourcePhase::Ready
+                },
+                (resource_ref.resource_type().as_str() == "Process")
+                    .then_some(DesiredLifecycle::Running),
+                true,
+            )
+            .unwrap()
+            .with_owner_uid(owner_uid.clone())
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum CloudMode {
+    Ready,
+    ProcessAbsent,
+    Failed,
+    Ambiguous,
+}
+
+struct FakeCloudSession {
+    mode: CloudMode,
+}
 
 #[async_trait]
-impl GuestSessionEvidenceProbe for FakeGuestSession {
-    async fn observe(&self, _: u32, _: u32) -> Result<GuestSessionEvidence, GuestSessionError> {
-        GuestSessionEvidence::current(
-            ResourceRef::parse("Guest/test").unwrap(),
-            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-            1,
-            [],
-            true,
-            true,
-        )
-    }
-
-    async fn close(&self, _: u32) -> Result<(), GuestSessionError> {
-        Ok(())
-    }
-}
-
-struct FixedCloudClock;
-
-impl CloudHypervisorClock for FixedCloudClock {
-    fn now_unix_ms(&self) -> u64 {
-        1_000
+impl AuthenticatedResourceSession for FakeCloudSession {
+    async fn call(
+        &self,
+        request: CloudHypervisorResourceRequest,
+    ) -> Result<CloudHypervisorResourceResponse, CloudHypervisorResourceApiError> {
+        match request {
+            CloudHypervisorResourceRequest::Register { .. } => {
+                Ok(CloudHypervisorResourceResponse::Registered)
+            }
+            CloudHypervisorResourceRequest::GetGuest { .. } => match self.mode {
+                CloudMode::Failed => Err(CloudHypervisorResourceApiError::Transport),
+                CloudMode::Ready | CloudMode::ProcessAbsent | CloudMode::Ambiguous => {
+                    Ok(CloudHypervisorResourceResponse::Guest(cloud_guest()))
+                }
+            },
+            CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {
+                let guest = cloud_guest();
+                let children = match self.mode {
+                    CloudMode::Ambiguous => {
+                        let wrong_owner =
+                            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+                        cloud_children(&guest, &expected_refs[..1], &wrong_owner, true)
+                    }
+                    CloudMode::ProcessAbsent => {
+                        cloud_children(&guest, &expected_refs, guest.uid(), false)
+                    }
+                    CloudMode::Ready | CloudMode::Failed => {
+                        cloud_children(&guest, &expected_refs, guest.uid(), true)
+                    }
+                };
+                Ok(CloudHypervisorResourceResponse::OwnedChildren(children))
+            }
+            CloudHypervisorResourceRequest::ObserveDependencies { graph, .. } => {
+                Ok(CloudHypervisorResourceResponse::Dependencies(
+                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::ready(graph),
+                ))
+            }
+            CloudHypervisorResourceRequest::CommitBatch { .. } => Ok(
+                CloudHypervisorResourceResponse::Committed(GuestChildCommitResponse::Uncertain),
+            ),
+            CloudHypervisorResourceRequest::UpdateSpec { update } => {
+                Ok(CloudHypervisorResourceResponse::Updated(
+                    CommittedChild::new(
+                        update.target().clone(),
+                        ResourceRef::parse("Guest/gateway").unwrap(),
+                        ZoneId::parse("work").unwrap(),
+                        update.expected_uid().clone(),
+                        ZoneRevision::new(update.expected_revision().get().saturating_add(1)),
+                    )
+                    .unwrap(),
+                ))
+            }
+            CloudHypervisorResourceRequest::UpdateStatus { .. } => {
+                Ok(CloudHypervisorResourceResponse::StatusUpdated)
+            }
+            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => Ok(
+                CloudHypervisorResourceResponse::ProcessAdoption(match self.mode {
+                    CloudMode::ProcessAbsent => {
+                        d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
+                    }
+                    _ => d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                }),
+            ),
+            CloudHypervisorResourceRequest::AssessUpdate { .. } => {
+                Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
+            }
+            CloudHypervisorResourceRequest::ObserveFinalization { .. } => {
+                Err(CloudHypervisorResourceApiError::InvalidResponse)
+            }
+            CloudHypervisorResourceRequest::DrainGuestLocal { .. }
+            | CloudHypervisorResourceRequest::CloseGuestSession { .. }
+            | CloudHypervisorResourceRequest::DeleteChild { .. }
+            | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
+            | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
+        }
     }
 }
 
 fn cloud_controller(
-    effect: Arc<FakeCloudEffect>,
-) -> CloudHypervisorController<FakeCloudEffect, FakeGuestSession> {
+    mode: CloudMode,
+) -> CloudHypervisorController<AuthenticatedResourceApiAdapter<FakeCloudSession>> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(
-            "q35",
-        )
-        .unwrap(),
+        default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,
         health_check_timeout_ms: 5_000,
         health_check_failure_threshold: 3,
-        startup_deadline_ms: 30_000,
+        startup_deadline_ms: 120_000,
     };
-    let settings = CloudHypervisorGuestSettings {
-        vcpus: Some(2),
-        memory_mb: Some(512),
-        machine_type: None,
-        console_type: ConsoleType::Null,
-        serial_port: true,
-        pvpanic: false,
-        watchdog_override: None,
-        memory_shared: true,
-        has_virtiofs_attachment: false,
-        system_artifact_id: Some("system-artifact".to_owned()),
-    };
-    let graph = BootstrapGraph::new(
-        vec![ResourceRef::parse("Device/kvm").unwrap()],
-        vec![ResourceRef::parse("Network/cloud").unwrap()],
-        vec![ResourceRef::parse("Volume/state").unwrap()],
-        vec![AttachmentRef::new("launch-ticket").unwrap()],
+    let api = AuthenticatedResourceApiAdapter::new(Arc::new(FakeCloudSession { mode }));
+    CloudHypervisorController::from_verified_descriptor(
+        config,
+        cloud_graph(),
+        cloud_descriptor(),
+        Arc::new(api),
     )
-    .unwrap();
-    CloudHypervisorController::new(config, settings, graph, effect, Arc::new(FakeGuestSession))
-        .unwrap()
-        .with_clock(Arc::new(FixedCloudClock))
+    .unwrap()
 }
 
 #[tokio::test]
 async fn cloud_composition_reaches_ready_through_production_controllers() {
-    let cloud_effect = Arc::new(FakeCloudEffect {
-        identity: Mutex::new(None),
-        fail_launch: false,
-    });
-    let mut cloud = cloud_controller(Arc::clone(&cloud_effect));
+    let mut cloud = cloud_controller(CloudMode::Ready);
+    cloud.register().await.unwrap();
+    let cloud_outcome = cloud
+        .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+        .await
+        .unwrap();
     assert_eq!(
-        cloud.reconcile(false, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Retry { after_ms: 500 }
+        cloud_outcome.status().status().phase,
+        GuestStatusPhase::Ready
     );
-    assert_eq!(
-        cloud.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Converged
-    );
-    assert_eq!(cloud.phase(), CloudHypervisorPhase::Ready);
+    assert!(matches!(
+        cloud_outcome,
+        CloudHypervisorReconcileOutcome::Ready(_)
+    ));
 
     let aca_state = Arc::new(Mutex::new(AcaState {
         candidates: vec![aca_record("sandbox-1", AcaSandboxLifecycle::Running)],
@@ -356,21 +484,28 @@ async fn cloud_composition_reaches_ready_through_production_controllers() {
         "Azure provider status must retain only a digest, not a cloud identity"
     );
     assert!(aca_state.lock().unwrap().revoked > 0);
-
-    cloud.finalize().await.unwrap();
-    assert!(cloud_effect.identity.lock().unwrap().is_none());
 }
 
 #[tokio::test]
 async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
-    let failed_effect = Arc::new(FakeCloudEffect {
-        identity: Mutex::new(None),
-        fail_launch: true,
-    });
-    let mut cloud = cloud_controller(failed_effect);
+    let mut cloud = cloud_controller(CloudMode::Failed);
+    cloud.register().await.unwrap();
     assert_eq!(
-        cloud.reconcile(true, true, true, 14).await,
-        Err(CloudHypervisorError::Effect)
+        cloud
+            .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+            .await,
+        Err(CloudHypervisorError::ResourceApi(
+            CloudHypervisorResourceApiError::Transport
+        ))
+    );
+
+    let mut ambiguous_cloud = cloud_controller(CloudMode::Ambiguous);
+    ambiguous_cloud.register().await.unwrap();
+    assert_eq!(
+        ambiguous_cloud
+            .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+            .await,
+        Err(CloudHypervisorError::ChildConflict)
     );
 
     let aca_state = Arc::new(Mutex::new(AcaState {
@@ -386,4 +521,19 @@ async fn cloud_composition_fails_closed_on_ambiguous_or_failed_effects() {
             .await,
         Err(d2b_provider_runtime_azure_container_apps::AcaControllerError::AmbiguousAdoption)
     );
+}
+
+#[tokio::test]
+async fn cloud_composition_requires_process_provider_liveness_for_ready() {
+    let mut cloud = cloud_controller(CloudMode::ProcessAbsent);
+    cloud.register().await.unwrap();
+    let outcome = cloud
+        .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(outcome.status().status().phase, GuestStatusPhase::Degraded);
+    assert!(!matches!(
+        outcome,
+        CloudHypervisorReconcileOutcome::Ready(_)
+    ));
 }

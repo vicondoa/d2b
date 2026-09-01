@@ -39,7 +39,11 @@ fn local_nixos_advertises_positive_operation_axes() {
     assert!(runtime.services.iter().any(|service| service.optional));
 
     let value = serde_json::to_value(runtime).expect("serializes");
-    assert!(value.pointer("/operationCapabilities/guest/componentSession").is_none());
+    assert!(
+        value
+            .pointer("/operationCapabilities/guest/componentSession")
+            .is_none()
+    );
     assert!(value.pointer("/services/3/processRole").is_none());
     assert_eq!(
         value.pointer("/autostartPolicy"),

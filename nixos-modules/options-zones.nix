@@ -2,7 +2,9 @@
 
 let
   cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   resourceTypes = import ./resources.nix { inherit lib; };
+  identityModel = import ./resources-bundle.nix { inherit lib; };
 
   zoneNamePattern = "^[a-z][a-z0-9-]{0,62}$";
 
@@ -67,6 +69,65 @@ let
       && builtins.hasAttr artifactId (cfg.artifacts or { })
     then cfg.artifacts.${artifactId}
     else null;
+
+  guestSystemFor = zoneName: guestName:
+    d2bLib.v3GuestSystemFor (cfg.guestSystems or { }) zoneName guestName;
+
+  pathPrefix = zoneName: resourceName:
+    "d2b.zones.${zoneName}.resources.${resourceName}";
+
+  guestSystemAssertions = lib.concatMap
+    (zoneName:
+      let
+        zoneSystems = cfg.guestSystems.${zoneName};
+        zoneDeclared = builtins.hasAttr zoneName cfg.zones;
+        resources =
+          if zoneDeclared
+          then cfg.zones.${zoneName}.resources
+          else { };
+      in
+      [
+        {
+          assertion = builtins.match zoneNamePattern zoneName != null
+            && zoneDeclared;
+          message = "d2b.guestSystems.${zoneName} must name a declared Zone.";
+        }
+      ]
+      ++ lib.mapAttrsToList
+        (guestName: _guestSystem: {
+          assertion = builtins.match zoneNamePattern guestName != null
+            && builtins.hasAttr guestName resources
+            && resources.${guestName}.type == "Guest";
+          message = "d2b.guestSystems.${zoneName}.${guestName} must name a declared Guest resource in Zone ${zoneName}.";
+        })
+        zoneSystems)
+    (lib.attrNames (cfg.guestSystems or { }));
+
+  guestResourceAssertions = zoneName: resourceName: resource:
+    let
+      spec = resource.spec or { };
+      artifactId = spec.systemArtifactId or null;
+      artifact = artifactFor artifactId;
+      guestSystem = guestSystemFor zoneName resourceName;
+      evaluatorReady = d2bLib.v3GuestEvaluatorReady guestSystem;
+      guestConfig = d2bLib.v3GuestConfigFor guestSystem;
+      guestToplevel =
+        if evaluatorReady
+        then guestConfig.system.build.toplevel
+        else null;
+    in
+    lib.optionals (resource.type == "Guest" && artifactId != null) [
+      {
+        assertion = evaluatorReady;
+        message = "${pathPrefix zoneName resourceName}.spec.systemArtifactId must have a matching d2b.guestSystems.${zoneName}.${resourceName} evaluator.";
+      }
+      {
+        assertion = !evaluatorReady
+          || artifact != null
+          && toString guestToplevel == toString artifact.package;
+        message = "${pathPrefix zoneName resourceName}.spec.systemArtifactId must match the Guest evaluator toplevel.";
+      }
+    ];
 
   artifactAssertions = zoneName: resourceName: resource:
     let
@@ -246,7 +307,8 @@ let
             message = "${path}.spec.userRef is required for user-domain execution when the target has no default user.";
           }
         ]
-        ++ artifactAssertions zoneName resourceName resource)
+        ++ artifactAssertions zoneName resourceName resource
+        ++ guestResourceAssertions zoneName resourceName resource)
       resources);
 
   zoneAssertions = lib.flatten (lib.mapAttrsToList
@@ -446,6 +508,17 @@ in
     description = "Zone-local resource identity and authoring declarations.";
   };
 
+  options.d2b.guestSystems = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.attrsOf lib.types.unspecified);
+    default = { };
+    description = ''
+      Consumer-owned NixOS Guest evaluations keyed only by
+      d2b.guestSystems.<zone>.<guest>. Values are the result of the named
+      Guest evaluator and remain compiler inputs for artifact and low-level
+      projections; they are not daemon or runtime authority.
+    '';
+  };
+
   options.d2b._zoneCompiler = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;
     default = { };
@@ -455,7 +528,11 @@ in
   };
 
   config = {
-    assertions = zoneAssertions ++ topologyAssertions ++ zoneLinkAssertions ++ ownerCycleAssertions;
+    assertions = zoneAssertions
+      ++ topologyAssertions
+      ++ zoneLinkAssertions
+      ++ ownerCycleAssertions
+      ++ guestSystemAssertions;
     d2b._zoneCompiler = {
       localRoot = localRootZoneName;
       maxAncestryNames = maxAncestryNames;
@@ -476,6 +553,7 @@ in
           metadata = {
             name = zoneName;
             zone = zoneName;
+            uid = identityModel.stableUid "d2b:v3:zone-uid" zoneName;
           };
           spec = { };
         })

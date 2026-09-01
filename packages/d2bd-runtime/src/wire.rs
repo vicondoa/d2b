@@ -54,7 +54,6 @@ pub enum Request {
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
     Console(public_wire::ConsoleOp),
-    GatewayDisplay(public_wire::GatewayDisplayOp),
     Workload(public_wire::WorkloadOp),
     Audio(public_wire::AudioOp),
     Resource(ResourceRequest),
@@ -113,7 +112,6 @@ impl Request {
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
             Self::Console(_) => "console",
-            Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
             Self::Audio(_) => "audio",
             Self::Resource(request) if request.method() == Some("Reconcile") => "resourceReconcile",
@@ -164,7 +162,6 @@ impl Request {
             | Self::KeysShow(_)
             | Self::UsbipProbe
             | Self::Console(_)
-            | Self::GatewayDisplay(_)
             | Self::Workload(_)
             | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
             Self::Resource(request)
@@ -181,6 +178,26 @@ impl Request {
                     .map(|value| value.to_canonical_string())
                     .unwrap_or_else(|| "usb-resource".to_owned());
                 OpLockClass::PerVm(target)
+            }
+            Self::Resource(request)
+                if matches!(request.method(), Some("Start" | "Stop" | "Restart")) =>
+            {
+                let target = request
+                    .fields
+                    .get("resourceRef")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ResourceRef::parse(value).ok())
+                    .filter(|value| matches!(value.resource_type().as_str(), "Guest" | "Process"))
+                    .map(|value| {
+                        if value.resource_type().as_str() == "Guest" {
+                            value.name().to_canonical_string()
+                        } else {
+                            value.to_canonical_string()
+                        }
+                    });
+                target
+                    .map(OpLockClass::PerVm)
+                    .unwrap_or(OpLockClass::ReadOnly)
             }
             Self::Resource(request)
                 if matches!(
@@ -398,9 +415,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 .map(Request::Console)
                 .map_err(map_parse_error)
         }
-        "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::GatewayDisplay)
-            .map_err(map_parse_error),
         "workload" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Workload)
             .map_err(map_parse_error),
@@ -703,6 +717,31 @@ mod tests {
             request.lock_class(),
             crate::concurrency::OpLockClass::Global
         );
+    }
+
+    #[test]
+    fn typed_guest_and_process_lifecycle_requests_lock_the_target() {
+        for (resource_ref, expected) in [
+            (
+                "Guest/corp-vm",
+                crate::concurrency::OpLockClass::PerVm("corp-vm".to_owned()),
+            ),
+            (
+                "Process/worker",
+                crate::concurrency::OpLockClass::PerVm("Process/worker".to_owned()),
+            ),
+        ] {
+            for method in ["Start", "Stop", "Restart"] {
+                let request = parse_request(
+                    format!(
+                        r#"{{"type":"resourceRequest","service":"d2b.resource.v3","method":"{method}","zoneRef":"Zone/work","resourceRef":"{resource_ref}","apply":true}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("typed lifecycle request");
+                assert_eq!(request.lock_class(), expected);
+            }
+        }
     }
 
     #[test]

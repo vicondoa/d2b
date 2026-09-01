@@ -79,6 +79,145 @@ let
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
     else null;
+  processResources = zoneName:
+    let
+      compiler = cfg._resourceCompiler or { };
+      processes = compiler.processes or { };
+      byZone = processes.byZone or { };
+    in
+    if builtins.hasAttr zoneName byZone
+    then byZone.${zoneName}
+    else { };
+
+  # Keep this list explicit so every Provider projection has a visible bundle
+  # owner and no consumer can register an implicit fallback.
+  providerProjectionOwners = [
+    "volume-local"
+    "volume-virtiofs"
+    "device-gpu"
+    "device-usbip"
+    "device-security-key"
+    "device-tpm"
+    "display-wayland"
+    "audio-pipewire"
+    "clipboard-wayland"
+    "notification-desktop"
+    "activation-nixos"
+    "observability-otel"
+    "shell-terminal"
+    "runtime-qemu-media"
+    "runtime-azure-container-apps"
+    "runtime-azure-virtual-machine"
+  ];
+
+  providerProjectionKeys = {
+    "volume-local" = "providerProjectionVolumeLocal";
+    "volume-virtiofs" = "providerProjectionVolumeVirtiofs";
+    "device-gpu" = "providerProjectionDeviceGpu";
+    "device-usbip" = "providerProjectionDeviceUsbip";
+    "device-security-key" = "providerProjectionDeviceSecurityKey";
+    "device-tpm" = "providerProjectionDeviceTpm";
+    "display-wayland" = "providerProjectionDisplayWayland";
+    "audio-pipewire" = "providerProjectionAudioPipewire";
+    "clipboard-wayland" = "providerProjectionClipboardWayland";
+    "notification-desktop" = "providerProjectionNotificationDesktop";
+    "activation-nixos" = "providerProjectionActivationNixos";
+    "observability-otel" = "providerProjectionObservabilityOtel";
+    "shell-terminal" = "providerProjectionShellTerminal";
+    "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
+    "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
+    "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";
+  };
+
+  providerProjection = owner:
+    let
+      table = cfg._resourceCompiler or { };
+      key = builtins.getAttr owner providerProjectionKeys;
+    in if builtins.hasAttr key table
+    then builtins.getAttr key table
+    else { };
+
+  providerResources = zoneName:
+    lib.foldl'
+      (result: owner:
+        let projection = providerProjection owner;
+        in if (projection.enabled or false)
+          then result
+            // ((projection.resourcesByZone or { }).${zoneName} or { })
+          else result)
+      { }
+      providerProjectionOwners;
+
+  providerGuestPatches = zoneName: resourceName:
+    lib.foldl'
+      (result: owner:
+        let projection = providerProjection owner;
+        in if (projection.enabled or false)
+          then lib.recursiveUpdate result
+            (((projection.guestPatchesByZone or { }).${zoneName}
+              or { }).${resourceName} or { })
+          else result)
+      { }
+      providerProjectionOwners;
+
+  providerProjectionArtifacts = lib.mapAttrs
+    (owner: projection: {
+      data = (projection.privateArtifact or { }) // {
+        zoneScopes = map
+          (zoneName: {
+            zone = zoneName;
+            processRefs =
+              let processes =
+                if builtins.hasAttr zoneName (projection.processesByZone or { })
+                then builtins.getAttr zoneName projection.processesByZone
+                else { };
+              in map
+                (name: "${processes.${name}.type}/${name}")
+                (lib.attrNames processes);
+            resourceNames = lib.attrNames
+                (if builtins.hasAttr zoneName (projection.resourcesByZone or { })
+                 then builtins.getAttr zoneName projection.resourcesByZone
+                 else { });
+          })
+          (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+      };
+      installFileName = null;
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+      enableEtc = false;
+    })
+    (lib.filterAttrs
+      (_: projection: projection.enabled or false)
+      (lib.listToAttrs (map
+        (owner:
+          lib.nameValuePair owner (providerProjection owner))
+        providerProjectionOwners)));
+
+  providerProjectionCollisions = lib.concatMap
+    (owner:
+      let projection = providerProjection owner;
+      in lib.concatMap
+        (zoneName:
+          let
+            authored = lib.attrNames (cfg.zones.${zoneName}.resources or { });
+            generated =
+              lib.attrNames
+                (if builtins.hasAttr zoneName (projection.resourcesByZone or { })
+                 then builtins.getAttr zoneName projection.resourcesByZone
+                 else { })
+              ++ lib.attrNames
+                (if builtins.hasAttr zoneName (projection.processesByZone or { })
+                 then builtins.getAttr zoneName projection.processesByZone
+                 else { });
+            collisions = lib.filter (name: builtins.elem name authored) generated;
+          in map
+            (name: {
+              assertion = false;
+              message = "d2b.zones.${zoneName}.resources.${name} collides with the ${owner} Provider projection.";
+            })
+            (lib.unique collisions))
+        (lib.sort lib.lessThan (lib.attrNames cfg.zones)))
+    providerProjectionOwners;
 
   stripRuntime = value:
     if builtins.isAttrs value
@@ -109,8 +248,9 @@ let
 
   zoneResources = zoneName: zone:
     zone.resources
-    // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
-    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { })
+    // providerResources zoneName
+    // processResources zoneName;
 
   projectedResource = zoneName: resourceName: resource:
     if resource.type == "Device"
@@ -121,18 +261,27 @@ let
     else resource;
 
   canonicalResource = zoneName: resourceName: resource:
-    let projected = projectedResource zoneName resourceName resource;
+    let
+      projected = projectedResource zoneName resourceName resource;
+      guestPatch =
+        if projected.type == "Guest"
+        then providerGuestPatches zoneName resourceName
+        else { };
+      patched =
+        if projected.type == "Guest" && guestPatch != { }
+        then projected // { spec = lib.recursiveUpdate (projected.spec or { }) guestPatch; }
+        else projected;
     in {
       inherit apiVersion;
-      type = projected.type;
+      type = patched.type;
       metadata = {
         name = resourceName;
         zone = zoneName;
-      } // optionalMetadata projected;
+      } // optionalMetadata patched;
       spec = stripRuntime
-        (if builtins.elem projected.type [ "Host" "Guest" ]
-         then (projected.spec or { })
-         else stripCompilerDefaults (projected.spec or { }));
+        (if builtins.elem patched.type [ "Host" "Guest" ]
+         then (patched.spec or { })
+         else stripCompilerDefaults (patched.spec or { }));
     };
 
   sortResources = resources:
@@ -248,6 +397,7 @@ let
     in {
       schemaVersion = 3;
       bundleVersion = 1;
+      zoneUid = resourcesBundle.stableUid "d2b:v3:zone-uid" zoneName;
       zone = zoneName;
       inherit contentHash;
       artifactCatalogDigest = catalogDigest;
@@ -261,6 +411,7 @@ let
       compilerInput = pkgs.writeText "d2b-resource-compiler-${zoneName}.json"
         (builtins.toJSON {
           zone = zoneName;
+          zoneUid = data.zoneUid;
           resources = data.resources;
           providerSchemaDigests = data.providerSchemaDigests;
           providers = providerInputs cfg.zones.${zoneName};
@@ -268,6 +419,9 @@ let
             if catalogPath == null then null else "${catalogPath}";
           expectedArtifactCatalogDigest = catalogDigest;
           schemaRoot = "${schemaRoot}";
+          # The compiler appends signed static Provider controller Processes
+          # and their private processTemplates metadata. Those generated rows
+          # stay out of the processes.json projection.
           expectedContentHash = data.contentHash;
           inherit strictSecrets;
         });
@@ -306,7 +460,8 @@ in
   };
 
   config = {
-    assertions = helperAssertions;
+    assertions = helperAssertions ++ providerProjectionCollisions;
+    d2b._bundle.extraArtifacts = providerProjectionArtifacts;
     d2b._bundle.zoneResourceBundlesV3 = bundles;
     # The v3 emitter owns every installed path. Only the eval-visible data
     # field retains the compatibility projection used by older consumers.

@@ -1,76 +1,19 @@
-# Persistent shell component
+# Shell Provider
 
-> Diataxis: reference. Option and policy contract for persistent guest shells.
+**Diataxis category:** reference.
 
-Persistent shells are disabled by default and are configured per VM:
+Named shells are `ShellSession` Resources owned by the Zone and attached to a
+Host or Guest execution target. The shell Provider owns the authenticated
+ProcessAttachClient stream, terminal fd, bounded output cursors, and cleanup.
 
-```nix
-d2b.vms.<vm>.guest.shell = {
-  enable = true;
-  defaultName = "default";
-  maxSessions = 8;
-  maxAttached = 1;
-};
+```bash
+d2b shell open Guest/work-app --name build
+d2b shell attach ShellSession/build
+d2b shell status ShellSession/build --zone work
+d2b shell detach ShellSession/build --zone work --apply
+d2b shell kill ShellSession/build --zone work --apply
 ```
 
-## Options
-
-| Option | Type/default | Meaning |
-| --- | --- | --- |
-| `guest.shell.enable` | boolean, default `false` | Enables the persistent shell policy and guest runtime wiring for this VM. |
-| `guest.shell.defaultName` | shell name, default `default` | Session name used when attach/detach omit `--name`. |
-| `guest.shell.maxSessions` | integer 1-256, default `8` | Maximum persistent shell sessions tracked for the VM, attached plus detached. |
-| `guest.shell.maxAttached` | integer 1-64, default `1` | Maximum concurrently attached persistent shell clients. Must be `<= maxSessions`. |
-
-## Requirements
-
-Enabling `guest.shell` requires:
-
-- `guest.componentSession.enable = true`;
-- a runtime/provider that supports the signed target-local shell Process.
-
-`qemu-media` and providers without component-session reject non-default
-`guest.shell.*` settings at eval time.
-
-## Guest wiring
-
-When enabled for a workload user, the guest module:
-
-- passes the shell policy to the signed target-local Process;
-- wires the static `d2b-guest-shell-runner` and `systemctl` paths;
-- declares `d2b-shpool-daemon.service` as the workload user with
-  `PAMName=d2b-shpool-daemon`;
-- sets workload-user linger so `/run/user/<uid>` exists while all shell clients
-  are detached.
-
-The shpool daemon remains in the delegated system service cgroup; the PAM service
-uses `startSession = false`, `setEnvironment = true`, and `setLoginUid = true`.
-
-## Manifest metadata
-
-Supported providers emit a per-VM manifest block:
-
-```json
-{
-  "shell": {
-    "enabled": true,
-    "defaultName": "default",
-    "maxSessions": 8,
-    "maxAttached": 1
-  }
-}
-```
-
-Providers without component-session emit `shell = null`. The manifest never exposes
-runtime helper sockets, terminal handles, shpool state paths, or live session
-names beyond the configured default.
-
-## Trust and redaction
-
-Persistent shells use a same-UID AF_UNIX shpool socket inside the guest. This is
-not a boundary against other processes already running as the workload user.
-
-Daemon metrics and audit surfaces do not use raw shell names, terminal handles,
-terminal bytes, helper diagnostics, argv, env, or paths as labels or log fields.
-The daemon audit stream uses a fixed shell correlation digest where correlation
-is needed.
+Shell names are bounded ASCII identifiers. The shell path never carries
+credentials, host paths, argv, environment, or a private runtime locator.
+Unsafe-local shells run only as the verified requesting UID.

@@ -1,12 +1,9 @@
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
-    CLOSE_GRACE_MS, SessionKey, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError,
-    NamedStreamId, NamedStreamPort, OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest,
-    PeerCid, ReadySession, ServiceError, SessionAuthority, SessionProof, TransportPhase,
+    CLOSE_GRACE_MS, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError, NamedStreamId,
+    NamedStreamPort, OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest, PeerCid,
+    ReadySession, ServiceError, SessionAuthority, SessionKey, SessionProof, TransportPhase,
     TransportRole, VsockEffectError, VsockEffectPort, VsockTransportService,
 };
 use ring::rand::{SystemRandom, generate};

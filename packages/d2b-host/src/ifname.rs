@@ -15,10 +15,7 @@
 //! TAPs prefix `t`. The full name fits inside the IFNAMSIZ-1 (15 byte)
 //! limit by construction.
 
-use d2b_contracts_resource::v3::{
-    IfName as CoreIfName,
-    IfNameError as CoreIfNameError,
-};
+use d2b_contracts_resource::v3::{IfName as CoreIfName, IfNameError as CoreIfNameError};
 use d2b_core::host_w3::IfNameMapping;
 
 pub use d2b_contracts_resource::v3::IfName;

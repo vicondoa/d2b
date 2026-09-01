@@ -8,10 +8,6 @@ mod controller;
 mod deployment_service;
 #[allow(missing_docs)]
 mod effects;
-#[allow(missing_docs)]
-mod error;
-pub mod gateway;
-mod rate_limit;
 mod metrics;
 
 pub use audit::{AcaAuditEvent, AcaAuditOutcome, AcaAuditSink};
@@ -19,11 +15,11 @@ pub use controller::{
     AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome, AcaRecoveryState,
     AcaStatus, AzureContainerAppsRuntimeProvider, CompletedOperationLedger, SystemAcaClock,
 };
-pub use effects::*;
 pub use deployment_service::{
     AcaDeploymentRequest, AcaDeploymentResponse, AcaDeploymentService, AcaServiceError,
     AcaServiceMethod,
 };
+pub use effects::*;
 pub use metrics::{AcaMetricEvent, AcaMetricOutcome, AcaMetricValidationError};
 
 /// Stable Provider implementation identifier.

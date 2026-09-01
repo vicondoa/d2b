@@ -25,16 +25,15 @@ use crate::resource_runtime::{
     CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
 };
 use d2b_bus::{
-    BusAuthorizer, BusConfig, BusError, BusIngress, CommittedInteractionSubjectInput,
-    ComponentRequestReceiver, ComponentSessionAdmission, NoopBusObserver, OperationId,
-    OperationSpec, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    BusAuthorizer, BusConfig, BusError, BusIngress, ComponentRequestReceiver,
+    ComponentSessionAdmission, OperationId, OperationSpec, RouteGenerations, RouteKey, RouteMember,
+    RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourcePhase, ResourceRef,
-    ResourceUid, ZoneId, ZoneRevision,
-    canonical_digest,
+    ResourceUid, ZoneId, ZoneRevision, canonical_digest,
     endpoint::{
         EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy, EndpointLocality,
         EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
@@ -45,8 +44,8 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::component_session::{
     AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
     EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
-    Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding,
-    TransportClass, MAX_LOGICAL_MESSAGE_BYTES,
+    Locality as TransportLocality, MAX_LOGICAL_MESSAGE_BYTES, NoiseProfile, PurposeClass,
+    ServicePackage, TransportBinding, TransportClass,
 };
 use d2b_process::ProcessLaunchEffectPort;
 #[cfg(test)]
@@ -1604,10 +1603,7 @@ where
                 if response.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
                     return Err(InteractionDispatchError::RuntimeFailure);
                 }
-                Ok((
-                    response,
-                    false,
-                ))
+                Ok((response, false))
             }
             (d2b_provider_notification_desktop::SERVICE_PACKAGE, "NotificationService/Drain") => {
                 if !payload.is_empty() {
@@ -2743,7 +2739,8 @@ impl ProcessLaunchEffectPort for UnavailableProcessEffectPort {
     fn observe(
         &self,
         _ticket: &d2b_process_conformance::LaunchTicket,
-    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send {
+    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send
+    {
         async { Err(ProcessConformanceError::LaunchFailed) }
     }
 
@@ -3408,9 +3405,8 @@ where
                 return Ok(());
             }
             let mut mutation = wire::Mutation::new();
-            mutation.kind = protobuf::EnumOrUnknown::new(
-                wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
-            );
+            mutation.kind =
+                protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
             mutation.target = protobuf::MessageField::some(resource_wire_identity(
                 &zone,
                 &session_ref,
@@ -3418,8 +3414,9 @@ where
                 Some(envelope.metadata().revision().get()),
             ));
             let mut precondition = wire::Precondition::new();
-            precondition.kind =
-                protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+            );
             precondition.expected_revision = Some(envelope.metadata().revision().get());
             precondition.expected_uid = Some(envelope.metadata().uid().as_str().to_owned());
             mutation.precondition = protobuf::MessageField::some(precondition);
@@ -3639,9 +3636,7 @@ where
                 None,
             ));
             let mut request = wire::UpdateStatusRequest::new();
-            request.meta = protobuf::MessageField::some(resource_request_meta(
-                &operation_id,
-            ));
+            request.meta = protobuf::MessageField::some(resource_request_meta(&operation_id));
             request.mutation = protobuf::MessageField::some(mutation);
             let response = client.update_status(request).await;
             if response.error.is_some() {
@@ -3738,8 +3733,7 @@ where
                 &owner_uid,
                 &producer_ref,
             )?;
-            self.resource_endpoints
-                .insert(role, current_record.clone());
+            self.resource_endpoints.insert(role, current_record.clone());
             if !current_record.deletion_requested {
                 let uid = current_record.resource_uid.clone();
                 let revision = current_record.revision;
@@ -3868,65 +3862,65 @@ where
                     {
                         (resource, false)
                     } else {
-                    let canonical_json = update_display_policy_annotation(
-                        &resource.canonical_json,
-                        expected_generation,
-                    )?;
-                    let uid = envelope.metadata().uid().clone();
-                    let revision = envelope.metadata().revision().get();
-                    let target =
-                        resource_wire_identity(&zone, &process_ref, Some(&uid), Some(revision));
-                    let mut body = wire::ResourceEnvelopeBytes::new();
-                    body.identity = protobuf::MessageField::some(target.clone());
-                    body.canonical_json = canonical_json.clone();
-                    body.payload_digest = ResourceEnvelope::from_json(&body.canonical_json)
-                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-                        .digest()
-                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-                    let mut precondition = wire::Precondition::new();
-                    precondition.kind = protobuf::EnumOrUnknown::new(
-                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-                    );
-                    precondition.expected_revision = Some(revision);
-                    precondition.expected_uid = Some(uid.as_str().to_owned());
-                    let mut mutation = wire::Mutation::new();
-                    mutation.kind = protobuf::EnumOrUnknown::new(
-                        wire::MutationKind::MUTATION_KIND_UPDATE_METADATA,
-                    );
-                    mutation.target = protobuf::MessageField::some(target);
-                    mutation.precondition = protobuf::MessageField::some(precondition);
-                    mutation.owner = protobuf::MessageField::some(resource_wire_identity(
-                        &zone,
-                        &owner_ref,
-                        Some(&owner_uid),
-                        None,
-                    ));
-                    mutation.resource = protobuf::MessageField::some(body);
-                    let mut operation_key =
-                        format!("{}:{}:", uid.as_str(), revision).into_bytes();
-                    operation_key.extend_from_slice(&canonical_json);
-                    let mut request = wire::UpdateMetadataRequest::new();
-                    request.meta = protobuf::MessageField::some(resource_request_meta(
-                        &resource_operation_id_with_key(
-                            "display-process-policy-update",
+                        let canonical_json = update_display_policy_annotation(
+                            &resource.canonical_json,
+                            expected_generation,
+                        )?;
+                        let uid = envelope.metadata().uid().clone();
+                        let revision = envelope.metadata().revision().get();
+                        let target =
+                            resource_wire_identity(&zone, &process_ref, Some(&uid), Some(revision));
+                        let mut body = wire::ResourceEnvelopeBytes::new();
+                        body.identity = protobuf::MessageField::some(target.clone());
+                        body.canonical_json = canonical_json.clone();
+                        body.payload_digest = ResourceEnvelope::from_json(&body.canonical_json)
+                            .map_err(|_| WorkerEffectError::WorkerUnavailable)?
+                            .digest()
+                            .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+                        let mut precondition = wire::Precondition::new();
+                        precondition.kind = protobuf::EnumOrUnknown::new(
+                            wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+                        );
+                        precondition.expected_revision = Some(revision);
+                        precondition.expected_uid = Some(uid.as_str().to_owned());
+                        let mut mutation = wire::Mutation::new();
+                        mutation.kind = protobuf::EnumOrUnknown::new(
+                            wire::MutationKind::MUTATION_KIND_UPDATE_METADATA,
+                        );
+                        mutation.target = protobuf::MessageField::some(target);
+                        mutation.precondition = protobuf::MessageField::some(precondition);
+                        mutation.owner = protobuf::MessageField::some(resource_wire_identity(
                             &zone,
-                            &process_ref,
-                            &operation_key,
-                        ),
-                    ));
-                    request.mutation = protobuf::MessageField::some(mutation);
-                    let updated = client.update_metadata(request).await;
-                    if updated.error.is_some() {
-                        return Err(WorkerEffectError::WorkerUnavailable);
-                    }
-                    (
-                        *updated
-                            .resource
-                            .0
-                            .ok_or(WorkerEffectError::WorkerUnavailable)?,
-                        true,
-                    )
-                };
+                            &owner_ref,
+                            Some(&owner_uid),
+                            None,
+                        ));
+                        mutation.resource = protobuf::MessageField::some(body);
+                        let mut operation_key =
+                            format!("{}:{}:", uid.as_str(), revision).into_bytes();
+                        operation_key.extend_from_slice(&canonical_json);
+                        let mut request = wire::UpdateMetadataRequest::new();
+                        request.meta = protobuf::MessageField::some(resource_request_meta(
+                            &resource_operation_id_with_key(
+                                "display-process-policy-update",
+                                &zone,
+                                &process_ref,
+                                &operation_key,
+                            ),
+                        ));
+                        request.mutation = protobuf::MessageField::some(mutation);
+                        let updated = client.update_metadata(request).await;
+                        if updated.error.is_some() {
+                            return Err(WorkerEffectError::WorkerUnavailable);
+                        }
+                        (
+                            *updated
+                                .resource
+                                .0
+                                .ok_or(WorkerEffectError::WorkerUnavailable)?,
+                            true,
+                        )
+                    };
                 let (state, record) = durable_record_from_response(
                     process_ref,
                     resource,
@@ -4044,7 +4038,9 @@ where
             ));
         };
         self.resource_processes.insert(role, record.clone());
-        if !matches!(worker_state, WorkerState::Terminal { deleted: true }) && !record.deletion_requested {
+        if !matches!(worker_state, WorkerState::Terminal { deleted: true })
+            && !record.deletion_requested
+        {
             let client = self
                 .resource_client
                 .clone()
@@ -4907,8 +4903,9 @@ fn validate_production_interaction_resource_state<'b>(
     resource: &ProductionInteractionResourceState<'b>,
 ) -> Result<&'b CommittedInteractionIdentity, BusError> {
     let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
-    if identity.wayland_session_ref().resource_type().as_str()
-        != "display-wayland.d2bus.org.WaylandSession"
+    if identity.zone() != &resource.zone
+        || identity.wayland_session_ref().resource_type().as_str()
+            != "display-wayland.d2bus.org.WaylandSession"
         || identity.wayland_session_uid().as_str().is_empty()
         || identity.subject_ref().resource_type().as_str() != "Guest"
         || identity.host_execution_ref().resource_type().as_str() != "Host"
@@ -4928,18 +4925,11 @@ fn validate_production_interaction_resource_state<'b>(
 pub(crate) fn production_interaction_composition(
     daemon_uid: u32,
     resource: ProductionInteractionResourceState<'_>,
-) -> Result<
-    InteractionComposition<UnavailableProcessEffectPort>,
-    BusError,
-> {
+) -> Result<InteractionComposition<UnavailableProcessEffectPort>, BusError> {
     let identity = validate_production_interaction_resource_state(&resource)?;
     let system_core_client = resource
         .system_core_client
         .clone()
-        .ok_or(BusError::InvalidConfig)?;
-    let controller_generation = resource
-        .committed_policy
-        .controller_generation
         .ok_or(BusError::InvalidConfig)?;
     let catalog = ApiCatalog::standard();
     let rule = PolicyRule::new(
@@ -5008,12 +4998,10 @@ pub(crate) fn production_interaction_composition(
     };
     let committed_policy = state.snapshot;
     let authorizer = BusAuthorizer::new(native, state).map_err(|_| BusError::InvalidConfig)?;
-    let (_bus, registrar) = ZoneBus::with_observer_and_metrics(
+    let (_bus, registrar, issuer) = ZoneBus::with_interaction_subject_issuer(
         resource.zone.clone(),
         authorizer,
         BusConfig::default(),
-        std::sync::Arc::new(NoopBusObserver),
-        std::sync::Arc::new(d2b_bus::metrics::NoopBusTelemetry),
     )?;
     let mut composition = InteractionComposition::new_with_notification_port(
         registrar,
@@ -5023,20 +5011,11 @@ pub(crate) fn production_interaction_composition(
     composition.bind_display_resource_client(system_core_client);
     composition
         .registrar
-        .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-            display_subject_ref: identity.subject_ref().clone(),
-            display_subject_uid: identity.subject_uid().clone(),
-            zone_ref: ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
+        .install_committed_interaction_subject(
+            identity
+                .seal_interaction_subject_install(issuer, daemon_uid)
                 .map_err(|_| BusError::InvalidConfig)?,
-            expected_peer_uid: daemon_uid,
-            execution_ref: identity.host_execution_ref().clone(),
-            display_generation: identity.display_provider_generation(),
-            clipboard_generation: identity.clipboard_provider_generation(),
-            notification_generation: identity.notification_provider_generation(),
-            clipboard_provider_uid: identity.clipboard_provider_uid().cloned(),
-            notification_provider_uid: identity.notification_provider_uid().cloned(),
-            controller_generation,
-        })
+        )
         .map_err(|_| BusError::InvalidConfig)?;
     composition.bind_interaction_identity(identity);
     if let Some(configuration) = resource.configuration {
@@ -5641,13 +5620,10 @@ where
             }
         };
         let attachments = if request_accepts_clipboard_attachments(&frame) {
-            tokio::time::timeout(
-                Duration::from_secs(5),
-                request_receiver.recv_attachments(),
-            )
-            .await
-            .map_err(|_| "interaction-attachment-receive-timeout".to_owned())?
-            .map_err(|_| "interaction-attachment-receive-failed".to_owned())?
+            tokio::time::timeout(Duration::from_secs(5), request_receiver.recv_attachments())
+                .await
+                .map_err(|_| "interaction-attachment-receive-timeout".to_owned())?
+                .map_err(|_| "interaction-attachment-receive-failed".to_owned())?
         } else {
             Vec::new()
         };
@@ -5740,7 +5716,7 @@ fn validate_interaction_attachments(
             || descriptor
                 .operation_id
                 .as_ref()
-            .is_some_and(|id| id.as_bytes() != operation_id.as_str().as_bytes())
+                .is_some_and(|id| id.as_bytes() != operation_id.as_str().as_bytes())
         {
             return Err(());
         }
@@ -5753,8 +5729,8 @@ fn validate_interaction_attachments(
         {
             return Err(());
         }
-        let request_id =
-            d2b_session::ttrpc_request_id(descriptor.reconnect_generation, frame).map_err(|_| ())?;
+        let request_id = d2b_session::ttrpc_request_id(descriptor.reconnect_generation, frame)
+            .map_err(|_| ())?;
         if descriptor.request_id != request_id {
             return Err(());
         }
@@ -5769,27 +5745,29 @@ fn process_ticket_for_session(
     target_ref: Option<&ResourceRef>,
     session_digest: [u8; 32],
 ) -> Result<ProcessLaunchTicket, WorkerEffectError> {
-    let (role_name, template_name, selected_provider, inherited_fd_count) = match binding.role() {
-        DisplayProcessRole::HostProxy => ("host-proxy", "wayland-proxy", "system-minijail", 2),
-        DisplayProcessRole::GuestFrontend => {
-            ("guest-frontend", "wayland-proxy", "system-systemd", 1)
-        }
+    let (role_name, template_name, selected_provider) = match binding.role() {
+        DisplayProcessRole::HostProxy => ("host-proxy", "wayland-proxy", "system-minijail"),
+        DisplayProcessRole::GuestFrontend => ("guest-frontend", "wayland-proxy", "system-systemd"),
     };
     let suffix = display_session_suffix(session_digest);
     let process_ref = ResourceRef::parse(&format!("Process/display-{role_name}-{suffix}"))
         .map_err(|_| WorkerEffectError::LaunchRejected)?;
     let owner_provider =
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("display-wayland").map_err(|_| WorkerEffectError::LaunchRejected)?;
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("display-wayland")
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
     let component =
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller").map_err(|_| WorkerEffectError::LaunchRejected)?;
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller")
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
     let template = d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(template_name)
         .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let selected_provider = d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(selected_provider)
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let selected_provider =
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(selected_provider)
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
     let process_uid = session_resource_uid(session_digest, binding.role(), b"process");
     let operation_uid = session_resource_uid(session_digest, binding.role(), b"operation");
-    let generation = d2b_contracts_resource::v3::ResourceGeneration::new(binding.policy_generation())
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let generation =
+        d2b_contracts_resource::v3::ResourceGeneration::new(binding.policy_generation())
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
     let controller_generation =
         d2b_contracts_resource::v3::ControllerGeneration::new(binding.controller_generation())
             .map_err(|_| WorkerEffectError::LaunchRejected)?;
@@ -5836,10 +5814,7 @@ fn process_ticket_for_session(
     } else {
         ticket
     };
-    ticket
-        .with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness"))
-        .with_inherited_fd_count(inherited_fd_count)
-        .map_err(|_| WorkerEffectError::LaunchRejected)
+    Ok(ticket.with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness")))
 }
 
 #[cfg(test)]
@@ -5972,11 +5947,7 @@ fn wayland_session_resource_projection(
 }
 
 fn resource_operation_id(operation: &str, zone: &ZoneId, resource_ref: &ResourceRef) -> String {
-    let scope = format!(
-        "{}:{}",
-        zone.as_str(),
-        resource_ref.to_canonical_string()
-    );
+    let scope = format!("{}:{}", zone.as_str(), resource_ref.to_canonical_string());
     let digest = Sha256::digest(scope.as_bytes());
     let digest = digest
         .iter()
@@ -6314,7 +6285,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceGeneration};
+    use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_contracts_zone_session::v3::component_session::RequestId;
     use d2b_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
@@ -6483,10 +6454,9 @@ mod tests {
     #[test]
     fn resource_operation_ids_are_valid_bounded_api_ids() {
         let zone = ZoneId::parse("work").expect("zone");
-        let resource_ref = ResourceRef::parse(
-            "display-wayland.d2bus.org.WaylandSession/display-wayland",
-        )
-        .expect("resource ref");
+        let resource_ref =
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+                .expect("resource ref");
         let operation = resource_operation_id("display-process-create", &zone, &resource_ref);
         assert!(OperationId::parse(operation.clone()).is_ok());
         assert!(!operation.contains('/'));
@@ -6984,31 +6954,35 @@ mod tests {
             },
         )
         .unwrap();
-        let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
+        let (_bus, registrar, issuer) =
+            ZoneBus::with_clock_observer_and_metrics_and_interaction_subject_issuer(
+                zone.clone(),
+                authorizer,
+                BusConfig::default(),
+                Arc::new(d2b_bus::ManualClock::new(1)),
+                Arc::new(d2b_bus::NoopBusObserver),
+                Arc::new(d2b_bus::metrics::NoopBusTelemetry),
+            )
+            .unwrap();
+        let interaction_identity = CommittedInteractionIdentity::for_test(
             zone.clone(),
-            authorizer,
-            BusConfig::default(),
-            Arc::new(d2b_bus::ManualClock::new(1)),
-            Arc::new(NoopBusObserver),
-            Arc::new(d2b_bus::metrics::NoopBusTelemetry),
-        )
-        .unwrap();
+            subject_ref.clone(),
+            subject_uid.clone(),
+            host_execution_ref.clone(),
+            observer_user_ref.clone(),
+            BTreeMap::from([(subject_ref.clone(), subject_uid.clone())]),
+            ResourceGeneration::new(display_generation).unwrap(),
+            clipboard_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            clipboard_provider_uid.clone(),
+            notification_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            notification_provider_uid.clone(),
+        );
         registrar
-            .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-                display_subject_ref: subject_ref.clone(),
-                display_subject_uid: subject_uid.clone(),
-                zone_ref: ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
-                expected_peer_uid: transport_uid,
-                execution_ref: host_execution_ref.clone(),
-                display_generation: ResourceGeneration::new(display_generation).unwrap(),
-                clipboard_generation: clipboard_generation
-                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
-                notification_generation: notification_generation
-                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
-                clipboard_provider_uid: clipboard_provider_uid.clone(),
-                notification_provider_uid: notification_provider_uid.clone(),
-                controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
-            })
+            .install_committed_interaction_subject(
+                interaction_identity
+                    .seal_interaction_subject_install(issuer, transport_uid)
+                    .unwrap(),
+            )
             .unwrap();
         let mut composition =
             InteractionComposition::new(registrar, ProviderSupervisor::new(Backend::default()));
@@ -7039,18 +7013,7 @@ mod tests {
             )
             .unwrap(),
         );
-        composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
-            subject_ref.clone(),
-            subject_uid.clone(),
-            host_execution_ref.clone(),
-            observer_user_ref.clone(),
-            BTreeMap::from([(subject_ref, subject_uid)]),
-            ResourceGeneration::new(display_generation).unwrap(),
-            clipboard_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
-            clipboard_provider_uid,
-            notification_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
-            notification_provider_uid,
-        ));
+        composition.bind_interaction_identity(&interaction_identity);
         composition
     }
 
@@ -7113,9 +7076,9 @@ mod tests {
                 .await
                 .as_ref()
                 .and_then(|set| set.runtime_for(&zone))
-                .is_some_and(|composition| composition.has_service_session(
-                    d2b_provider_display_wayland::SERVICE_PACKAGE,
-                ))
+                .is_some_and(|composition| {
+                    composition.has_service_session(d2b_provider_display_wayland::SERVICE_PACKAGE)
+                })
             {
                 break;
             }
@@ -7126,15 +7089,10 @@ mod tests {
             ResourceRef::parse("Guest/work").expect("guest"),
             ResourceRef::parse("Host/host").expect("host"),
             ResourceRef::parse("User/alice").expect("user"),
-            ResourceRef::parse(
-                "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
-            )
-            .expect("policy"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+                .expect("policy"),
             d2b_provider_display_wayland::DisplayIdentity::new(
-                "work",
-                "#112233",
-                "#223344",
-                "#334455",
+                "work", "#112233", "#223344", "#334455",
             )
             .expect("display identity"),
             true,
@@ -7152,12 +7110,7 @@ mod tests {
             .and_then(|set| set.runtime_for_mut(&zone))
             .expect("committed interaction composition");
         let result = composition
-            .reconcile_committed_display_for_vm_start(
-                "work",
-                &session_ref,
-                &session_uid,
-                &spec,
-            )
+            .reconcile_committed_display_for_vm_start("work", &session_ref, &session_uid, &spec)
             .expect("committed display reconciliation");
         assert_eq!(
             result.status.phase,
@@ -7165,8 +7118,7 @@ mod tests {
         );
         assert_eq!(result.worker_actions.len(), 0);
         assert_eq!(
-            result.status.resource.proxy_process_ref,
-            None,
+            result.status.resource.proxy_process_ref, None,
             "the hermetic effect port has no Resource API; production must supply the durable projection"
         );
         assert!(
@@ -7237,6 +7189,7 @@ mod tests {
             })
             .collect();
         composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
+            zone.clone(),
             first_guest,
             first_uid,
             ResourceRef::parse("Host/host").unwrap(),
@@ -8127,6 +8080,7 @@ mod tests {
         let guest_uid = ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
         let wrong_uid = ResourceUid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
         let wrong = CommittedInteractionIdentity::for_test(
+            zone.clone(),
             guest_ref.clone(),
             guest_uid.clone(),
             ResourceRef::parse("Host/host").unwrap(),

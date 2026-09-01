@@ -21,6 +21,36 @@ let
     ];
   };
   config = evaluated.config;
+  projected = lib.evalModules {
+    modules = [
+      {
+        options.d2b.zones = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        options.d2b._resourceCompiler = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+          internal = true;
+          visible = false;
+        };
+      }
+      (import ../default.nix)
+      {
+        config.d2b.zones.dev.resources = {
+          device-usbip = { type = "Provider"; spec = { }; };
+          guest = { type = "Guest"; spec = { }; };
+          usb-binding = {
+            type = "usb.d2bus.org.UsbBinding";
+            spec = {
+              providerRef = "Provider/device-usbip";
+              guestRef = "Guest/guest";
+            };
+          };
+        };
+      }
+    ];
+  };
 in
 {
   cases = {
@@ -40,6 +70,18 @@ in
       expected = {
         kernel = true;
         tools = true;
+      };
+    };
+    "provider-device-usbip/projects-guest-process-and-endpoint" = {
+      expr = {
+        processes = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceUsbip.processesByZone.dev);
+        endpoints = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceUsbip.resourcesByZone.dev);
+      };
+      expected = {
+        processes = [ "usbip-usb-binding" ];
+        endpoints = [ "usbip-usb-binding" ];
       };
     };
   };

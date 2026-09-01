@@ -10,8 +10,8 @@ use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, Evidence
 use d2b_contracts_resource::v3::{
     ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
     MAX_ROLE_RULE_RESOURCE_NAMES, MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS,
-    MAX_ROLE_RULES, ResourceErrorKind, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
-    ZoneId, ZoneRevision,
+    MAX_ROLE_RULES, ResourceErrorKind, ResourceGeneration, ResourceName, ResourceRef,
+    ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_zone_session::v3::{
     RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
@@ -22,7 +22,8 @@ use d2b_core_controller::controller_assignment::{
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
-    ResourceAssignmentFence, StoreMutation, StoreOperationContext, StoreSealIdentity, StoreSlot,
+    ResourceAssignmentFence, ResourceAssignmentScope, StoreMutation, StoreOperationContext,
+    StoreSealIdentity, StoreSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -796,6 +797,25 @@ impl CompiledRoleBinding {
                 })
             })
             .collect::<Result<Vec<_>, AuthorizationPolicyError>>()?;
+        Self::from_spec_with_resolved_subjects(spec, subjects, relay_authority)
+    }
+
+    /// Compile a RoleBinding from the subset of subjects that currently have
+    /// valid store evidence. Unresolved subjects are intentionally omitted so
+    /// they cannot grant access or invalidate unrelated subjects in the same
+    /// binding.
+    pub fn from_spec_with_resolved_subjects(
+        spec: &RoleBindingSpec,
+        subjects: impl IntoIterator<Item = BoundSubject>,
+        relay_authority: RelayGrantAuthority,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let subjects = subjects.into_iter().collect::<Vec<_>>();
+        if subjects
+            .iter()
+            .any(|subject| !spec.subjects().contains(&subject.subject_ref))
+        {
+            return Err(AuthorizationPolicyError::BindingShape);
+        }
         let mut scope = BindingScope::default();
         if let Some(narrowing) = spec.scope_narrowing() {
             for rule in narrowing.rules() {
@@ -949,6 +969,7 @@ pub fn assignment_fence(
         target,
         session_generation: identity.session_generation(),
         epoch: identity.epoch().get(),
+        scope: d2b_resource_store::ResourceAssignmentScope::Primary,
     })
 }
 
@@ -956,7 +977,16 @@ pub fn assignment_fence(
 pub fn assignment_fence_for_mutation(
     mutation: &ScopedResourceMutation,
 ) -> Result<ResourceAssignmentFence, AssignmentError> {
-    assignment_fence(mutation.assignment())
+    let mut fence = assignment_fence(mutation.assignment())?;
+    if let Some(scope) = mutation.scope().owner_child() {
+        fence.scope = ResourceAssignmentScope::OwnerChild {
+            owner_ref: scope.owner_ref().clone(),
+            owner_uid: scope.owner_uid().clone(),
+            owner_revision: scope.owner_revision(),
+            owner_generation: scope.owner_generation(),
+        };
+    }
+    Ok(fence)
 }
 
 impl core::fmt::Debug for AuthorizationGrant {
@@ -965,13 +995,178 @@ impl core::fmt::Debug for AuthorizationGrant {
     }
 }
 
+/// Non-transferable authorization evidence for a downstream effect.
+///
+/// The issuer is private to this crate and the value has no serialization or
+/// general construction path. A downstream owner may borrow the evidence only
+/// while consuming the matching admitted mutation.
+///
+/// ```compile_fail
+/// use d2b_resource_api::AuthorizationLease;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<AuthorizationLease>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_resource_api::AuthorizationLease;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<AuthorizationLease>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_resource_api::AuthorizationLease;
+///
+/// let _: AuthorizationLease = <() as Into<AuthorizationLease>>::into(());
+/// ```
+pub struct AuthorizationLease {
+    #[allow(dead_code)]
+    authority: Arc<LeaseAuthority>,
+    subject_uid: ResourceUid,
+    zone_uid: ResourceUid,
+    object_uid: Option<ResourceUid>,
+    object_generation: Option<ResourceGeneration>,
+    operation: AdmittedVerb,
+    policy_revision: u64,
+    provider_assignment_generation: Option<ResourceGeneration>,
+    operation_id: String,
+}
+
+struct LeaseAuthority;
+
+impl core::fmt::Debug for AuthorizationLease {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AuthorizationLease")
+            .field("subject_uid", &"<redacted>")
+            .field("zone_uid", &"<redacted>")
+            .field("has_object_uid", &self.object_uid.is_some())
+            .field("has_object_generation", &self.object_generation.is_some())
+            .field("operation", &self.operation)
+            .field("policy_revision", &"<redacted>")
+            .field(
+                "has_provider_assignment_generation",
+                &self.provider_assignment_generation.is_some(),
+            )
+            .field("operation_id", &"<redacted>")
+            .finish()
+    }
+}
+
+const _: fn() = || {
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
+    let _ = <AuthorizationLease as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
+};
+
+impl AuthorizationLease {
+    pub(crate) fn issue(
+        subject_uid: ResourceUid,
+        zone_uid: ResourceUid,
+        object_uid: Option<ResourceUid>,
+        object_generation: Option<ResourceGeneration>,
+        operation: AdmittedVerb,
+        policy_revision: u64,
+        provider_assignment_generation: Option<ResourceGeneration>,
+        operation_id: String,
+    ) -> Result<Self, AdmissionError> {
+        if policy_revision == 0
+            || operation_id.is_empty()
+            || operation_id.len() > 128
+            || operation_id.chars().any(char::is_control)
+        {
+            return Err(AdmissionError::LeaseInvalid);
+        }
+        Ok(Self {
+            authority: Arc::new(LeaseAuthority),
+            subject_uid,
+            zone_uid,
+            object_uid,
+            object_generation,
+            operation,
+            policy_revision,
+            provider_assignment_generation,
+            operation_id,
+        })
+    }
+
+    pub const fn subject_uid(&self) -> &ResourceUid {
+        &self.subject_uid
+    }
+
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    pub const fn object_uid(&self) -> Option<&ResourceUid> {
+        self.object_uid.as_ref()
+    }
+
+    pub const fn object_generation(&self) -> Option<ResourceGeneration> {
+        self.object_generation
+    }
+
+    pub const fn operation(&self) -> AdmittedVerb {
+        self.operation
+    }
+
+    pub const fn policy_revision(&self) -> u64 {
+        self.policy_revision
+    }
+
+    pub const fn provider_assignment_generation(&self) -> Option<ResourceGeneration> {
+        self.provider_assignment_generation
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
 impl AuthorizationGrant {
+    /// Consume this positive authorization result into one exact Guest
+    /// lifecycle lease. The caller must supply the current object and
+    /// Provider assignment identity obtained from the trusted Zone store.
+    pub(crate) fn issue_lifecycle_lease(
+        self,
+        zone_uid: ResourceUid,
+        object_uid: ResourceUid,
+        object_generation: ResourceGeneration,
+        provider_assignment_generation: ResourceGeneration,
+        operation_id: String,
+    ) -> Result<AuthorizationLease, AdmissionError> {
+        self.permit.issue_lifecycle_lease(
+            zone_uid,
+            object_uid,
+            object_generation,
+            provider_assignment_generation,
+            operation_id,
+        )
+    }
+
     pub(crate) fn admit(
         self,
         mutations: Vec<StoreMutation>,
         operation: StoreOperationContext,
     ) -> Result<AdmittedMutation, AdmissionError> {
         self.permit.admit(mutations, operation)
+    }
+
+    pub(crate) fn admit_with_zone_uid(
+        self,
+        mutations: Vec<StoreMutation>,
+        operation: StoreOperationContext,
+        zone_uid: ResourceUid,
+    ) -> Result<AdmittedMutation, AdmissionError> {
+        self.permit
+            .admit_with_zone_uid(mutations, operation, zone_uid)
     }
 }
 
@@ -982,6 +1177,7 @@ pub struct NativeAuthorizer {
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
     store_binding: Mutex<Option<StoreAdmissionBinding>>,
+    session_store_binding: Option<StoreAdmissionBinding>,
     store_seal:
         std::sync::Arc<Mutex<Option<d2b_resource_store::mutation_seal::MutationSealIssuer>>>,
 }
@@ -1032,6 +1228,7 @@ impl NativeAuthorizer {
                 .as_ref()
                 .map(|binding| binding.seal_issuer())
                 .unwrap_or_else(|| std::sync::Arc::new(Mutex::new(None))),
+            session_store_binding: store_binding.clone(),
             store_binding: Mutex::new(store_binding),
         })
     }
@@ -1045,6 +1242,14 @@ impl NativeAuthorizer {
             return Err(StoreBindingError);
         }
         binding.take().ok_or(StoreBindingError)
+    }
+
+    pub(super) fn session_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
+        self.session_store_binding
+            .as_ref()
+            .filter(|binding| binding.has_seal_issuer())
+            .cloned()
+            .ok_or(StoreBindingError)
     }
 
     pub fn take_store_seal(
@@ -1170,7 +1375,13 @@ impl NativeAuthorizer {
             );
         }
         before_grant();
-        Ok(grant(&self.admission, context, request, state.snapshot))
+        Ok(grant(
+            &self.admission,
+            context,
+            request,
+            state.snapshot,
+            state.zone_policy_revision.get(),
+        ))
     }
 
     pub fn positive_capabilities(
@@ -1348,9 +1559,10 @@ fn grant(
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
     policy_snapshot: PolicySnapshot,
+    zone_policy_revision: u64,
 ) -> AuthorizationGrant {
     AuthorizationGrant {
-        permit: admission.record_allow(
+        permit: admission.record_allow_with_zone_policy_revision(
             AdmittedAuthorization {
                 zone: request.zone.clone(),
                 subject_ref: context.subject_ref().clone(),
@@ -1368,6 +1580,7 @@ fn grant(
                     .collect(),
             },
             policy_snapshot,
+            zone_policy_revision,
         ),
     }
 }
@@ -1756,7 +1969,13 @@ fn authorize_bootstrap(
             return Err(AuthorizationDenial::BootstrapDenied);
         }
     }
-    Ok(grant(admission, context, request, state.snapshot))
+    Ok(grant(
+        admission,
+        context,
+        request,
+        state.snapshot,
+        state.zone_policy_revision.get(),
+    ))
 }
 
 /// Invalid compiled policy projection.
@@ -1862,6 +2081,86 @@ mod tests {
             bootstrap_phase: BootstrapPhase::Disabled,
             now_tick: 1,
         }
+    }
+
+    #[test]
+    fn authorization_lease_binds_the_complete_downstream_identity() {
+        let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let object_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap();
+        let lease = AuthorizationLease::issue(
+            subject_uid.clone(),
+            zone_uid.clone(),
+            Some(object_uid.clone()),
+            Some(ResourceGeneration::new(4).unwrap()),
+            AdmittedVerb::UpdateSpec,
+            7,
+            Some(ResourceGeneration::new(9).unwrap()),
+            "operation-lease".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(lease.subject_uid(), &subject_uid);
+        assert_eq!(lease.zone_uid(), &zone_uid);
+        assert_eq!(lease.object_uid(), Some(&object_uid));
+        assert_eq!(
+            lease.object_generation(),
+            Some(ResourceGeneration::new(4).unwrap())
+        );
+        assert_eq!(lease.operation(), AdmittedVerb::UpdateSpec);
+        assert_eq!(lease.policy_revision(), 7);
+        assert_eq!(
+            lease.provider_assignment_generation(),
+            Some(ResourceGeneration::new(9).unwrap())
+        );
+        assert_eq!(lease.operation_id(), "operation-lease");
+        let rendered = format!("{lease:?}");
+        assert!(!rendered.contains("operation-lease"));
+        assert!(!rendered.contains(subject_uid.as_str()));
+        assert!(!rendered.contains(zone_uid.as_str()));
+    }
+
+    #[test]
+    fn lifecycle_lease_is_issued_only_from_a_consumed_authorization_grant() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let request = AuthorizationRequest {
+            method: ApiMethod::UpdateSpec,
+            zone: zone.clone(),
+            targets: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Guest").unwrap(),
+                resource_name: Some(ResourceName::parse("workstation").unwrap()),
+                verb: ResourceVerb::UpdateSpec,
+                subresource: None,
+                execution_ref: None,
+            }],
+        };
+        let snapshot = state(7).snapshot;
+        let grant = grant(
+            &test_issuer(),
+            &subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice"),
+            &request,
+            snapshot,
+            7,
+        );
+        let lease = grant
+            .issue_lifecycle_lease(
+                ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceGeneration::new(4).unwrap(),
+                ResourceGeneration::new(9).unwrap(),
+                "guest-start".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(lease.operation(), AdmittedVerb::UpdateSpec);
+        assert_eq!(lease.policy_revision(), 7);
+        assert_eq!(lease.operation_id(), "guest-start");
+        assert_eq!(
+            lease.object_generation(),
+            Some(ResourceGeneration::new(4).unwrap())
+        );
+        assert_eq!(
+            lease.provider_assignment_generation(),
+            Some(ResourceGeneration::new(9).unwrap())
+        );
     }
 
     #[test]
@@ -2862,7 +3161,13 @@ mod tests {
             EvidenceClass::UnixPeer,
             &format!("User/{REF_SENTINEL}"),
         );
-        let grant = grant(&test_issuer(), &context, &request, protected_state.snapshot);
+        let grant = grant(
+            &test_issuer(),
+            &context,
+            &request,
+            protected_state.snapshot,
+            protected_state.zone_policy_revision.get(),
+        );
         let authorizer =
             NativeAuthorizer::from_issuer(catalog.clone(), Some(policy.clone()), test_issuer())
                 .unwrap();

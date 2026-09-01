@@ -104,7 +104,10 @@ pub enum PickerError {
     #[error("picker is not configured")]
     NotConfigured,
     #[error("picker environment must not include {name}")]
-    #[cfg_attr(not(test), expect(dead_code, reason = "test-only environment assertion"))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "test-only environment assertion")
+    )]
     ForbiddenEnvironment { name: &'static str },
     #[error("picker is already active for request {request_id}")]
     AlreadyActive { request_id: String },
@@ -358,7 +361,10 @@ pub fn sanitize_picker_env(ambient: &BTreeMap<OsString, OsString>) -> BTreeMap<O
         .collect()
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "test-only environment assertion"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "test-only environment assertion")
+)]
 pub fn assert_picker_env_excludes_niri_socket(
     picker_env: &BTreeMap<OsString, OsString>,
 ) -> Result<(), PickerError> {

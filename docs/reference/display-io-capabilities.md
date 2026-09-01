@@ -73,15 +73,17 @@ sessions on close, failed open, and daemon-side stale-session collection.
 Console streaming and audio enforcement are separately tracked from the
 display capability set documented above. The provider capability matrix
 for console and audio - covering Cloud Hypervisor NixOS VMs, qemu-media
-targets, and ACA sandboxes - is documented in
+targets, and the deferred ACA adapter - is documented in
 [provider capability matrix](./provider-capability-matrix.md).
+ACA entries are contract metadata only; U19 and U20 do not claim remote
+acceptance for them.
 
 ## Related references
 
 - [Provider capability matrix](./provider-capability-matrix.md) documents
   the console and audio capability boundaries across runtime providers.
 - [Provider-managed sandboxes](./provider-managed-sandboxes.md) documents the
-  Azure Container Apps adapter and its absent display/I/O capabilities.
+  deferred Azure Container Apps adapter; it is not U19 or U20 acceptance.
 - [Graphics](./components-graphics.md) documents local Wayland forwarding.
 - [Clipboard architecture](../explanation/clipboard-architecture.md) documents the separate
   clipboard authority and picker split.

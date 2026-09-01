@@ -1,6 +1,5 @@
 use d2b_provider_audio_pipewire::{
-    AudioGrant, AudioPolicyState, LevelPercent, read_audio_state_locked,
-    write_audio_state_locked,
+    AudioGrant, AudioPolicyState, LevelPercent, read_audio_state_locked, write_audio_state_locked,
 };
 
 #[test]

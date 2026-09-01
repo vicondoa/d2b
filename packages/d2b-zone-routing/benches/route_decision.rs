@@ -23,17 +23,21 @@
 
 use std::time::{Duration, Instant};
 
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision};
 use d2b_contracts_zone_session::v3::{
+    component_session::{OperationClass, OperationId},
     zone_routing::{
-    ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
-    ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
-    ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
-    ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
-    ZoneSigningKeyFingerprint, ZoneTreeEdge,
-},
+        ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute,
+        ZoneLabelId, ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation,
+        ZoneLinkRouteAdvertisement, ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet,
+        ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature, ZoneRouteSignatureAlgorithm,
+        ZoneRouteSignatureRef, ZoneSigningKeyFingerprint, ZoneTreeEdge,
+    },
 };
 use d2b_zone_routing::engine::{
-    ZoneAdvertisementAdmission, ZoneRouteDecision, ZoneRouteEngine, ZoneRouteRequest,
+    ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
+    ZoneRouteDecision, ZoneRouteEngine, ZoneRouteRequest,
 };
 
 /// The p95 budget the work item fixes.
@@ -116,12 +120,25 @@ fn percentile(sorted_samples: &[Duration], percentile: usize) -> Duration {
 }
 
 fn request(target: ZonePath) -> ZoneRouteRequest {
-    let mut request = ZoneRouteRequest::new(root(), target, NOW);
-    request.policy_allows = true;
-    request.zone_link_connected = true;
-    request.remaining_hops = ZONE_ROUTE_INITIAL_HOP_BUDGET;
-    request.required_capability = Some(capability("get"));
-    request
+    let child = ZonePath::new(vec![target.labels()[1].clone(), label("k0")])
+        .expect("target has a direct child");
+    let expectation = ZoneRouteAdmissionExpectation::new(
+        ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("valid link UID"),
+        ZoneTreeEdge::new(root(), child).expect("direct edge"),
+        ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+        ReconnectGeneration::new(7).expect("valid reconnect generation"),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("valid source UID"),
+        ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("valid target UID"),
+        OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
+        OperationClass::Invoke,
+        capability("get"),
+        ZoneRevision::new(9),
+    )
+    .expect("valid route admission expectation")
+    .for_zones(root(), target.clone());
+    ZoneRouteRequest::new(root(), target)
+        .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET)
+        .with_admission(ZoneRouteAdmission::for_test(expectation, NOW, 4_000))
 }
 
 fn assert_allowed(decision: &ZoneRouteDecision, target: &ZonePath) {

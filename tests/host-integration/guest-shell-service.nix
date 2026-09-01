@@ -21,6 +21,7 @@ pkgs.testers.runNixOSTest {
         _module.args = {
           d2bInputs = { inherit self; };
           d2bHostTools = null;
+          d2bHostToolOverrides = self.lib.d2bHostToolOverrides;
         };
 
         users.users.alice = {
@@ -28,7 +29,7 @@ pkgs.testers.runNixOSTest {
           uid = 1000;
         };
 
-        # host.nix derives d2b.vms.<vm>.ssh.user into this guest field.
+        # The host consumer supplies the target user through this guest field.
         d2b.sshUser = "alice";
         d2b.componentSession = {
           enable = lib.mkForce true;
@@ -48,7 +49,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("multi-user.target")
+    machine.wait_for_unit("multi-user.target", timeout=180)
 
     # The shell pool daemon is declared but dormant: the target-local Process
     # owner starts or adopts the pool.

@@ -10,10 +10,7 @@ use crate::metric_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
     validate_resource_attributes,
 };
-use d2b_contracts_provider::v3::{
-    TelemetryFrame,
-    TelemetrySignal,
-};
+use d2b_contracts_provider::v3::{TelemetryFrame, TelemetrySignal};
 
 /// Maximum frame bytes accepted before policy evaluation.
 pub const MAX_INGRESS_FRAME_BYTES: usize = d2b_contracts_provider::v3::MAX_TELEMETRY_FRAME_BYTES;

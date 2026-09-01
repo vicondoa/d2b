@@ -2,7 +2,13 @@ use d2b_contracts_resource::v3::{
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId,
     identity::{ReconnectGeneration, SessionPurpose},
 };
-use d2b_session::{HandshakeCredentials, Secret32, SessionEngine, x25519_public_key};
+use d2b_contracts_zone_session::v3::component_session::{
+    EndpointPolicy, EndpointPurpose, EndpointRole, ServicePackage,
+};
+use d2b_session::{
+    HandshakeCredentials, Secret32, SessionAuthorizationRequest, SessionEngine, SessionVerb,
+    x25519_public_key,
+};
 use d2b_session_unix::FramedVsockTransport;
 use d2bd_runtime::{
     guest_mode::{
@@ -14,11 +20,11 @@ use d2bd_runtime::{
 };
 use std::time::Instant;
 
-fn identity(generation: u64) -> GuestIdentity {
+fn identity_in_zone(generation: u64, zone: &str) -> GuestIdentity {
     GuestIdentity::new(
         ResourceRef::parse("Guest/workload").expect("Guest ref"),
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
-        ZoneId::parse("work").expect("Zone"),
+        ZoneId::parse(zone).expect("Zone"),
         BootIdentity::from_kernel_boot_id("boot-id-u3").expect("boot ID"),
         SessionPurpose::parse(GUEST_COMPONENT_SESSION_PURPOSE).expect("purpose"),
         SchemaFingerprint::parse(
@@ -33,6 +39,10 @@ fn identity(generation: u64) -> GuestIdentity {
     .expect("Guest identity")
 }
 
+fn identity(generation: u64) -> GuestIdentity {
+    identity_in_zone(generation, "work")
+}
+
 async fn runtime() -> (GuestRuntime, tempfile::TempDir) {
     let state_dir = tempfile::tempdir().expect("state directory");
     let runtime = GuestRuntime::new(
@@ -45,6 +55,43 @@ async fn runtime() -> (GuestRuntime, tempfile::TempDir) {
     .await
     .expect("Guest runtime");
     (runtime, state_dir)
+}
+
+async fn rejected_parent_handshake(
+    runtime: &GuestRuntime,
+    policy: EndpointPolicy,
+    expected_parent_public: [u8; 32],
+) {
+    let parent_private_bytes = [2_u8; 32];
+    let guest_private_bytes = [3_u8; 32];
+    let guest_public = x25519_public_key(&guest_private_bytes).expect("Guest public key");
+    let parent_private = Secret32::new(parent_private_bytes).expect("parent private key");
+    let guest_private = Secret32::new(guest_private_bytes).expect("Guest private key");
+    let (left, right) = tokio::io::duplex(16 * 1024);
+    let parent = tokio::spawn(async move {
+        SessionEngine::establish_initiator(
+            FramedVsockTransport::new(left),
+            policy,
+            HandshakeCredentials::Kk {
+                local_private: parent_private,
+                remote_public: guest_public,
+            },
+            Instant::now(),
+        )
+        .await
+    });
+    let result = runtime
+        .establish_component_session(
+            FramedVsockTransport::new(right),
+            guest_private,
+            expected_parent_public,
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "mismatched parent session must fail closed"
+    );
+    let _ = parent.await;
 }
 
 #[tokio::test]
@@ -159,6 +206,37 @@ async fn disconnected_generation_cannot_be_reused() {
 }
 
 #[tokio::test]
+async fn wrong_zone_link_purpose_role_and_service_fail_closed() {
+    for mismatch in ["purpose", "role", "service"] {
+        let (runtime, _state_dir) = runtime().await;
+        let mut policy = identity(1).endpoint_policy();
+        match mismatch {
+            "purpose" => policy.purpose = EndpointPurpose::ResourceService,
+            "role" => policy.responder_role = EndpointRole::Component,
+            "service" => policy.service = ServicePackage::ControllerV3,
+            _ => unreachable!("test mismatch is closed"),
+        }
+        let parent_public = x25519_public_key(&[2_u8; 32]).expect("parent public key");
+        rejected_parent_handshake(&runtime, policy, parent_public).await;
+    }
+}
+
+#[tokio::test]
+async fn peer_and_zone_binding_substitution_fail_closed() {
+    let (first_runtime, _state_dir) = runtime().await;
+    let policy = identity(1).endpoint_policy();
+    let substituted_parent_public =
+        x25519_public_key(&[9_u8; 32]).expect("substituted parent public key");
+    rejected_parent_handshake(&first_runtime, policy, substituted_parent_public).await;
+
+    let (runtime, _state_dir) = runtime().await;
+    let mut policy = identity(1).endpoint_policy();
+    policy.transport_binding.channel_binding[0] ^= 1;
+    let parent_public = x25519_public_key(&[2_u8; 32]).expect("parent public key");
+    rejected_parent_handshake(&runtime, policy, parent_public).await;
+}
+
+#[tokio::test]
 async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_closed() {
     let (runtime, _state_dir) = runtime().await;
     let previous = runtime
@@ -172,11 +250,12 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
     let parent_private = Secret32::new(parent_private_bytes).expect("parent private key");
     let guest_private = Secret32::new(guest_private_bytes).expect("Guest private key");
     let policy = identity(2).endpoint_policy();
+    let parent_policy = policy.clone();
     let (left, right) = tokio::io::duplex(16 * 1024);
     let parent = tokio::spawn(async move {
         SessionEngine::establish_initiator_with_generation_discovery(
             FramedVsockTransport::new(left),
-            d2b_session::contract::EndpointPolicyIdentity::from(&policy),
+            d2b_session::contract::EndpointPolicyIdentity::from(&parent_policy),
             HandshakeCredentials::Kk {
                 local_private: parent_private,
                 remote_public: guest_public,
@@ -185,7 +264,7 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
         )
         .await
     });
-    let (session, lease) = runtime
+    let (mut session, lease) = runtime
         .establish_component_session(
             FramedVsockTransport::new(right),
             guest_private,
@@ -200,10 +279,68 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
     let resource_runtime = GuestResourceRuntime::new(identity(2), state_dir.path())
         .await
         .expect("target-local resource runtime");
+    let route = session.route_binding();
+    assert_eq!(route.zone(), &ZoneId::parse("work").expect("Zone"));
+    assert_eq!(route.subject_ref(), identity(2).guest_ref());
+    assert_eq!(route.subject_uid(), identity(2).guest_uid());
+    assert_eq!(route.service().as_str(), "d2b.resource.v3");
+    assert_eq!(route.purpose_class(), policy.purpose_class);
+    assert_eq!(route.initiator_role(), policy.initiator_role);
+    assert_eq!(route.responder_role(), policy.responder_role);
+    assert_eq!(route.endpoint_locality(), policy.transport_binding.locality);
+    assert_eq!(route.transport_class(), policy.transport_binding.transport);
     let resource_session = resource_runtime
-        .bind_session(&session.route_binding())
+        .bind_session(&route)
         .expect("authenticated session binds Resource API");
     assert_eq!(resource_session.generation(), 2);
+    let wrong_service = SessionAuthorizationRequest::new(
+        SessionVerb::Invoke,
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.controller.v3")
+            .expect("service"),
+        "ResourceService/Get",
+        ZoneId::parse("work").expect("Zone"),
+        Some(ResourceRef::parse("Guest/other").expect("target")),
+    )
+    .expect("authorization request");
+    assert_eq!(
+        session
+            .authorize(wrong_service, 2)
+            .await
+            .expect_err("wrong service or target must fail closed")
+            .code(),
+        d2b_session::contract::SessionErrorCode::PolicyDenied
+    );
+    let wrong_zone = SessionAuthorizationRequest::new(
+        SessionVerb::Invoke,
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+            .expect("service"),
+        "ResourceService/Get",
+        ZoneId::parse("personal").expect("Zone"),
+        None,
+    )
+    .expect("authorization request");
+    assert_eq!(
+        session
+            .authorize(wrong_zone, 2)
+            .await
+            .expect_err("wrong target Zone must fail closed")
+            .code(),
+        d2b_session::contract::SessionErrorCode::PolicyDenied
+    );
+    assert!(matches!(
+        identity_in_zone(2, "personal").validate_route(&route),
+        Err(d2bd_runtime::guest_mode::GuestModeError::SessionBindingMismatch)
+    ));
+
+    drop(session);
+    assert!(!route.liveness().is_live());
+    assert_eq!(
+        runtime
+            .resource_runtime()
+            .bind_session(&route)
+            .expect_err("a dropped authenticated session must fail closed"),
+        GuestResourceRuntimeError::SessionBinding
+    );
 
     let invalid_state_dir = tempfile::tempdir().expect("state directory");
     let invalid_runtime = GuestResourceRuntime::new(identity(3), invalid_state_dir.path())
@@ -211,7 +348,7 @@ async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_clo
         .expect("target-local resource runtime");
     assert_eq!(
         invalid_runtime
-            .bind_session(&session.route_binding())
+            .bind_session(&route)
             .expect_err("stale session binding must fail closed"),
         GuestResourceRuntimeError::SessionBinding
     );

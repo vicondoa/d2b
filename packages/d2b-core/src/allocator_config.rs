@@ -4,8 +4,10 @@ use schemars::{
     schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 
 use crate::contract_id::{ContractId, ContractStringError, PathTemplate};
+use d2b_contracts_resource::v3::ZoneId;
 
 pub const MAX_ALLOCATOR_REALM_PATH_BYTES: usize = 255;
 pub const MAX_ALLOCATOR_REALM_PATH_LABELS: usize = 16;
@@ -142,6 +144,8 @@ pub struct AllocatorJson {
     pub schema_version: String,
     pub allocator: AllocatorRoot,
     pub realms: Vec<AllocatorRealm>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_topology: Option<AllocatorZoneTopology>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_requests: Vec<AllocatorResourceRequest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,6 +155,16 @@ pub struct AllocatorJson {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_bridge: Vec<AllocatorEnvBridge>,
     pub invariants: AllocatorInvariants,
+}
+
+/// The sealed Zone parent map used by runtime composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocatorZoneTopology {
+    /// The one Zone with no parent.
+    pub root: ZoneId,
+    /// Every declared Zone and its direct parent, with `null` for the root.
+    pub parent_map: BTreeMap<ZoneId, Option<ZoneId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -1,159 +1,62 @@
 # Daemon autostart contract
 
-`d2bd` runs a single **autostart pass** on startup that brings
-per-env net VMs and workload VMs up in a controlled, degraded-aware
-order. The contract is intentionally narrow: it sequences the VMs,
-caps how many start at once, tolerates failures, and is safe to
-re-run.
+The daemon performs one bounded startup pass over current Zone Guest
+resources. It is idempotent, degraded-aware, and never creates a second
+lifecycle authority.
 
-This page is the reference. The Rust implementation lives in
-`packages/d2bd-runtime/src/autostart.rs`; the production starter wires
-into `dispatch_broker_vm_start` so each per-VM start drives the
-same host-prep DAG → process DAG → pidfd-registration sequence
-that a manual `vm start` would.
+## Startup order
 
-## When the pass runs
+After restoring and reconciling broker-owned runner state, d2bd:
 
-`d2bd::serve()` calls `run_startup_autostart()` once, after:
+1. relists committed Zone resources;
+2. resolves Provider and dependency readiness;
+3. starts eligible Guest/Process resources in deterministic order; and
+4. records typed outcomes without blocking the public socket.
 
-1. `PidfdTable::restore_from_disk` has loaded any previously
-   supervised runners off `/var/lib/d2b/daemon-state/`.
-2. `adopt_orphaned_runners_on_startup` has reconciled the table
-   against `/proc` (so VMs that survived a daemon restart are
-   already accounted for).
+A missing bundle or unavailable Provider leaves the daemon serving
+read-only status and reports the failure; it does not guess a Guest name or
+fall back to SSH.
 
-Only then does the pass dispatch the plan. The daemon's accept
-loop starts immediately afterwards; autostart progress is logged
-to `journalctl -u d2bd.service` but never blocks the public
-socket from serving `status` / `doctor` / `audit`.
+## Concurrency and outcomes
 
-If the trusted bundle fails to load, autostart is **skipped** with
-a warning - the daemon must still come up so operators can run
-`d2b doctor` against a broken bundle.
+`d2b.daemon.autostart.parallelism` bounds concurrent startup work. The pass
+continues for independent Zones and records:
 
-## Plan order
+- `Started`;
+- `AlreadyRunning`;
+- `NotAutostart`;
+- `Failed { reason }`; or
+- `Degraded { reason }`.
 
-`build_autostart_plan(resolver)` derives the plan from the loaded
-bundle. The shape is intentionally simple so two operators on the
-same bundle always see the same order (Net VMs first, then
-workloads):
+The report is persisted under the daemon state owner and contains bounded
+Zone, Resource, generation, and outcome metadata.
 
-1. **Net VMs.** Every VM where `is_net_vm = true` (i.e., the
-   auto-declared `sys-<env>-net` VMs from
-   `packages/d2b-provider-network-local/nix/network.nix`). Sorted by `(env, vm-name)`.
-2. **Workloads.** Every other VM, sorted by `(env, vm-name)` so
-   workloads pin to their env's net VM in plan order.
+## Idempotency
 
-The daemon reads the per-VM `autostart` policy from the trusted public
-manifest. The Nix emitter mirrors `d2b.vms.<name>.autostart`; graphics
-VMs and `qemu-media` runtimes remain barred from unattended startup by
-provider guards (`nixos-modules/assertions.nix` also rejects graphics
-VMs with `autostart = true`). Older manifests that omit the additive
-field default to the former heuristic for compatibility.
-
-VMs with `autostart = false` remain in the plan (so a future
-`d2b guest status <name>` can surface the full picture) but
-`execute_autostart` skips them with `Outcome::NotAutostart`. A
-non-autostart net VM does **not** propagate as a degraded gate for
-its env's workloads - opting out is an explicit operator choice,
-not a failure.
-
-## Concurrency cap
-
-Both stages honour a single concurrency cap N
-(`d2b.daemon.autostart.parallelism`, default `3`):
-
-- up to N net VMs start in parallel in stage 1;
-- once stage 1 settles (every net VM has reached a terminal
-  outcome), up to N workloads start in parallel in stage 2.
-
-Values `< 1` are clamped to `1`. The cap is enforced with a
-`tokio::sync::Semaphore`; each per-VM start runs on a
-`spawn_blocking` worker so the broker round-trip can use plain
-sync I/O.
-
-## Degraded mode
-
-Failures are isolated, not abortive:
-
-- A net VM failure (`Outcome::Failed`) does NOT block sibling net
-  VMs in other envs. Once stage 1 ends, every workload whose env
-  has a failed net VM is recorded as `Outcome::Degraded` with a
-  human-readable `reason` pointing at the upstream failure. The
-  workload's start machinery is **not** dispatched.
-- A workload failure is recorded as `Outcome::Failed` but does not
-  block sibling workloads (including workloads in the same env).
-- A net VM whose status was `Outcome::NotAutostart` does NOT
-  degrade its env. Operators routinely opt the framework-declared
-  `sys-<env>-net` VM out of autostart on hosts where the env's net
-  topology is managed by hand.
-
-The daemon itself stays up regardless of autostart outcomes; the
-accept loop is reachable as soon as `run_startup_autostart`
-returns.
-
-## Idempotency (Idempotent re-entry)
-
-Every per-VM dispatch is gated on
-`VmStarter::is_running(vm)`, which the production
-`BrokerVmStarter` implements as
-`pidfd_table.contains(vm, "ch-runner")`. A second invocation of
-the autostart pass against the same live daemon reports
-`Outcome::AlreadyRunning` for every VM the previous pass started
-and dispatches nothing new. This is the property the SIGHUP /
-bundle-reload path relies on: a future `d2bctl reload` can
-re-run the pass without double-spawning runners.
+Every start is fenced by the committed Resource identity and Provider
+generation. Repeating the pass against a live current Process returns
+`AlreadyRunning` and does not spawn a duplicate. A restart adopts only
+matching immutable identity; stale or uncertain state is quarantined.
 
 ## Configuration
 
-NixOS option set (`nixos-modules/options-daemon.nix`):
-
 ```nix
-d2b.daemon.autostart = {
-  # Concurrency cap N for the autostart pass. Net-VM phase and
-  # workload phase each honour the cap independently. Default 3;
-  # values < 1 are clamped to 1.
-  parallelism = 3;
-};
+d2b.daemon.autostart.parallelism = 3;
 ```
 
-The Rust side exposes the same default via
-`autostart::DEFAULT_PARALLELISM` and reads the value off
-`DaemonConfig::autostart_parallelism` (camelCase
-`autostartParallelism` on the wire / on disk).
+Autostart policy is part of the private daemon/Provider contract. It is not a
+public Guest child graph or a caller-supplied start argument.
 
-## Outcomes (`Outcome` enum)
+## Verification
 
-| Variant            | Meaning                                                                                       |
-| ------------------ | --------------------------------------------------------------------------------------------- |
-| `Started`          | The VM was not running and the per-VM start sequence succeeded.                               |
-| `AlreadyRunning`   | The pidfd table already supervises this VM; nothing dispatched (idempotency short-circuit).   |
-| `NotAutostart`     | Plan row carried `autostart = false`; nothing dispatched. Not propagated as degraded.         |
-| `Failed { reason }`| `VmStarter::start` returned an error; sibling VMs continue.                                   |
-| `Degraded { reason }` | Workload skipped because its env's net VM is `Failed` (or `Degraded`).                    |
+```bash
+d2b zone list
+d2b guest list --zone local-root
+d2b host doctor --read-only
+```
 
-The companion `AutostartReport` preserves plan order so the
-journal record reads as the operator expects: net VMs first, then
-workloads grouped by env.
-
-## Testing
-
-- Unit tests live in `packages/d2bd-runtime/src/autostart.rs`
-  (`bazel test //packages/d2bd-runtime:d2bd_runtime_test`). They cover ordering,
-  concurrency-cap enforcement, degraded-mode propagation,
-  idempotent re-entry, and the `parallelism = 0` clamp.
-- `tests/unit/nix/cases/daemon-autostart.nix` asserts the public Rust surface,
-  the NixOS option default and override, daemon-side wiring, and documentation
-  cross-references through `test-nix-unit`.
-- No current full Layer-2 autostart smoke is registered.
-
-## Cross-references
-
-- [`docs/reference/daemon-api.md`](daemon-api.md) - daemon
-  lifecycle and where the autostart pass slots in.
-- [`docs/reference/host-prep-dag.md`](host-prep-dag.md) - per-VM
-  host-prep step set that `dispatch_broker_vm_start` drives once
-  the autostart layer picks the VM.
-- [`docs/reference/per-vm-state-ownership.md`](per-vm-state-ownership.md) -
-  ownership-matrix preflight that gates every per-VM start
-  (autostart or otherwise).
+Owner-local tests cover deterministic ordering, concurrency bounds,
+degraded propagation, and idempotent re-entry. The current private
+compatibility bundle may retain historical field names while the Zone
+Resource migration completes; that projection cannot authorize a new
+lifecycle path.

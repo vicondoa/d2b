@@ -18,11 +18,7 @@ use crate::metric_label_policy::{
     validate_canonical_data_point, validate_data_point,
 };
 use d2b_contracts_provider::v3::{
-    TelemetryFrame,
-    TelemetryFrameError,
-    TelemetrySignal,
-    parse_raw_frame,
-    redact_parsed_frame,
+    TelemetryFrame, TelemetryFrameError, TelemetrySignal, parse_raw_frame, redact_parsed_frame,
     validate_frame,
 };
 

@@ -52,7 +52,6 @@ test_suite(
     name = "drift",
     tests = [
         "//packages/xtask:generated_artifacts",
-        "//tests/unit/gates:vms_json_parity",
     ],
 )
 

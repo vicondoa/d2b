@@ -3,11 +3,7 @@
 //! This module intentionally exposes no dispatch seam. The production backend
 //! must first provide a writer-issued durable-commit proof.
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneRevision,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneRevision};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -31,12 +31,11 @@
 //! # Fail-closed posture
 //!
 //! Every refusal in this file is one closed [`ZoneRouteFailClosedReason`].
-//! There is no permissive default: every authorization, connectivity, and
-//! authentication input defaults to its refusing value, a method with no
-//! landed handler is refused at dispatch admission rather than served, and an
-//! over-ceiling dispatch or shortcut table is refused rather than grown.
-//! Authorization verdicts are *inputs*, exactly as in the engine; this service
-//! mints, holds, and presents no authority, and performs no I/O.
+//! There is no permissive default: a missing or mismatched runtime-issued
+//! admission refuses a route, a method with no landed handler is refused at
+//! dispatch admission rather than served, and an over-ceiling dispatch or
+//! shortcut table is refused rather than grown. The service mints, holds, and
+//! presents no authority, and performs no I/O.
 //!
 //! Nothing here accepts or returns a uid, gid, host path, socket path, store
 //! path, transport endpoint, credential, or key material.
@@ -53,15 +52,17 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use d2b_bus::session::{RouteAdmissionEvidence, RouteAdmissionVerifier};
 use d2b_contracts_resource::v3::execution_policy::PrimitiveSpecError;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
     ZoneRouteFailClosedReason, ZoneTreeEdge,
-},
 };
 
-use crate::engine::{ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteEngine};
+use crate::engine::{
+    ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
+    ZoneRouteEngine,
+};
 use crate::resolver::{
     SealedZoneTopology, ZoneEntrypointRequest, ZoneEntrypointResolution, ZoneEntrypointResolver,
 };
@@ -259,34 +260,56 @@ impl ZoneDispatchAdmission {
     }
 }
 
-/// The inputs one topology projection is evaluated against.
+/// The runtime-issued admissions used to evaluate a topology projection.
 ///
-/// Every input defaults to its refusing value in
-/// [`ZoneTopologyRequest::new`], matching [`ZoneEntrypointRequest`], so a
-/// caller that forgets one gets `Unreachable` rows rather than an
-/// optimistically reachable projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Each sealed child row is keyed to its own admission. Missing evidence
+/// leaves that row unreachable; there is no shared caller-populated policy,
+/// connectivity, authentication, capability, or time flag.
 pub struct ZoneTopologyRequest {
-    /// The caller-supplied projection time in Unix seconds.
-    pub current_time_unix_seconds: u64,
-    /// Whether the caller's authorizer allowed the read.
-    pub policy_allows: bool,
-    /// Whether the uplink is established.
-    pub zone_link_connected: bool,
-    /// Whether the backing route projection was admitted from an
-    /// authenticated advertisement.
-    pub route_projection_authenticated: bool,
+    admissions: std::collections::BTreeMap<ZonePath, ZoneRouteAdmission>,
 }
 
 impl ZoneTopologyRequest {
-    /// A projection request with refusing defaults for every input.
-    pub const fn new(current_time_unix_seconds: u64) -> Self {
+    /// A projection request with no runtime admissions.
+    pub fn new() -> Self {
         Self {
-            current_time_unix_seconds,
-            policy_allows: false,
-            zone_link_connected: false,
-            route_projection_authenticated: false,
+            admissions: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Attach the admission bound to one sealed child Zone.
+    pub fn with_admission(mut self, child_zone: ZonePath, admission: ZoneRouteAdmission) -> Self {
+        self.admissions.insert(child_zone, admission);
+        self
+    }
+
+    /// Consume and verify the admission bound to one sealed child Zone.
+    pub fn with_runtime_admission(
+        self,
+        child_zone: ZonePath,
+        verifier: RouteAdmissionVerifier,
+        evidence: RouteAdmissionEvidence,
+        expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        let admission = ZoneRouteAdmission::verify(verifier, evidence, expected)?;
+        Ok(self.with_admission(child_zone, admission))
+    }
+
+    /// Borrow the admission bound to one child Zone, when present.
+    pub fn admission_for(&self, child_zone: &ZonePath) -> Option<&ZoneRouteAdmission> {
+        self.admissions.get(child_zone)
+    }
+}
+
+impl Default for ZoneTopologyRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for ZoneTopologyRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneTopologyRequest(<redacted>)")
     }
 }
 
@@ -674,14 +697,21 @@ impl ZoneServiceServer {
         child: &ZonePath,
         parent: &ZonePath,
     ) -> ZoneTopologyRow {
-        let mut entrypoint =
-            ZoneEntrypointRequest::new(child.clone(), request.current_time_unix_seconds);
-        entrypoint.policy_allows = request.policy_allows;
-        entrypoint.zone_link_connected = request.zone_link_connected;
-        entrypoint.route_projection_authenticated = request.route_projection_authenticated;
-        entrypoint.remaining_hops = ZONE_ROUTE_INITIAL_HOP_BUDGET;
+        let resolution = match request.admission_for(child) {
+            Some(admission) => self.resolver.resolve_with_admission(
+                engine,
+                child,
+                ZONE_ROUTE_INITIAL_HOP_BUDGET,
+                admission,
+            ),
+            None => {
+                let entrypoint = ZoneEntrypointRequest::new(child.clone())
+                    .with_remaining_hops(ZONE_ROUTE_INITIAL_HOP_BUDGET);
+                self.resolver.resolve(engine, &entrypoint)
+            }
+        };
 
-        let status = match self.resolver.resolve(engine, &entrypoint) {
+        let status = match resolution {
             ZoneEntrypointResolution::Resolved { .. } => ZoneTopologyStatus::Reachable,
             ZoneEntrypointResolution::Refused { reason } => {
                 ZoneTopologyStatus::Unreachable { reason }
@@ -716,17 +746,21 @@ redacted_service_debug!(ZoneServiceServer);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneRevision, identity::ReconnectGeneration};
     use d2b_contracts_zone_session::v3::{
-    zone_routing::{
-        ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
-        ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
-        ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
-        ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
-        ZoneSigningKeyFingerprint,
-    },
-};
+        component_session::{OperationClass, OperationId},
+        zone_routing::{
+            ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
+            ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
+            ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
+            ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
+            ZoneSigningKeyFingerprint,
+        },
+    };
 
-    use crate::engine::ZoneAdvertisementAdmission;
+    use crate::engine::{
+        ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
+    };
 
     fn zone(labels: &[&str]) -> ZonePath {
         ZonePath::new(
@@ -750,6 +784,68 @@ mod tests {
 
     fn edge(parent: &[&str], child: &[&str]) -> ZoneTreeEdge {
         ZoneTreeEdge::new(zone(parent), zone(child)).expect("direct child edge")
+    }
+
+    fn uid(marker: char) -> ResourceUid {
+        let value = match marker {
+            '1' => "11111111-1111-4111-8111-111111111111",
+            '2' => "22222222-2222-4222-8222-222222222222",
+            '3' => "33333333-3333-4333-8333-333333333333",
+            _ => panic!("test UID marker must be one of 1..=3"),
+        };
+        ResourceUid::parse(value).expect("valid resource UID")
+    }
+
+    fn admission(capability: &str, issued_at: u64, expires_at: u64) -> ZoneRouteAdmission {
+        admission_for_zones(
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            OperationClass::Invoke,
+            capability,
+            issued_at,
+            expires_at,
+        )
+    }
+
+    fn admission_for(
+        verb: OperationClass,
+        capability: &str,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> ZoneRouteAdmission {
+        admission_for_zones(
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            verb,
+            capability,
+            issued_at,
+            expires_at,
+        )
+    }
+
+    fn admission_for_zones(
+        source: ZonePath,
+        target: ZonePath,
+        verb: OperationClass,
+        capability: &str,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> ZoneRouteAdmission {
+        let expectation = ZoneRouteAdmissionExpectation::new(
+            uid('1'),
+            edge(&["k0"], &["k1", "k0"]),
+            ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+            ReconnectGeneration::new(7).expect("valid reconnect generation"),
+            uid('2'),
+            uid('3'),
+            OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
+            verb,
+            ZoneRouteCapability::parse(capability).expect("valid capability"),
+            ZoneRevision::new(9),
+        )
+        .expect("valid route admission expectation")
+        .for_zones(source, target);
+        ZoneRouteAdmission::for_test(expectation, issued_at, expires_at)
     }
 
     fn edges() -> Vec<ZoneTreeEdge> {
@@ -804,19 +900,31 @@ mod tests {
     }
 
     fn allowed_topology_request() -> ZoneTopologyRequest {
-        let mut request = ZoneTopologyRequest::new(1_500);
-        request.policy_allows = true;
-        request.zone_link_connected = true;
-        request.route_projection_authenticated = true;
-        request
+        ZoneTopologyRequest::new()
+            .with_admission(
+                zone(&["k1", "k0"]),
+                admission_for_zones(
+                    zone(&["k0"]),
+                    zone(&["k1", "k0"]),
+                    OperationClass::Invoke,
+                    "get",
+                    1_500,
+                    4_000,
+                ),
+            )
+            .with_admission(zone(&["k2", "k1", "k0"]), admission("get", 1_500, 4_000))
     }
 
     fn allowed_entrypoint_request(target: ZonePath) -> ZoneEntrypointRequest {
-        let mut request = ZoneEntrypointRequest::new(target, 1_500);
-        request.policy_allows = true;
-        request.zone_link_connected = true;
-        request.route_projection_authenticated = true;
-        request
+        let source = zone(&["k0"]);
+        ZoneEntrypointRequest::new(target.clone()).with_admission(admission_for_zones(
+            source,
+            target,
+            OperationClass::Invoke,
+            "get",
+            1_500,
+            4_000,
+        ))
     }
 
     // -- wire inventory ---------------------------------------------------
@@ -976,8 +1084,7 @@ mod tests {
     #[test]
     fn an_unauthenticated_projection_reports_every_remote_row_unreachable() {
         let server = server();
-        let mut request = allowed_topology_request();
-        request.route_projection_authenticated = false;
+        let request = ZoneTopologyRequest::new();
         let rows = server.list_topology(&seeded_engine(), &request);
         for row in &rows {
             assert_eq!(
@@ -992,9 +1099,10 @@ mod tests {
     #[test]
     fn a_stale_projection_reports_the_row_unreachable() {
         let server = server();
-        let mut request = allowed_topology_request();
-        // The seeded advertisement expires at 4000.
-        request.current_time_unix_seconds = 9_000;
+        // The seeded advertisement expires at 4000; the runtime-issued
+        // admission is stamped after that window.
+        let request = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k2", "k1", "k0"]), admission("get", 9_000, 10_000));
         let row = server
             .inspect_zone(&seeded_engine(), &zone(&["k2", "k1", "k0"]), &request)
             .expect("the sealed row survives projection expiry");
@@ -1031,10 +1139,8 @@ mod tests {
     #[test]
     fn projection_request_defaults_refuse() {
         let server = server();
-        let request = ZoneTopologyRequest::new(1_500);
-        assert!(!request.policy_allows);
-        assert!(!request.zone_link_connected);
-        assert!(!request.route_projection_authenticated);
+        let request = ZoneTopologyRequest::new();
+        assert!(request.admissions.is_empty());
         for row in server.list_topology(&seeded_engine(), &request) {
             assert!(matches!(row.status, ZoneTopologyStatus::Unreachable { .. }));
         }
@@ -1054,14 +1160,17 @@ mod tests {
         assert_eq!(first.revision, 1);
         assert_eq!(first.rows.len(), 2);
 
+        let unchanged_request = allowed_topology_request();
         assert!(
-            server.poll_topology_watch(&engine, &request).is_none(),
+            server
+                .poll_topology_watch(&engine, &unchanged_request)
+                .is_none(),
             "an unchanged projection reports nothing"
         );
 
         // Expiring the projection changes every remote row's status.
-        let mut later = request;
-        later.current_time_unix_seconds = 9_000;
+        let later = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k1", "k0"]), admission("get", 9_000, 10_000));
         let second = server
             .poll_topology_watch(&engine, &later)
             .expect("a changed projection reports");
@@ -1072,7 +1181,30 @@ mod tests {
                 .iter()
                 .any(|row| matches!(row.status, ZoneTopologyStatus::Unreachable { .. }))
         );
-        assert!(server.poll_topology_watch(&engine, &later).is_none());
+        let later_again = ZoneTopologyRequest::new()
+            .with_admission(zone(&["k1", "k0"]), admission("get", 9_000, 10_000));
+        assert!(server.poll_topology_watch(&engine, &later_again).is_none());
+    }
+
+    #[test]
+    fn a_topology_watch_request_cannot_reuse_consumed_admissions() {
+        let mut server = server();
+        let engine = seeded_engine();
+        let request = allowed_topology_request();
+
+        assert!(server.poll_topology_watch(&engine, &request).is_some());
+        let reused = server
+            .poll_topology_watch(&engine, &request)
+            .expect("reusing consumed evidence must report a refusal");
+        assert!(reused.rows.iter().all(|row| {
+            matches!(
+                row.status,
+                ZoneTopologyStatus::Unreachable {
+                    reason: ZoneRouteFailClosedReason::ZoneLinkDisconnected
+                        | ZoneRouteFailClosedReason::PolicyDenial
+                }
+            )
+        }));
     }
 
     // -- route resolution --------------------------------------------------
@@ -1081,9 +1213,14 @@ mod tests {
     fn resolve_returns_the_resolver_outcome_unchanged_and_audits_it() {
         let mut server = server();
         let engine = seeded_engine();
-        let request = allowed_entrypoint_request(zone(&["k2", "k1", "k0"]));
-        let expected = server.resolver().resolve(&engine, &request);
-        let served = server.resolve_zone_route(&engine, &request);
+        let expected = server.resolver().resolve(
+            &engine,
+            &allowed_entrypoint_request(zone(&["k2", "k1", "k0"])),
+        );
+        let served = server.resolve_zone_route(
+            &engine,
+            &allowed_entrypoint_request(zone(&["k2", "k1", "k0"])),
+        );
         assert!(served == expected);
         assert_eq!(
             server
@@ -1103,11 +1240,10 @@ mod tests {
     fn a_refused_resolution_is_audited_with_its_closed_reason() {
         let mut server = server();
         let engine = seeded_engine();
-        let mut request = allowed_entrypoint_request(zone(&["k2", "k1", "k0"]));
-        request.zone_link_connected = false;
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
         assert_eq!(
             server.resolve_zone_route(&engine, &request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
         );
         let record = server
             .audit_events()
@@ -1117,7 +1253,7 @@ mod tests {
         assert_eq!(record.kind, ZoneRouteAuditEventKind::ZoneRouteDenied);
         assert_eq!(
             record.denial_reason,
-            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
         );
     }
 
@@ -1126,42 +1262,36 @@ mod tests {
     #[test]
     fn a_forwarding_hop_needs_the_relay_grant_and_the_target_verb_independently() {
         let mut server = server();
-        let mut base = ZoneRelayRequest::new(4);
-        base.zone_link_connected = true;
+        let base = ZoneRelayRequest::new(4);
 
-        // Neither grant.
+        // Neither runtime admission.
         assert_eq!(
             server.admit_relay_hop(&base).denial_reason(),
-            Some(ZoneRouteFailClosedReason::RelayDenied)
+            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
         );
 
-        // Target verb only: the relay grant is still required.
-        let mut target_only = base;
-        target_only.target_verb_granted = true;
+        // Target admission only: the relay admission remains independent.
+        let target_only =
+            ZoneRelayRequest::new(4).with_target_admission(admission("get", 1_500, 4_000));
         assert_eq!(
-            server.admit_relay_hop(&target_only).denial_reason(),
-            Some(ZoneRouteFailClosedReason::RelayDenied)
+            server.admit_relay_hop(&target_only),
+            ZoneRelayAdmission::Denied {
+                reason: ZoneRouteFailClosedReason::ZoneLinkDisconnected
+            }
         );
 
-        // Relay only: the target verb is still required, and the relay grant
-        // does not supply it.
-        let mut relay_only = base;
-        relay_only.relay_granted = true;
-        assert_eq!(
-            server.admit_relay_hop(&relay_only).denial_reason(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
+        // Both independently verified admissions are required.
+        let both = ZoneRelayRequest::new(4).with_admissions(
+            admission("get", 1_500, 4_000),
+            admission_for(OperationClass::Relay, "relay", 1_500, 4_000),
         );
-
-        // Both grants, independently held.
-        let mut both = base;
-        both.relay_granted = true;
-        both.target_verb_granted = true;
         assert_eq!(
             server.admit_relay_hop(&both),
             ZoneRelayAdmission::Admitted {
                 forwarded_remaining_hops: 3
             }
         );
+
         assert_eq!(
             server
                 .audit_events()
@@ -1199,8 +1329,7 @@ mod tests {
     fn a_shortcut_is_refused_when_the_route_would_be_refused() {
         let mut server = server();
         let engine = seeded_engine();
-        let mut request = allowed_entrypoint_request(zone(&["k2", "k1", "k0"]));
-        request.policy_allows = false;
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
         assert_eq!(
             server
                 .authorize_zone_shortcut(&engine, &request)
@@ -1215,10 +1344,10 @@ mod tests {
         let mut server = server();
         let engine = seeded_engine();
         let entrypoint = zone(&["k2", "k1", "k0"]);
-        let request = allowed_entrypoint_request(entrypoint.clone());
 
         assert!(matches!(
-            server.authorize_zone_shortcut(&engine, &request),
+            server
+                .authorize_zone_shortcut(&engine, &allowed_entrypoint_request(entrypoint.clone())),
             ZoneShortcutOutcome::Authorized { .. }
         ));
         assert_eq!(
@@ -1232,7 +1361,8 @@ mod tests {
         );
 
         assert!(matches!(
-            server.authorize_zone_shortcut(&engine, &request),
+            server
+                .authorize_zone_shortcut(&engine, &allowed_entrypoint_request(entrypoint.clone())),
             ZoneShortcutOutcome::Authorized { .. }
         ));
         assert_eq!(

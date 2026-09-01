@@ -1,6 +1,7 @@
 //! Opaque privileged effect-port seam for system-minijail.
 
 use std::future::Future;
+use std::os::fd::OwnedFd;
 
 use d2b_process_conformance::{
     AdoptionCandidate, CancellationBinding, IdentityBinding, LaunchTicket, LaunchedProcess,
@@ -15,6 +16,25 @@ pub trait MinijailProcessEffectPort: Send + Sync {
         &self,
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send;
+
+    /// Spawn with owned descriptors that must be inherited by the child.
+    ///
+    /// The default keeps existing effect owners descriptor-free while
+    /// rejecting accidental descriptor-bearing launches.
+    fn spawn_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
+        async move {
+            if inherited_fds.is_empty() {
+                self.spawn(ticket).await
+            } else {
+                drop(inherited_fds);
+                Err(ProcessConformanceError::InvalidTicket)
+            }
+        }
+    }
 
     /// Find a candidate without using pidfd readability as identity.
     fn observe(
@@ -68,6 +88,15 @@ where
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
         validate_ticket(ticket)?;
         self.0.spawn(ticket).await
+    }
+
+    async fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        validate_ticket(ticket)?;
+        self.0.spawn_with_inherited_fds(ticket, inherited_fds).await
     }
 
     async fn observe(

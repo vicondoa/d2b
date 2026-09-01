@@ -390,7 +390,6 @@ pub fn send_report<W: Write>(stream: &mut W, report: &CtaphidReport) -> std::io:
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,14 +397,18 @@ mod tests {
     #[test]
     fn parses_initialization_and_continuation_reports() {
         let init = build_init_packet(0x0102_0304, CTAPHID_INIT, 3, &[1, 2, 3]);
-        assert!(matches!(parse_ctaphid_report(&init), CtaphidPacket::Init(packet)
-            if packet.cid == 0x0102_0304 && packet.cmd == CTAPHID_INIT && packet.bcnt == 3));
+        assert!(
+            matches!(parse_ctaphid_report(&init), CtaphidPacket::Init(packet)
+            if packet.cid == 0x0102_0304 && packet.cmd == CTAPHID_INIT && packet.bcnt == 3)
+        );
 
         let mut continuation = [0; CTAPHID_REPORT_SIZE];
         continuation[..4].copy_from_slice(&0x0102_0304u32.to_be_bytes());
         continuation[4] = 2;
-        assert!(matches!(parse_ctaphid_report(&continuation), CtaphidPacket::Cont(packet)
-            if packet.cid == 0x0102_0304 && packet.seq == 2));
+        assert!(
+            matches!(parse_ctaphid_report(&continuation), CtaphidPacket::Cont(packet)
+            if packet.cid == 0x0102_0304 && packet.seq == 2)
+        );
     }
 
     #[test]
@@ -436,6 +439,9 @@ mod tests {
         let report = build_error_report(7, CTAPHID_ERR_CHANNEL_BUSY);
         let mut wire = Vec::new();
         send_report(&mut wire, &report).expect("frame report");
-        assert_eq!(recv_report(&mut wire.as_slice()).expect("read report"), report);
+        assert_eq!(
+            recv_report(&mut wire.as_slice()).expect("read report"),
+            report
+        );
     }
 }

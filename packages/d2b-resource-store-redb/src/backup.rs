@@ -112,6 +112,8 @@ pub struct LogicalBackup {
     pub store_uuid: String,
     pub zone_name: String,
     pub zone_uid: String,
+    #[serde(default = "default_store_epoch")]
+    pub store_epoch: u64,
     pub created_at: String,
     pub schema_version: u32,
     pub current_revision: u64,
@@ -123,6 +125,10 @@ pub struct LogicalBackup {
     pub clean_shutdown: bool,
     pub backup_generation: u64,
     pub tables: Vec<BackupTable>,
+}
+
+fn default_store_epoch() -> u64 {
+    1
 }
 
 impl fmt::Debug for LogicalBackup {
@@ -201,6 +207,7 @@ impl LogicalBackup {
             store_uuid: meta.store_uuid,
             zone_name: meta.zone_name,
             zone_uid: meta.zone_uid,
+            store_epoch: meta.store_epoch,
             created_at: meta.created_at,
             schema_version: meta.schema_version,
             current_revision: meta.current_revision,
@@ -242,6 +249,9 @@ impl LogicalBackup {
         ResourceUid::parse(self.store_uuid.clone()).map_err(integrity)?;
         ZoneId::parse(self.zone_name.clone()).map_err(integrity)?;
         ResourceUid::parse(self.zone_uid.clone()).map_err(integrity)?;
+        if self.store_epoch == 0 {
+            return Err(integrity("backup-store-epoch-invalid"));
+        }
         Timestamp::parse(self.created_at.clone()).map_err(integrity)?;
 
         let mut names = BTreeSet::new();
@@ -315,6 +325,7 @@ impl LogicalBackup {
         if meta.store_uuid != self.store_uuid
             || meta.zone_name != self.zone_name
             || meta.zone_uid != self.zone_uid
+            || meta.store_epoch != self.store_epoch
             || meta.created_at != self.created_at
             || meta.schema_version != self.schema_version
             || meta.current_revision != self.current_revision
@@ -363,6 +374,7 @@ impl LogicalBackup {
         if self.store_uuid != identity.store_uuid.as_str()
             || self.zone_name != identity.zone.as_str()
             || self.zone_uid != identity.zone_uid.as_str()
+            || self.store_epoch != identity.store_epoch()
             || self.created_at != identity.created_at
             || self.active_configuration_revision
                 != identity.revisions.active_configuration_revision.get()
@@ -563,6 +575,7 @@ fn validate_meta_identity(
         || meta.store_uuid != identity.store_uuid.as_str()
         || meta.zone_name != identity.zone.as_str()
         || meta.zone_uid != identity.zone_uid.as_str()
+        || meta.store_epoch != identity.store_epoch()
         || meta.created_at != identity.created_at
         || meta.active_configuration_revision
             != identity.revisions.active_configuration_revision.get()

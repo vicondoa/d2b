@@ -1,5 +1,5 @@
 {
-  description = "d2b example: one workload VM plus the auto-declared native SigNoz observability stack";
+  description = "d2b example: one Zone Guest plus an observability Provider";
 
   inputs = {
     # Pin d2b to a published release tag for real-world use:

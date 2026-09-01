@@ -5,15 +5,13 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSessionBinding, PlacementBinding,
     dispatch_authorized_provider,
-},
 };
-use d2b_contracts_resource::v3::identity::Locality;
 use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant, EntraLeaseInspection,

@@ -62,7 +62,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("multi-user.target")
+    machine.wait_for_unit("multi-user.target", timeout=180)
     machine.succeed("systemctl start d2b-test-agent-netns.service")
 
     capability_mask = (1 << 10) | (1 << 12) | (1 << 13)
@@ -122,7 +122,7 @@ pkgs.testers.runNixOSTest {
     baseline = host_namespace_capabilities()
 
     machine.succeed("systemctl start d2b-test-guest-agent.service")
-    machine.wait_for_unit("d2b-test-guest-agent.service")
+    machine.wait_for_unit("d2b-test-guest-agent.service", timeout=60)
     agent_pid = machine.succeed(
         "systemctl show -P MainPID d2b-test-guest-agent.service"
     ).strip()

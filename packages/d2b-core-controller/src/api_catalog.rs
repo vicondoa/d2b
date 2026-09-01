@@ -272,9 +272,7 @@ mod tests {
         ProviderManifest::new(
             ArtifactId::parse("provider").unwrap(),
             ArtifactDigestSet {
-                package: digest(),
                 executable: digest(),
-                manifest: digest(),
                 config: digest(),
                 schema: digest(),
                 service: digest(),

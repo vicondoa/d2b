@@ -1,7 +1,4 @@
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_unix::{
     BrokerRole, OpenTransportRequest, PortalError, RouteClass, SocketKind, TransportPortal,
     TransportRequestBinding,

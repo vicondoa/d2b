@@ -31,9 +31,10 @@
 let
   cfg = config.d2b;
   d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
+  gatewayVms = d2bLib.gatewayVms cfg;
   enabledVms = lib.filterAttrs
     (_: vm: vm.audio.enable)
-    (d2bLib.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms gatewayVms);
 
   anyAudio = enabledVms != { };
 
@@ -106,7 +107,7 @@ in
               and launch interactively, or set audio.enable = false.
             '';
           })
-          config.d2b.vms;
+          gatewayVms;
     }
 
     # ---------------------------------------------------------------

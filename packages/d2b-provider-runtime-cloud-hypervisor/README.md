@@ -5,8 +5,8 @@ Canonical implementation of `Provider/runtime-cloud-hypervisor`.
 ## Provider identity
 
 The implementation identifier is `cloud-hypervisor`. It reconciles local
-`Guest` resources and owns the VMM Process lifecycle through a typed effect
-port.
+`Guest` resources and requests VMM Process lifecycle through the authenticated
+Resource API.
 
 ## Config schema
 
@@ -22,20 +22,29 @@ Core. Device, Network, and Volume resources remain owned by their Providers.
 ## Controllers / services / workers / binaries
 
 `CloudHypervisorController` gates launch on Device, Network, and Volume
-readiness, adopts exact process identity, probes the authenticated
-ComponentSession, and finalizes the target-local session before the VMM
-process.
+readiness, consumes exact Process Provider adoption outcomes, probes the
+authenticated ComponentSession, performs D091 realization recycling, and
+finalizes the Guest in reverse dependency order.
 
 ## Placement and dependencies
 
 The controller runs on an explicit Host, while the VMM is broker-spawned and
 daemon-supervised. No per-VM systemd unit or direct broker socket is used.
+The crate has no direct dependency on `d2b-broker` or either Resource Store
+crate. Launch, mount, storage, socket, device, and network effects remain
+owned by the corresponding Resource controllers and broker adapters.
+
+The package ships the signed `provider-manifest.json`, its detached signature,
+the publisher public key, and `root-config.schema.json`. These files are
+packaged by `nix/provider-artifact.nix`; the manifest is canonicalized by the
+Provider toolkit rather than maintained as a second runtime contract.
 
 ## RBAC requirements
 
-Only opaque attachment refs and typed launch effects cross the Provider
-boundary. Pidfds are opened after PID, start-time, cgroup, executable,
-template, and generation evidence is verified.
+Only opaque attachment refs, bounded adoption outcomes, and typed Resource API
+requests cross the Provider boundary. The Process Provider verifies PID,
+start-time, cgroup, executable, template, and generation evidence locally
+before opening a pidfd.
 
 ## Security posture
 

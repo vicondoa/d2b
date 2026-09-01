@@ -228,9 +228,7 @@ impl AudioResourceRuntime {
 
         for (key, (resource, spec)) in bindings {
             if deletion_requested(&resource) {
-                if !self.bindings.contains_key(&key)
-                    && !active_targets.contains(&spec.target_ref)
-                {
+                if !self.bindings.contains_key(&key) && !active_targets.contains(&spec.target_ref) {
                     self.revoke_unmanaged_binding(&spec, manifest.as_ref())?;
                 }
                 let promoted = if let Some(record) = self.bindings.get_mut(&key) {
@@ -825,9 +823,7 @@ pub(crate) async fn run_audio_watch(
         let mut finalizer_retry = false;
         let mut finalizer_added = false;
         for resource in &snapshot.bindings {
-            if audio_binding_requires_finalizer(resource, &zone)
-                && !has_audio_finalizer(resource)
-            {
+            if audio_binding_requires_finalizer(resource, &zone) && !has_audio_finalizer(resource) {
                 if let Err(error) =
                     update_audio_finalizer(status_client.as_ref(), resource, true).await
                 {

@@ -198,8 +198,7 @@ let
 
   cidrOverlaps = lib.filter
     (pair:
-      pair.left.zoneName == pair.right.zoneName
-      && d2bLib.cidrOverlaps pair.left.cidr pair.right.cidr)
+      d2bLib.cidrOverlaps pair.left.cidr pair.right.cidr)
     (unorderedPairs networkCidrs);
 
   crossZoneExternalClaims = lib.filter
@@ -508,6 +507,20 @@ let
             (if provider != null then attrOr provider.spec "artifactId" null else null);
       in if artifact != null && artifact.type == "provider" then artifact.package else null)
     networks));
+
+  admissionRows = map
+    (network:
+      let spec = canonicalSpec network.spec;
+      in {
+        zone = network.zoneName;
+        network = network.name;
+        ref = "Network/${network.name}";
+        lanCidr = attrOr spec "lanCidr" null;
+        uplinkCidr = attrOr spec "uplinkCidr" null;
+        attachmentRefs = map (attachment: attachment.executionRef)
+          (attrOr spec "attachments" [ ]);
+      })
+    networks;
 in
 {
   options.d2b.zones = lib.mkOption {
@@ -528,7 +541,11 @@ in
       list = compiledNetworks;
       byZone = compiledByZone;
     };
-    d2b._resourceCompiler.networks = compiledByZone;
+    d2b._resourceCompiler.networks = {
+      list = compiledNetworks;
+      byZone = compiledByZone;
+      admission = admissionRows;
+    };
 
     networking.networkmanager.unmanaged = lib.mkAfter [ "interface-name:d2b-*" ];
     environment.systemPackages = selectedProviderPackages;

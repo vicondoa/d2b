@@ -20,11 +20,6 @@ use d2b_contracts_control::public_wire::{
     AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
     AudioSetVolumeArgs, AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState,
 };
-use d2b_provider_audio_pipewire::{
-    AudioGrant, AudioPolicyState, LevelPercent,
-    acquire_audio_state_lock, audio_lock_path, audio_state_path, read_audio_state_locked,
-    read_audio_state_unlocked, write_audio_state_unlocked,
-};
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::ProcessesJson;
 use d2b_core::provider_capabilities::{
@@ -35,6 +30,11 @@ use d2b_provider_audio_pipewire::{
     AudioChannel as ProviderAudioChannel, AudioGrant as ProviderAudioGrant, AudioMediator,
     AudioMediatorError, AudioReadiness, GuestAudioReadiness, HostAudioReadiness,
     LevelPercent as ProviderLevelPercent,
+};
+use d2b_provider_audio_pipewire::{
+    AudioGrant, AudioPolicyState, LevelPercent, acquire_audio_state_lock, audio_lock_path,
+    audio_state_path, read_audio_state_locked, read_audio_state_unlocked,
+    write_audio_state_unlocked,
 };
 use serde_json::Value;
 
@@ -93,7 +93,8 @@ pub enum HostEnforcementResult {
     Failed,
 }
 
-/// Build the host controller for a VM based on its audio capability row.
+/// Build the retained legacy host controller for a VM based on its audio
+/// capability row. v3 Guest lifecycle does not use this process-DAG connector.
 ///
 /// * For `PipeWireVhostUserSound` providers (Cloud Hypervisor NixOS), reads
 ///   the audio ProcessNode from `processes.json` to extract `WPCTL_PATH` and
@@ -256,7 +257,6 @@ impl DaemonAudioMediator {
             }
         }
     }
-
 }
 
 impl AudioMediator for DaemonAudioMediator {
@@ -761,8 +761,7 @@ mod tests {
         let ctrl = FakeHostController::success();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied =
-            combined_audio_applied(host_result, &cap);
+        let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::HostOnly,
@@ -779,8 +778,7 @@ mod tests {
         let ctrl = FakeHostController::failed();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
-        let applied =
-            combined_audio_applied(host_result, &cap);
+        let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
@@ -797,8 +795,7 @@ mod tests {
         let level = LevelPercent::new(80).unwrap();
         let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
         assert_eq!(host_result, HostEnforcementResult::Failed);
-        let applied =
-            combined_audio_applied(host_result, &cap);
+        let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::Unsupported);
     }
 
@@ -809,8 +806,7 @@ mod tests {
         let ctrl = QemuAudioController;
         let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied =
-            combined_audio_applied(host_result, &cap);
+        let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::HostOnly);
     }
 
@@ -827,8 +823,7 @@ mod tests {
             AudioChannel::Microphone,
         );
         assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied =
-            combined_audio_applied(host_result, &cap);
+        let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::HostOnly,

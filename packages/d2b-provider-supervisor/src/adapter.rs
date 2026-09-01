@@ -12,11 +12,12 @@ use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::broker::{BrokerLaunchResolver, BrokerProcessBackend};
 use d2b_contracts_resource::v3::ResourceUid;
 use d2b_process::{
     AdoptionCandidate, BackendObservation, LaunchTicket, LaunchedProcess, PidfdEvidence,
     ProcessConformanceError, ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest,
-    ProcessLaunchEffectPort, ProcessRequest, ProcessStopClass, StopClass,
+    ProcessLaunchEffectPort, ProcessLaunchRequest, ProcessRequest, ProcessStopClass, StopClass,
 };
 /// Default upper bound for concurrent blocking process effects.
 pub const DEFAULT_BLOCKING_LIMIT: usize = 16;
@@ -368,10 +369,24 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                     state.handles.remove(&finalize_identity);
                     state.quarantined_identities.remove(&finalize_identity);
                 }
+
                 Ok(())
             })
             .await;
         result.map_err(map_error)
+    }
+
+    /// Take the Provider-controller bootstrap endpoint retained with one handle.
+    pub async fn take_controller_bootstrap(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<Option<std::os::fd::OwnedFd>, ProcessConformanceError> {
+        let handle = self.handle(identity).map_err(map_error)?;
+        self.blocking(self.inner.default_timeout, move |backend| {
+            backend.take_controller_bootstrap(handle.as_ref())
+        })
+        .await
+        .map_err(map_error)
     }
 
     fn remember(
@@ -483,10 +498,10 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
     async fn launch_with_timeout(
         &self,
         ticket: &LaunchTicket,
+        request: ProcessLaunchRequest,
         timeout: Duration,
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
         let operation_uid = self.begin_launch(ticket).map_err(map_error)?;
-        let request = ProcessRequest::new(ticket.clone());
         let backend = Arc::clone(&self.inner.backend);
         let state = Arc::clone(&self.inner.state);
         let worker_operation_uid = operation_uid.clone();
@@ -494,7 +509,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .pool
             .submit_with_deadline(timeout, move |deadline| {
-                let launch = backend.launch(request);
+                let launch = backend.launch_with_inherited_fds(request);
                 let late = Instant::now() >= deadline;
                 match (launch, late) {
                     (Err(error), late) => {
@@ -602,8 +617,18 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
         &self,
         ticket: &LaunchTicket,
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        self.launch_with_inherited_fds(ticket, Vec::new()).await
+    }
+
+    async fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<std::os::fd::OwnedFd>,
+    ) -> Result<LaunchedProcess, ProcessConformanceError> {
         let timeout = Duration::from_millis(u64::from(ticket.operation().deadline_ms()));
-        self.launch_with_timeout(ticket, timeout).await
+        let request = ProcessLaunchRequest::new(ProcessRequest::new(ticket.clone()), inherited_fds)
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+        self.launch_with_timeout(ticket, request, timeout).await
     }
 
     async fn observe(
@@ -722,6 +747,22 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
         })
         .await
         .map_err(map_error)
+    }
+}
+
+impl<R: BrokerLaunchResolver> ProviderSupervisor<BrokerProcessBackend<R>> {
+    /// Verify that a peer PID still names the exact process represented by a
+    /// retained broker pidfd and opaque process identity.
+    pub fn matches_peer_process(
+        &self,
+        identity: &ProcessIdentityDigest,
+        peer_pid: i32,
+    ) -> Result<bool, ProcessConformanceError> {
+        let handle = self.handle(identity).map_err(map_error)?;
+        self.inner
+            .backend
+            .matches_peer_process(handle.as_ref(), peer_pid)
+            .map_err(map_error)
     }
 }
 
@@ -853,10 +894,13 @@ mod tests {
         let (result_sender, result_receiver) = channel();
         let thread = std::thread::spawn(move || {
             let ticket = fixtures::ticket_builder().build().unwrap();
+            let request = ProcessLaunchRequest::empty(ProcessRequest::new(ticket.clone())).unwrap();
             result_sender
-                .send(block_on(
-                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
-                ))
+                .send(block_on(worker_supervisor.launch_with_timeout(
+                    &ticket,
+                    request,
+                    Duration::from_millis(10),
+                )))
                 .unwrap();
         });
 
@@ -892,10 +936,13 @@ mod tests {
         let (result_sender, result_receiver) = channel();
         let thread = std::thread::spawn(move || {
             let ticket = fixtures::ticket_builder().build().unwrap();
+            let request = ProcessLaunchRequest::empty(ProcessRequest::new(ticket.clone())).unwrap();
             result_sender
-                .send(block_on(
-                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
-                ))
+                .send(block_on(worker_supervisor.launch_with_timeout(
+                    &ticket,
+                    request,
+                    Duration::from_millis(10),
+                )))
                 .unwrap();
         });
 
@@ -993,9 +1040,11 @@ mod tests {
         let (result_sender, result_receiver) = channel();
         std::thread::spawn(move || {
             result_sender
-                .send(block_on(
-                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
-                ))
+                .send(block_on(worker_supervisor.launch_with_timeout(
+                    &ticket,
+                    ProcessLaunchRequest::empty(ProcessRequest::new(ticket.clone())).unwrap(),
+                    Duration::from_millis(10),
+                )))
                 .unwrap();
         });
 

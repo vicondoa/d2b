@@ -441,4 +441,70 @@ in
     ];
     expected = true;
   };
+
+  "provider-runtime-contracts-rejects-provider-config-secret-material" = {
+    expr = hasFailure "Provider config must not contain credential material" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.transport-azure-relay.spec.config =
+          lib.mkForce {
+            executionRef = "Guest/gateway";
+            networkRef = "SharedAccessSignature sr=canary";
+          };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-guest-settings-secret-material" = {
+    expr = hasFailure "spec.provider.settings must not contain credential material" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.gateway.spec.provider.settings =
+          lib.mkForce {
+            configuredImageId = "SharedAccessSignature sr=canary";
+          };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-transport-settings-secret-value" = {
+    expr = hasFailure "transportSettings must not contain credential or locator fields" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.relay-link.spec.transportSettings.relayEntityId =
+          lib.mkForce "SharedAccessSignature sr=canary";
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-provider-config-locator" = {
+    expr = hasFailure "Provider config must not contain raw host locators or argv" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.transport-azure-relay.spec.config =
+          lib.mkForce {
+            executionRef = "Guest/gateway";
+            networkRef = "Network/control-network";
+            socketPath = "/run/transport.sock";
+          };
+      })
+    ];
+    expected = true;
+  };
+
+  "provider-runtime-contracts-rejects-guest-settings-locator" = {
+    expr = hasFailure "spec.provider.settings must not contain raw host locators or argv" [
+      contractBase
+      ({ ... }: {
+        d2b.zones.local-root.resources.gateway.spec.provider.settings =
+          lib.mkForce {
+            argv = [ "/bin/sh" ];
+          };
+      })
+    ];
+    expected = true;
+  };
 }

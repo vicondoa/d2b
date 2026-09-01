@@ -41,7 +41,7 @@ pub use resource_type::{
     validate_audio_service,
 };
 pub use state::{
-    AudioStateIoError, AudioStateLock, acquire_audio_state_lock, audio_lock_path,
-    audio_state_path, read_audio_state_locked, read_audio_state_unlocked,
-    write_audio_state_locked, write_audio_state_unlocked,
+    AudioStateIoError, AudioStateLock, acquire_audio_state_lock, audio_lock_path, audio_state_path,
+    read_audio_state_locked, read_audio_state_unlocked, write_audio_state_locked,
+    write_audio_state_unlocked,
 };

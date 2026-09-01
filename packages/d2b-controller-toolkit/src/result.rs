@@ -1,14 +1,8 @@
 //! Bounded handler plans, results, projections, and upgrade contracts.
 
 use d2b_contracts_resource::v3::{
-    MAX_BATCH_MUTATIONS,
-    ResourceGeneration,
-    ResourcePhase,
-    ResourceRef,
-    ResourceUid,
-    ZoneRevision,
-    resource::MAX_RESOURCE_ENVELOPE_BYTES,
-    resource_status::MAX_STATUS_BYTES,
+    MAX_BATCH_MUTATIONS, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, ZoneRevision,
+    resource::MAX_RESOURCE_ENVELOPE_BYTES, resource_status::MAX_STATUS_BYTES,
 };
 
 use crate::ResourceKey;
@@ -774,10 +768,7 @@ impl std::error::Error for ResultError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{
-    ResourceTypeName,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceTypeName, ZoneId};
 
     fn key() -> ResourceKey {
         ResourceKey::new(

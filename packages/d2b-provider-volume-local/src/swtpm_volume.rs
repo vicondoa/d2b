@@ -6,11 +6,9 @@
 //! written is a hard failure, never a fresh empty TPM.
 
 use d2b_contracts_resource::v3::ResourceUid;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryType, RepairPolicy, SensitivityClass,
     VolumeKind, VolumeSpec,
-},
 };
 
 use crate::error::VolumeLocalError;

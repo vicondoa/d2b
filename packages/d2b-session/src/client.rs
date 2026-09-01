@@ -13,11 +13,11 @@ use tokio::{
     task::JoinHandle,
 };
 use ttrpc::{
+    r#async::{Client, transport::Socket},
     proto::{
         MESSAGE_HEADER_LENGTH, MESSAGE_TYPE_DATA, MESSAGE_TYPE_REQUEST, MESSAGE_TYPE_RESPONSE,
         MessageHeader,
     },
-    r#async::{Client, transport::Socket},
 };
 
 use crate::{Cancellation, ComponentSessionDriver, SessionError, ttrpc_request_id};
@@ -50,16 +50,10 @@ impl SessionTtrpcClient {
         let bridge_cancellation = cancellation.clone();
         let bridge = tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(bridge_transport);
-            let outgoing = forward_client_frames(
-                reader,
-                Arc::clone(&driver),
-                bridge_cancellation.clone(),
-            );
-            let incoming = forward_session_frames(
-                writer,
-                Arc::clone(&driver),
-                bridge_cancellation.clone(),
-            );
+            let outgoing =
+                forward_client_frames(reader, Arc::clone(&driver), bridge_cancellation.clone());
+            let incoming =
+                forward_session_frames(writer, Arc::clone(&driver), bridge_cancellation.clone());
             tokio::select! {
                 _ = outgoing => {}
                 _ = incoming => {}
@@ -264,9 +258,15 @@ mod tests {
             frame.extend_from_slice(b"two");
             frame
         };
-        writer.write_all(&[&first[..], &second[..]].concat()).await.unwrap();
+        writer
+            .write_all(&[&first[..], &second[..]].concat())
+            .await
+            .unwrap();
         let cancellation = Cancellation::new();
         assert_eq!(read_frame(&mut reader, &cancellation).await.unwrap(), first);
-        assert_eq!(read_frame(&mut reader, &cancellation).await.unwrap(), second);
+        assert_eq!(
+            read_frame(&mut reader, &cancellation).await.unwrap(),
+            second
+        );
     }
 }

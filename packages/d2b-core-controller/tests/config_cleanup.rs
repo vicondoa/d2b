@@ -1,22 +1,10 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts_zone_session::v3::{
-    BundleMetadata,
-    BundleResource,
-    ZoneBundle,
-    ZoneBundleError,
-};
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceBundleGenerationId,
-    ResourceName,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
+    CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName, ResourceUid,
+    SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
 };
+use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle, ZoneBundleError};
 use d2b_core_controller::{
     audit::{AuditEventKind, AuditReason},
     cleanup::{CleanupZonePhase, PendingCleanupState},
@@ -768,16 +756,18 @@ fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
     let mut controller = ZoneConfigController::with_defaults(zone());
     controller
         .activate(
-            BundleActivation::new(bundle('a', [input("Device", "gpu", "first")]))
-                .with_zone_uid(Some(uid)),
+            BundleActivation::new(
+                bundle('a', [input("Device", "gpu", "first")]).with_zone_uid(uid.clone()),
+            ),
             &[],
             &timestamp(),
         )
         .unwrap();
     let error = controller
         .activate(
-            BundleActivation::new(bundle('b', [input("Device", "gpu", "second")]))
-                .with_zone_uid(Some(other_uid)),
+            BundleActivation::new(
+                bundle('b', [input("Device", "gpu", "second")]).with_zone_uid(other_uid),
+            ),
             &[],
             &timestamp(),
         )

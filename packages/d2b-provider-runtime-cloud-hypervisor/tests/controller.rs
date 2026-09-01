@@ -1,484 +1,348 @@
 use std::sync::{Arc, Mutex};
-use tokio::time::{Duration, sleep};
 
 use async_trait::async_trait;
 use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
-use d2b_contracts_resource::v3::ResourceRef;
-use d2b_provider_runtime_cloud_hypervisor::{
-    CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
-    CloudHypervisorEffectPort, CloudHypervisorGuestSettings, CloudHypervisorPhase,
-    CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionEvidence, GuestSessionHealth,
-    GuestSessionEvidenceProbe,
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_provider_runtime_cloud_hypervisor::{
-    adoption::ProcessIdentity,
-    bootstrap_graph::{AttachmentRef, BootstrapGraph},
-    health::GuestSessionError,
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
+    BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController,
+    CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
+    CloudHypervisorResourceResponse, DescriptorSignature, GuestGenerationSet, GuestSeedContract,
+    GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot, SignatureAlgorithm,
 };
 
-#[derive(Default)]
-struct FakeState {
-    identity: Option<ProcessIdentity>,
-    observations: Vec<Option<ProcessIdentity>>,
-    launched: bool,
-    stopped: bool,
-    stop_calls: usize,
-    stop_failures: usize,
-    stop_leaves_identity: bool,
-    launch_delay_ms: u64,
-    pidfd_failures: usize,
-}
+const ARTIFACT_DIGEST: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SCHEMA_FINGERPRINT: &str =
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+const ZONE_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
 
-struct FakeEffect {
-    state: Arc<Mutex<FakeState>>,
-}
+struct AcceptingVerifier;
 
-struct FixedClock(Arc<Mutex<u64>>);
-
-impl CloudHypervisorClock for FixedClock {
-    fn now_unix_ms(&self) -> u64 {
-        *self.0.lock().unwrap()
-    }
-}
-
-#[async_trait]
-impl CloudHypervisorEffectPort for FakeEffect {
-    async fn launch(
+impl GuestSetupDescriptorVerifier for AcceptingVerifier {
+    fn verify(
         &self,
-        _: &BootstrapGraph,
-        _: &CloudHypervisorConfig,
-        _: &CloudHypervisorGuestSettings,
-    ) -> Result<ProcessIdentity, d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
-        let launch_delay_ms = self.state.lock().unwrap().launch_delay_ms;
-        if launch_delay_ms > 0 {
-            sleep(Duration::from_millis(launch_delay_ms)).await;
-        }
-        let mut state = self.state.lock().unwrap();
-        state.launched = true;
-        let identity = identity();
-        state.identity = Some(identity);
-        Ok(identity)
-    }
-
-    async fn observe(
-        &self,
-    ) -> Result<Option<ProcessIdentity>, d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError>
-    {
-        let mut state = self.state.lock().unwrap();
-        Ok(state.observations.pop().unwrap_or(state.identity))
-    }
-
-    async fn open_pidfd(
-        &self,
-        _: &ProcessIdentity,
-    ) -> Result<(), d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
-        let mut state = self.state.lock().unwrap();
-        if state.pidfd_failures > 0 {
-            state.pidfd_failures -= 1;
-            return Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect);
-        }
-        Ok(())
-    }
-
-    async fn stop(
-        &self,
-        _: &ProcessIdentity,
-    ) -> Result<(), d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError> {
-        let mut state = self.state.lock().unwrap();
-        state.stop_calls += 1;
-        if state.stop_failures > 0 {
-            state.stop_failures -= 1;
-            return Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect);
-        }
-        state.stopped = true;
-        if !state.stop_leaves_identity {
-            state.identity = None;
-        }
-        Ok(())
+        _key_fingerprint: &d2b_contracts_resource::v3::SchemaFingerprint,
+        _descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
+        signature: &str,
+    ) -> bool {
+        signature == "signature-sentinel"
     }
 }
 
-struct ReadyProbe {
-    responses: Arc<Mutex<Vec<GuestSessionHealth>>>,
-    close_calls: Arc<Mutex<Vec<u32>>>,
-    delay_ms: u64,
+fn descriptor() -> d2b_provider_runtime_cloud_hypervisor::VerifiedGuestSetupDescriptor {
+    GuestSetupDescriptor::new(
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        ResourceGeneration::new(3).unwrap(),
+        d2b_contracts_resource::v3::ArtifactId::parse("guest-system").unwrap(),
+        d2b_contracts_provider::v3::ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
+        GuestSeedContract::new(
+            "guest-resource-seed",
+            d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
+            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
+        DescriptorSignature::new(
+            SignatureAlgorithm::Ed25519Blake3,
+            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+            "signature-sentinel",
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .verify_with(&AcceptingVerifier)
+    .unwrap()
 }
 
-impl ReadyProbe {
-    fn scripted(responses: Vec<GuestSessionHealth>) -> Self {
-        Self {
-            responses: Arc::new(Mutex::new(responses)),
-            close_calls: Arc::new(Mutex::new(Vec::new())),
-            delay_ms: 0,
-        }
-    }
-
-    fn delayed(responses: Vec<GuestSessionHealth>, delay_ms: u64) -> Self {
-        Self {
-            responses: Arc::new(Mutex::new(responses)),
-            close_calls: Arc::new(Mutex::new(Vec::new())),
-            delay_ms,
-        }
-    }
-}
-
-#[async_trait]
-impl GuestSessionEvidenceProbe for ReadyProbe {
-    async fn observe(
-        &self,
-        _: u32,
-        _: u32,
-    ) -> Result<GuestSessionEvidence, GuestSessionError> {
-        if self.delay_ms > 0 {
-            sleep(Duration::from_millis(self.delay_ms)).await;
-        }
-        let health = self
-            .responses
-            .lock()
-            .unwrap()
-            .pop()
-            .unwrap_or(GuestSessionHealth::Ready);
-        match health {
-            GuestSessionHealth::Ready => GuestSessionEvidence::current(
-                ResourceRef::parse("Guest/test").unwrap(),
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-                1,
-                [],
-                true,
-                true,
-            ),
-            GuestSessionHealth::Degraded => GuestSessionEvidence::current(
-                ResourceRef::parse("Guest/test").unwrap(),
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-                1,
-                [],
-                false,
-                false,
-            ),
-            GuestSessionHealth::Failed => Err(GuestSessionError::AuthenticationFailed),
-        }
-    }
-
-    async fn close(&self, cid: u32) -> Result<(), GuestSessionError> {
-        self.close_calls.lock().unwrap().push(cid);
-        Ok(())
-    }
-}
-
-fn identity() -> ProcessIdentity {
-    ProcessIdentity {
-        pid: 42,
-        start_time_ticks: 7,
-        cgroup_digest: [1; 32],
-        executable_digest: [2; 32],
-        template_digest: [3; 32],
-        generation: 1,
-    }
-}
-
-fn controller_with_probe(
-    state: Arc<Mutex<FakeState>>,
-    probe: ReadyProbe,
-) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
-    controller_with_probe_and_deadline(state, probe, 120_000)
-}
-
-fn controller_with_probe_and_deadline(
-    state: Arc<Mutex<FakeState>>,
-    probe: ReadyProbe,
-    startup_deadline_ms: u32,
-) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
-    controller_with_windows(state, probe, startup_deadline_ms, 30_000)
-}
-
-fn controller_with_windows(
-    state: Arc<Mutex<FakeState>>,
-    probe: ReadyProbe,
-    startup_deadline_ms: u32,
-    adoption_window_ms: u32,
-) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
-    let config = CloudHypervisorConfig {
+fn config() -> CloudHypervisorConfig {
+    CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
         default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
         watchdog: true,
-        adoption_window_ms,
+        adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,
         health_check_timeout_ms: 5_000,
         health_check_failure_threshold: 3,
-        startup_deadline_ms,
-    };
-    let settings = CloudHypervisorGuestSettings {
-        vcpus: Some(2),
-        memory_mb: Some(512),
-        machine_type: None,
-        console_type: ConsoleType::Null,
-        serial_port: true,
-        pvpanic: false,
-        watchdog_override: None,
-        memory_shared: true,
-        has_virtiofs_attachment: false,
-        system_artifact_id: Some("system-artifact".to_owned()),
-    };
-    let graph = BootstrapGraph::new(
+        startup_deadline_ms: 120_000,
+    }
+}
+
+fn graph() -> BootstrapGraph {
+    BootstrapGraph::new(
         vec![ResourceRef::parse("Device/kvm").unwrap()],
         vec![ResourceRef::parse("Network/work").unwrap()],
         vec![ResourceRef::parse("Volume/store").unwrap()],
-        vec![AttachmentRef::new("launch-ticket").unwrap()],
-    )
-    .unwrap();
-    CloudHypervisorController::new(
-        config,
-        settings,
-        graph,
-        Arc::new(FakeEffect { state }),
-        Arc::new(probe),
+        vec![],
     )
     .unwrap()
 }
 
-fn controller(state: Arc<Mutex<FakeState>>) -> CloudHypervisorController<FakeEffect, ReadyProbe> {
-    controller_with_probe(state, ReadyProbe::scripted(Vec::new()))
-}
-
-#[tokio::test]
-async fn dependency_barrier_prevents_process_launch() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let mut controller = controller(Arc::clone(&state));
-    assert!(matches!(
-        controller.reconcile(false, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Retry { .. }
-    ));
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Pending);
-    assert!(!state.lock().unwrap().launched);
-}
-
-#[tokio::test]
-async fn launch_requires_authenticated_guest_session_before_ready() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let mut controller = controller(Arc::clone(&state));
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Converged
-    );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Ready);
-    controller.finalize().await.unwrap();
-    assert!(state.lock().unwrap().stopped);
-    assert!(!controller.finalizer_installed());
-}
-
-#[tokio::test]
-async fn failed_pidfd_open_stops_the_newly_launched_vmm() {
-    let state = Arc::new(Mutex::new(FakeState {
-        pidfd_failures: 1,
-        ..FakeState::default()
-    }));
-    let mut controller = controller(Arc::clone(&state));
-
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
-    );
-    let state = state.lock().unwrap();
-    assert_eq!(state.stop_calls, 1);
-    assert!(state.stopped);
-    assert!(
-        !controller.finalizer_installed() || controller.phase() == CloudHypervisorPhase::Failed
-    );
-}
-
-#[tokio::test]
-async fn restart_rejects_stale_generation_before_pidfd_open() {
-    let state = Arc::new(Mutex::new(FakeState {
-        identity: Some(identity()),
-        ..FakeState::default()
-    }));
-    let mut controller = controller(Arc::clone(&state));
-    let mut expected = identity();
-    expected.generation = 2;
-    assert!(matches!(
-        controller.adopt(expected, 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
-    ));
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Degraded);
-}
-
-#[tokio::test]
-async fn adoption_window_is_not_reset_between_retries() {
-    let state = Arc::new(Mutex::new(FakeState {
-        identity: Some(identity()),
-        observations: vec![Some(identity()), None],
-        ..FakeState::default()
-    }));
-    let mut controller = controller_with_windows(
-        Arc::clone(&state),
-        ReadyProbe::scripted(Vec::new()),
-        120_000,
-        20,
-    );
-
-    assert!(matches!(
-        controller.adopt(identity(), 14).await,
-        Ok(CloudHypervisorReconcileOutcome::Retry { .. })
-    ));
-    sleep(Duration::from_millis(30)).await;
-    assert_eq!(
-        controller.adopt(identity(), 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
-    );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Degraded);
-}
-
-#[tokio::test]
-async fn adoption_window_survives_controller_restart() {
-    let now = Arc::new(Mutex::new(1_000));
-    let state = Arc::new(Mutex::new(FakeState {
-        identity: Some(identity()),
-        observations: vec![None],
-        ..FakeState::default()
-    }));
-    let mut controller = controller_with_windows(
-        Arc::clone(&state),
-        ReadyProbe::scripted(Vec::new()),
-        120_000,
-        20,
+fn guest() -> GuestSnapshot {
+    GuestSnapshot::new(
+        ZoneId::parse("work").unwrap(),
+        ResourceUid::parse(ZONE_UID).unwrap(),
+        ResourceRef::parse("Guest/gateway").unwrap(),
+        ResourceUid::parse(GUEST_UID).unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(7),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(1),
+        false,
     )
-    .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
+    .unwrap()
+}
+
+#[derive(Default)]
+struct RecordingSession {
+    requests: Mutex<Vec<CloudHypervisorResourceRequest>>,
+}
+
+#[async_trait]
+impl AuthenticatedResourceSession for RecordingSession {
+    async fn call(
+        &self,
+        request: CloudHypervisorResourceRequest,
+    ) -> Result<CloudHypervisorResourceResponse, CloudHypervisorResourceApiError> {
+        self.requests.lock().unwrap().push(request.clone());
+        match request {
+            CloudHypervisorResourceRequest::Register { .. } => {
+                Ok(CloudHypervisorResourceResponse::Registered)
+            }
+            CloudHypervisorResourceRequest::GetGuest { .. } => {
+                Ok(CloudHypervisorResourceResponse::Guest(guest()))
+            }
+            CloudHypervisorResourceRequest::RelistOwnedChildren { .. } => {
+                Ok(CloudHypervisorResourceResponse::OwnedChildren(Vec::new()))
+            }
+            CloudHypervisorResourceRequest::ObserveDependencies { .. } => {
+                Ok(CloudHypervisorResourceResponse::Dependencies(
+                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::ready(graph()),
+                ))
+            }
+            CloudHypervisorResourceRequest::CommitBatch { .. } => {
+                Ok(CloudHypervisorResourceResponse::Committed(
+                    d2b_provider_runtime_cloud_hypervisor::GuestChildCommitResponse::Uncertain,
+                ))
+            }
+            CloudHypervisorResourceRequest::UpdateSpec { .. } => {
+                Err(CloudHypervisorResourceApiError::InvalidResponse)
+            }
+            CloudHypervisorResourceRequest::UpdateStatus { .. } => {
+                Ok(CloudHypervisorResourceResponse::StatusUpdated)
+            }
+            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
+                Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                    d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                ))
+            }
+            CloudHypervisorResourceRequest::AssessUpdate { .. } => {
+                Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
+            }
+            CloudHypervisorResourceRequest::ObserveFinalization { .. } => {
+                Err(CloudHypervisorResourceApiError::InvalidResponse)
+            }
+            CloudHypervisorResourceRequest::DrainGuestLocal { .. }
+            | CloudHypervisorResourceRequest::CloseGuestSession { .. }
+            | CloudHypervisorResourceRequest::DeleteChild { .. }
+            | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
+            | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn registration_uses_verified_descriptor_and_authenticated_resource_calls() {
+    let session = Arc::new(RecordingSession::default());
+    let api = AuthenticatedResourceApiAdapter::new(Arc::clone(&session));
+    let mut controller = CloudHypervisorController::from_verified_descriptor(
+        config(),
+        graph(),
+        descriptor(),
+        api.into(),
+    )
+    .unwrap();
+
+    controller.register().await.unwrap();
+
+    let registration = controller.registration();
+    assert_eq!(
+        registration.provider_ref(),
+        &ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap()
+    );
+    assert_eq!(
+        registration.descriptor_digest(),
+        descriptor().descriptor().descriptor_digest()
+    );
+    assert_eq!(
+        registration.watched_types(),
+        &[
+            "Guest".parse().unwrap(),
+            "Process".parse().unwrap(),
+            "Endpoint".parse().unwrap(),
+            "Volume".parse().unwrap(),
+        ]
+    );
+    assert_eq!(
+        registration.dependency_types(),
+        &["Device".parse().unwrap(), "Network".parse().unwrap()]
+    );
+
+    let outcome = controller
+        .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+        .await
+        .unwrap();
+    assert!(outcome.is_pending());
+
+    let requests = session.requests.lock().unwrap();
+    assert!(matches!(
+        requests.first(),
+        Some(CloudHypervisorResourceRequest::Register { .. })
+    ));
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        CloudHypervisorResourceRequest::RelistOwnedChildren { .. }
+    )));
+}
+
+#[tokio::test]
+async fn one_uid_free_batch_contains_the_complete_guest_owned_child_graph() {
+    let session = Arc::new(RecordingSession::default());
+    let api = AuthenticatedResourceApiAdapter::new(Arc::clone(&session));
+    let mut controller = CloudHypervisorController::from_verified_descriptor(
+        config(),
+        graph(),
+        descriptor(),
+        api.into(),
+    )
+    .unwrap();
+    controller.register().await.unwrap();
+    controller
+        .reconcile(&ResourceRef::parse("Guest/gateway").unwrap())
+        .await
+        .unwrap();
+
+    let requests = session.requests.lock().unwrap();
+    let Some(CloudHypervisorResourceRequest::CommitBatch { batch }) = requests
+        .iter()
+        .find(|request| matches!(request, CloudHypervisorResourceRequest::CommitBatch { .. }))
+    else {
+        panic!("expected one child CommitBatch");
+    };
+    assert_eq!(batch.mutations().len(), 4);
+    let mut targets = batch
+        .mutations()
+        .iter()
+        .map(|mutation| mutation.target().to_canonical_string())
+        .collect::<Vec<_>>();
+    targets.sort();
+    assert_eq!(
+        targets,
+        vec![
+            "Endpoint/gateway-ch-api",
+            "Endpoint/gateway-guest-control",
+            "Process/gateway-vmm",
+            "Volume/gateway-system",
+        ]
+    );
+    assert_eq!(batch.owner_uid(), &ResourceUid::parse(GUEST_UID).unwrap());
+    assert_eq!(batch.owner_revision(), ZoneRevision::new(7));
+    assert!(batch.mutations().iter().all(|mutation| {
+        mutation.expected_uid().is_none()
+            && mutation.owner_ref() == &ResourceRef::parse("Guest/gateway").unwrap()
+            && mutation.zone() == &ZoneId::parse("work").unwrap()
+    }));
+    for mutation in batch.mutations() {
+        let payload =
+            String::from_utf8(batch.canonical_payload(mutation.target()).unwrap()).unwrap();
+        assert!(!payload.contains("\"uid\""));
+        assert!(!payload.contains("argv"));
+        assert!(!payload.contains("credential"));
+        assert!(!payload.contains("locator"));
+        assert!(!payload.contains("/nix/store"));
+    }
+}
+
+#[test]
+fn same_guest_name_in_different_zones_has_distinct_private_runtime_identity() {
+    let session = Arc::new(RecordingSession::default());
+    let api = AuthenticatedResourceApiAdapter::new(session);
+    let controller = CloudHypervisorController::from_verified_descriptor(
+        config(),
+        graph(),
+        descriptor(),
+        api.into(),
+    )
+    .unwrap();
+    let first = guest();
+    let second = GuestSnapshot::new(
+        ZoneId::parse("other").unwrap(),
+        ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+        ResourceRef::parse("Guest/gateway").unwrap(),
+        ResourceUid::parse("323e4567-e89b-42d3-a456-426614174003").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ZoneRevision::new(7),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(1),
+        false,
+    )
+    .unwrap();
+
+    assert_ne!(
+        controller.private_runtime_scope(&first, "vmm").unwrap(),
+        controller.private_runtime_scope(&second, "vmm").unwrap()
+    );
+}
+
+#[test]
+fn invalid_descriptor_is_rejected_before_registration() {
+    let raw = GuestSetupDescriptor::new(
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        ResourceGeneration::new(3).unwrap(),
+        d2b_contracts_resource::v3::ArtifactId::parse("guest-system").unwrap(),
+        d2b_contracts_provider::v3::ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
+        GuestSeedContract::new(
+            "guest-resource-seed",
+            d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
+            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
+        DescriptorSignature::new(
+            SignatureAlgorithm::Ed25519Blake3,
+            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
+            "wrong-signature",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let session = Arc::new(RecordingSession::default());
+    let api = AuthenticatedResourceApiAdapter::new(Arc::clone(&session));
+
+    let error = CloudHypervisorController::from_descriptor(
+        config(),
+        graph(),
+        raw,
+        &AcceptingVerifier,
+        api.into(),
+    )
+    .unwrap_err();
 
     assert!(matches!(
-        controller.adopt(identity(), 14).await,
-        Ok(CloudHypervisorReconcileOutcome::Retry { .. })
+        error,
+        d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Descriptor(_)
     ));
-    let recovery = controller.recovery_state();
-    *now.lock().unwrap() = 1_030;
-    let mut restored =
-        controller_with_windows(state, ReadyProbe::scripted(Vec::new()), 120_000, 20)
-            .with_clock(Arc::new(FixedClock(Arc::clone(&now))))
-            .restore_recovery_state(recovery)
-            .unwrap();
-    assert_eq!(
-        restored.adopt(identity(), 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
-    );
-    assert_eq!(restored.phase(), CloudHypervisorPhase::Degraded);
-}
-
-#[tokio::test]
-async fn observed_process_without_durable_identity_is_rejected() {
-    let state = Arc::new(Mutex::new(FakeState {
-        identity: Some(identity()),
-        ..FakeState::default()
-    }));
-    let mut controller = controller(state);
-    assert!(matches!(
-        controller.reconcile(true, true, true, 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::AdoptionAmbiguous)
-    ));
-}
-
-#[tokio::test]
-async fn failed_stop_retains_identity_for_retry() {
-    let state = Arc::new(Mutex::new(FakeState {
-        stop_failures: 1,
-        ..FakeState::default()
-    }));
-    let mut controller = controller(Arc::clone(&state));
-    controller.reconcile(true, true, true, 14).await.unwrap();
-    assert_eq!(
-        controller.finalize().await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
-    );
-    assert!(controller.finalizer_installed());
-    controller.finalize().await.unwrap();
-    assert!(!controller.finalizer_installed());
-    assert_eq!(state.lock().unwrap().stop_calls, 2);
-}
-
-#[tokio::test]
-async fn finalization_requires_observing_process_exit() {
-    let state = Arc::new(Mutex::new(FakeState {
-        stop_leaves_identity: true,
-        ..FakeState::default()
-    }));
-    let mut controller = controller(Arc::clone(&state));
-    controller.reconcile(true, true, true, 14).await.unwrap();
-    assert_eq!(
-        controller.finalize().await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::Effect)
-    );
-    assert!(controller.finalizer_installed());
-    state.lock().unwrap().stop_leaves_identity = false;
-    controller.finalize().await.unwrap();
-    assert!(!controller.finalizer_installed());
-}
-
-#[tokio::test]
-async fn absent_process_still_closes_guest_session() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let probe = ReadyProbe::scripted(Vec::new());
-    let close_calls = Arc::clone(&probe.close_calls);
-    let mut controller = controller_with_probe(Arc::clone(&state), probe);
-    controller.reconcile(true, true, true, 14).await.unwrap();
-    state.lock().unwrap().identity = None;
-
-    controller.finalize().await.unwrap();
-
-    assert_eq!(*close_calls.lock().unwrap(), vec![14]);
-    assert!(!controller.finalizer_installed());
-}
-
-#[tokio::test]
-async fn degraded_health_requires_threshold_before_phase_change() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let mut controller = controller_with_probe(
-        state,
-        ReadyProbe::scripted(vec![
-            GuestSessionHealth::Ready,
-            GuestSessionHealth::Degraded,
-            GuestSessionHealth::Degraded,
-        ]),
-    );
-    assert!(matches!(
-        controller.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Retry { .. }
-    ));
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Bootstrapping);
-    assert!(matches!(
-        controller.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Retry { .. }
-    ));
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Bootstrapping);
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Converged
-    );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Ready);
-}
-
-#[tokio::test]
-async fn launch_is_cancelled_at_startup_deadline() {
-    let state = Arc::new(Mutex::new(FakeState {
-        launch_delay_ms: 100,
-        ..FakeState::default()
-    }));
-    let mut controller =
-        controller_with_probe_and_deadline(state, ReadyProbe::scripted(Vec::new()), 20);
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::StartupDeadlineExceeded)
-    );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Failed);
-}
-
-#[tokio::test]
-async fn initial_guest_session_probe_is_cancelled_at_startup_deadline() {
-    let state = Arc::new(Mutex::new(FakeState::default()));
-    let mut controller =
-        controller_with_probe_and_deadline(state, ReadyProbe::delayed(Vec::new(), 100), 20);
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await,
-        Err(d2b_provider_runtime_cloud_hypervisor::CloudHypervisorError::StartupDeadlineExceeded)
-    );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Failed);
+    assert!(session.requests.lock().unwrap().is_empty());
 }

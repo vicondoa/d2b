@@ -1,151 +1,36 @@
-# Edit a VM's config from inside the VM
+# Edit a Guest evaluator
 
-d2b normally treats each VM's config as host-owned: you declare it
-in your host config (`d2b.vms.<vm>.config`), build it on the host,
-and the guest boots a read-only closure. That keeps the trusted host in
-control of the runner substrate (mounts, devices, hypervisor args, …).
-
-But sometimes you want to iterate on what's *installed inside* a VM
-from inside the VM, then persist that change on the host with review.
-That's what `guestConfigFile` + `d2b activation config` are for.
-
-## The split: host-owned vs guest-editable
-
-| Concern | Where it lives | Editable in VM? |
-| --- | --- | --- |
-| Mounts / `microvm.*` runner substrate, `d2b.*` framework, env, components | host-owned `d2b.vms.<vm>.config` | no |
-| Installed software: `environment.systemPackages`, `services.*`, in-guest `users.users.*`, `programs.*`, files, desktop | **`d2b.vms.<vm>.guestConfigFile`** | **yes** |
-
-Both merge into the single per-VM closure the guest boots, so the
-guest-editable layer genuinely runs in the VM. The guest-editable file
-is **contained**: if it tries to set any host-owned `microvm.*` /
-`d2b.*` option, the host rebuild fails with a clear assertion. The
-guest can change its own OS, never the host's control of it.
-
-## One-time setup
-
-Point a VM at a dedicated guest file and move the in-VM software layer
-into it:
+Guest operating-system configuration is consumer-owned. The host declares a
+semantic `Guest` Resource and supplies its evaluator through
+`d2b.guestSystems.<zone>.<guest>`.
 
 ```nix
-# host config
-d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
+d2b.guestSystems.work.work-app = {
+  config = {
+    environment.systemPackages = [ ];
+    services.openssh.enable = true;
+    system.build.toplevel = inputs.workGuestSystem;
+  };
+};
 ```
 
-```nix
-# ./vms/work.guest.nix - only guest OS options
-{ ... }:
-{
-  environment.systemPackages = [ ];   # add your packages
-  services.openssh.enable = true;
-  # microvm.* / d2b.* here would FAIL the build (contained).
-}
+Framework settings, Provider selection, host devices, sockets, credentials,
+and runtime identity remain outside the Guest evaluator. A guest module must
+not define `d2b.*` host options or place raw host paths in a Resource spec.
+
+## Apply an evaluator change
+
+```bash
+d2b activation switch Guest/work-app --zone work --dry-run
+d2b activation switch Guest/work-app --zone work --apply
+d2b guest status work-app --zone work
 ```
 
-Rebuild the host once (`d2b activation switch Guest/work --apply`). The guest now carries:
+The activation Provider publishes the selected immutable system artifact and
+uses the authenticated Guest session for live activation. Stopped Guests use
+offline staging for their next start. The Guest controller and specialized
+Providers remain the lifecycle owners.
 
-- `/etc/d2b/guest-config.nix` - a **read-only** copy of the current
-  approved guest config (always reflects what's live).
-- `/var/lib/d2b-guest/guest-config.nix` - a **writable** working
-  copy, seeded once from the baseline. It is owned by the VM's
-  `ssh.user` when one is declared, and by `root` otherwise (the
-  component-session exec path can edit it either way).
-
-### Prerequisite: the component-session channel
-
-`config sync` reads the edited file over the authenticated
-**component-session** vsock - the daemon's `ReadGuestConfig` →
-target-local Process `ReadGuestFile` path - not over SSH. It is wired exactly when
-the VM both enables component-session and declares a `guestConfigFile`:
-
-```nix
-d2b.vms.work.guest.componentSession.enable = true; # enable the target-local Process service
-d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
-```
-
-With those set, target-local Process advertises the `ReadGuestFile` capability and
-serves a bounded read of exactly the working-copy path. Without them
-the capability stays absent and `config sync` **fails closed** with a
-typed error - it never falls back to SSH. `ssh.user` is **not**
-required for sync; it only chooses a non-root owner for the writable
-working copy (and remains the in-VM account you edit as when you reach
-the VM over SSH/console):
-
-```nix
-d2b.vms.work.ssh.user = "alice";   # optional: the in-VM account that owns the writable copy
-```
-
-When `ssh.user` is unset the working copy is owned by `root`.
-
-## The edit → sync → review → approve loop
-
-1. **Edit inside the VM.** SSH/console into the VM and edit the writable
-   working copy:
-
-   ```bash
-   $EDITOR /var/lib/d2b-guest/guest-config.nix
-   ```
-
-2. **Sync it back to the host (on-demand).** From the host:
-
-   ```bash
-   d2b activation config sync Guest/work
-   ```
-
-   This pulls the edited file over the authenticated component-session
-   channel into a host-side staging copy
-   (`~/.local/state/d2b/config-staging/work.guest.nix`). The host
-   treats it as untrusted data - nothing is evaluated yet.
-
-3. **Review the change.**
-
-   ```bash
-   d2b activation config diff Guest/work --against ./vms/work.guest.nix
-   ```
-
-4. **Approve (or reject).** Approve writes the staged copy onto your
-   guest file:
-
-   ```bash
-   d2b activation config approve Guest/work --to ./vms/work.guest.nix
-   # or, to discard:
-   d2b activation config reject Guest/work
-   ```
-
-   `approve` is atomic and only validates the bytes; the **real**
-   containment + eval gate is the next step.
-
-5. **Build + activate.**
-
-   ```bash
-   d2b activation switch Guest/work --apply
-   ```
-
-   The `guestConfigFile` containment assertion runs during this eval -
-   a change that reached for a host-owned option is rejected here,
-   before anything is built or activated.
-
-## You can also build on the host
-
-Nothing forces the in-VM loop. Editing `./vms/work.guest.nix` directly
-on the host and running `d2b activation switch Guest/work --apply` works exactly the same -
-the same file, the same containment. The in-VM loop is just an
-ergonomic way to iterate from inside the workspace.
-
-## Status
-
-`d2b activation config status Guest/work` lists a Guest with a pending (un-approved)
-staged config. `d2b guest status <name>` and `d2b guest start <name>` also print a
-note when a VM has a pending edit (human output only), so an in-progress
-edit isn't silently forgotten before you approve it.
-
-## Notes
-
-- The CLI never auto-writes your config tree: `approve` only writes the
-  `--to` path you name. It never touches anything you don't point it at.
-- `config sync` is host-initiated (the host reads the guest's working
-  copy over the authenticated component-session vsock). The guest never
-  initiates a connection to the host control plane, and there is no new
-  socket or virtiofs share.
-- If `/var` is not persistent in your VM, the writable working copy is
-  re-seeded from the read-only baseline on each boot.
+For interactive iteration use [persistent shells](./use-persistent-shells.md)
+or [Guest exec](../reference/cli-contract.md#guest-execution); do not invent a
+second host-to-Guest config channel.

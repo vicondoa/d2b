@@ -21,13 +21,14 @@
 //! pure data so it's fully unit-tested without root.
 
 use std::ffi::{CString, NulError};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 
 /// Validated launch plan. Produced by [`preflight`] from a
 /// bundle-resolved row; consumed by `clone3_pidfd_or_fork_fallback`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpawnRunnerPlan {
     pub binary_path: PathBuf,
     pub argv: Vec<String>,
@@ -49,6 +50,12 @@ pub struct SpawnRunnerPlan {
     /// File-creation mask the broker installs in the spawned child
     /// before execve. See `MinijailProfile::umask`.
     pub umask: Option<u32>,
+}
+
+impl fmt::Debug for SpawnRunnerPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SpawnRunnerPlan(<redacted>)")
+    }
 }
 
 /// Single-entry uid/gid mapping for a runner's user namespace.
@@ -129,7 +136,7 @@ impl std::fmt::Display for SpawnRunnerError {
 impl std::error::Error for SpawnRunnerError {}
 
 /// Input to [`preflight`]. Pure data; no syscalls.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpawnRunnerPlanInput {
     pub binary_path: PathBuf,
     pub argv: Vec<String>,
@@ -156,6 +163,12 @@ pub struct SpawnRunnerPlanInput {
     pub user_namespace: Option<UserNamespaceSpec>,
     /// Optional umask installed before execve.
     pub umask: Option<u32>,
+}
+
+impl fmt::Debug for SpawnRunnerPlanInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SpawnRunnerPlanInput(<redacted>)")
+    }
 }
 /// [`SpawnRunnerPlan`].
 pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnRunnerError> {
@@ -458,6 +471,20 @@ mod tests {
         assert_eq!(argv.len(), 2);
         assert_eq!(env.len(), 2);
         assert_eq!(argv[0].to_string_lossy(), "microvm@corp-vm");
+    }
+
+    #[test]
+    fn launch_plan_debug_redacts_host_values() {
+        let input = good_input();
+        let plan = preflight(&input).unwrap();
+        let plan_debug = format!("{plan:?}");
+        let input_debug = format!("{input:?}");
+        for rendered in [plan_debug, input_debug] {
+            assert!(!rendered.contains("/nix/store/abc"));
+            assert!(!rendered.contains("PATH=/usr/bin"));
+            assert!(!rendered.contains("cloud-hypervisor"));
+            assert!(rendered.contains("<redacted>"));
+        }
     }
 
     // user_namespace round-trips (ADR 0021).

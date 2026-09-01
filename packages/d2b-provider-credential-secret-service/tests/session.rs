@@ -1,16 +1,10 @@
 mod common;
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialServiceErrorCode,
     PlacementBinding, dispatch_authorized_provider,
-},
 };
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServicePlacement,

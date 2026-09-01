@@ -2391,8 +2391,9 @@ impl ZoneConfigController {
                 now,
             );
         }
+        let candidate_zone_uid = candidate.zone_uid.as_ref().or_else(|| bundle.zone_uid());
         if let Some(current_uid) = self.state.zone_uid()
-            && candidate.zone_uid.as_ref() != Some(current_uid)
+            && candidate_zone_uid != Some(current_uid)
         {
             return self.reject(
                 ActivationError::ZoneUidMismatch,
@@ -2479,7 +2480,7 @@ impl ZoneConfigController {
         .unwrap_or(u32::MAX);
 
         if self.state.zone_uid.is_none() {
-            self.state.zone_uid = candidate.zone_uid.clone();
+            self.state.zone_uid = candidate_zone_uid.cloned();
         }
         self.state.last_activation_error = None;
         self.active_bundles

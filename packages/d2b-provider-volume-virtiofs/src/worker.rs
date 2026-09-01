@@ -12,10 +12,8 @@ use std::fmt;
 use serde::Serialize;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     AttachmentAccess, AttachmentCache, InodeFileHandles, ViewRight, ViewSpec,
-},
 };
 
 use crate::error::VirtiofsExportError;

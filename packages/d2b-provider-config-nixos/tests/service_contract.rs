@@ -24,7 +24,12 @@ fn descriptor_is_closed_and_service_only() {
     descriptor.validate().expect("canonical descriptor");
     assert!(descriptor.service_only);
     assert_eq!(descriptor.methods.len(), ConfigOperation::ALL.len());
-    assert!(descriptor.methods.iter().all(|method| method.starts_with("ConfigNixosService/")));
+    assert!(
+        descriptor
+            .methods
+            .iter()
+            .all(|method| method.starts_with("ConfigNixosService/"))
+    );
 }
 
 #[test]
@@ -32,11 +37,18 @@ fn request_and_document_bounds_are_enforced() {
     let guest = ResourceRef::parse("Guest/work").expect("guest ref");
     let request = ConfigSyncRequest::new(guest).expect("request");
     let service = ConfigService;
-    assert!(service.validate_operation(
-        ConfigOperation::ReadGuestConfig,
-        &serde_json::to_value(&request).expect("request JSON")
-    ).is_ok());
-    assert!(GuestConfigDocument::new(vec![b'x'; d2b_provider_config_nixos::MAX_CONFIG_BYTES + 1]).is_err());
+    assert!(
+        service
+            .validate_operation(
+                ConfigOperation::ReadGuestConfig,
+                &serde_json::to_value(&request).expect("request JSON")
+            )
+            .is_ok()
+    );
+    assert!(
+        GuestConfigDocument::new(vec![b'x'; d2b_provider_config_nixos::MAX_CONFIG_BYTES + 1])
+            .is_err()
+    );
 }
 
 #[test]
@@ -94,7 +106,9 @@ fn config_service_publishes_only_the_closed_typed_methods() {
             .expect("method prefix");
         assert!(service.methods.contains_key(method));
     }
-    assert!(services
-        .keys()
-        .all(|name| name == "d2b.config-nixos.v3.ConfigNixosService"));
+    assert!(
+        services
+            .keys()
+            .all(|name| name == "d2b.config-nixos.v3.ConfigNixosService")
+    );
 }

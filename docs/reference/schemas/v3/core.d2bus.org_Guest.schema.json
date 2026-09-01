@@ -306,6 +306,20 @@
           },
           "type": "array"
         },
+        "executionRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef",
+              "x-d2b-reference-kind": "ResourceRef",
+              "x-d2b-reference-scope": "same-zone"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
         "networkAttachments": {
           "items": {
             "$ref": "#/definitions/NetworkAttachment"

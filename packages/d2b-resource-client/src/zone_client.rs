@@ -17,12 +17,16 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceName, ResourceRef, ResourceTypeName,
+    CanonicalJsonObject, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, SchemaFingerprint, ZoneId,
 };
 use d2b_core_controller::controller_assignment::{
-    AssignmentError, AssignmentVerb, ResourceClientLease, ScopedResourceFilter, ScopedResourceQuery,
+    AssignmentError, ResourceClientLease, ScopedResourceFilter,
 };
-pub use d2b_core_controller::controller_assignment::{AssignmentIdentity, ScopedResourceMutation};
+pub use d2b_core_controller::controller_assignment::{
+    AssignmentIdentity, AssignmentVerb, OwnerChildScope, ScopedResourceMutation,
+    ScopedResourceQuery, ScopedResourceScope,
+};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
@@ -114,6 +118,146 @@ pub struct ZoneSessionPin {
     transport: TransportKind,
     reconnect_generation: u64,
     transcript_hash: [u8; 32],
+}
+
+/// Authenticated, locator-free identity of a Guest-control Endpoint.
+///
+/// Endpoint resolution is an authorized effect-owner operation. This value
+/// carries only the bounded evidence needed to bind that result to a Guest
+/// session; no socket, CID, port, file descriptor, or credential is
+/// representable.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GuestControlEndpoint {
+    endpoint_ref: ResourceRef,
+    guest_ref: ResourceRef,
+    zone: ZoneId,
+    uid: ResourceUid,
+    resource_generation: ResourceGeneration,
+    endpoint_generation: ResourceGeneration,
+    provider_generation: ResourceGeneration,
+    schema_digest: SchemaFingerprint,
+    ready: bool,
+}
+
+impl GuestControlEndpoint {
+    /// Construct one resolved Guest-control Endpoint identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        endpoint_ref: ResourceRef,
+        guest_ref: ResourceRef,
+        zone: ZoneId,
+        uid: ResourceUid,
+        resource_generation: ResourceGeneration,
+        endpoint_generation: ResourceGeneration,
+        provider_generation: ResourceGeneration,
+        schema_digest: SchemaFingerprint,
+        ready: bool,
+    ) -> Result<Self, ClientError> {
+        if endpoint_ref.resource_type().as_str() != "Endpoint"
+            || guest_ref.resource_type().as_str() != "Guest"
+            || zone.as_str().is_empty()
+            || resource_generation.get() == 0
+            || endpoint_generation.get() == 0
+            || provider_generation.get() == 0
+            || !ready
+        {
+            return Err(ClientError::InvalidTarget);
+        }
+        Ok(Self {
+            endpoint_ref,
+            guest_ref,
+            zone,
+            uid,
+            resource_generation,
+            endpoint_generation,
+            provider_generation,
+            schema_digest,
+            ready,
+        })
+    }
+
+    /// Borrow the exact Endpoint ResourceRef.
+    pub const fn endpoint_ref(&self) -> &ResourceRef {
+        &self.endpoint_ref
+    }
+
+    /// Borrow the producing Guest ResourceRef.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the exact Endpoint Zone.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the store-assigned Endpoint UID.
+    pub const fn uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+
+    /// Borrow the store-assigned Endpoint UID.
+    pub const fn endpoint_uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+
+    /// Return the Endpoint Resource generation.
+    pub const fn resource_generation(&self) -> ResourceGeneration {
+        self.resource_generation
+    }
+
+    /// Return the producer-derived Endpoint generation.
+    pub const fn endpoint_generation(&self) -> ResourceGeneration {
+        self.endpoint_generation
+    }
+
+    /// Return the Provider generation observed with the Endpoint.
+    pub const fn provider_generation(&self) -> ResourceGeneration {
+        self.provider_generation
+    }
+
+    /// Borrow the target-local schema commitment.
+    pub const fn schema_digest(&self) -> &SchemaFingerprint {
+        &self.schema_digest
+    }
+
+    /// Whether the Endpoint is currently ready for an authenticated session.
+    pub const fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// Validate this resolution against one exact Guest and Provider contract.
+    pub fn validate_for(
+        &self,
+        endpoint_ref: &ResourceRef,
+        guest_ref: &ResourceRef,
+        provider_generation: ResourceGeneration,
+        schema_digest: &SchemaFingerprint,
+    ) -> Result<(), ClientError> {
+        if !self.ready
+            || &self.endpoint_ref != endpoint_ref
+            || &self.guest_ref != guest_ref
+            || self.provider_generation != provider_generation
+            || &self.schema_digest != schema_digest
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for GuestControlEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GuestControlEndpoint")
+            .field("ready", &self.ready)
+            .field("has_endpoint_uid", &true)
+            .field("resource_generation", &self.resource_generation)
+            .field("endpoint_generation", &self.endpoint_generation)
+            .field("provider_generation", &self.provider_generation)
+            .field("has_schema_digest", &true)
+            .finish()
+    }
 }
 
 impl ZoneSessionPin {
@@ -500,6 +644,17 @@ where
         filters: Vec<ScopedResourceFilter>,
     ) -> Result<ScopedResourceQuery, AssignmentError> {
         lease.query(resource_types, resource_names, filters)
+    }
+
+    /// Mint an owner-bound Process child query for the controller lease.
+    pub fn scoped_child_query(
+        &self,
+        lease: &ResourceClientLease,
+        resource_types: Vec<ResourceTypeName>,
+        resource_names: Vec<ResourceName>,
+        filters: Vec<ScopedResourceFilter>,
+    ) -> Result<ScopedResourceQuery, AssignmentError> {
+        lease.child_query(resource_types, resource_names, filters)
     }
 
     /// Resolve a target and prepare one bounded Resource call.
@@ -898,5 +1053,25 @@ mod tests {
             .unwrap_err(),
             ClientError::ContractViolation
         );
+    }
+
+    #[test]
+    fn guest_control_endpoint_keeps_only_exact_redacted_identity() {
+        let endpoint = GuestControlEndpoint::new(
+            ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+            ResourceRef::parse("Guest/gateway").unwrap(),
+            d2b_contracts_resource::v3::ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ResourceGeneration::new(3).unwrap(),
+            SchemaFingerprint::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(endpoint.endpoint_uid(), endpoint.uid());
+        assert_eq!(endpoint.zone().as_str(), "work");
+        assert!(!format!("{endpoint:?}").contains("gateway"));
+        assert!(!format!("{endpoint:?}").contains("123e4567"));
     }
 }

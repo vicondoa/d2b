@@ -173,9 +173,9 @@ fn validate_observation_value(
         if is_sensitive_key(key) {
             if key == "trace_id" || key == "span_id" {
                 if !(value.is_null()
-                    || value
-                        .as_str()
-                        .is_some_and(d2b_contracts_resource::v3::resource_schema::is_canonical_digest))
+                    || value.as_str().is_some_and(
+                        d2b_contracts_resource::v3::resource_schema::is_canonical_digest,
+                    ))
                 {
                     return Err(TelemetryFrameError::ResourceAttributeInvalid);
                 }
@@ -372,10 +372,12 @@ fn redact_value(value: &mut Value, key: Option<&str>, redact_sensitive_signal: b
             return;
         }
         let bytes = serde_json::to_vec(value).unwrap_or_default();
-        *value = Value::String(d2b_contracts_resource::v3::resource_schema::canonical_digest(
-            "d2b:telemetry-redaction:v1",
-            &bytes,
-        ));
+        *value = Value::String(
+            d2b_contracts_resource::v3::resource_schema::canonical_digest(
+                "d2b:telemetry-redaction:v1",
+                &bytes,
+            ),
+        );
         return;
     }
     match value {

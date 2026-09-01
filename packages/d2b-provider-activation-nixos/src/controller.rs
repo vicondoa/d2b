@@ -3,19 +3,9 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::{
-    ActivationMode,
-    ActivationOutcomeCode,
-    ArtifactId,
-    ActivationRunnerInput,
-    process::{
-        EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec,
-    },
-    EnvironmentClass,
-    ExecutionDomain,
-    ResourceName,
-    NixosGenerationSpec,
-    ResourcePhase,
-    ResourceRef,
+    ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
+    ExecutionDomain, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
+    process::{EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec},
 };
 use sha2::{Digest, Sha256};
 
@@ -193,8 +183,7 @@ pub fn activation_runner_ref(generation: &ResourceRef) -> ResourceRef {
         "{ACTIVATION_RUNNER_RESOURCE_TYPE}/{}",
         activation_runner_name(generation).as_str()
     );
-    ResourceRef::parse(&canonical)
-    .expect("activation runner reference is valid")
+    ResourceRef::parse(&canonical).expect("activation runner reference is valid")
 }
 
 /// Build the closed EphemeralProcess contract for one activation request.
@@ -203,7 +192,11 @@ pub fn activation_runner_spec(request: &RunnerRequest) -> EphemeralProcessSpec {
     let template = d2b_contracts_resource::v3::BoundedToken::parse(ACTIVATION_RUNNER_TEMPLATE)
         .expect("static activation runner template");
     let sandbox = SandboxSpec::new(
-        vec![NamespaceClass::Pid, NamespaceClass::Mount, NamespaceClass::Ipc],
+        vec![
+            NamespaceClass::Pid,
+            NamespaceClass::Mount,
+            NamespaceClass::Ipc,
+        ],
         Vec::new(),
         d2b_contracts_resource::v3::BoundedToken::parse("activation-nixos-runner")
             .expect("static activation runner seccomp class"),
@@ -402,9 +395,9 @@ impl ActivationController {
         ) && spec.activation_mode() != ActivationMode::Adopt
         {
             let generation_ref = format!(
-                    "activation-nixos.d2bus.org.NixosGeneration/{}",
-                    observed.name()
-                );
+                "activation-nixos.d2bus.org.NixosGeneration/{}",
+                observed.name()
+            );
             vec![RunnerRequest {
                 runner_name: activation_runner_name(
                     &ResourceRef::parse(&generation_ref).expect("generation reference is valid"),

@@ -3,7 +3,8 @@
 //! Every mutating variant carries **only opaque identifiers** +
 //! bundle-resolved intent refs. The daemon never names a raw path, a
 //! raw nft rule text, a raw route spec, a raw sysctl key/value, a raw
-//! ifname set, a raw `/etc/hosts` entry list, a raw uid/gid, raw argv
+//! ifname set outside the exact Network admission proof, a raw `/etc/hosts`
+//! entry list, a raw uid/gid, raw argv
 //! or env, raw caps, or a raw seccomp profile path. The broker uses
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
@@ -23,8 +24,7 @@ use d2b_contracts_resource::v3::process::{
 };
 use d2b_contracts_resource::v3::{
     ActivationRunnerInput, ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration,
-    ResourceRef, ResourceUid,
-    execution_policy::ExecutionDomain, storage::ZoneStoreId,
+    ResourceRef, ResourceUid, execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,8 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Consume one sealed Guest lifecycle lease before any host effect.
+    ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest),
     /// Obtain a pidfd for the peer of exactly one accepted Unix socket.
     ///
     /// The accepted socket is the sole SCM_RIGHTS request attachment. The
@@ -184,8 +186,8 @@ pub enum BrokerRequest {
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
     PrepareStoreView(PrepareStoreViewRequest),
-    /// Typed broker op that hardlink-farms a VM's resolved closure into
-    /// `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the
+    /// Typed broker op that hardlink-farms a Guest's resolved closure into
+    /// its Zone-qualified store view and atomically swaps the
     /// `current` symlink. Replaces the retired per-VM
     /// `d2b-<vm>-store-sync.service` bash oneshot. The daemon names
     /// only the opaque `bundle_closure_ref` + `vm_id` + expected
@@ -369,6 +371,7 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::ConsumeLifecycleLease(_) => "ConsumeLifecycleLease",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "OpenPeerPidfdFromAcceptedSocket",
             Self::ObserveRunner(_) => "ObserveRunner",
             Self::PipeWireAudio(_) => "PipeWireAudio",
@@ -448,6 +451,7 @@ impl BrokerRequest {
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenZoneStore(_) => "zone-store",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
+            Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
             _ => "operation",
         }
     }
@@ -726,7 +730,7 @@ impl BrokerRequest {
                 format!("{}:{}", self.op_name(), request.vm_id),
             ),
             Self::StoreSync(request) => (
-                request.vm_id.to_string(),
+                request.bundle_closure_ref.to_string(),
                 format!(
                     "{}:{}:{}:{}",
                     self.op_name(),
@@ -907,6 +911,16 @@ impl BrokerRequest {
                 request.bundle_udev_intent_ref.clone(),
                 format!("{}:{}", self.op_name(), request.bundle_udev_intent_ref),
             ),
+            Self::ConsumeLifecycleLease(request) => (
+                request.zone_uid.as_str().to_owned(),
+                format!(
+                    "{}:{}:{}:{:?}",
+                    self.op_name(),
+                    request.guest_uid.as_str(),
+                    request.operation_id,
+                    request.operation
+                ),
+            ),
             Self::ValidateBundle
             | Self::ExportBrokerAudit(_)
             | Self::Hello(_)
@@ -995,24 +1009,30 @@ impl BrokerProfile {
         match self {
             Self::Host => !Self::request_targets_guest(request),
             Self::Guest => match request {
+                BrokerRequest::ConsumeLifecycleLease(_) => false,
                 BrokerRequest::SpawnRunner(request) => {
                     request
                         .execution_ref
                         .as_ref()
                         .is_some_and(|target| target.resource_type().as_str() == "Guest")
                         && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
-                        && request.guest_execution.as_ref().is_some_and(GuestExecutionBinding::is_valid)
+                        && request
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
                 }
                 BrokerRequest::StartSystemdUnit(request)
                 | BrokerRequest::ObserveSystemdUnit(request)
-                | BrokerRequest::CheckSystemdUserManager(request) => request
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
-                        .guest_execution
+                | BrokerRequest::CheckSystemdUserManager(request) => {
+                    request
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
                 BrokerRequest::OpenPidfd(request) => request
                     .guest_execution
                     .as_ref()
@@ -1021,26 +1041,30 @@ impl BrokerProfile {
                     .guest_execution
                     .as_ref()
                     .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::OpenSystemdUnitPidfd(request) => request
-                    .unit
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
+                BrokerRequest::OpenSystemdUnitPidfd(request) => {
+                    request
                         .unit
-                        .guest_execution
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
-                BrokerRequest::StopSystemdUnit(request) => request
-                    .unit
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    && request
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .unit
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
+                BrokerRequest::StopSystemdUnit(request) => {
+                    request
                         .unit
-                        .guest_execution
+                        .execution_ref
                         .as_ref()
-                        .is_some_and(GuestExecutionBinding::is_valid),
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && request
+                            .unit
+                            .guest_execution
+                            .as_ref()
+                            .is_some_and(GuestExecutionBinding::is_valid)
+                }
                 BrokerRequest::SignalRunner(request) => request
                     .guest_execution
                     .as_ref()
@@ -1056,18 +1080,22 @@ impl BrokerProfile {
 
     fn request_targets_guest(request: &BrokerRequest) -> bool {
         match request {
-            BrokerRequest::SpawnRunner(request) => request
-                .execution_ref
-                .as_ref()
-                .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                || request.guest_execution.is_some(),
+            BrokerRequest::SpawnRunner(request) => {
+                request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    || request.guest_execution.is_some()
+            }
             BrokerRequest::StartSystemdUnit(request)
             | BrokerRequest::ObserveSystemdUnit(request)
-            | BrokerRequest::CheckSystemdUserManager(request) => request
-                .execution_ref
-                .as_ref()
-                .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                || request.guest_execution.is_some(),
+            | BrokerRequest::CheckSystemdUserManager(request) => {
+                request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    || request.guest_execution.is_some()
+            }
             BrokerRequest::OpenSystemdUnitPidfd(request) => {
                 request.unit.guest_execution.is_some()
                     || request
@@ -1129,6 +1157,7 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "QemuMediaAttach",
     "QemuMediaDetach",
     "OpenPidfd",
+    "ConsumeLifecycleLease",
     "OpenPeerPidfdFromAcceptedSocket",
     "ObserveRunner",
     "PipeWireAudio",
@@ -1430,6 +1459,8 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Confirmation that one lifecycle lease was consumed.
+    ConsumeLifecycleLease(ConsumeLifecycleLeaseResponse),
     /// Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`].
     /// The only attachment is the returned close-on-exec pidfd.
     OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketResponse),
@@ -1557,6 +1588,10 @@ pub struct ApplyNftablesProjectionRequest {
     pub bundle_nft_projection_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
     pub action: NftablesProjectionAction,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
     /// Immutable installed bundle generation the projection was resolved from.
     pub expected_generation_id: ResourceBundleGenerationId,
     #[serde(default)]
@@ -1581,6 +1616,11 @@ pub struct ApplyNmUnmanagedRequest {
 pub struct ApplyRouteRequest {
     pub bundle_route_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -1592,6 +1632,11 @@ pub struct ApplyRouteRequest {
 pub struct ApplySysctlRequest {
     pub bundle_sysctl_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -1617,25 +1662,24 @@ pub struct CreateOrReconcileUsersGroupsRequest {
 }
 
 /// The broker derives the bridge ifname, owner uid/gid, and TAP
-/// attributes from the trusted bundle row anchored by `role_id` +
-/// `vm_id`. The legacy wire carried a caller-supplied
-/// `ifname_derived: IfName`; that preserved a future bypass of
-/// broker-side trusted-bundle resolution, so the field was removed. The
-/// broker emits the observed ifname only in the audit record / response.
+/// attributes from the admitted Network identity. Every field in the
+/// provenance tuple and the exact admitted interface set is mandatory; there
+/// is no legacy env/manifest path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreatePersistentTapRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
-    /// Optional v3 attachment realization identity. Legacy host-prep callers
-    /// omit these fields; Network Provider callers supply all three so the
-    /// broker can adopt and generation-fence the persistent TAP on restart.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachment_id: Option<ResourceUid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network_generation: Option<ResourceGeneration>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachment_generation: Option<ResourceGeneration>,
+    /// Opaque TAP identity bound to the complete Network tuple below.
+    pub bundle_tap_intent_ref: BundleOpId,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1646,8 +1690,13 @@ pub struct CreatePersistentTapRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeletePersistentTapRequest {
     pub attachment_id: ResourceUid,
+    /// Exact Zone/Network identity and installed bundle generation required
+    /// for deletion; none are accepted from a caller as a wildcard.
+    pub expected_zone_uid: ResourceUid,
+    pub expected_network_uid: ResourceUid,
     pub expected_network_generation: ResourceGeneration,
     pub expected_attachment_generation: ResourceGeneration,
+    pub expected_bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1661,6 +1710,11 @@ pub struct DeletePersistentTapRequest {
 pub struct CreateBridgeRequest {
     pub bundle_bridge_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1672,17 +1726,32 @@ pub struct CreateBridgeRequest {
 pub struct DeleteBridgeRequest {
     pub bundle_bridge_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// See [`CreatePersistentTapRequest`] for the opaque-ID rationale;
-/// `CreateTapFd` follows the same contract.
+/// See [`CreatePersistentTapRequest`] for the provenance contract;
+/// `CreateTapFd` carries the same complete identity tuple and interface proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateTapFdRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
+    /// Opaque TAP identity bound to the complete Network tuple below.
+    pub bundle_tap_intent_ref: BundleOpId,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2017,6 +2086,40 @@ impl GuestExecutionBinding {
     }
 }
 
+/// Operation named by a sealed Guest lifecycle lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LifecycleLeaseOperation {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// Broker-side consumption of one daemon-issued Guest lifecycle lease.
+///
+/// The broker validates the complete immutable identity and records this
+/// unique lease identity as consumed before allowing the daemon to request
+/// effects. Replay retention is bounded by the broker's lease expiry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsumeLifecycleLeaseRequest {
+    pub zone_uid: ResourceUid,
+    pub guest_uid: ResourceUid,
+    pub guest_generation: u64,
+    pub provider_assignment_generation: u64,
+    pub policy_revision: u64,
+    pub operation_id: String,
+    pub operation: LifecycleLeaseOperation,
+    #[serde(default)]
+    pub stop_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsumeLifecycleLeaseResponse {
+    pub consumed: bool,
+}
+
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
 /// `d2bd::supervisor::state::reconcile_and_adopt` loop sends this
 /// request for every snapshot the classifier returned `Adopt` for. The
@@ -2042,6 +2145,9 @@ pub struct OpenPidfdRequest {
     /// Per-VM role identifier (matches the daemon-side
     /// `PidfdKey::role_id`).
     pub role_id: RoleId,
+    /// Exact trusted runner intent for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_runner_intent_ref: Option<BundleOpId>,
     /// PID the snapshot recorded.
     pub pid: i32,
     /// Field-22 start-time ticks from `/proc/<pid>/stat` at the
@@ -2055,6 +2161,27 @@ pub struct OpenPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2077,6 +2204,9 @@ pub struct OpenPidfdResponse {
     /// Always `0` today; reserved for future multi-fd
     /// SCM_RIGHTS handoffs.
     pub pidfd_index: u32,
+    /// Broker-retained Provider-controller bootstrap endpoint, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_bootstrap_fd_index: Option<u32>,
 }
 
 /// A request whose authority is the sole attached accepted Unix socket.
@@ -2107,6 +2237,27 @@ pub struct ObserveRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2530,8 +2681,9 @@ pub struct PrepareStoreViewRequest {
 }
 
 /// Store-sync request. The broker resolves the closure intent row from
-/// the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref`
-/// does not match. The broker also
+/// the opaque `bundle_closure_ref`, verifies that it belongs to the
+/// plain `vm_id`, and refuses the op if either identity does not match.
+/// The broker also
 /// refuses if the wire-supplied `generation_token` does not match the
 /// bundle's resolved generation. The token is a content-derived stable
 /// equality value (see `closures-json.nix`), not a monotonic counter:
@@ -2575,21 +2727,17 @@ pub struct StoreSyncResponse {
     pub cleanup_deferred: bool,
 }
 
-/// The broker derives the bridge, port,
-/// isolated/neigh_suppress/learning/unicast_flood flags, and matching
-/// rule rationale from the trusted bundle row anchored by `vm_id` +
-/// `role_id`. The legacy wire carried caller-supplied `bridge: IfName`,
-/// `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; these
-/// violated the broker's own "daemon never names raw ifnames or raw
-/// intent" invariant, so the fields were removed. The broker reads the
-/// per-role `BridgePortFlags` row from
-/// `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and
-/// applies the documented flag set.
+/// The broker derives the bridge, port, and flag set from the complete
+/// admitted Network identity. Legacy callers without that context are
+/// refused before any link mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetBridgePortFlagsRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
+    /// Complete admitted Network identity for a Network-owned port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_tap_context: Option<NetworkTapContext>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2619,6 +2767,16 @@ pub struct SetupMountNamespaceRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateHostsFileRequest {
     pub bundle_hosts_intent_ref: BundleOpId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_generation: Option<ResourceGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_generation: Option<ResourceGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_generation: Option<ResourceBundleGenerationId>,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -2839,6 +2997,27 @@ pub struct SignalRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2878,6 +3057,27 @@ pub struct DeregisterRunnerPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of a typed Process resource, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Selected Process Provider reference for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
+    /// Provider identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_identity: Option<[u8; 32]>,
+    /// Template identity commitment for typed Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_identity: Option<[u8; 32]>,
+    /// Desired Process generation for the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Exact Guest target/session binding for target-local Process cleanup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_execution: Option<GuestExecutionBinding>,
@@ -2907,6 +3107,8 @@ pub struct DeregisterRunnerPidfdResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerRole {
+    /// External Provider controller with one inherited bootstrap descriptor.
+    ProviderController,
     /// Cloud Hypervisor headless / hybrid VM. The runtime Provider owns argv
     /// planning; the broker consumes the bundle-authoritative launch shape.
     CloudHypervisor,
@@ -2972,6 +3174,7 @@ pub struct SandboxLaunchPlan {
 impl RunnerRole {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ProviderController => "provider-controller",
             Self::CloudHypervisor => "cloud-hypervisor",
             Self::QemuMedia => "qemu-media",
             Self::ActivationNixos => "activation-nixos-runner",
@@ -3002,9 +3205,9 @@ pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[RunnerRole::ActivationNixo
 pub struct SpawnRunnerRequest {
     /// VM scope the runner belongs to.
     pub vm_id: VmId,
-    /// Per-VM role this runner fills. Must be unique across the VM's
-    /// active runners - the daemon's pidfd table is keyed on
-    /// `(vm_id, role_id)` and a duplicate registration fails closed.
+    /// Per-VM role this runner fills. Legacy runners are unique on
+    /// `(vm_id, role_id)`; typed Process runners are additionally fenced by
+    /// their private runtime scope and resource incarnation.
     pub role_id: RoleId,
     /// Optional generic Process identity binding. These fields are part of
     /// the registry key and prevent distinct Process resources from
@@ -3013,6 +3216,18 @@ pub struct SpawnRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Exact semantic owner of the Process resource, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    /// Immutable semantic-owner UID for owner-scoped runtime bootstrap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<ResourceUid>,
+    /// Selected Process Provider reference for typed Process launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_ref: Option<ResourceRef>,
     /// Content identity of the daemon's trusted bundle snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_content_identity: Option<String>,
@@ -3023,6 +3238,9 @@ pub struct SpawnRunnerRequest {
     pub template_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u64>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Typed stdin input admitted only for the activation-nixos runner role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_input: Option<ActivationRunnerInput>,
@@ -3069,6 +3287,30 @@ pub struct SpawnRunnerRequest {
     /// carried in the existing typed fields, never inside this identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload_identity: Option<WorkloadIdentity>,
+    /// Number of request-side inherited descriptors attached with SCM_RIGHTS.
+    ///
+    /// Provider controller launches carry exactly one bootstrap descriptor;
+    /// every other runner launch carries zero.
+    #[serde(default)]
+    pub inherited_fd_count: u16,
+    /// Complete admitted Network context required when this runner opens a
+    /// VMM TAP through `CreateTapFd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_tap_context: Option<NetworkTapContext>,
+}
+
+/// Admitted Network identity passed through a VMM runner launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkTapContext {
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
 }
 
 /// Per-runner runtime allocation tuple. Each entry pairs a typed slot
@@ -3111,6 +3353,17 @@ pub struct SpawnRunnerResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub role: RunnerRole,
+    /// Exact generic Process identity echoed after broker validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
     /// Resolved execution binding and content identities echoed by the
     /// broker after validating the request against its trusted bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3142,6 +3395,9 @@ pub struct SpawnRunnerResponse {
     /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
+    /// Provider-controller bootstrap endpoint created and retained by the broker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_bootstrap_fd_index: Option<u32>,
     /// Optional index into the SCM_RIGHTS fd vector for a provider-specific
     /// console stream. qemu-media uses this for the daemon-owned peer of the
     /// socketpair whose other end was passed to QEMU.
@@ -3239,6 +3495,9 @@ pub enum BrokerCallerRole {
     RootUid {
         uid: u32,
     },
+    HostShutdownUid {
+        uid: u32,
+    },
     #[default]
     NotAuthorized,
 }
@@ -3253,6 +3512,7 @@ impl BrokerCallerRole {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
             Self::RootUid { .. } => "RootUid",
+            Self::HostShutdownUid { .. } => "d2b-host-shutdown",
             Self::NotAuthorized => "d2b-not-authorized",
         }
     }
@@ -3274,6 +3534,11 @@ impl BrokerCallerRole {
 pub struct SeedDnsmasqLeaseRequest {
     pub vm_id: VmId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3503,6 +3768,7 @@ mod tests {
     fn broker_caller_role_admin_passes_predicate() {
         assert!(BrokerCallerRole::AdminUid { uid: 1000 }.is_admin_uid());
         assert!(!BrokerCallerRole::LauncherUid { uid: 1000 }.is_admin_uid());
+        assert!(!BrokerCallerRole::HostShutdownUid { uid: 0 }.is_admin_uid());
     }
 
     #[test]
@@ -3527,6 +3793,7 @@ mod tests {
             BrokerCallerRole::AdminUid { uid: 1000 },
             BrokerCallerRole::LauncherUid { uid: 1001 },
             BrokerCallerRole::RootUid { uid: 0 },
+            BrokerCallerRole::HostShutdownUid { uid: 0 },
             BrokerCallerRole::NotAuthorized,
         ] {
             let json = serde_json::to_string(&role).unwrap();
@@ -3792,18 +4059,24 @@ mod tests {
         }
     }
 
-    /// CreatePersistentTap and CreateTapFd carry only opaque
-    /// (role_id, vm_id) on the wire; the broker derives
-    /// ifname/owner/attrs from the trusted bundle. The v3 attachment
-    /// identity and generation fences are optional typed fields used only
-    /// for broker-owned restart adoption and finalization.
+    /// CreatePersistentTap and CreateTapFd carry opaque runner identity plus
+    /// the complete admitted Network provenance. Kernel names and attributes
+    /// remain broker-derived.
     #[test]
-    fn create_persistent_tap_request_is_opaque_only() {
+    fn create_persistent_tap_request_requires_admitted_provenance() {
         let frame = encode_frame(&serde_json::json!({
             "kind": "CreatePersistentTap",
             "payload": {
                 "roleId": "runner-lan",
-                "vmId": "corp-vm"
+                "vmId": "corp-vm",
+                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+                "networkGeneration": 4,
+                "attachmentGeneration": 7,
+                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
+                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
         .expect("encodes");
@@ -3818,12 +4091,20 @@ mod tests {
     }
 
     #[test]
-    fn create_tap_fd_request_is_opaque_only() {
+    fn create_tap_fd_request_requires_admitted_provenance() {
         let frame = encode_frame(&serde_json::json!({
             "kind": "CreateTapFd",
             "payload": {
                 "roleId": "runner-lan",
-                "vmId": "corp-vm"
+                "vmId": "corp-vm",
+                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+                "networkGeneration": 4,
+                "attachmentGeneration": 7,
+                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
+                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
         .expect("encodes");
@@ -3834,6 +4115,65 @@ mod tests {
                 assert_eq!(req.vm_id.as_str(), "corp-vm");
             }
             other => panic!("expected CreateTapFd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tap_create_rejects_missing_provenance_fields() {
+        for kind in ["CreatePersistentTap", "CreateTapFd"] {
+            for field in [
+                "attachmentId",
+                "attachmentGeneration",
+                "admittedInterfaceNames",
+                "bundleTapIntentRef",
+                "networkGeneration",
+                "networkUid",
+                "zoneUid",
+                "bundleGeneration",
+            ] {
+                let mut payload = opaque_create_tap_payload();
+                payload.as_object_mut().unwrap().remove(field);
+                let frame = encode_frame(&serde_json::json!({
+                    "kind": kind,
+                    "payload": payload,
+                }))
+                .expect("encodes");
+                assert!(
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    "{kind} must reject missing {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tap_create_rejects_null_provenance_fields() {
+        for kind in ["CreatePersistentTap", "CreateTapFd"] {
+            for field in [
+                "attachmentId",
+                "attachmentGeneration",
+                "admittedInterfaceNames",
+                "bundleTapIntentRef",
+                "networkGeneration",
+                "networkUid",
+                "zoneUid",
+                "bundleGeneration",
+            ] {
+                let mut payload = opaque_create_tap_payload();
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.to_owned(), serde_json::Value::Null);
+                let frame = encode_frame(&serde_json::json!({
+                    "kind": kind,
+                    "payload": payload,
+                }))
+                .expect("encodes");
+                assert!(
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    "{kind} must reject null {field}"
+                );
+            }
         }
     }
 
@@ -3961,7 +4301,18 @@ mod tests {
     }
 
     fn opaque_create_tap_payload() -> serde_json::Value {
-        serde_json::json!({ "roleId": "runner-lan", "vmId": "corp-vm" })
+        serde_json::json!({
+            "roleId": "runner-lan",
+            "vmId": "corp-vm",
+            "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+            "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+            "networkGeneration": 4,
+            "attachmentGeneration": 7,
+            "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+            "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
+            "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        })
     }
 
     fn opaque_set_bridge_port_flags_payload() -> serde_json::Value {
@@ -4077,9 +4428,13 @@ mod tests {
     fn apply_nftables_projection_requires_installed_generation_fence() {
         let generation_id = format!("sha256:{}", "1".repeat(64));
         let mut payload = serde_json::json!({
-            "bundleNftProjectionIntentRef": "nft-projection:work",
-            "scopeId": "scope:work",
+            "bundleNftProjectionIntentRef": "network-firewall:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002:work",
+            "scopeId": "network:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002",
             "action": "apply",
+            "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+            "networkGeneration": 4,
+            "attachmentGeneration": 7,
             "expectedGenerationId": generation_id,
         });
         let request: ApplyNftablesProjectionRequest =
@@ -4098,8 +4453,11 @@ mod tests {
     fn delete_persistent_tap_requires_opaque_id_and_both_generation_fences() {
         let mut payload = serde_json::json!({
             "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+            "expectedZoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "expectedNetworkUid": "323e4567-e89b-42d3-a456-426614174002",
             "expectedNetworkGeneration": 7,
             "expectedAttachmentGeneration": 11,
+            "expectedBundleGeneration": format!("sha256:{}", "1".repeat(64)),
         });
         let request: DeletePersistentTapRequest =
             serde_json::from_value(payload.clone()).expect("valid fenced tap deletion request");
@@ -4109,11 +4467,18 @@ mod tests {
         );
         assert_eq!(request.expected_network_generation.get(), 7);
         assert_eq!(request.expected_attachment_generation.get(), 11);
+        assert_eq!(
+            request.expected_network_uid.as_str(),
+            "323e4567-e89b-42d3-a456-426614174002"
+        );
 
         for required in [
             "attachmentId",
+            "expectedZoneUid",
+            "expectedNetworkUid",
             "expectedNetworkGeneration",
             "expectedAttachmentGeneration",
+            "expectedBundleGeneration",
         ] {
             let mut missing = payload.clone();
             missing.as_object_mut().unwrap().remove(required);
@@ -4247,10 +4612,15 @@ mod tests {
             role_id: RoleId::new(role.as_str()),
             resource_ref: None,
             resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            owner_uid: None,
+            provider_ref: None,
             bundle_content_identity: None,
             provider_identity: None,
             template_identity: None,
             generation: None,
+            runtime_scope: None,
             activation_input: None,
             sandbox_plan: None,
             role,
@@ -4262,6 +4632,8 @@ mod tests {
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
+            inherited_fd_count: 0,
+            network_tap_context: None,
         })
     }
 
@@ -4317,17 +4689,12 @@ mod tests {
 
     #[test]
     fn guest_profile_requires_a_complete_target_execution_binding() {
-        let mut request = spawn_runner_for_profile(
-            RunnerRole::ActivationNixos,
-            "Guest/guest-vm",
-        );
+        let mut request = spawn_runner_for_profile(RunnerRole::ActivationNixos, "Guest/guest-vm");
         request = match request {
             BrokerRequest::SpawnRunner(mut request) => {
                 request.guest_execution = Some(GuestExecutionBinding {
-                    target_uid: ResourceUid::parse(
-                        "123e4567-e89b-42d3-a456-426614174000",
-                    )
-                    .expect("Guest UID"),
+                    target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                        .expect("Guest UID"),
                     boot_identity_digest: [7; 32],
                     session_generation: 2,
                     assignment_epoch: 3,
@@ -4524,9 +4891,15 @@ mod tests {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch"),
             role: RunnerRole::CloudHypervisor,
+            resource_ref: None,
+            resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            runtime_scope: None,
             pid: 4242,
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
+            controller_bootstrap_fd_index: None,
             console_fd_index: None,
             execution_ref: None,
             execution_domain: None,

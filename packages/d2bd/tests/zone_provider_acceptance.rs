@@ -5,6 +5,7 @@
 //! not record expected calls or bypass the Provider controllers.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     os::unix::fs::FileTypeExt,
@@ -19,8 +20,9 @@ use d2b_contracts_provider::v3::{
     ComponentType, ControllerInstanceScope, ControllerTargetKind, EffectPortClass,
 };
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
-    ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
+    ArtifactId, ControllerGeneration, DesiredLifecycle, ResourceBundleGenerationId,
+    ResourceGeneration, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    SchemaFingerprint, SchemaVersion, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     guest::GuestSpec,
     identity::ReconnectGeneration,
@@ -38,18 +40,19 @@ use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
     controller::{
         AttachmentRealization, FinalizerStage, FirewallDigest, FirewallIntent,
-        NetworkConfigContent, NetworkEffectError, NetworkEffectPort, NetworkReconciler,
-        NetworkResourcePort, ReconcileInput, ReconcileProgress,
+        NetworkAdmissionIntent, NetworkAdmissionKey, NetworkConfigContent, NetworkEffectError,
+        NetworkEffectPort, NetworkReconciler, NetworkResourcePort, ReconcileInput,
+        ReconcileProgress,
     },
 };
 use d2b_provider_runtime_cloud_hypervisor::{
-    CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
-    CloudHypervisorEffectPort, CloudHypervisorError, CloudHypervisorGuestSettings,
-    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionEvidence,
-    GuestSessionEvidenceProbe,
-    adoption::ProcessIdentity,
-    bootstrap_graph::{AttachmentRef, BootstrapGraph},
-    health::GuestSessionError,
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
+    BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController,
+    CloudHypervisorReconcileOutcome, CloudHypervisorResourceApiError,
+    CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, CommittedChild,
+    DescriptorSignature, GuestChildCommitResponse, GuestGenerationSet, GuestSeedContract,
+    GuestSessionEvidence, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
+    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm, health::GuestSessionEvidenceBinding,
 };
 use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
@@ -147,6 +150,7 @@ impl VolumeSourceEffectPort for &FilesystemVolume {
     async fn resolve_root(
         &self,
         _source_policy_id: Option<&BoundedToken>,
+        _system_artifact_id: Option<&BoundedToken>,
         _kind: d2b_contracts_resource::v3::volume::SourceKind,
     ) -> Result<VolumeRootHandle, d2b_provider_volume_local::VolumeLocalError> {
         fs::create_dir_all(&self.root)
@@ -481,20 +485,35 @@ fn network_input(
 ) -> ReconcileInput {
     let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let attachment_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    let installed_generation = ResourceBundleGenerationId::parse(
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let admission = NetworkAdmissionIntent::new(
+        NetworkAdmissionKey::new(
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_uid.clone(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            installed_generation.clone(),
+        ),
+        spec.clone(),
+        Vec::new(),
+    )
+    .unwrap()
+    .proof();
     ReconcileInput {
         spec,
         mdns_enabled: false,
         network_uid: network_uid.clone(),
         network_generation: ResourceGeneration::new(4).unwrap(),
-        installed_generation: ResourceBundleGenerationId::parse(
-            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap(),
+        attachment_generation: ResourceGeneration::new(7).unwrap(),
+        installed_generation,
+        admission,
         artifact_catalog: vec![ArtifactCatalogEntry::new(
             BoundedToken::parse("net-vm-base").unwrap(),
             ArtifactKind::NixosSystem,
         )],
-        peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: 8 * 1024 * 1024,
         volume_ready,
@@ -777,128 +796,487 @@ async fn device_tpm_zone_activation_ready_and_state_preserving_removal() {
     assert!(directory.path().join("swtpm.stopped").is_file());
 }
 
-struct RealCloudHypervisorEffect {
-    process: Mutex<Option<Child>>,
-    pidfds: Mutex<Vec<rustix::fd::OwnedFd>>,
+const CLOUD_ARTIFACT_DIGEST: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const CLOUD_SCHEMA_FINGERPRINT: &str =
+    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const CLOUD_GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+const CLOUD_ZONE_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
+
+struct AcceptingCloudDescriptorVerifier;
+
+impl GuestSetupDescriptorVerifier for AcceptingCloudDescriptorVerifier {
+    fn verify(
+        &self,
+        _key_fingerprint: &SchemaFingerprint,
+        _descriptor_digest: &SchemaFingerprint,
+        signature: &str,
+    ) -> bool {
+        signature == "signature-sentinel"
+    }
 }
 
-impl RealCloudHypervisorEffect {
-    fn identity_for(child: &Child) -> Result<ProcessIdentity, CloudHypervisorError> {
-        let pid = child.id();
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
-            .map_err(|_| CloudHypervisorError::Effect)?;
-        let fields = stat
-            .split_once(") ")
-            .map(|(_, rest)| rest.split_whitespace().collect::<Vec<_>>())
-            .ok_or(CloudHypervisorError::Effect)?;
-        let start_time_ticks = fields
-            .get(19)
-            .and_then(|value| value.parse().ok())
-            .ok_or(CloudHypervisorError::Effect)?;
-        let executable =
-            fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| CloudHypervisorError::Effect)?;
-        let cgroup =
-            fs::read(format!("/proc/{pid}/cgroup")).map_err(|_| CloudHypervisorError::Effect)?;
-        let executable_digest = digest(executable.to_string_lossy().as_bytes());
-        let cgroup_digest = digest(&cgroup);
-        Ok(ProcessIdentity {
-            pid,
-            start_time_ticks,
-            cgroup_digest,
-            executable_digest,
-            template_digest: [3; 32],
-            generation: 1,
-        })
+fn cloud_descriptor() -> d2b_provider_runtime_cloud_hypervisor::VerifiedGuestSetupDescriptor {
+    GuestSetupDescriptor::new(
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        ResourceGeneration::new(3).unwrap(),
+        ArtifactId::parse("guest-system").unwrap(),
+        ArtifactDigest::parse(CLOUD_ARTIFACT_DIGEST).unwrap(),
+        GuestSeedContract::new(
+            "guest-resource-seed",
+            SchemaVersion::new(1, 0).unwrap(),
+            SchemaFingerprint::parse(CLOUD_SCHEMA_FINGERPRINT).unwrap(),
+        )
+        .unwrap(),
+        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
+        DescriptorSignature::new(
+            SignatureAlgorithm::Ed25519Blake3,
+            SchemaFingerprint::parse(CLOUD_SCHEMA_FINGERPRINT).unwrap(),
+            "signature-sentinel",
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .verify_with(&AcceptingCloudDescriptorVerifier)
+    .unwrap()
+}
+
+fn cloud_guest(
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    generation: ResourceGeneration,
+) -> GuestSnapshot {
+    let evidence = GuestSessionEvidence::current_bound(
+        guest_ref.clone(),
+        format!("sha256:{}", "0".repeat(64)),
+        Vec::<String>::new(),
+        true,
+        true,
+        true,
+        GuestSessionEvidenceBinding::new(
+            guest_uid.to_canonical_string(),
+            CLOUD_SCHEMA_FINGERPRINT,
+            CLOUD_SCHEMA_FINGERPRINT,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    GuestSnapshot::new(
+        ZoneId::parse("work").unwrap(),
+        ResourceUid::parse(CLOUD_ZONE_UID).unwrap(),
+        guest_ref,
+        guest_uid,
+        generation,
+        ZoneRevision::new(1),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
+        Some("guest-system".to_owned()),
+        GuestGenerationSet::all(generation.get()),
+        false,
+    )
+    .unwrap()
+    .with_session_evidence(evidence)
+}
+
+fn cloud_graph() -> BootstrapGraph {
+    BootstrapGraph::new(
+        vec![ResourceRef::parse("Device/kvm").unwrap()],
+        vec![ResourceRef::parse("Network/work").unwrap()],
+        vec![ResourceRef::parse("Volume/store").unwrap()],
+        vec![],
+    )
+    .unwrap()
+}
+
+struct RealCloudHypervisorResourceSession {
+    root: PathBuf,
+    guest: Mutex<GuestSnapshot>,
+    dependencies_ready: Mutex<bool>,
+    children: Mutex<BTreeMap<ResourceRef, OwnedChildSnapshot>>,
+    process: Mutex<Option<Child>>,
+    lifecycle_updates: Mutex<Vec<DesiredLifecycle>>,
+}
+
+impl RealCloudHypervisorResourceSession {
+    fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        fs::create_dir_all(&root).expect("create Cloud Hypervisor Resource API root");
+        let guest_ref = ResourceRef::parse("Guest/workstation").unwrap();
+        let guest_uid = ResourceUid::parse(CLOUD_GUEST_UID).unwrap();
+        Self {
+            root,
+            guest: Mutex::new(cloud_guest(
+                guest_ref,
+                guest_uid,
+                ResourceGeneration::new(1).unwrap(),
+            )),
+            dependencies_ready: Mutex::new(false),
+            children: Mutex::new(BTreeMap::new()),
+            process: Mutex::new(None),
+            lifecycle_updates: Mutex::new(Vec::new()),
+        }
     }
 
-    fn current_identity(&self) -> Result<Option<ProcessIdentity>, CloudHypervisorError> {
+    fn set_guest(&self, resource: &Wave6Resource) -> Result<(), CloudHypervisorResourceApiError> {
+        let guest = cloud_guest(
+            resource.resource_ref.clone(),
+            resource.uid.clone(),
+            resource.generation,
+        );
+        *self
+            .guest
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)? = guest;
+        Ok(())
+    }
+
+    fn set_dependencies_ready(&self, ready: bool) -> Result<(), CloudHypervisorResourceApiError> {
+        *self
+            .dependencies_ready
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)? = ready;
+        Ok(())
+    }
+
+    fn start_process(&self) -> Result<(), CloudHypervisorResourceApiError> {
         let mut process = self
             .process
             .lock()
-            .map_err(|_| CloudHypervisorError::Effect)?;
-        let Some(child) = process.as_mut() else {
-            return Ok(None);
-        };
-        if child
-            .try_wait()
-            .map_err(|_| CloudHypervisorError::Effect)?
-            .is_some()
-        {
-            *process = None;
-            return Ok(None);
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+        if let Some(child) = process.as_mut() {
+            match child
+                .try_wait()
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+            {
+                Some(_) => *process = None,
+                None => return Ok(()),
+            }
         }
-        Ok(Some(Self::identity_for(child)?))
-    }
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(bytes);
-    digest.finalize().into()
-}
-
-#[async_trait]
-impl CloudHypervisorEffectPort for RealCloudHypervisorEffect {
-    async fn launch(
-        &self,
-        _: &BootstrapGraph,
-        _: &CloudHypervisorConfig,
-        _: &CloudHypervisorGuestSettings,
-    ) -> Result<ProcessIdentity, CloudHypervisorError> {
         let child = Command::new("sleep")
             .arg("60")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|_| CloudHypervisorError::Effect)?;
-        let identity = Self::identity_for(&child)?;
-        *self
-            .process
-            .lock()
-            .map_err(|_| CloudHypervisorError::Effect)? = Some(child);
-        Ok(identity)
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+        *process = Some(child);
+        fs::write(self.root.join("process.started"), b"running")
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)
     }
 
-    async fn observe(&self) -> Result<Option<ProcessIdentity>, CloudHypervisorError> {
-        self.current_identity()
-    }
-
-    async fn open_pidfd(&self, identity: &ProcessIdentity) -> Result<(), CloudHypervisorError> {
-        let pidfd = rustix::process::pidfd_open(
-            rustix::process::Pid::from_raw(identity.pid as i32)
-                .ok_or(CloudHypervisorError::Effect)?,
-            rustix::process::PidfdFlags::empty(),
-        )
-        .map_err(|_| CloudHypervisorError::Effect)?;
-        self.pidfds
-            .lock()
-            .map_err(|_| CloudHypervisorError::Effect)?
-            .push(pidfd);
-        Ok(())
-    }
-
-    async fn stop(&self, identity: &ProcessIdentity) -> Result<(), CloudHypervisorError> {
+    fn stop_process(&self) -> Result<(), CloudHypervisorResourceApiError> {
         let mut process = self
             .process
             .lock()
-            .map_err(|_| CloudHypervisorError::Effect)?;
-        let Some(mut child) = process.take() else {
-            return Ok(());
-        };
-        if child.id() != identity.pid {
-            return Err(CloudHypervisorError::AdoptionAmbiguous);
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+        if let Some(mut child) = process.take() {
+            if child
+                .try_wait()
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                .is_none()
+            {
+                child
+                    .kill()
+                    .and_then(|_| child.wait())
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+            }
         }
-        child
-            .kill()
-            .and_then(|_| child.wait())
-            .map(|_| ())
-            .map_err(|_| CloudHypervisorError::Effect)
+        fs::write(self.root.join("process.stopped"), b"stopped")
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)
+    }
+
+    fn process_running(&self) -> Result<bool, CloudHypervisorResourceApiError> {
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+        let Some(child) = process.as_mut() else {
+            return Ok(false);
+        };
+        if child
+            .try_wait()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+            .is_some()
+        {
+            *process = None;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn remove_guest(&self) -> Result<(), CloudHypervisorResourceApiError> {
+        self.stop_process()?;
+        self.children
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+            .clear();
+        fs::write(self.root.join("guest.removed"), b"removed")
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)
+    }
+
+    fn lifecycle_updates(&self) -> Result<Vec<DesiredLifecycle>, CloudHypervisorResourceApiError> {
+        Ok(self
+            .lifecycle_updates
+            .lock()
+            .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+            .clone())
     }
 }
 
-impl Drop for RealCloudHypervisorEffect {
+#[async_trait]
+impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
+    async fn call(
+        &self,
+        request: CloudHypervisorResourceRequest,
+    ) -> Result<CloudHypervisorResourceResponse, CloudHypervisorResourceApiError> {
+        match request {
+            CloudHypervisorResourceRequest::Register { .. } => {
+                fs::write(self.root.join("registered"), b"registered")
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                Ok(CloudHypervisorResourceResponse::Registered)
+            }
+            CloudHypervisorResourceRequest::GetGuest { .. } => {
+                Ok(CloudHypervisorResourceResponse::Guest(
+                    self.guest
+                        .lock()
+                        .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                        .clone(),
+                ))
+            }
+            CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {
+                let ready = *self
+                    .dependencies_ready
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                let has_process = {
+                    let mut children = self
+                        .children
+                        .lock()
+                        .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                    if ready {
+                        for child in children.values_mut() {
+                            if child.resource_ref().resource_type().as_str() == "Process" {
+                                *child = child
+                                    .clone()
+                                    .with_desired_lifecycle(DesiredLifecycle::Running);
+                            }
+                        }
+                    }
+                    children
+                        .values()
+                        .any(|child| child.resource_ref().resource_type().as_str() == "Process")
+                };
+                if ready && has_process {
+                    self.start_process()?;
+                }
+                let children = self
+                    .children
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                Ok(CloudHypervisorResourceResponse::OwnedChildren(
+                    expected_refs
+                        .iter()
+                        .filter_map(|resource_ref| children.get(resource_ref).cloned())
+                        .collect(),
+                ))
+            }
+            CloudHypervisorResourceRequest::ObserveDependencies { graph, .. } => {
+                let ready = *self
+                    .dependencies_ready
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                let snapshot = if ready {
+                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::ready(graph)
+                } else {
+                    d2b_provider_runtime_cloud_hypervisor::GuestDependencySnapshot::new(
+                        graph
+                            .devices
+                            .iter()
+                            .cloned()
+                            .map(|resource_ref| (resource_ref, ResourcePhase::Pending))
+                            .collect(),
+                        graph
+                            .networks
+                            .iter()
+                            .cloned()
+                            .map(|resource_ref| (resource_ref, ResourcePhase::Pending))
+                            .collect(),
+                        graph
+                            .volumes
+                            .iter()
+                            .cloned()
+                            .map(|resource_ref| (resource_ref, ResourcePhase::Pending))
+                            .collect(),
+                        false,
+                        false,
+                    )
+                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
+                };
+                Ok(CloudHypervisorResourceResponse::Dependencies(snapshot))
+            }
+            CloudHypervisorResourceRequest::CommitBatch { batch } => {
+                let ready = *self
+                    .dependencies_ready
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                let mut committed = Vec::with_capacity(batch.mutations().len());
+                let mut children = self
+                    .children
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                for (index, mutation) in batch.mutations().iter().enumerate() {
+                    let uid =
+                        ResourceUid::parse(format!("323e4567-e89b-42d3-a456-42661417{index:04}"))
+                            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
+                    let desired_lifecycle = (mutation.target().resource_type().as_str()
+                        == "Process")
+                        .then_some(if ready {
+                            DesiredLifecycle::Running
+                        } else {
+                            DesiredLifecycle::Stopped
+                        });
+                    let child = OwnedChildSnapshot::new(
+                        mutation.target().clone(),
+                        batch.zone().clone(),
+                        batch.owner_ref().clone(),
+                        uid.clone(),
+                        ResourceGeneration::new(1)
+                            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
+                        batch.owner_revision(),
+                        batch
+                            .desired_digest(mutation.target())
+                            .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
+                        ResourcePhase::Ready,
+                        desired_lifecycle,
+                        true,
+                    )
+                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
+                    .with_owner_uid(batch.owner_uid().clone());
+                    children.insert(mutation.target().clone(), child);
+                    committed.push(
+                        CommittedChild::new(
+                            mutation.target().clone(),
+                            batch.owner_ref().clone(),
+                            batch.zone().clone(),
+                            uid,
+                            batch.owner_revision(),
+                        )
+                        .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
+                    );
+                }
+                drop(children);
+                if ready {
+                    self.start_process()?;
+                }
+                Ok(CloudHypervisorResourceResponse::Committed(
+                    GuestChildCommitResponse::Committed(committed),
+                ))
+            }
+            CloudHypervisorResourceRequest::UpdateSpec { update } => {
+                let target = update.target().clone();
+                let current = self
+                    .children
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                    .get(&target)
+                    .cloned()
+                    .ok_or(CloudHypervisorResourceApiError::NotFound)?;
+                if current.uid() != update.expected_uid()
+                    || current.revision() != update.expected_revision()
+                {
+                    return Err(CloudHypervisorResourceApiError::Conflict);
+                }
+                let desired_lifecycle = if target.resource_type().as_str() == "Process" {
+                    update.desired_lifecycle()
+                } else {
+                    None
+                };
+                if let Some(desired_lifecycle) = desired_lifecycle {
+                    self.lifecycle_updates
+                        .lock()
+                        .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                        .push(desired_lifecycle);
+                }
+                match desired_lifecycle {
+                    Some(DesiredLifecycle::Running) => self.start_process()?,
+                    Some(DesiredLifecycle::Stopped) => self.stop_process()?,
+                    None => {}
+                }
+                let revision =
+                    ZoneRevision::new(update.expected_revision().get().saturating_add(1));
+                let updated = OwnedChildSnapshot::new(
+                    current.resource_ref().clone(),
+                    current.zone().clone(),
+                    current.owner_ref().clone(),
+                    current.uid().clone(),
+                    current.generation(),
+                    revision,
+                    current.spec_digest().to_owned(),
+                    current.phase(),
+                    desired_lifecycle.or(current.desired_lifecycle()),
+                    current.healthy(),
+                )
+                .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
+                .with_owner_uid(
+                    current
+                        .owner_uid()
+                        .cloned()
+                        .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?,
+                );
+                self.children
+                    .lock()
+                    .map_err(|_| CloudHypervisorResourceApiError::Transport)?
+                    .insert(target.clone(), updated);
+                Ok(CloudHypervisorResourceResponse::Updated(
+                    CommittedChild::new(
+                        target,
+                        current.owner_ref().clone(),
+                        current.zone().clone(),
+                        current.uid().clone(),
+                        revision,
+                    )
+                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
+                ))
+            }
+            CloudHypervisorResourceRequest::UpdateStatus { status, .. } => {
+                fs::write(
+                    self.root.join("status.json"),
+                    serde_json::to_vec(status.status())
+                        .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?,
+                )
+                .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
+                Ok(CloudHypervisorResourceResponse::StatusUpdated)
+            }
+            CloudHypervisorResourceRequest::ObserveProcessAdoption { .. } => {
+                Ok(CloudHypervisorResourceResponse::ProcessAdoption(
+                    d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Current,
+                ))
+            }
+            CloudHypervisorResourceRequest::AssessUpdate { .. } => {
+                Ok(CloudHypervisorResourceResponse::UpdateAssessment(None))
+            }
+            CloudHypervisorResourceRequest::ObserveFinalization { .. } => {
+                Err(CloudHypervisorResourceApiError::InvalidResponse)
+            }
+            CloudHypervisorResourceRequest::DrainGuestLocal { .. }
+            | CloudHypervisorResourceRequest::CloseGuestSession { .. }
+            | CloudHypervisorResourceRequest::DeleteChild { .. }
+            | CloudHypervisorResourceRequest::InvalidateGuestSession { .. }
+            | CloudHypervisorResourceRequest::EnsureGuestFinalizer { .. }
+            | CloudHypervisorResourceRequest::ClearGuestFinalizer { .. } => {
+                Ok(CloudHypervisorResourceResponse::LifecycleApplied)
+            }
+        }
+    }
+}
+
+impl Drop for RealCloudHypervisorResourceSession {
     fn drop(&mut self) {
         if let Ok(mut process) = self.process.lock()
             && let Some(mut child) = process.take()
@@ -909,58 +1287,10 @@ impl Drop for RealCloudHypervisorEffect {
     }
 }
 
-struct FixedCloudClock(u64);
+type CloudController =
+    CloudHypervisorController<AuthenticatedResourceApiAdapter<RealCloudHypervisorResourceSession>>;
 
-impl CloudHypervisorClock for FixedCloudClock {
-    fn now_unix_ms(&self) -> u64 {
-        self.0
-    }
-}
-
-struct FilesystemGuestSession {
-    ready: PathBuf,
-}
-
-#[async_trait]
-impl GuestSessionEvidenceProbe for FilesystemGuestSession {
-    async fn observe(
-        &self,
-        _: u32,
-        _: u32,
-    ) -> Result<GuestSessionEvidence, GuestSessionError> {
-        match fs::read_to_string(&self.ready) {
-            Ok(value) if value == "ready" => GuestSessionEvidence::current(
-                ResourceRef::parse("Guest/test").unwrap(),
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-                1,
-                [],
-                true,
-                true,
-            )
-            .map_err(|_| GuestSessionError::Protocol),
-            Ok(_) => GuestSessionEvidence::current(
-                ResourceRef::parse("Guest/test").unwrap(),
-                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-                1,
-                [],
-                false,
-                false,
-            )
-            .map_err(|_| GuestSessionError::Protocol),
-            Err(_) => Err(GuestSessionError::Disconnected),
-        }
-    }
-
-    async fn close(&self, _: u32) -> Result<(), GuestSessionError> {
-        fs::write(&self.ready, b"closed").map_err(|_| GuestSessionError::Disconnected)
-    }
-}
-
-fn cloud_controller(
-    effect: Arc<RealCloudHypervisorEffect>,
-    probe: Arc<FilesystemGuestSession>,
-    expected: Option<ProcessIdentity>,
-) -> CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession> {
+fn cloud_controller(session: Arc<RealCloudHypervisorResourceSession>) -> CloudController {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -974,111 +1304,88 @@ fn cloud_controller(
         health_check_failure_threshold: 3,
         startup_deadline_ms: 30_000,
     };
-    let settings = CloudHypervisorGuestSettings {
-        vcpus: Some(2),
-        memory_mb: Some(512),
-        machine_type: None,
-        console_type: ConsoleType::Null,
-        serial_port: true,
-        pvpanic: false,
-        watchdog_override: None,
-        memory_shared: true,
-        has_virtiofs_attachment: false,
-        system_artifact_id: Some("system-artifact".to_owned()),
-    };
-    let graph = BootstrapGraph::new(
-        vec![ResourceRef::parse("Device/kvm").unwrap()],
-        vec![ResourceRef::parse("Network/work").unwrap()],
-        vec![ResourceRef::parse("Volume/store").unwrap()],
-        vec![AttachmentRef::new("launch-ticket").unwrap()],
+    let api = AuthenticatedResourceApiAdapter::new(session);
+    CloudHypervisorController::from_verified_descriptor(
+        config,
+        cloud_graph(),
+        cloud_descriptor(),
+        Arc::new(api),
     )
-    .unwrap();
-    let controller = CloudHypervisorController::new(config, settings, graph, effect, probe)
-        .unwrap()
-        .with_clock(Arc::new(FixedCloudClock(1_000)));
-    match expected {
-        Some(identity) => controller.with_expected_identity(identity),
-        None => controller,
-    }
+    .unwrap()
 }
 
 #[tokio::test]
 async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_process() {
-    let directory = tempfile::tempdir().expect("ComponentSession state directory");
-    let ready_path = directory.path().join("component-session");
-    fs::write(&ready_path, b"ready").unwrap();
-    let effect = Arc::new(RealCloudHypervisorEffect {
-        process: Mutex::new(None),
-        pidfds: Mutex::new(Vec::new()),
-    });
-    let probe = Arc::new(FilesystemGuestSession { ready: ready_path });
-    let mut controller = cloud_controller(Arc::clone(&effect), Arc::clone(&probe), None);
+    let directory = tempfile::tempdir().expect("Cloud Hypervisor Resource API state directory");
+    let session = Arc::new(RealCloudHypervisorResourceSession::new(directory.path()));
+    let mut controller = cloud_controller(Arc::clone(&session));
+    controller.register().await.unwrap();
 
-    assert_eq!(
-        controller.reconcile(false, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Retry { after_ms: 500 }
+    session.set_dependencies_ready(false).unwrap();
+    let pending = controller
+        .reconcile(&ResourceRef::parse("Guest/workstation").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(pending.status().status().phase, GuestStatusPhase::Pending);
+    assert!(
+        pending.is_pending(),
+        "unexpected dependency-gated outcome: {pending:?}"
     );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Pending);
-    assert_eq!(
-        controller.reconcile(true, true, true, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Converged
+    assert!(
+        session.lifecycle_updates().unwrap().is_empty(),
+        "dependency-pending reconcile must not force the VMM Process Running"
     );
-    assert_eq!(controller.phase(), CloudHypervisorPhase::Ready);
-    let identity = effect
-        .current_identity()
-        .unwrap()
-        .expect("running VMM identity");
-    let recovery = controller.recovery_state();
+
+    session.set_dependencies_ready(true).unwrap();
+    let ready = controller
+        .reconcile(&ResourceRef::parse("Guest/workstation").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ready.status().status().phase, GuestStatusPhase::Ready);
+    assert!(matches!(ready, CloudHypervisorReconcileOutcome::Ready(_)));
+    assert!(session.process_running().unwrap());
     drop(controller);
 
-    let mut restarted = cloud_controller(Arc::clone(&effect), probe, Some(identity))
-        .restore_recovery_state(recovery)
+    let mut restarted = cloud_controller(Arc::clone(&session));
+    restarted.register().await.unwrap();
+    let adopted = restarted
+        .reconcile(&ResourceRef::parse("Guest/workstation").unwrap())
+        .await
         .unwrap();
-    assert_eq!(
-        restarted.adopt(identity, 14).await.unwrap(),
-        CloudHypervisorReconcileOutcome::Converged
-    );
-    assert_eq!(restarted.phase(), CloudHypervisorPhase::Ready);
-    restarted.finalize().await.unwrap();
-    assert_eq!(restarted.phase(), CloudHypervisorPhase::Finalized);
-    assert!(effect.current_identity().unwrap().is_none());
+    assert_eq!(adopted.status().status().phase, GuestStatusPhase::Ready);
+    assert!(matches!(adopted, CloudHypervisorReconcileOutcome::Ready(_)));
+    assert!(session.process_running().unwrap());
+    session.remove_guest().unwrap();
+    assert!(!session.process_running().unwrap());
 }
 
-/// Shared real-effect boundary used by the daemon-level operator acceptance.
+/// Shared Resource API boundary used by the daemon-level operator acceptance.
 ///
-/// The boundary deliberately owns filesystem and child-process effects and
-/// reconstructs controller state during `adopt_after_restart`; it is not a
-/// call-recording test double.
+/// The boundary deliberately owns filesystem and child-process effects behind
+/// the authenticated Resource API and reconstructs controller state during
+/// `adopt_after_restart`; it is not a call-recording test double.
 pub struct Wave6RealBoundary {
     root: PathBuf,
     volume: FilesystemVolume,
     network: FilesystemNetworkBoundary,
     tpm: FilesystemTpm,
     tpm_controller: Mutex<Option<TpmResourceController>>,
-    cloud_effect: Arc<RealCloudHypervisorEffect>,
-    cloud_probe: Arc<FilesystemGuestSession>,
-    guest_sessionler:
-        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>>>,
+    cloud_session: Arc<RealCloudHypervisorResourceSession>,
+    guest_sessionler: Mutex<Option<CloudController>>,
 }
 
 impl Wave6RealBoundary {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         fs::create_dir_all(&root).expect("create Wave 6 provider effect root");
-        let guest_session = root.join("component-session");
-        fs::write(&guest_session, b"ready").expect("seed component-session readiness");
         Self {
             volume: FilesystemVolume::new(root.join("volume")),
             network: FilesystemNetworkBoundary::new(root.join("network")),
             tpm: FilesystemTpm::new(root.join("tpm")),
             tpm_controller: Mutex::new(None),
-            cloud_effect: Arc::new(RealCloudHypervisorEffect {
-                process: Mutex::new(None),
-                pidfds: Mutex::new(Vec::new()),
-            }),
-            cloud_probe: Arc::new(FilesystemGuestSession {
-                ready: guest_session,
-            }),
+            cloud_session: Arc::new(RealCloudHypervisorResourceSession::new(
+                root.join("cloud-hypervisor"),
+            )),
             guest_sessionler: Mutex::new(None),
             root,
         }
@@ -1094,18 +1401,8 @@ impl Wave6RealBoundary {
         .map_err(|_| Wave6BoundaryError::Effect)
     }
 
-    fn guest_sessionler(
-        &self,
-        expected: Option<ProcessIdentity>,
-    ) -> Result<
-        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>,
-        Wave6BoundaryError,
-    > {
-        Ok(cloud_controller(
-            Arc::clone(&self.cloud_effect),
-            Arc::clone(&self.cloud_probe),
-            expected,
-        ))
+    fn guest_sessionler(&self) -> CloudController {
+        cloud_controller(Arc::clone(&self.cloud_session))
     }
 
     fn ready_network_input(&self, dependencies: Wave6Dependencies) -> ReconcileInput {
@@ -1175,23 +1472,27 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
 
     async fn reconcile_cloud_hypervisor_guest(
         &self,
-        _resource: &Wave6Resource,
+        resource: &Wave6Resource,
         dependencies: Wave6Dependencies,
     ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
+        self.cloud_session
+            .set_guest(resource)
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        self.cloud_session
+            .set_dependencies_ready(dependencies.network_ready)
+            .map_err(|_| Wave6BoundaryError::Effect)?;
         let mut controller = self
             .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
-            .map(Ok)
-            .unwrap_or_else(|| self.guest_sessionler(None))?;
+            .unwrap_or_else(|| self.guest_sessionler());
+        controller
+            .register()
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
         let outcome = controller
-            .reconcile(
-                dependencies.network_ready,
-                dependencies.volume_ready,
-                dependencies.attachment_ready,
-                14,
-            )
+            .reconcile(&resource.resource_ref)
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
         self.guest_sessionler
@@ -1199,11 +1500,17 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(controller);
         match outcome {
-            CloudHypervisorReconcileOutcome::Retry { .. }
-            | CloudHypervisorReconcileOutcome::Progressing { .. } => {
+            CloudHypervisorReconcileOutcome::Pending(_)
+            | CloudHypervisorReconcileOutcome::RelistRequired(_) => {
                 Ok(Wave6ReconcileResult::Waiting)
             }
-            CloudHypervisorReconcileOutcome::Converged => Ok(Wave6ReconcileResult::Ready),
+            CloudHypervisorReconcileOutcome::Ready(status)
+                if status.status().phase == GuestStatusPhase::Ready =>
+            {
+                Ok(Wave6ReconcileResult::Ready)
+            }
+            CloudHypervisorReconcileOutcome::Ready(_)
+            | CloudHypervisorReconcileOutcome::Degraded(_) => Err(Wave6BoundaryError::Lifecycle),
         }
     }
 
@@ -1237,28 +1544,35 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(tpm_controller);
 
-        let (recovery, identity) = {
-            let mut guest_guard = self
-                .guest_sessionler
-                .lock()
-                .map_err(|_| Wave6BoundaryError::Effect)?;
-            let controller = guest_guard.take().ok_or(Wave6BoundaryError::Lifecycle)?;
-            let identity = self
-                .cloud_effect
-                .current_identity()
-                .map_err(|_| Wave6BoundaryError::Effect)?
-                .ok_or(Wave6BoundaryError::Lifecycle)?;
-            (controller.recovery_state(), identity)
-        };
-        let mut restarted = self
-            .guest_sessionler(Some(identity))?
-            .restore_recovery_state(recovery)
-            .map_err(|_| Wave6BoundaryError::Lifecycle)?;
+        self.cloud_session
+            .set_guest(&resources.cloud_hypervisor_guest)
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        self.cloud_session
+            .set_dependencies_ready(true)
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        self.guest_sessionler
+            .lock()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            .take()
+            .ok_or(Wave6BoundaryError::Lifecycle)?;
+        let mut restarted = self.guest_sessionler();
         restarted
-            .adopt(identity, 14)
+            .register()
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
-        if restarted.phase() != CloudHypervisorPhase::Ready {
+        let outcome = restarted
+            .reconcile(&resources.cloud_hypervisor_guest.resource_ref)
+            .await
+            .map_err(|_| Wave6BoundaryError::Effect)?;
+        if !matches!(
+            outcome,
+            CloudHypervisorReconcileOutcome::Ready(status)
+                if status.status().phase == GuestStatusPhase::Ready
+        ) || !self
+            .cloud_session
+            .process_running()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+        {
             return Err(Wave6BoundaryError::Lifecycle);
         }
         *self
@@ -1272,22 +1586,24 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         &self,
         _resource: &Wave6Resource,
     ) -> Result<(), Wave6BoundaryError> {
-        let mut controller = self
-            .guest_sessionler
+        self.guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .ok_or(Wave6BoundaryError::Lifecycle)?;
-        controller
-            .finalize()
-            .await
+        self.cloud_session
+            .remove_guest()
             .map_err(|_| Wave6BoundaryError::Effect)?;
-        if controller.phase() != CloudHypervisorPhase::Finalized
-            || self
-                .cloud_effect
-                .current_identity()
+        if self
+            .cloud_session
+            .process_running()
+            .map_err(|_| Wave6BoundaryError::Effect)?
+            || !self
+                .cloud_session
+                .children
+                .lock()
                 .map_err(|_| Wave6BoundaryError::Effect)?
-                .is_some()
+                .is_empty()
         {
             return Err(Wave6BoundaryError::Lifecycle);
         }

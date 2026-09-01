@@ -71,7 +71,6 @@ impl JsonSchema for LevelPercent {
     }
 }
 
-
 // ── AudioGrant ──────────────────────────────────────────────────────────────
 
 /// On/off grant for a single audio channel (mic or speaker).

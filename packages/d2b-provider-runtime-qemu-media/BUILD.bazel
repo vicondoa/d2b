@@ -2,7 +2,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel", "nix/default.nix", "nix/tests/default.nix"],
+    ["BUILD.bazel", "nix/default.nix", "nix/projection.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
@@ -164,6 +164,16 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "fixture_projection",
+    srcs = ["tests/fixture_projection.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/fixtures:fixture_smoke"],
+    env = {"D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)"},
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

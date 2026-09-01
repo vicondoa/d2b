@@ -57,6 +57,7 @@ One closed `store_meta` table binds:
 | `store_uuid` | Random immutable store identity |
 | `zone_name` | Must match `Zone/<name>` self resource |
 | `zone_uid` | Immutable UID of self resource |
+| `store_epoch` | Immutable nonzero epoch for the physical store identity |
 | `created_at` | RFC 3339 UTC |
 | `schema_version` | Internal physical schema version |
 | `current_revision` | Latest committed Zone revision |

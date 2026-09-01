@@ -32,6 +32,10 @@ All cloud control and credential use is gateway-Guest local. No Host process,
 Host Credential, ambient SDK credential chain, or Provider-owned persistent
 service is used.
 
+The Zone-native controller and effect contracts use the v3 Provider and
+Resource contract crates directly. Gateway DAG composition is retired; this
+crate exposes only the current Zone-native controller and effect contracts.
+
 ## RBAC requirements
 
 Callers provide an operation-bound opaque ID and a bounded deadline. Effect

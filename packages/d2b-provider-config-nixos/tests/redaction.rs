@@ -11,7 +11,8 @@ fn debug_does_not_include_guest_content_or_boot_identity() {
         ResourceRef::parse("Guest/work").expect("guest ref"),
         "private-boot-id",
         1,
-    ).expect("evidence");
+    )
+    .expect("evidence");
     let evidence_debug = format!("{evidence:?}");
     assert!(!evidence_debug.contains("private-boot-id"));
     let _ = ConfigService;

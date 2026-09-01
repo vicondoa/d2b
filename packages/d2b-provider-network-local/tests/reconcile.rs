@@ -5,18 +5,20 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceUid,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
     execution_policy::BoundedToken,
-    network::{AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkSpec, RoutingSpec},
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
+        MdnsSpec, NetworkSpec, RoutingSpec,
+    },
 };
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
     controller::{
         AttachmentRealization, FinalizerStage, FirewallDigest, FirewallIntent,
-        NetworkConfigContent, NetworkEffectError, NetworkEffectPort, NetworkReconciler,
-        NetworkResourcePort, ReconcileInput, ReconcileProgress,
+        NetworkAdmissionIntent, NetworkAdmissionKey, NetworkConfigContent, NetworkEffectError,
+        NetworkEffectPort, NetworkReconciler, NetworkResourcePort, ReconcileInput,
+        ReconcileProgress,
     },
 };
 
@@ -234,17 +236,32 @@ fn generation() -> ResourceBundleGenerationId {
 fn input() -> ReconcileInput {
     let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let attachment_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    let spec = spec("10.20.0.0/24", "192.0.2.0/30");
+    let admission = NetworkAdmissionIntent::new(
+        NetworkAdmissionKey::new(
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_uid.clone(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            generation(),
+        ),
+        spec.clone(),
+        Vec::new(),
+    )
+    .unwrap()
+    .proof();
     ReconcileInput {
-        spec: spec("10.20.0.0/24", "192.0.2.0/30"),
+        spec,
         mdns_enabled: false,
         network_uid: network_uid.clone(),
         network_generation: ResourceGeneration::new(4).unwrap(),
+        attachment_generation: ResourceGeneration::new(7).unwrap(),
         installed_generation: generation(),
+        admission,
         artifact_catalog: vec![ArtifactCatalogEntry::new(
             BoundedToken::parse("net-vm-base").unwrap(),
             ArtifactKind::NixosSystem,
         )],
-        peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: 8 * 1024 * 1024,
         volume_ready: true,
@@ -393,15 +410,15 @@ fn finalizer_never_deletes_bridge_before_tap_and_children() {
 }
 
 #[test]
-fn cidr_conflict_and_host_budget_block_before_effects() {
+fn admission_mismatch_and_host_budget_block_before_effects() {
     let effects = FakePorts::default();
     let resources = FakePorts::default();
     let controller = NetworkReconciler::new(effects.clone(), resources.clone());
     let mut conflicting = input();
-    conflicting.peer_networks = vec![spec("10.20.0.0/24", "198.51.100.0/30")];
+    conflicting.spec = spec("10.30.0.0/24", "198.51.100.0/30");
     assert_eq!(
         block_on(controller.reconcile(&conflicting)),
-        Err(NetworkEffectError::CidrConflict)
+        Err(NetworkEffectError::NetworkAdmissionMismatch)
     );
     assert!(effects.events().is_empty());
 
@@ -413,6 +430,30 @@ fn cidr_conflict_and_host_budget_block_before_effects() {
     assert_eq!(
         block_on(controller.reconcile(&exhausted)),
         Err(NetworkEffectError::HostMemoryBudgetExceeded)
+    );
+    assert!(effects.events().is_empty());
+}
+
+#[test]
+fn stale_attachment_admission_refuses_before_effects() {
+    let effects = FakePorts::default();
+    let resources = FakePorts::default();
+    let controller = NetworkReconciler::new(effects.clone(), resources);
+    let mut stale = input();
+    let network_uid = stale.network_uid.clone();
+    let attachment_uid = stale.attachments[0].handle.opaque_id().clone();
+    stale.attachments[0].handle = AttachmentHandle::new(
+        attachment_uid.clone(),
+        AttachmentGenerationFence::new(
+            network_uid,
+            stale.network_generation,
+            attachment_uid,
+            ResourceGeneration::new(6).unwrap(),
+        ),
+    );
+    assert_eq!(
+        block_on(controller.reconcile(&stale)),
+        Err(NetworkEffectError::NetworkAdmissionMismatch)
     );
     assert!(effects.events().is_empty());
 }

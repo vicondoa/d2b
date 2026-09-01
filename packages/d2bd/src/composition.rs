@@ -2,11 +2,12 @@
 // Result Err type. Boxing it would require pervasive API changes across
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+#[cfg(test)]
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -28,6 +29,7 @@ use d2b_audit::{
     AuditSink, DurabilityEvidence, OperationIdentity, ZoneId as AuditZoneId, ZoneOperationKey,
     evidence_from_decision_result,
 };
+use d2b_contracts::workload_identity::{WorkloadIdentity, WorkloadTarget};
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
@@ -35,11 +37,10 @@ use d2b_contracts::{
 use d2b_contracts_broker::broker_wire::{
     ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
     ApplyNftablesRequest as BrokerApplyNftablesRequest,
-    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
-    ApplyRouteRequest as BrokerApplyRouteRequest, ApplySysctlRequest as BrokerApplySysctlRequest,
-    AuditJoinContext, BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
-    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest,
-    HelloRequest, LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
+    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, AuditJoinContext, BrokerCallerRole,
+    BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
+    LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
     OpenPidfdRequest as BrokerOpenPidfdRequest, OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
@@ -54,7 +55,6 @@ use d2b_contracts_broker::broker_wire::{
     RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
     SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
     StoreVerifyRequest as BrokerStoreVerifyRequest,
-    UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
     UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
     UsbipBindRequest as BrokerUsbipBindRequest,
     UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
@@ -67,67 +67,72 @@ use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef, ResourceUid,
-    SchemaFingerprint, ZoneId,
+    NetworkProvenance, ResourceBundleGenerationId, ResourceEnvelope, ResourceErrorKind,
+    ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
+    ZoneResourceIdentity, ZoneRevision,
+    endpoint::{
+        EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+        EndpointVisibility,
+    },
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
     volume::{VolumeAttachment, VolumeSpec},
 };
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
-};
+use d2b_contracts_resource::v3::{ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE};
+use d2b_contracts_zone_session::v3::ZoneLinkSpec;
+use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
+use d2b_contracts_zone_session::v3::zone_routing::{
+    ZoneLabelId, ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest, ZonePath,
+    ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneTreeEdge,
+};
+use d2b_core::allocator_config::AllocatorZoneTopology;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
-    BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
-    intent_id_hosts_host, intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
-    intent_id_nft_host, intent_id_nft_projection_env, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
-    intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
+    BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_installer_host,
+    intent_id_keys_rotate, intent_id_legacy_runner, intent_id_migrate_host,
+    intent_id_network_bridge_uids, intent_id_network_hosts_uids, intent_id_network_projection_uids,
+    intent_id_network_route_uids, intent_id_network_sysctl_uids, intent_id_nft_host,
+    intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_trust,
+    intent_id_usbip_bind, intent_id_usbip_firewall,
 };
 use d2b_core::closures::ClosureMetadata;
 use d2b_core::error::BundleError;
-use d2b_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
+use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
-use d2b_gateway::{
-    AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
-    DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
-    IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
-    SessionBinding, SessionSecret, TargetKey,
+use d2b_core_controller::zone_links::{
+    BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
+    ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkRecord, ZoneLinkRouteBinding,
 };
-use d2b_gateway_runtime::relay_bridge::LocalTarget;
-use d2b_gateway_runtime::{
-    AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
-    RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
-    system_now_unix,
-};
+use d2b_core_controller::zonelink::{ZoneLinkController, ZoneLinkOwnerProof};
 use d2b_host::ssh_keygen;
-use d2b_provider_network_local::diagnostics::{net_route_preflight, net_vm_bundle_gate};
+use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
-    broker::NetworkEffectContext,
+    broker::{NetworkEffectContext, resolve_tap_identity},
     controller::{
-        CONFIG_VOLUME_MAX_BYTES, NetworkConfigContent, NetworkEffectError, NetworkReconciler,
+        CONFIG_VOLUME_MAX_BYTES, NetworkAdmissionIntent, NetworkAdmissionKey,
+        NetworkAdmissionProof, NetworkConfigContent, NetworkEffectError, NetworkReconciler,
         NetworkResourcePort, ReconcileInput, ReconcileProgress,
     },
-};
-use d2b_provider_runtime_azure_container_apps::gateway::{
-    AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
+    ifname::derive_network_child_name,
+    observe::observe_host_network,
 };
 use d2b_provider_shell_terminal::{
     DEFAULT_OUTPUT_RING_CAPACITY, ExecutionTarget, PoolSpec, ShellAuthorityLedger,
     ShellAuthorityPort, ShellPool, ShellSession, ShellTerminalError, SupervisorProcessResource,
 };
-use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
+use d2b_provider_transport_azure_relay::RelayTransportSettings;
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
-use d2b_realm_core::TargetName;
-use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
+use d2b_zone_routing::engine::ZoneRouteRequest;
+use d2b_zone_routing::engine::{
+    ZoneRouteAdmission, ZoneRouteAdmissionExpectation, ZoneRouteDecision, ZoneRouteEngine,
+};
+use d2b_zone_routing::resolver::{SealedZoneTopology, ZoneEntrypointResolver};
 pub(crate) use d2bd_runtime::broker_transport::{
     broker_remaining_before_op, broker_response_kind, default_audit_join_context,
     dispatch_broker_request_to_socket, redact_broker_dispatch_failure_for_launcher,
@@ -169,8 +174,9 @@ pub(crate) use d2bd_runtime::wire_response_helpers::{
     daemon_failure_response, invalid_request_response, invalid_request_response_with_summary,
     response_outcome, response_summary, retarget_mutating_response,
 };
+use d2bd_runtime::zone_authority::complete_generation_set_digest;
 use nix::fcntl::{Flock, FlockArg};
-use nix::unistd::{Group, User};
+use nix::unistd::Group;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -212,12 +218,12 @@ pub use d2bd_runtime::runtime_process::{
 use d2bd_runtime::runtime_util::{
     block_on_future, duplicate_received_fd, hex_bytes, projection_digest_bytes,
 };
+#[cfg(test)]
+use d2bd_runtime::shell_backend::shell_poll_timeout;
 use d2bd_runtime::shell_backend::{
     SHELL_MANAGEMENT_TIMEOUT, shell_capability_failed, shell_failed, shell_protocol_failed,
     shell_transport_failed,
 };
-#[cfg(test)]
-use d2bd_runtime::shell_backend::shell_poll_timeout;
 #[cfg(test)]
 use d2bd_runtime::shell_backend::{SHELL_POLL_CAP, SHELL_POLL_SLACK};
 use d2bd_runtime::vm_start_support::{
@@ -230,6 +236,145 @@ use d2bd_runtime::workload_dispatch::{
     map_catalog_error as map_workload_catalog_error, map_helper_registry_error,
     unsafe_local_workload_availability, workload_availability_label, workload_provider_label,
 };
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum GuestComponentSessionKey {
+    Guest {
+        zone: ZoneId,
+        guest_ref: ResourceRef,
+        guest_uid: ResourceUid,
+        endpoint_uid: ResourceUid,
+        provider_uid: ResourceUid,
+        provider_generation: ResourceGeneration,
+        endpoint_generation: ResourceGeneration,
+    },
+    LegacyVm(String),
+}
+
+impl GuestComponentSessionKey {
+    pub(crate) fn for_guest(
+        zone: ZoneId,
+        guest_ref: ResourceRef,
+        guest_uid: ResourceUid,
+        endpoint_uid: ResourceUid,
+        provider_uid: ResourceUid,
+        provider_generation: ResourceGeneration,
+        endpoint_generation: ResourceGeneration,
+    ) -> Self {
+        Self::Guest {
+            zone,
+            guest_ref,
+            guest_uid,
+            endpoint_uid,
+            provider_uid,
+            provider_generation,
+            endpoint_generation,
+        }
+    }
+
+    fn for_legacy_vm(vm: impl Into<String>) -> Self {
+        Self::LegacyVm(vm.into())
+    }
+
+    pub(crate) fn is_guest_identity(
+        &self,
+        zone: &ZoneId,
+        guest_ref: &ResourceRef,
+        guest_uid: &ResourceUid,
+    ) -> bool {
+        matches!(
+            self,
+            Self::Guest {
+                zone: current_zone,
+                guest_ref: current_ref,
+                guest_uid: current_uid,
+                ..
+            } if current_zone == zone && current_ref == guest_ref && current_uid == guest_uid
+        )
+    }
+}
+
+impl std::fmt::Debug for GuestComponentSessionKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GuestComponentSessionKey(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct CommittedGuestSessionTarget {
+    zone: ZoneId,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    guest_generation: ResourceGeneration,
+    endpoint_ref: ResourceRef,
+    endpoint_uid: ResourceUid,
+    endpoint_resource_generation: ResourceGeneration,
+    endpoint_generation: ResourceGeneration,
+    provider_uid: ResourceUid,
+    provider_generation: ResourceGeneration,
+}
+
+impl CommittedGuestSessionTarget {
+    fn key(&self) -> GuestComponentSessionKey {
+        GuestComponentSessionKey::for_guest(
+            self.zone.clone(),
+            self.guest_ref.clone(),
+            self.guest_uid.clone(),
+            self.endpoint_uid.clone(),
+            self.provider_uid.clone(),
+            self.provider_generation,
+            self.endpoint_generation,
+        )
+    }
+
+    fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    fn guest_uid(&self) -> &ResourceUid {
+        &self.guest_uid
+    }
+
+    fn endpoint_ref(&self) -> &ResourceRef {
+        &self.endpoint_ref
+    }
+
+    fn endpoint_uid(&self) -> &ResourceUid {
+        &self.endpoint_uid
+    }
+
+    fn endpoint_resource_generation(&self) -> ResourceGeneration {
+        self.endpoint_resource_generation
+    }
+
+    fn endpoint_generation(&self) -> ResourceGeneration {
+        self.endpoint_generation
+    }
+
+    fn provider_generation(&self) -> ResourceGeneration {
+        self.provider_generation
+    }
+
+    fn provider_uid(&self) -> &ResourceUid {
+        &self.provider_uid
+    }
+
+    fn same_guest_identity(&self, other: &Self) -> bool {
+        self.zone == other.zone
+            && self.guest_ref == other.guest_ref
+            && self.guest_uid == other.guest_uid
+    }
+}
+
+impl std::fmt::Debug for CommittedGuestSessionTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CommittedGuestSessionTarget(<redacted>)")
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn test_scratch_root() -> PathBuf {
@@ -244,8 +389,7 @@ pub(crate) fn test_scratch_root() -> PathBuf {
 
 use d2bd_runtime::admission::{
     AdmissionConfig, PeerIdentity, PeerRole, authorize_peer, broker_caller_role_for_peer,
-    gateway_display_op_requires_admin, gateway_display_peer_principal,
-    gateway_display_peer_principal_string, verb_allowed_for_host_shutdown, verb_requires_admin,
+    verb_allowed_for_host_shutdown, verb_requires_admin,
 };
 #[cfg(test)]
 use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRIDE_LOCK};
@@ -277,7 +421,6 @@ const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
-const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// The static composition root is one artifact for both process-start modes.
 pub const D2BD_ARTIFACT_FAMILY: &str = "d2bd";
@@ -410,78 +553,6 @@ mod tpm_migration_inventory_tests {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GatewayFileConfig {
-    gateway: String,
-    realm: String,
-    #[serde(default)]
-    state_dir: Option<PathBuf>,
-    #[serde(default)]
-    credential_path: Option<PathBuf>,
-    #[serde(default)]
-    seal_key_path: Option<PathBuf>,
-    #[serde(default)]
-    allow_host_relay_credentials: bool,
-    #[serde(default)]
-    relay: GatewayRelayFileConfig,
-    #[serde(default)]
-    aca: GatewayAcaFileConfig,
-    #[serde(default)]
-    display: GatewayDisplayFileConfig,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayRelayFileConfig {
-    #[serde(default)]
-    namespace: Option<String>,
-    #[serde(default)]
-    entity: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayAcaFileConfig {
-    #[serde(default)]
-    endpoint: Option<String>,
-    #[serde(default)]
-    subscription: Option<String>,
-    #[serde(default)]
-    resource_group: Option<String>,
-    #[serde(default)]
-    sandbox_group: Option<String>,
-    #[serde(default)]
-    region: Option<String>,
-    #[serde(default)]
-    disk_image_id: Option<String>,
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    disk_name: Option<String>,
-    #[serde(default)]
-    managed_identity_resource_id: Option<String>,
-    #[serde(default)]
-    managed_identity_client_id: Option<String>,
-    #[serde(default)]
-    cpu: Option<String>,
-    #[serde(default)]
-    memory: Option<String>,
-    #[serde(default)]
-    auto_suspend_interval_secs: Option<u32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GatewayDisplayFileConfig {
-    #[serde(default)]
-    vsock_port: Option<u32>,
-    #[serde(default)]
-    waypipe_compression: Option<String>,
-    #[serde(default)]
-    waypipe_socket: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct ServerState {
     config: DaemonConfig,
@@ -498,9 +569,6 @@ struct ServerState {
     /// session is a daemon-held authenticated named-stream client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
-    /// Gateway display orchestrator state. Persisted for the daemon lifetime so
-    /// Open/List/Close share the same ledger and resource handles.
-    gateway_display: Arc<GatewayDisplayRuntime>,
     /// Bounded admission gate for in-flight connection-handler threads.
     /// The accept loop performs a non-blocking try-acquire and refuses
     /// (typed-busy) on a miss rather than ever blocking `accept()`.
@@ -541,21 +609,20 @@ struct ServerState {
     /// resolve through this index; no process-global lock carries that state.
     zone_coordinator: Arc<Mutex<ZoneCoordinator>>,
     /// Daemon-owned typed Guest configuration staging state.
-    config_staging:
-        Arc<Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
+    config_staging: Arc<Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
     /// One shared authenticated ComponentSession per Guest target. Typed
     /// health, activation, and Resource API callers must not race by opening
     /// independent sessions with the same reconnect generation.
     guest_component_sessions: Arc<
         tokio::sync::Mutex<
             HashMap<
-                String,
+                GuestComponentSessionKey,
                 Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
             >,
         >,
     >,
     guest_component_session_locks:
-        Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+        Arc<tokio::sync::Mutex<HashMap<GuestComponentSessionKey, Arc<tokio::sync::Mutex<()>>>>>,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -564,6 +631,1269 @@ struct ServerState {
     security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
+}
+
+/// Closed failures while composing one Zone-owned Gateway Guest route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZoneLinkGatewayCompositionError {
+    InvalidResource,
+    InvalidTransportSettings,
+    InvalidTopology,
+    InvalidIdentity,
+    SessionAlreadyBound,
+}
+
+impl ZoneLinkGatewayCompositionError {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidResource => "zonelink-composition-resource-invalid",
+            Self::InvalidTransportSettings => "zonelink-composition-transport-settings-invalid",
+            Self::InvalidTopology => "zonelink-composition-topology-invalid",
+            Self::InvalidIdentity => "zonelink-composition-identity-invalid",
+            Self::SessionAlreadyBound => "zonelink-composition-session-already-bound",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ZoneTopologyError {
+    Empty,
+    Missing,
+    Ambiguous,
+    RootMismatch,
+    MissingParent,
+    SelfParent,
+    Cycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommittedZoneTopology {
+    root: ZoneId,
+    parents: BTreeMap<ZoneId, ZoneId>,
+}
+
+impl CommittedZoneTopology {
+    fn from_allocator(
+        zones: &BTreeSet<ZoneId>,
+        topology: &AllocatorZoneTopology,
+    ) -> Result<Self, ZoneTopologyError> {
+        if zones.is_empty() {
+            return Err(ZoneTopologyError::Empty);
+        }
+        if topology.parent_map.keys().cloned().collect::<BTreeSet<_>>() != *zones {
+            return Err(ZoneTopologyError::Missing);
+        }
+        let roots = topology
+            .parent_map
+            .iter()
+            .filter_map(|(zone, parent)| parent.is_none().then_some(zone.clone()))
+            .collect::<Vec<_>>();
+        let [root] = roots.as_slice() else {
+            return Err(ZoneTopologyError::Ambiguous);
+        };
+        if root != &topology.root {
+            return Err(ZoneTopologyError::RootMismatch);
+        }
+        let mut parents = BTreeMap::new();
+        for (zone, parent) in &topology.parent_map {
+            let Some(parent) = parent else {
+                continue;
+            };
+            if zone == parent {
+                return Err(ZoneTopologyError::SelfParent);
+            }
+            if !zones.contains(parent) {
+                return Err(ZoneTopologyError::MissingParent);
+            }
+            parents.insert(zone.clone(), parent.clone());
+        }
+        if parents.len() + 1 != zones.len() {
+            return Err(ZoneTopologyError::Missing);
+        }
+        for start in zones {
+            let mut seen = BTreeSet::new();
+            let mut current = start;
+            while let Some(parent) = parents.get(current) {
+                if !seen.insert(current.clone()) {
+                    return Err(ZoneTopologyError::Cycle);
+                }
+                current = parent;
+            }
+            if !seen.insert(current.clone()) {
+                return Err(ZoneTopologyError::Cycle);
+            }
+            if current != root {
+                return Err(ZoneTopologyError::MissingParent);
+            }
+        }
+        Ok(Self {
+            root: root.clone(),
+            parents,
+        })
+    }
+
+    fn parent(&self, zone: &ZoneId) -> Option<&ZoneId> {
+        self.parents.get(zone)
+    }
+
+    fn path(&self, zone: &ZoneId) -> Option<ZonePath> {
+        let mut labels = Vec::new();
+        let mut current = zone;
+        loop {
+            labels.push(ZoneLabelId::parse(current.as_str().to_owned()).ok()?);
+            if current == &self.root {
+                break;
+            }
+            current = self.parents.get(current)?;
+        }
+        ZonePath::new(labels).ok()
+    }
+}
+
+/// Production composition for a child-local ZoneLink using a Gateway Guest.
+///
+/// The composition owns only non-secret route metadata and the child-local
+/// controller. Relay credentials, sealing keys, and relay bearer material are
+/// deliberately absent: the selected transport Provider acquires them inside
+/// its Gateway Guest execution context. Route admissions are accepted only as
+/// runtime-issued, single-use values and are never reconstructed from this
+/// metadata.
+pub(crate) struct ZoneLinkGatewayComposition {
+    zone: ZoneId,
+    link_uid: ResourceUid,
+    transport_provider_ref: ResourceRef,
+    parent_path: ZonePath,
+    child_path: ZonePath,
+    edge: ZoneTreeEdge,
+    parent_zone_uid: ResourceUid,
+    child_zone_uid: ResourceUid,
+    controller_generation: ZoneLinkControllerGeneration,
+    reconnect_generation: Mutex<ReconnectGeneration>,
+    required_capability: ZoneRouteCapability,
+    policy_revision: ZoneRevision,
+    cursor_owner: ZoneLinkOwnerProof,
+    controller: Mutex<ZoneLinkController>,
+    route_engine: Mutex<ZoneRouteEngine>,
+    resolver: ZoneEntrypointResolver,
+    gateway_session:
+        Mutex<Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>>>,
+    route_admission_authority: Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
+    gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
+    last_gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
+}
+
+impl std::fmt::Debug for ZoneLinkGatewayComposition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneLinkGatewayComposition(<redacted>)")
+    }
+}
+
+impl ZoneLinkGatewayComposition {
+    /// Compose the selected Azure Relay route from the committed ZoneLink row.
+    ///
+    /// The Host retains only the ZoneLink's non-secret transport settings. The
+    /// selected Provider's execution/configuration rows and all credential
+    /// rows remain in the Gateway Guest composition.
+    #[allow(clippy::too_many_arguments)]
+    fn from_committed_resources(
+        zone: ZoneId,
+        parent_path: ZonePath,
+        child_path: ZonePath,
+        parent_uid: ResourceUid,
+        child_uid: ResourceUid,
+        authority_generation: u64,
+        authority_digest: &str,
+        link: &Value,
+    ) -> Result<Self, ZoneLinkGatewayCompositionError> {
+        if link.get("type").and_then(Value::as_str) != Some("ZoneLink") {
+            return Err(ZoneLinkGatewayCompositionError::InvalidResource);
+        }
+        let link_name = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidResource)?;
+        if link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str)
+            != Some(zone.as_str())
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidResource);
+        }
+        ResourceRef::parse(&format!("ZoneLink/{link_name}"))
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        let link_uid = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let spec = link
+            .get("spec")
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidResource)
+            .and_then(|spec| {
+                serde_json::from_value::<ZoneLinkSpec>(spec.clone())
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)
+            })?;
+        spec.validate_child_zone(&zone)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        if spec.transport_provider_ref().to_canonical_string()
+            != d2b_provider_transport_azure_relay::PROVIDER_REF
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidTransportSettings);
+        }
+        serde_json::from_slice::<RelayTransportSettings>(
+            &spec.transport_settings().to_canonical_bytes(),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTransportSettings)?;
+
+        let edge = ZoneTreeEdge::new(parent_path.clone(), child_path)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?;
+        let controller_generation = ZoneLinkControllerGeneration::parse(format!(
+            "zonelink-{}",
+            link_uid.as_str().replace('-', "")
+        ))
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let reconnect_generation = ReconnectGeneration::new(1)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let policy_revision = link
+            .get("metadata")
+            .and_then(|metadata| metadata.get("revision"))
+            .and_then(Value::as_u64)
+            .filter(|value| *value != 0)
+            .map(ZoneRevision::new)
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let required_capability = ZoneRouteCapability::parse("resource-read")
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let binding = ZoneLinkRouteBinding::new(
+            link_uid.clone(),
+            edge.clone(),
+            controller_generation.clone(),
+            reconnect_generation,
+            parent_uid.clone(),
+            child_uid.clone(),
+            policy_revision,
+            required_capability.clone(),
+            OperationClass::Invoke,
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let record = ZoneLinkRecord::unenrolled(controller_generation.clone())
+            .with_disabled(spec.disabled())
+            .with_route_binding(binding)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let owner = ZoneLinkOwnerProof::from_digest(authority_generation, authority_digest)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let controller_limits = ZoneLinkLimits::new(
+            spec.limits().max_pending_intents(),
+            spec.limits().max_active_streams(),
+            spec.limits().reconnect_max_attempts(),
+            spec.limits().reconnect_window_secs(),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
+        let controller = ZoneLinkController::restore(
+            controller_limits,
+            ZoneLinkKeyPolicy::default(),
+            record,
+            owner.clone(),
+        );
+        let child_path_for_route = edge.child().clone();
+        let topology = SealedZoneTopology::seal(parent_path.clone(), vec![edge.clone()])
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?;
+        Ok(Self {
+            zone,
+            link_uid,
+            transport_provider_ref: spec.transport_provider_ref().clone(),
+            parent_path: parent_path.clone(),
+            child_path: child_path_for_route,
+            edge,
+            parent_zone_uid: parent_uid,
+            child_zone_uid: child_uid,
+            controller_generation,
+            reconnect_generation: Mutex::new(reconnect_generation),
+            required_capability,
+            policy_revision,
+            cursor_owner: owner.clone(),
+            controller: Mutex::new(controller),
+            route_engine: Mutex::new(ZoneRouteEngine::new(parent_path)),
+            resolver: ZoneEntrypointResolver::new(topology),
+            gateway_session: Mutex::new(None),
+            route_admission_authority: Mutex::new(None),
+            gateway_guest: Mutex::new(None),
+            last_gateway_guest: Mutex::new(None),
+        })
+    }
+
+    const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    #[cfg(test)]
+    const fn link_uid(&self) -> &ResourceUid {
+        &self.link_uid
+    }
+
+    const fn child_path(&self) -> &ZonePath {
+        &self.child_path
+    }
+
+    fn transport_provider_ref(&self) -> &ResourceRef {
+        &self.transport_provider_ref
+    }
+
+    /// Return the child-local controller session state.
+    fn session_state(&self) -> d2b_core_controller::zone_links::ZoneLinkSessionState {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .handler()
+            .session_state()
+    }
+
+    /// Apply one committed child-local controller event and release effects.
+    fn apply_event(
+        &self,
+        event: d2b_core_controller::zone_links::ZoneLinkEvent,
+    ) -> Result<Vec<ZoneLinkEffect>, ZoneLinkError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pass = controller.handler_mut().begin(event)?;
+        let proof = controller.handler_mut().commit(pass)?;
+        controller.handler_mut().release_effects(proof)
+    }
+
+    /// Issue one route admission through the child-local controller's
+    /// post-commit hand-off.
+    fn issue_route_admission<T>(
+        &self,
+        request: ZoneLinkRouteAdmissionRequest,
+        issuer: impl FnOnce(ZoneLinkRouteAdmissionRequest) -> Result<T, ZoneLinkError>,
+    ) -> Result<T, ZoneLinkError> {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .issue_route_admission(request, issuer)
+    }
+
+    /// Adopt the single durable cursor observation owned by this link.
+    #[cfg(test)]
+    fn adopt_cursor(
+        &self,
+        observation: d2b_core_controller::zonelink::ZoneLinkCursorRecord,
+    ) -> d2b_core_controller::zonelink::ZoneLinkAdoption {
+        self.controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .adopt_cursor([observation])
+    }
+
+    fn reconnect_generation(&self) -> ReconnectGeneration {
+        *self
+            .reconnect_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Bind the host-side authenticated Gateway Guest session and its
+    /// runtime-owned route-admission issuer.
+    fn bind_gateway_session(
+        &self,
+        session: Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    ) -> Result<(), ZoneLinkGatewayCompositionError> {
+        let gateway_guest = self
+            .gateway_guest()
+            .ok_or(ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        if session.identity().zone() != gateway_guest.zone()
+            || session.identity().guest_ref() != gateway_guest.guest_ref()
+            || session.identity().guest_uid() != gateway_guest.guest_uid()
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let session_generation = ReconnectGeneration::new(session.generation())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        let current_generation = self.reconnect_generation();
+        if session_generation < current_generation {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let previous_session = self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let previous_authority = self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let previous_is_live = previous_session
+            .as_ref()
+            .is_some_and(|previous| previous.route_binding().liveness().is_live());
+        if previous_is_live && session_generation == current_generation {
+            if let Some(previous_session) = previous_session {
+                *self
+                    .gateway_session
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_session);
+            }
+            if let Some(previous_authority) = previous_authority {
+                *self
+                    .route_admission_authority
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_authority);
+            }
+            return Err(ZoneLinkGatewayCompositionError::SessionAlreadyBound);
+        }
+        if let Some(previous_authority) = previous_authority {
+            previous_authority.revoke();
+        }
+        drop(previous_session);
+        if session_generation > current_generation {
+            self.apply_event(ZoneLinkEvent::SessionGenerationAdvanced {
+                reconnect_generation: session_generation,
+            })
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            *self
+                .reconnect_generation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = session_generation;
+        }
+        self.establish_authenticated_controller_session(
+            session_generation,
+            session.peer_key_fingerprint(),
+        )?;
+        let route_binding = session.route_binding();
+        let policy = session
+            .identity()
+            .endpoint_policy_for_generation(session_generation.get());
+        let authority = d2b_bus::session::RuntimeRouteAdmissionAuthority::new(
+            self.link_uid.clone(),
+            self.edge.clone(),
+            self.controller_generation.clone(),
+            self.parent_zone_uid.clone(),
+            self.child_zone_uid.clone(),
+            self.required_capability.clone(),
+            OperationClass::Invoke,
+            self.policy_revision,
+            &policy,
+            &route_binding,
+            Arc::new(unix_now_millis),
+        )
+        .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        *self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session);
+        *self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(authority);
+        Ok(())
+    }
+
+    fn establish_authenticated_controller_session(
+        &self,
+        reconnect_generation: ReconnectGeneration,
+        peer_key_fingerprint: &d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint,
+    ) -> Result<(), ZoneLinkGatewayCompositionError> {
+        if self.reconnect_generation() != reconnect_generation {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        if self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .handler()
+            .record()
+            .enrollment()
+            .is_some_and(|enrollment| enrollment.key_fingerprint() != peer_key_fingerprint)
+        {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let state = self.session_state();
+        match state {
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Unenrolled => {
+                let issued_at = unix_now_millis();
+                let psk = BootstrapPsk::issue(
+                    self.controller_generation.clone(),
+                    1,
+                    issued_at.saturating_add(300_000),
+                );
+                self.apply_event(ZoneLinkEvent::PskIssued { psk: psk.clone() })
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::BootstrapAdmit {
+                    psk,
+                    now_ms: issued_at,
+                })
+                .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::SealEnrollment {
+                    enrollment: SealedEnrollment::new(
+                        self.child_zone_uid.clone(),
+                        peer_key_fingerprint.clone(),
+                    ),
+                })
+                .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+                self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            }
+            d2b_core_controller::zone_links::ZoneLinkSessionState::EnrollmentCommitted => {
+                self.apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+                    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+            }
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Kk => {}
+            d2b_core_controller::zone_links::ZoneLinkSessionState::Ready => {}
+            d2b_core_controller::zone_links::ZoneLinkSessionState::IKpsk2 => {
+                return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+            }
+        }
+        if self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Kk {
+            self.apply_event(ZoneLinkEvent::EnrolledSessionEstablished {
+                peer_key_fingerprint: peer_key_fingerprint.clone(),
+            })
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        }
+        if self.session_state() != d2b_core_controller::zone_links::ZoneLinkSessionState::Ready {
+            return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+        }
+        let mut controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !controller.cursor_authority().adoption().is_adopted() {
+            let cursor = controller.handler().record().cursor();
+            if !controller
+                .adopt_cursor([d2b_core_controller::zonelink::ZoneLinkCursorRecord::new(
+                    self.cursor_owner.clone(),
+                    cursor,
+                )])
+                .is_adopted()
+            {
+                return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
+            }
+        }
+        Ok(())
+    }
+
+    fn has_gateway_session(&self) -> bool {
+        self.gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|session| session.route_binding().liveness().is_live())
+    }
+
+    fn gateway_session(
+        &self,
+    ) -> Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>> {
+        self.gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn fence_gateway_session(&self) {
+        if let Some(authority) = self
+            .route_admission_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            authority.revoke();
+        }
+        let had_session = self
+            .gateway_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .is_some();
+        if had_session
+            && self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Ready
+        {
+            let _ = self.apply_event(ZoneLinkEvent::SessionDisconnected);
+        }
+        self.gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+
+    fn reset_gateway_guest_identity(&self) -> Result<(), ZoneLinkGatewayCompositionError> {
+        self.fence_gateway_session();
+        self.apply_event(ZoneLinkEvent::Revoke)
+            .map(|_| ())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        *self
+            .reconnect_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ReconnectGeneration::new(1)
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
+        Ok(())
+    }
+
+    fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
+        *self
+            .last_gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest.clone());
+        *self
+            .gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest);
+    }
+
+    fn gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
+        self.gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn last_gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
+        self.last_gateway_guest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Consume one runtime-issued admission for a child-Zone request.
+    fn admit_request(
+        &self,
+        operation_id: &str,
+        target_zone: ZonePath,
+    ) -> Result<(), ZoneRouteFailClosedReason> {
+        if target_zone != self.child_path || !self.has_gateway_session() {
+            return Err(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        let mut operation_digest = Sha256::new();
+        operation_digest.update(b"d2b:v3:zonelink-operation\0");
+        operation_digest.update(operation_id.as_bytes());
+        let operation_id = OperationId::new(operation_digest.finalize()[..16].to_vec())
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let request =
+            ZoneLinkRouteAdmissionRequest::new(operation_id.clone(), OperationClass::Invoke)
+                .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let expected = ZoneRouteAdmissionExpectation::new(
+            self.link_uid.clone(),
+            self.edge.clone(),
+            self.controller_generation.clone(),
+            self.reconnect_generation(),
+            self.parent_zone_uid.clone(),
+            self.child_zone_uid.clone(),
+            operation_id,
+            OperationClass::Invoke,
+            self.required_capability.clone(),
+            self.policy_revision,
+        )?
+        .for_zones(self.parent_path.clone(), self.child_path.clone());
+        let (verifier, evidence) = self
+            .issue_route_admission(request, |request| {
+                let authority = self
+                    .route_admission_authority
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                authority
+                    .as_ref()
+                    .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?
+                    .issue(request)
+                    .map_err(|_| ZoneLinkError::RouteAdmissionBindingInvalid)
+            })
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        let admission = ZoneRouteAdmission::verify(verifier, evidence, &expected)?;
+        match self.decide_route(target_zone, admission) {
+            ZoneRouteDecision::Allowed { .. } => Ok(()),
+            ZoneRouteDecision::Denied { reason } => Err(reason),
+        }
+    }
+
+    /// Decide a route using a runtime-issued admission.
+    ///
+    /// The route engine consumes the admission at the exact decision point;
+    /// no caller policy, connectivity, capability, or time claim is read.
+    fn decide_route(
+        &self,
+        target_zone: ZonePath,
+        admission: ZoneRouteAdmission,
+    ) -> ZoneRouteDecision {
+        let request =
+            ZoneRouteRequest::new(self.resolver.topology().local_root().clone(), target_zone)
+                .with_admission(admission);
+        let now = unix_now_seconds();
+        self.route_engine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .decide_authenticated_edge_route(
+                &self.edge,
+                ZoneRouteCapabilitySet::new(vec![self.required_capability.clone()])
+                    .expect("one required capability is within the contract bound"),
+                now,
+                now.saturating_add(30),
+                &request,
+            )
+    }
+}
+
+#[cfg(test)]
+fn zone_path(zone: &ZoneId) -> Result<ZonePath, ZoneLinkGatewayCompositionError> {
+    ZonePath::new(vec![
+        ZoneLabelId::parse(zone.as_str().to_owned())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?,
+    ])
+    .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)
+}
+
+#[cfg(test)]
+fn child_zone_path(
+    parent: &ZonePath,
+    child: &ZoneId,
+) -> Result<ZonePath, ZoneLinkGatewayCompositionError> {
+    let mut labels = Vec::with_capacity(parent.depth() + 1);
+    labels.push(
+        ZoneLabelId::parse(child.as_str().to_owned())
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?,
+    );
+    labels.extend(parent.labels().iter().cloned());
+    ZonePath::new(labels).map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)
+}
+
+fn unix_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod zone_link_gateway_composition_tests {
+    use super::*;
+    use d2b_core_controller::zone_links::{
+        BootstrapPsk, SealedEnrollment, ZoneLinkCursor, ZoneLinkEvent, ZoneLinkSessionState,
+    };
+    use d2b_core_controller::zonelink::{ZoneLinkCursorRecord, ZoneLinkOwnerProof};
+
+    fn uid(digit: char) -> ResourceUid {
+        ResourceUid::parse(format!(
+            "{0}{0}{0}{0}{0}{0}{0}{0}-{0}{0}{0}{0}-4{0}{0}{0}-8{0}{0}{0}-{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}",
+            digit
+        ))
+        .expect("test resource uid")
+    }
+
+    fn link_resource() -> Value {
+        json!({
+            "type": "ZoneLink",
+            "metadata": {
+                "name": "uplink",
+                "zone": "child",
+                "uid": uid('1'),
+                "revision": 1,
+            },
+            "spec": {
+                "childZoneName": "child",
+                "disabled": false,
+                "limits": {
+                    "maxActiveStreams": 32,
+                    "maxPendingIntents": 256,
+                    "reconnectMaxAttempts": 10,
+                    "reconnectWindowSecs": 300,
+                },
+                "transportCredentials": [
+                    "Credential/relay-listen",
+                    "Credential/relay-send",
+                ],
+                "transportProviderRef": "Provider/transport-azure-relay",
+                "transportSettings": {
+                    "relayEntityId": "hc-d2b-child",
+                    "relayNamespaceId": "relns-d2b-prod",
+                },
+            },
+        })
+    }
+
+    fn composition() -> ZoneLinkGatewayComposition {
+        let link = link_resource();
+        ZoneLinkGatewayComposition::from_committed_resources(
+            ZoneId::parse("child").unwrap(),
+            zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+            child_zone_path(
+                &zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+                &ZoneId::parse("child").unwrap(),
+            )
+            .unwrap(),
+            uid('2'),
+            uid('3'),
+            1,
+            &format!("sha256:{}", "a".repeat(64)),
+            &link,
+        )
+        .expect("valid Gateway Guest composition")
+    }
+
+    #[test]
+    fn committed_topology_accepts_a_non_local_root_name() {
+        let root = ZoneId::parse("root").unwrap();
+        let child = ZoneId::parse("child").unwrap();
+        let zones = BTreeSet::from([root.clone(), child.clone()]);
+        let topology = AllocatorZoneTopology {
+            root: root.clone(),
+            parent_map: BTreeMap::from([(root.clone(), None), (child.clone(), Some(root.clone()))]),
+        };
+        let resolved =
+            CommittedZoneTopology::from_allocator(&zones, &topology).expect("valid topology");
+        assert_eq!(resolved.root, root);
+        assert_eq!(
+            resolved.path(&child).unwrap().to_storage_string(),
+            "root/child"
+        );
+    }
+
+    #[test]
+    fn committed_topology_rejects_missing_and_ambiguous_roots() {
+        let root = ZoneId::parse("root").unwrap();
+        let child = ZoneId::parse("child").unwrap();
+        let zones = BTreeSet::from([root.clone(), child.clone()]);
+        let missing = AllocatorZoneTopology {
+            root: root.clone(),
+            parent_map: BTreeMap::from([(root.clone(), None)]),
+        };
+        assert!(matches!(
+            CommittedZoneTopology::from_allocator(&zones, &missing),
+            Err(ZoneTopologyError::Missing)
+        ));
+
+        let ambiguous = AllocatorZoneTopology {
+            root,
+            parent_map: BTreeMap::from([
+                (child.clone(), None),
+                (ZoneId::parse("other").unwrap(), None),
+            ]),
+        };
+        let ambiguous_zones = BTreeSet::from([child, ZoneId::parse("other").unwrap()]);
+        assert!(matches!(
+            CommittedZoneTopology::from_allocator(&ambiguous_zones, &ambiguous),
+            Err(ZoneTopologyError::Ambiguous)
+        ));
+    }
+
+    #[test]
+    fn composition_keeps_gateway_provider_and_route_state_together() {
+        let composition = composition();
+        assert_eq!(composition.zone().as_str(), "child");
+        assert_eq!(composition.link_uid(), &uid('1'));
+        assert_eq!(
+            composition.session_state(),
+            ZoneLinkSessionState::Unenrolled
+        );
+        assert_eq!(
+            format!("{composition:?}"),
+            "ZoneLinkGatewayComposition(<redacted>)"
+        );
+        assert!(!format!("{composition:?}").contains("hc-d2b-child"));
+    }
+
+    #[test]
+    fn authenticated_session_promotes_child_controller_and_adopts_cursor() {
+        let composition = composition();
+        let fingerprint =
+            d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                "fingerprint-child",
+            )
+            .unwrap();
+        composition
+            .establish_authenticated_controller_session(
+                composition.reconnect_generation(),
+                &fingerprint,
+            )
+            .expect("authenticated session should establish the child controller");
+        assert_eq!(composition.session_state(), ZoneLinkSessionState::Ready);
+        assert!(
+            composition
+                .controller
+                .lock()
+                .unwrap()
+                .cursor_authority()
+                .adoption()
+                .is_adopted()
+        );
+    }
+
+    #[test]
+    fn a_reconnected_session_with_a_different_enrolled_key_is_refused() {
+        let composition = composition();
+        let first = d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+            "fingerprint-child",
+        )
+        .unwrap();
+        let replacement =
+            d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                "fingerprint-other",
+            )
+            .unwrap();
+        composition
+            .establish_authenticated_controller_session(composition.reconnect_generation(), &first)
+            .expect("initial session should establish");
+        assert_eq!(
+            composition
+                .establish_authenticated_controller_session(
+                    composition.reconnect_generation(),
+                    &replacement,
+                )
+                .unwrap_err(),
+            ZoneLinkGatewayCompositionError::InvalidIdentity
+        );
+    }
+
+    #[test]
+    fn gateway_route_operation_identity_binds_target_and_method() {
+        let base = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway",
+            "operationId": "same-operation"
+        });
+        let mut other_target = base.clone();
+        other_target["resourceRef"] = Value::String("Guest/other".to_owned());
+        let mut other_method = base.clone();
+        other_method["method"] = Value::String("Delete".to_owned());
+        assert_ne!(
+            gateway_route_operation_id(&base, 1000, "Get"),
+            gateway_route_operation_id(&other_target, 1000, "Get")
+        );
+        assert_ne!(
+            gateway_route_operation_id(&base, 1000, "Get"),
+            gateway_route_operation_id(&other_method, 1000, "Delete")
+        );
+    }
+
+    #[test]
+    fn gateway_classification_blocks_host_fallback_before_method_dispatch() {
+        let gateway_start = json!({
+            "method": "Start",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway"
+        });
+        let gateway_reconcile = json!({
+            "method": "Reconcile",
+            "zoneRef": "Zone/child",
+            "resourceType": "Guest"
+        });
+        let gateway_exec = json!({
+            "method": "Create",
+            "zoneRef": "Zone/child",
+            "resourceType": "EphemeralProcess"
+        });
+        let gateway_unsupported = json!({
+            "method": "Status",
+            "zoneRef": "Zone/child",
+            "resourceType": "Guest"
+        });
+        let gateway_shell = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "shell-terminal.d2bus.org.ShellSession/canary"
+        });
+        let gateway_exec_get = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "EphemeralProcess/canary"
+        });
+        for request in [
+            &gateway_start,
+            &gateway_reconcile,
+            &gateway_exec,
+            &gateway_unsupported,
+            &gateway_shell,
+            &gateway_exec_get,
+        ] {
+            assert_eq!(
+                classify_gateway_zone_request_kind(GatewayZonePresence::Composed, request)
+                    .unwrap_err(),
+                resource_runtime::ResourceRuntimeError::CapabilityUnavailable
+            );
+            assert_eq!(
+                classify_gateway_zone_request_kind(GatewayZonePresence::Refused, request)
+                    .unwrap_err(),
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            );
+        }
+
+        let forwarded = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "Guest/gateway"
+        });
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Composed, &forwarded),
+            Ok(GatewayZoneRequestRoute::Forward)
+        );
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Local, &forwarded),
+            Ok(GatewayZoneRequestRoute::Local)
+        );
+
+        let control = json!({
+            "method": "Get",
+            "zoneRef": "Zone/child",
+            "resourceRef": "ZoneLink/uplink"
+        });
+        assert_eq!(
+            classify_gateway_zone_request_kind(GatewayZonePresence::Composed, &control),
+            Ok(GatewayZoneRequestRoute::HostControl)
+        );
+        assert_eq!(
+            classify_gateway_zone_request_kind(
+                GatewayZonePresence::Composed,
+                &json!({
+                    "method": "Start",
+                    "zoneRef": "Zone/child",
+                    "resourceRef": "ZoneLink/uplink"
+                })
+            )
+            .unwrap_err(),
+            resource_runtime::ResourceRuntimeError::CapabilityUnavailable
+        );
+    }
+
+    #[test]
+    fn gateway_classification_precedes_lifecycle_and_reconcile_dispatch() {
+        let source = include_str!("composition.rs");
+        let early_classification = source
+            .find("let gateway_resource_route = match")
+            .expect("early gateway classification");
+        let shell_owner = source
+            .find("&& typed_shell_request(&resource.value())")
+            .expect("typed shell owner dispatch");
+        let process_owner = source
+            .find("&& process_resource_owner_request(&resource.value())")
+            .expect("process owner dispatch");
+        assert!(early_classification < shell_owner);
+        assert!(early_classification < process_owner);
+
+        let classification = source
+            .find("let gateway_route = match classify_gateway_zone_request")
+            .expect("gateway classification");
+        let forwarding = source
+            .find("if gateway_route == GatewayZoneRequestRoute::Forward")
+            .expect("gateway forwarding branch");
+        let admission = source
+            .find("match admit_gateway_zone_request")
+            .expect("gateway route admission");
+        let lifecycle = source
+            .find("Some(\"Start\" | \"Stop\" | \"Restart\")")
+            .expect("lifecycle dispatch");
+        let reconcile = source
+            .find("if is_device_tpm_reconcile_request")
+            .expect("reconcile dispatch");
+        assert!(classification < forwarding);
+        assert!(classification < admission);
+        assert!(classification < lifecycle);
+        assert!(classification < reconcile);
+    }
+
+    #[test]
+    fn non_relay_provider_is_refused_before_gateway_composition() {
+        let mut link = link_resource();
+        link["spec"]["transportProviderRef"] = Value::String("Provider/transport-unix".to_owned());
+        assert!(!is_gateway_zone_link(&link));
+        let error = ZoneLinkGatewayComposition::from_committed_resources(
+            ZoneId::parse("child").unwrap(),
+            zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+            child_zone_path(
+                &zone_path(&ZoneId::parse("local-root").unwrap()).unwrap(),
+                &ZoneId::parse("child").unwrap(),
+            )
+            .unwrap(),
+            uid('2'),
+            uid('3'),
+            1,
+            &format!("sha256:{}", "a".repeat(64)),
+            &link,
+        )
+        .expect_err("local transport cannot use the Gateway Guest composition");
+        assert_eq!(
+            error,
+            ZoneLinkGatewayCompositionError::InvalidTransportSettings
+        );
+    }
+
+    #[test]
+    fn v3_guest_sessions_use_committed_identity_keys_not_guest_names() {
+        let guest = ResourceRef::parse("Guest/gateway").expect("Guest ref");
+        let first = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            guest.clone(),
+            uid('1'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
+        );
+        let second = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("other").expect("Zone"),
+            guest.clone(),
+            uid('1'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
+        );
+        let replacement = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            guest,
+            uid('2'),
+            uid('2'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(1).expect("Endpoint generation"),
+        );
+        let endpoint_replacement = GuestComponentSessionKey::for_guest(
+            ZoneId::parse("child").expect("Zone"),
+            ResourceRef::parse("Guest/gateway").expect("Guest ref"),
+            uid('1'),
+            uid('4'),
+            uid('3'),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            ResourceGeneration::new(2).expect("Endpoint generation"),
+        );
+        assert_ne!(first, second);
+        assert_ne!(first, replacement);
+        assert_ne!(first, endpoint_replacement);
+        assert!(!format!("{first:?}").contains("gateway"));
+        assert!(!format!("{first:?}").contains("11111111"));
+    }
+
+    #[test]
+    fn v3_guest_session_resolution_does_not_use_legacy_process_dag_lookup() {
+        let source = include_str!("composition.rs");
+        let start = source
+            .rfind("async fn resolve_component_session_endpoint_for_guest(")
+            .expect("v3 Guest endpoint resolver");
+        let end = source
+            .rfind("/// Resolve the ComponentSession endpoint for `vm`")
+            .expect("legacy endpoint resolver");
+        assert!(
+            !source[start..end].contains("find_process_vm"),
+            "v3 Guest endpoint resolution must use committed resources"
+        );
+        assert!(source[start..end].contains("GuestControlEndpoint"));
+        assert!(source[start..end].contains("find_guest_vmm_intent"));
+    }
+
+    #[test]
+    fn fencing_gateway_session_clears_cached_guest_target() {
+        let composition = composition();
+        composition.set_gateway_guest(CommittedGuestSessionTarget {
+            zone: ZoneId::parse("gateway").unwrap(),
+            guest_ref: ResourceRef::parse("Guest/gateway").unwrap(),
+            guest_uid: uid('1'),
+            guest_generation: ResourceGeneration::new(1).unwrap(),
+            endpoint_ref: ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+            endpoint_uid: uid('2'),
+            endpoint_resource_generation: ResourceGeneration::new(1).unwrap(),
+            endpoint_generation: ResourceGeneration::new(1).unwrap(),
+            provider_uid: uid('3'),
+            provider_generation: ResourceGeneration::new(1).unwrap(),
+        });
+        assert!(composition.gateway_guest().is_some());
+        composition.fence_gateway_session();
+        assert!(composition.gateway_guest().is_none());
+        *composition.reconnect_generation.lock().unwrap() = ReconnectGeneration::new(7).unwrap();
+        composition.reset_gateway_guest_identity().unwrap();
+        assert_eq!(composition.reconnect_generation().get(), 1);
+    }
+
+    #[test]
+    fn controller_requires_adopted_cursor_before_route_admission() {
+        let composition = composition();
+        let generation = ZoneLinkControllerGeneration::parse(format!(
+            "zonelink-{}",
+            uid('1').as_str().replace('-', "")
+        ))
+        .unwrap();
+        let psk = BootstrapPsk::issue(generation.clone(), 1, 300_000);
+        composition
+            .apply_event(ZoneLinkEvent::PskIssued { psk: psk.clone() })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::BootstrapAdmit { psk, now_ms: 1 })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::SealEnrollment {
+                enrollment: SealedEnrollment::new(
+                    uid('3'),
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                        "fingerprint-child",
+                    )
+                    .unwrap(),
+                ),
+            })
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::BeginEnrolledHandshake)
+            .unwrap();
+        composition
+            .apply_event(ZoneLinkEvent::EnrolledSessionEstablished {
+                peer_key_fingerprint:
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneSigningKeyFingerprint::parse(
+                        "fingerprint-child",
+                    )
+                    .unwrap(),
+            })
+            .unwrap();
+        let request = ZoneLinkRouteAdmissionRequest::new(
+            d2b_contracts_zone_session::v3::component_session::OperationId::new(vec![1; 16])
+                .unwrap(),
+            OperationClass::Invoke,
+        )
+        .unwrap();
+        assert_eq!(
+            composition
+                .issue_route_admission(request.clone(), Ok::<_, ZoneLinkError>)
+                .unwrap_err(),
+            ZoneLinkError::RouteAdmissionCursorUnavailable
+        );
+        let owner =
+            ZoneLinkOwnerProof::from_digest(1, format!("sha256:{}", "a".repeat(64))).unwrap();
+        assert!(
+            composition
+                .adopt_cursor(ZoneLinkCursorRecord::new(owner, ZoneLinkCursor::default()))
+                .is_adopted()
+        );
+        assert_eq!(
+            composition
+                .issue_route_admission(request, Ok::<_, ZoneLinkError>)
+                .unwrap()
+                .verb(),
+            OperationClass::Invoke
+        );
+    }
+
+    #[test]
+    fn host_startup_has_no_legacy_gateway_config_or_credential_loader() {
+        let source = include_str!("composition.rs");
+        let start = source.find("pub async fn serve(").expect("host serve");
+        let end = source
+            .find("pub struct GuestServeOptions")
+            .expect("Guest options");
+        let host = &source[start..end];
+        for retired in [
+            "load_gateway_file_config",
+            "gateway_deps_from_config",
+            "GatewayCredential::load_sealed",
+        ] {
+            assert!(
+                !host.contains(retired),
+                "Host composition must not load retired gateway material: {retired}"
+            );
+        }
+    }
 }
 const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
 
@@ -2157,204 +3487,12 @@ fn next_internal_process_stream_id() -> u64 {
     }
 }
 
-
 fn admission_config(state: &ServerState) -> AdmissionConfig {
     AdmissionConfig {
         daemon_uid: state.daemon_uid,
         public_socket_group: state.config.public_socket_group.clone(),
         launcher_users: state.config.launcher_users.clone(),
         admin_users: state.config.admin_users.clone(),
-    }
-}
-
-struct GatewayDisplayRuntime {
-    orchestrator: GatewayOrchestrator,
-    sessions: Mutex<HashMap<String, GatewayDisplaySession>>,
-    lifecycle: Box<dyn GatewayLifecycle>,
-    preflight: Option<GatewayDisplayPreflight>,
-}
-
-impl std::fmt::Debug for GatewayDisplayRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("GatewayDisplayRuntime(<state>)")
-    }
-}
-
-#[derive(Debug, Clone)]
-struct GatewayDisplaySession {
-    target: String,
-    principal: String,
-    open: OpenSession,
-    opened_at: Instant,
-}
-
-#[derive(Debug, Clone)]
-struct GatewayDisplayPreflight {
-    allow_host_relay_credentials: bool,
-    waypipe_socket_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-struct ValidatedWaypipeSocket {
-    uid: u32,
-    mode: u32,
-}
-
-#[async_trait]
-trait GatewayLifecycle: Send + Sync {
-    async fn start(&self, target: &TargetName) -> Result<String, GatewayError>;
-    async fn stop(&self, target: &TargetName) -> Result<String, GatewayError>;
-}
-
-fn new_gateway_display_runtime() -> Arc<GatewayDisplayRuntime> {
-    Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(
-            unavailable_gateway_deps(),
-            1,
-            LedgerLimits::default(),
-        ),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(UnavailableGatewayLifecycle),
-        preflight: None,
-    })
-}
-
-#[cfg(test)]
-fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
-    Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(daemon_gateway_deps(), 1, LedgerLimits::default()),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(DaemonGatewayLifecycle),
-        preflight: None,
-    })
-}
-
-fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, TypedError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
-        context: format!("read gateway config {}", path.display()),
-        detail: err.to_string(),
-    })?;
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|err| TypedError::InternalConfig {
-            detail: format!("{}: {err}", path.display()),
-        })
-}
-
-fn new_gateway_display_runtime_from_config(
-    config: GatewayFileConfig,
-) -> Result<Arc<GatewayDisplayRuntime>, TypedError> {
-    let preflight = gateway_display_preflight_from_config(&config)?;
-    let deps = gateway_deps_from_config(&config)?;
-    let provider =
-        Arc::new(aca_provider_from_gateway_config(&config).map_err(gateway_error_to_typed)?);
-    Ok(Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(deps, 1, LedgerLimits::default()),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(AcaGatewayLifecycle { provider }),
-        preflight: Some(preflight),
-    }))
-}
-
-fn gateway_display_preflight_from_config(
-    config: &GatewayFileConfig,
-) -> Result<GatewayDisplayPreflight, TypedError> {
-    let waypipe_socket_path = config
-        .display
-        .waypipe_socket
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
-    Ok(GatewayDisplayPreflight {
-        allow_host_relay_credentials: config.allow_host_relay_credentials,
-        waypipe_socket_path,
-    })
-}
-
-fn validate_gateway_host_relay_transition_guard(
-    config: &GatewayFileConfig,
-) -> Result<(), TypedError> {
-    if config.allow_host_relay_credentials {
-        return Err(gateway_display_config_error(
-            "host-held gateway credentials and relay send-bearer minting are retired; enroll inside gateway then retry",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocket, TypedError> {
-    if !path.is_absolute() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be an absolute Unix socket path",
-            path.display()
-        )));
-    }
-    reject_symlink_components(path)?;
-    let metadata = fs::symlink_metadata(path).map_err(|err| {
-        gateway_display_config_error(format!(
-            "waypipeSocket {} cannot be inspected without following symlinks: {err}; create an operator-owned Unix socket with mode 0600",
-            path.display()
-        ))
-    })?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must point directly at an operator-owned Unix socket, not a symlink",
-            path.display()
-        )));
-    }
-    if !file_type.is_socket() {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be a Unix socket owned by the operator with mode 0600",
-            path.display()
-        )));
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode != 0o600 {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must have mode 0600; current mode is {mode:#05o}; run chmod 0600 on the socket path",
-            path.display()
-        )));
-    }
-    let uid = metadata.uid();
-    if uid == 0 {
-        return Err(gateway_display_config_error(format!(
-            "waypipeSocket {} must be owned by an unprivileged operator uid, not root",
-            path.display()
-        )));
-    }
-    Ok(ValidatedWaypipeSocket { uid, mode })
-}
-
-fn reject_symlink_components(path: &Path) -> Result<(), TypedError> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        current.push(component.as_os_str());
-        if current.parent().is_none() {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&current).map_err(|err| {
-            gateway_display_config_error(format!(
-                "waypipeSocket component {} cannot be inspected without following symlinks: {err}",
-                current.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(gateway_display_config_error(format!(
-                "waypipeSocket component {} must not be a symlink",
-                current.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn gateway_display_config_error(detail: impl Into<String>) -> TypedError {
-    TypedError::GatewayDisplayUnavailable {
-        detail: detail.into(),
     }
 }
 
@@ -2445,12 +3583,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         "d2bd restored runner state; checking startup contracts",
     );
 
-    let gateway_display =
-        if let Some(gateway_config) = load_gateway_file_config(&config.gateway_config_path)? {
-            crate::new_gateway_display_runtime_from_config(gateway_config)?
-        } else {
-            crate::new_gateway_display_runtime()
-        };
     if let Some(realm_controllers) =
         load_realm_controllers_config(&config.realm_controllers_config_path)?
     {
@@ -2509,7 +3641,6 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         console_sessions: Arc::new(Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
-        gateway_display,
         conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(
             resolve_max_inflight_connections(),
         ),
@@ -2558,8 +3689,29 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
-            let provider_ready = match state.provider_runtime.configure_from_host(&resolver.host) {
-                Ok(()) => {
+            let provider_root = d2bd_runtime::zone_authority::authoritative_zone_ids(&resolver)
+                .ok()
+                .and_then(|zones| committed_zone_topology(&resolver, &zones).ok())
+                .map(|topology| topology.root);
+            let provider_ready = match provider_root.as_ref() {
+                Some(root) => {
+                    let legacy_registry_ready = if resolver.bundle.schema_version == "v3" {
+                        true
+                    } else {
+                        match state
+                            .provider_runtime
+                            .configure_from_host(&resolver.host, root)
+                        {
+                            Ok(()) => true,
+                            Err(error) => {
+                                tracing::error!(
+                                    error = %error,
+                                    "provider registry catalog refused; Provider lifecycle effects are disabled",
+                                );
+                                false
+                            }
+                        }
+                    };
                     let process_providers =
                         Arc::new(process_provider_runtime::ProductionProcessProviders::new(
                             resolver.clone(),
@@ -2568,15 +3720,20 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 uid: state.daemon_uid,
                             },
                         ));
-                    state
+                    let process_providers_ready = state
                         .provider_runtime
                         .attach_process_providers(process_providers)
-                        .is_ok()
+                        .is_ok();
+                    if !process_providers_ready {
+                        tracing::error!(
+                            "Process Provider supervisors could not be attached; Provider lifecycle effects are disabled",
+                        );
+                    }
+                    legacy_registry_ready && process_providers_ready
                 }
-                Err(error) => {
+                None => {
                     tracing::error!(
-                        error = %error,
-                        "provider registry catalog refused; Provider lifecycle effects are disabled",
+                        "provider registry refused: committed Zone topology root is unavailable",
                     );
                     false
                 }
@@ -2619,6 +3776,143 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 detail: "resource-plane state lock unavailable".to_owned(),
                             });
                         }
+                        let convergence_state = Arc::new(state.clone());
+                        let convergence_plane = Arc::clone(&plane);
+                        tokio::spawn(async move {
+                            for zone in convergence_plane.zone_ids() {
+                                let Some(runtime) = convergence_plane.zone(&zone).ok() else {
+                                    continue;
+                                };
+                                let mut logged_list_error = false;
+                                let mut logged_reconcile_error = false;
+                                let mut logged_target_error = false;
+                                let mut logged_guests = false;
+                                let mut logged_target = false;
+                                loop {
+                                    if let Err(error) = runtime
+                                        .reconcile_cloud_hypervisor_guests(Arc::clone(
+                                            &convergence_state,
+                                        ))
+                                        .await
+                                        && !logged_reconcile_error
+                                    {
+                                        tracing::warn!(
+                                            zone = %zone,
+                                            error = ?error,
+                                            "post-publication Guest reconciliation degraded",
+                                        );
+                                        logged_reconcile_error = true;
+                                    }
+                                    let guests = match runtime.list_cloud_hypervisor_guests().await
+                                    {
+                                        Ok(guests) => guests,
+                                        Err(error) => {
+                                            if !logged_list_error {
+                                                tracing::warn!(
+                                                    zone = %zone,
+                                                    error = ?error,
+                                                    "post-publication Guest session relist failed",
+                                                );
+                                                logged_list_error = true;
+                                            }
+                                            tokio::time::sleep(Duration::from_millis(250)).await;
+                                            continue;
+                                        }
+                                    };
+                                    if guests.is_empty() {
+                                        break;
+                                    }
+                                    if !logged_guests {
+                                        tracing::info!(
+                                            zone = %zone,
+                                            guest_count = guests.len(),
+                                            "post-publication Guest session convergence discovered Guests",
+                                        );
+                                        logged_guests = true;
+                                    }
+                                    let mut pending = false;
+                                    for guest_ref in guests {
+                                        let target = match resolve_committed_guest_session_target(
+                                            &runtime, &guest_ref,
+                                        )
+                                        .await
+                                        {
+                                            Ok(target) => target,
+                                            Err(error) => {
+                                                if !logged_target_error {
+                                                    tracing::warn!(
+                                                        zone = %zone,
+                                                        guest = %guest_ref.name().as_str(),
+                                                        error = %error,
+                                                        "post-publication Guest session target is not ready",
+                                                    );
+                                                    logged_target_error = true;
+                                                }
+                                                pending = true;
+                                                continue;
+                                            }
+                                        };
+                                        if !logged_target {
+                                            tracing::info!(
+                                                zone = %zone,
+                                                guest = %guest_ref.name().as_str(),
+                                                "post-publication Guest session target resolved",
+                                            );
+                                            logged_target = true;
+                                        }
+                                        match connect_guest_component_session_for_guest(
+                                            &convergence_state,
+                                            &target,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                tracing::info!(
+                                                    zone = %zone,
+                                                    guest = %guest_ref.name().as_str(),
+                                                    "post-publication Guest session connected",
+                                                );
+                                                break;
+                                            }
+                                            Err(error)
+                                                if matches!(
+                                                    error.as_str(),
+                                                    "session-material-unavailable"
+                                                        | "session-unavailable"
+                                                        | "session-timeout"
+                                                ) =>
+                                            {
+                                                pending = true;
+                                            }
+                                            Err(error) => {
+                                                tracing::warn!(
+                                                    zone = %zone,
+                                                    guest = %guest_ref.name().as_str(),
+                                                    error = %error,
+                                                    "post-publication Guest session connection failed",
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if !pending {
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(250)).await;
+                                }
+                                if let Err(error) = runtime
+                                    .reconcile_cloud_hypervisor_guests(Arc::clone(
+                                        &convergence_state,
+                                    ))
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        zone = %zone,
+                                        error = ?error,
+                                        "post-publication Guest completion reconcile degraded",
+                                    );
+                                }
+                            }
+                        });
                         let mut runtimes = InteractionRuntime::new();
                         let mut listener_set: Option<
                             interaction_composition::InteractionListenerSet,
@@ -2854,62 +4148,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             BTreeSet::new()
         }
     };
-    // Daemon-side net-route preflight (replaces
-    // `d2b-net-route-preflight.service`). For each env in the host
-    // artifact, probe its LAN bridge.
-    //
-    // The startup pass is diagnostic only: cold boots can legitimately
-    // begin with no env bridges because the autostarted net VMs own the
-    // host-prep DAG that materializes them. Do not feed failed envs into
-    // autostart pre-degradation here, or the daemon deadlocks by skipping
-    // the very net VMs that would repair the bridge state. Workloads are
-    // still protected by the autostart net-VM phase: if an env net VM
-    // actually fails to start, its workloads are degraded by that direct
-    // dependency outcome.
-    let mut net_failed_envs: BTreeSet<String> = BTreeSet::new();
-    let net_history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
-    match load_host_artifact(&state) {
-        Ok(host) => {
-            let probe = net_route_preflight::SysClassNetProbe;
-            let report = net_route_preflight::run_net_route_preflight(&host, &probe);
-            let failed_envs = report.failed_envs();
-            let record = net_route_preflight::PreflightHistoryRecord {
-                ts: net_route_preflight::now_epoch_seconds(),
-                ok: report.is_ok(),
-                failed_envs: failed_envs.iter().cloned().collect(),
-                source: "startup".to_owned(),
-            };
-            if let Err(err) = net_history.record(&record) {
-                tracing::warn!(
-                    path = %net_history.path().display(),
-                    error = %err,
-                    "net-route-preflight: failed to persist history record (continuing)",
-                );
-            }
-            if !report.is_ok() {
-                net_failed_envs = failed_envs.clone();
-                tracing::error!(
-                    failed_envs = ?failed_envs,
-                    summary = %report.summary(),
-                    "net-route-preflight: one or more env bridges unhealthy before autostart; net VM autostart will attempt host reconciliation",
-                );
-            } else {
-                tracing::info!(
-                    summary = %report.summary(),
-                    "net-route-preflight: all env bridges healthy",
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error.message(),
-                "net-route-preflight: skipped (host artifact unavailable)",
-            );
-        }
-    }
-
     let combined_pre_degraded =
-        startup_autostart_pre_degraded_vms(&module_degraded_vms, &net_failed_envs);
+        startup_autostart_pre_degraded_vms(&module_degraded_vms, &BTreeSet::new());
 
     sd_notify_status(
         notify_socket.as_deref(),
@@ -3062,13 +4302,179 @@ pub struct GuestServeOptions {
     pub boot_id_path: PathBuf,
     pub local_private_key_path: Option<PathBuf>,
     pub parent_public_key_path: Option<PathBuf>,
+    /// Guest-local gateway configuration. The file contains only runtime
+    /// paths and non-secret Relay coordinates; absence means this Guest is not
+    /// a Gateway execution target.
+    pub gateway_zone_link_config_path: Option<PathBuf>,
     pub validate_only: bool,
     pub once: bool,
 }
 
+/// Guest-local inputs for the selected Azure Relay transport Provider.
+#[derive(Debug, Clone)]
+pub struct GatewayGuestZoneLinkOptions {
+    pub credential_path: PathBuf,
+    pub seal_key_path: PathBuf,
+    pub observation_path: Option<PathBuf>,
+    pub execution_ref: ResourceRef,
+    pub network_ref: ResourceRef,
+    pub settings: RelayTransportSettings,
+    pub max_concurrent_sessions: u32,
+    pub connect_timeout_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayGuestConfigFile {
+    credential_path: PathBuf,
+    seal_key_path: PathBuf,
+    observation_path: Option<PathBuf>,
+    relay: GatewayGuestRelayConfigFile,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayGuestRelayConfigFile {
+    namespace: Option<String>,
+    entity: Option<String>,
+}
+
+const GATEWAY_GUEST_OPEN_OBSERVATION_PATH: &str = "/run/d2b-gateway-observation/opened";
+
+fn validate_gateway_guest_observation_path(
+    path: Option<PathBuf>,
+) -> Result<Option<PathBuf>, TypedError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if path != Path::new(GATEWAY_GUEST_OPEN_OBSERVATION_PATH) {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest gateway observation path is invalid".to_owned(),
+        });
+    }
+    Ok(Some(path))
+}
+
+fn load_gateway_guest_zone_link_options(
+    config_path: Option<&Path>,
+    identity: &d2bd_runtime::guest_mode::GuestIdentity,
+    bundle: &BundleResolver,
+) -> Result<Option<GatewayGuestZoneLinkOptions>, TypedError> {
+    let Some(config_path) = config_path else {
+        return Ok(None);
+    };
+    let metadata = match fs::symlink_metadata(config_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(TypedError::InternalConfig {
+                detail: "Guest gateway configuration unavailable".to_owned(),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest gateway configuration is not a regular file".to_owned(),
+        });
+    }
+    let bytes = fs::read(config_path).map_err(|_| TypedError::InternalConfig {
+        detail: "Guest gateway configuration unavailable".to_owned(),
+    })?;
+    let config: GatewayGuestConfigFile =
+        serde_json::from_slice(&bytes).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest gateway configuration is invalid".to_owned(),
+        })?;
+    let observation_path = validate_gateway_guest_observation_path(config.observation_path)?;
+    let namespace = config
+        .relay
+        .namespace
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay namespace is unavailable".to_owned(),
+        })?;
+    let entity = config
+        .relay
+        .entity
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay entity is unavailable".to_owned(),
+        })?;
+    let settings =
+        RelayTransportSettings::new(namespace, entity).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest Relay settings are invalid".to_owned(),
+        })?;
+    let bundle_bytes = bundle
+        .zone_resource_bundle_bytes(identity.zone().as_str())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Zone resource bundle is unavailable".to_owned(),
+        })?;
+    let zone_bundle =
+        ResourceBundle::from_json(bundle_bytes).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest Zone resource bundle is invalid".to_owned(),
+        })?;
+    let providers = zone_bundle
+        .resources
+        .iter()
+        .filter(|resource| {
+            resource.resource_type().as_str() == "Provider"
+                && resource
+                    .metadata()
+                    .name()
+                    .as_str()
+                    .starts_with("transport-azure-relay")
+        })
+        .collect::<Vec<_>>();
+    let [provider] = providers.as_slice() else {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest Relay Provider assignment is unavailable".to_owned(),
+        });
+    };
+    let provider_spec = serde_json::from_slice::<Value>(&provider.spec().to_canonical_bytes())
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Guest Relay Provider configuration is invalid".to_owned(),
+        })?;
+    let provider_config = provider_spec
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay Provider configuration is unavailable".to_owned(),
+        })?;
+    let execution_ref = provider_config
+        .get("executionRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay execution assignment is invalid".to_owned(),
+        })?;
+    let network_ref = provider_config
+        .get("networkRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "Guest Relay network assignment is invalid".to_owned(),
+        })?;
+    if execution_ref != *identity.guest_ref()
+        || execution_ref.resource_type().as_str() != "Guest"
+        || network_ref.resource_type().as_str() != "Network"
+    {
+        return Err(TypedError::InternalConfig {
+            detail: "Guest Relay Provider placement is invalid".to_owned(),
+        });
+    }
+    Ok(Some(GatewayGuestZoneLinkOptions {
+        credential_path: config.credential_path,
+        seal_key_path: config.seal_key_path,
+        observation_path,
+        execution_ref,
+        network_ref,
+        settings,
+        max_concurrent_sessions: 32,
+        connect_timeout_seconds: 30,
+    }))
+}
+
 /// Start the fixed Guest target agent. Unlike [`serve`], this path never
-/// loads `DaemonConfig`, binds a public operator socket, opens a Zone store,
-/// or loads realm credentials.
+/// loads `DaemonConfig`, binds a public operator socket, or opens a Host Zone
+/// store. Any optional credential input belongs to the Guest-local
+/// `GatewayGuestZoneLinkOptions` path.
 pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
         return Err(TypedError::InternalConfig {
@@ -3092,10 +4498,10 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         ResourceRef::parse(&options.guest_ref).map_err(|_| TypedError::InternalConfig {
             detail: "guest identity reference is invalid".to_owned(),
         })?;
-    let guest_uid =
-        ResourceUid::parse(options.guest_uid).map_err(|_| TypedError::InternalConfig {
-            detail: "guest identity UID is invalid".to_owned(),
-        })?;
+    let guest_uid = kernel_guest_uid().unwrap_or(options.guest_uid);
+    let guest_uid = ResourceUid::parse(guest_uid).map_err(|_| TypedError::InternalConfig {
+        detail: "guest identity UID is invalid".to_owned(),
+    })?;
     let zone = ZoneId::parse(options.zone).map_err(|_| TypedError::InternalConfig {
         detail: "guest Zone identity is invalid".to_owned(),
     })?;
@@ -3146,35 +4552,81 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
     })?;
-    let bundle = BundleResolver::load(&options.bundle_path).map_err(|_| {
-        TypedError::InternalConfig {
+    let bundle = BundleResolver::load(&options.bundle_path)
+        .inspect_err(|error| {
+            tracing::error!(
+                error = %error,
+                "Guest process bundle validation failed",
+            );
+        })
+        .map_err(|_| TypedError::InternalConfig {
             detail: "guest process bundle unavailable".to_owned(),
-        }
-    })?;
-    let process_providers = Arc::new(process_provider_runtime::ProductionProcessProviders::new_for_mode(
-        bundle,
-        options.broker_socket_path.clone(),
-        BrokerCallerRole::LauncherUid {
-            uid: options.broker_uid,
-        },
-        d2bd_runtime::target_runtime::DaemonMode::Guest,
-    ));
-    let local_private_path = options
-        .local_private_key_path
-        .ok_or_else(|| TypedError::InternalConfig {
-            detail: "guest ComponentSession private key is unavailable".to_owned(),
         })?;
-    let parent_public_path = options
-        .parent_public_key_path
-        .ok_or_else(|| TypedError::InternalConfig {
-            detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+    let gateway_zone_link = load_gateway_guest_zone_link_options(
+        options.gateway_zone_link_config_path.as_deref(),
+        &identity,
+        &bundle,
+    )?
+    .map(|config| {
+        let observation_path = config.observation_path;
+        let runtime = d2b_provider_transport_azure_relay::GatewayGuestZoneLinkRuntime::from_sealed(
+            config.credential_path,
+            config.seal_key_path,
+            config.execution_ref,
+            config.network_ref,
+            config.settings,
+            config.max_concurrent_sessions,
+            config.connect_timeout_seconds,
+            &d2b_provider_transport_azure_relay::CredentialFilePolicy::default(),
+        )
+        .map_err(|error| TypedError::InternalConfig {
+            detail: error.code().to_owned(),
         })?;
+        Ok::<_, TypedError>((runtime, observation_path))
+    })
+    .transpose()?;
+    if gateway_zone_link.is_some() {
+        tracing::info!("Guest-local ZoneLink transport Provider composed");
+    }
+    let process_providers = Arc::new(
+        process_provider_runtime::ProductionProcessProviders::new_for_mode(
+            bundle,
+            options.broker_socket_path.clone(),
+            BrokerCallerRole::LauncherUid {
+                uid: options.broker_uid,
+            },
+            d2bd_runtime::target_runtime::DaemonMode::Guest,
+        ),
+    );
+    let local_private_path =
+        options
+            .local_private_key_path
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "guest ComponentSession private key is unavailable".to_owned(),
+            })?;
+    let parent_public_path =
+        options
+            .parent_public_key_path
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+            })?;
     let parent_public = read_public_key32(&parent_public_path)?;
     let mut listener = runtime
         .bind_listener()
         .map_err(|error| TypedError::InternalConfig {
             detail: error.to_string(),
         })?;
+    tracing::info!(
+        port = d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PORT,
+        "Guest ComponentSession listener bound",
+    );
+    if let Some((gateway_zone_link, Some(observation_path))) = gateway_zone_link.as_ref() {
+        gateway_zone_link
+            .write_open_observation(observation_path)
+            .map_err(|error| TypedError::InternalConfig {
+                detail: error.code().to_owned(),
+            })?;
+    }
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -3273,11 +4725,20 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             identity.zone().clone(),
                         ),
                     );
+                    tracing::debug!(
+                        generation = route.reconnect_generation().get(),
+                        "Guest ComponentSession Resource API server starting",
+                    );
+                    let generation = route.reconnect_generation().get();
                     active = Some((
                         tokio::spawn(async move {
-                            ttrpc
-                                .serve_ttrpc_services(services)
-                                .await
+                            let result = ttrpc.serve_ttrpc_services(services).await;
+                            tracing::warn!(
+                                generation,
+                                result = ?result,
+                                "Guest ComponentSession Resource API server stopped",
+                            );
+                            result
                         }),
                         process_task,
                         new_lease,
@@ -3323,14 +4784,15 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     continue;
                 }
             };
-            let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
-                Ok(services) => services,
-                Err(error) => {
-                    tracing::warn!(error = %error, "Guest config service binding refused");
-                    drop(lease);
-                    continue;
-                }
-            };
+            let config_services =
+                match guest_config_services(&identity, &route, &options.guest_config_path) {
+                    Ok(services) => services,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Guest config service binding refused");
+                        drop(lease);
+                        continue;
+                    }
+                };
             let mut services = resource_session.ttrpc_services();
             services.extend(config_services);
             let ttrpc = session.into_ttrpc_handle();
@@ -3341,31 +4803,25 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     Arc::clone(&process_providers),
                     Some(identity.guest_ref().clone()),
                 );
-            if let Ok(generation) =
-                d2b_contracts_resource::v3::ControllerGeneration::new(
-                    identity.controller_generation(),
-                )
-            {
+            if let Ok(generation) = d2b_contracts_resource::v3::ControllerGeneration::new(
+                identity.controller_generation(),
+            ) {
                 process_runtime.set_controller_generation(generation);
             }
-            process_runtime.set_guest_execution_binding(
-                guest_process_execution_binding(&identity, route.reconnect_generation())?,
-            );
+            process_runtime.set_guest_execution_binding(guest_process_execution_binding(
+                &identity,
+                route.reconnect_generation(),
+            )?);
             let process_store = resource_session.store_backend();
-            let process_task = tokio::spawn(
-                process_resource_runtime::run_guest_process_reconciliation(
+            let process_task =
+                tokio::spawn(process_resource_runtime::run_guest_process_reconciliation(
                     process_runtime,
                     process_store,
                     resource_client,
                     identity.zone().clone(),
-                ),
-            );
+                ));
             active = Some((
-                tokio::spawn(async move {
-                    ttrpc
-                        .serve_ttrpc_services(services)
-                        .await
-                }),
+                tokio::spawn(async move { ttrpc.serve_ttrpc_services(services).await }),
                 process_task,
                 lease,
             ));
@@ -3529,10 +4985,18 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
             BrokerRequest::OpenPidfd(BrokerOpenPidfdRequest {
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id),
+                bundle_runner_intent_ref: None,
                 pid,
                 expected_start_time_ticks,
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                provider_ref: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                runtime_scope: None,
                 guest_execution: None,
                 tracing_span_id: None,
             }),
@@ -3575,13 +5039,47 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
 
 fn adopt_orphaned_runners_on_startup(state: &ServerState) {
     if let Some(providers) = state.provider_runtime.process_providers() {
+        let store =
+            d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
+        let snapshots = match d2bd_runtime::supervisor::state::SnapshotStore::list(&store) {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Provider startup adoption refused because runner snapshots are unavailable"
+                );
+                return;
+            }
+        };
         let result = block_on_future(async move {
             for vm in providers.vm_ids() {
-                providers.adopt_vm(&vm).await?;
+                let expected = current_runner_lifecycle_identity(state, &vm);
+                let managed_roles = providers
+                    .managed_role_ids(&vm)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                for snapshot in snapshots.iter().filter(|snapshot| snapshot.vm == vm) {
+                    if !managed_roles.contains(&snapshot.role_id)
+                        || !runner_snapshot_is_eligible(snapshot, expected.as_ref())
+                    {
+                        tracing::warn!(
+                            vm = %snapshot.vm,
+                            role = %snapshot.role_id,
+                            "Provider startup adoption quarantined runner snapshot"
+                        );
+                    }
+                }
+                let eligible_roles = snapshots
+                    .iter()
+                    .filter(|snapshot| snapshot.vm == vm)
+                    .filter(|snapshot| managed_roles.contains(&snapshot.role_id))
+                    .filter(|snapshot| runner_snapshot_is_eligible(snapshot, expected.as_ref()))
+                    .map(|snapshot| snapshot.role_id.clone())
+                    .collect::<BTreeSet<_>>();
+                providers.adopt_vm(&vm, &eligible_roles).await?;
                 let _guard = state.pidfd_table.mutation_guard();
-                for role in providers.managed_role_ids(&vm) {
+                for role in eligible_roles {
                     let _ = state.pidfd_table.deregister(&vm, &role);
-                    remove_runner_snapshot(state, &vm, &role);
                 }
                 state
                     .pidfd_table
@@ -3624,6 +5122,30 @@ fn adopt_orphaned_runners_on_startup_with(
         return Ok(());
     }
 
+    let mut eligible_snapshots = Vec::with_capacity(snapshots.len());
+    for snapshot in &snapshots {
+        if !snapshot.has_complete_lifecycle_identity() {
+            tracing::warn!(
+                vm = %snapshot.vm,
+                role = %snapshot.role_id,
+                "startup adoption quarantined runner snapshot without lifecycle identity"
+            );
+            continue;
+        }
+        if !runner_snapshot_is_eligible(
+            snapshot,
+            current_runner_lifecycle_identity(state, &snapshot.vm).as_ref(),
+        ) {
+            tracing::warn!(
+                vm = %snapshot.vm,
+                role = %snapshot.role_id,
+                "startup adoption quarantined runner snapshot with stale lifecycle identity"
+            );
+            continue;
+        }
+        eligible_snapshots.push(snapshot.clone());
+    }
+
     let snapshot_index: BTreeMap<
         (String, String),
         &d2bd_runtime::supervisor::state::RunnerSnapshotRecord,
@@ -3632,9 +5154,11 @@ fn adopt_orphaned_runners_on_startup_with(
         .map(|snapshot| ((snapshot.vm.clone(), snapshot.role_id.clone()), snapshot))
         .collect();
 
-    for adopt in
-        d2bd_runtime::supervisor::state::reconcile_and_adopt(&snapshots, proc_reader, opener)
-    {
+    for adopt in d2bd_runtime::supervisor::state::reconcile_and_adopt(
+        &eligible_snapshots,
+        proc_reader,
+        opener,
+    ) {
         let key = (adopt.vm.clone(), adopt.role_id.clone());
         let Some(snapshot) = snapshot_index.get(&key) else {
             continue;
@@ -3692,6 +5216,13 @@ fn adopt_orphaned_runners_on_startup_with(
                     expected_start_time_ticks = snapshot.start_time_ticks,
                     observed_start_time_ticks,
                     "startup adoption quarantined runner snapshot"
+                );
+            }
+            d2bd_runtime::supervisor::state::AdoptOutcome::QuarantineIdentity => {
+                tracing::warn!(
+                    vm = %adopt.vm,
+                    role = %adopt.role_id,
+                    "startup adoption quarantined runner snapshot without complete lifecycle identity"
                 );
             }
             d2bd_runtime::supervisor::state::AdoptOutcome::Missing => {
@@ -3759,6 +5290,55 @@ fn adopt_orphaned_runners_on_startup_with(
             detail: err.to_string(),
         })?;
     Ok(())
+}
+
+fn current_runner_lifecycle_identity(
+    state: &ServerState,
+    vm: &str,
+) -> Option<(
+    ResourceUid,
+    ResourceUid,
+    ResourceGeneration,
+    ResourceGeneration,
+    u64,
+)> {
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+        .ok()?;
+    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let runtime = plane.zone(&zone).ok()?;
+    let target = ResourceRef::parse(&format!("Guest/{vm}")).ok()?;
+    let (zone_uid, guest_uid, guest_generation, provider_generation) =
+        block_on_future(runtime.guest_lifecycle_identity(&target)).ok()?;
+    let policy_revision = runtime.committed_policy_snapshot().policy_revision;
+    Some((
+        zone_uid,
+        guest_uid,
+        guest_generation,
+        provider_generation,
+        policy_revision,
+    ))
+}
+
+fn runner_snapshot_is_eligible(
+    snapshot: &d2bd_runtime::supervisor::state::RunnerSnapshotRecord,
+    expected: Option<&(
+        ResourceUid,
+        ResourceUid,
+        ResourceGeneration,
+        ResourceGeneration,
+        u64,
+    )>,
+) -> bool {
+    snapshot.has_complete_lifecycle_identity()
+        && expected.is_some_and(|expected| {
+            snapshot.matches_lifecycle_identity(
+                &expected.0,
+                &expected.1,
+                expected.2,
+                expected.3,
+                expected.4,
+            )
+        })
 }
 
 fn transient_adoption_error(detail: &str) -> bool {
@@ -4022,16 +5602,23 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             role_id: RoleId::new(spec.role.role_id().to_owned()),
             resource_ref: None,
             resource_uid: None,
+            zone_uid: None,
+            owner_ref: None,
+            owner_uid: None,
+            provider_ref: None,
             bundle_content_identity: None,
             provider_identity: None,
             template_identity: None,
             generation: None,
+            runtime_scope: None,
             activation_input: None,
             sandbox_plan: None,
             role: d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
             tracing_span_id: self.tracing_span_id.clone(),
+            inherited_fd_count: 0,
+            network_tap_context: None,
         });
         match dispatch_broker_request_with_fds_timeout(
             &self.state,
@@ -4229,8 +5816,30 @@ fn handle_connection_authorized(
             let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
             continue;
         }
+        let gateway_resource_route = if matches!(peer.role, PeerRole::Admin) {
+            match &request {
+                d2bd_runtime::wire::Request::Resource(resource) => {
+                    if let Ok(runtime) = resolve_resource_runtime(state, &resource.value()) {
+                        match classify_gateway_zone_request(state, &runtime, &resource.value()) {
+                            Ok(route) => Some(route),
+                            Err(error) => {
+                                let _ =
+                                    write_json_frame(&stream, &resource_runtime_error_frame(error));
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if let d2bd_runtime::wire::Request::Resource(resource) = &request
             && typed_shell_request(&resource.value())
+            && gateway_resource_route != Some(GatewayZoneRequestRoute::Forward)
         {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -4266,6 +5875,7 @@ fn handle_connection_authorized(
         }
         if let d2bd_runtime::wire::Request::Resource(resource) = &request
             && process_resource_owner_request(&resource.value())
+            && gateway_resource_route != Some(GatewayZoneRequestRoute::Forward)
         {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -4299,33 +5909,6 @@ fn handle_connection_authorized(
                 }
             }
         }
-        // Gateway display operations can perform provider/relay orchestration.
-        // Hand them off the serial accept loop just like Process owner sessions.
-        if let d2bd_runtime::wire::Request::GatewayDisplay(op) = &request {
-            if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
-                let error = TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                };
-                let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
-                continue;
-            }
-            let owner_state = state.clone();
-            let owner_peer = peer.clone();
-            let op = op.clone();
-            match std::thread::Builder::new()
-                .name("d2b-gateway-display".to_owned())
-                .spawn(move || {
-                    run_gateway_display_owner(stream, owner_state, owner_peer, op);
-                }) {
-                Ok(_) => return Ok(()),
-                Err(err) => {
-                    return Err(TypedError::InternalIo {
-                        context: "spawn gateway display handler".to_owned(),
-                        detail: err.to_string(),
-                    });
-                }
-            }
-        }
         let response =
             match dispatch_request(state, &peer, request) {
                 Ok(value) => value,
@@ -4337,24 +5920,6 @@ fn handle_connection_authorized(
             };
         write_json_frame(&stream, &response)?;
     }
-}
-
-fn run_gateway_display_owner(
-    stream: Socket,
-    state: ServerState,
-    peer: PeerIdentity,
-    op: public_wire::GatewayDisplayOp,
-) {
-    let response = match dispatch_request(
-        &state,
-        &peer,
-        d2bd_runtime::wire::Request::GatewayDisplay(op),
-    ) {
-        Ok(value) => value,
-        Err(error) => serde_json::to_value(d2bd_runtime::wire::error_frame(&error))
-            .unwrap_or_else(|_| json!({ "type": "error" })),
-    };
-    let _ = write_json_frame(&stream, &response);
 }
 
 fn dispatch_request(
@@ -4487,9 +6052,6 @@ fn dispatch_request_locked(
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
         d2bd_runtime::wire::Request::Console(op) => dispatch_console(state, peer, op),
-        d2bd_runtime::wire::Request::GatewayDisplay(op) => {
-            dispatch_gateway_display(state, peer, op)
-        }
         d2bd_runtime::wire::Request::Workload(op) => dispatch_workload(state, peer, op),
         d2bd_runtime::wire::Request::Audio(op) => {
             if !matches!(op, public_wire::AudioOp::Status(_))
@@ -4556,7 +6118,6 @@ fn process_resource_ref(request: &Value) -> Option<ResourceRef> {
                 })
         })
 }
-
 
 fn process_resource_management_request(request: &Value) -> bool {
     request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
@@ -4709,10 +6270,9 @@ fn process_resource_execution_ref_from_resource(
         });
     }
     let spec = envelope.spec().base().to_canonical_bytes();
-    let spec: Value =
-        serde_json::from_slice(&spec).map_err(|_| TypedError::ProcessExecFailed {
-            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
-        })?;
+    let spec: Value = serde_json::from_slice(&spec).map_err(|_| TypedError::ProcessExecFailed {
+        kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+    })?;
     let execution_ref = spec
         .get("executionRef")
         .and_then(Value::as_str)
@@ -4927,22 +6487,19 @@ fn dispatch_config_nixos_service_request(
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
         })?;
-    let runtime = plane
-        .zone(&zone)
-        .map_err(|_| TypedError::InternalConfig {
-            detail: "config-nixos Zone runtime unavailable".to_owned(),
-        })?;
+    let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
+        detail: "config-nixos Zone runtime unavailable".to_owned(),
+    })?;
     let guest_lookup = json!({
         "zoneRef": format!("Zone/{}", zone.as_str()),
         "service": "d2b.resource.v3",
         "method": "Get",
         "resourceRef": guest_ref.to_canonical_string(),
     });
-    let guest = block_on_future(runtime.dispatch_cli_request(&guest_lookup)).map_err(|_| {
-        TypedError::InternalConfig {
+    let guest = block_on_future(runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
+        .map_err(|_| TypedError::InternalConfig {
             detail: "config-nixos Guest lookup failed".to_owned(),
-        }
-    })?;
+        })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::AuthzNotAdmin {
             verb: "config-nixos Guest is not in the requested Zone".to_owned(),
@@ -4955,11 +6512,7 @@ fn dispatch_config_nixos_service_request(
                 serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
                     detail: "config-nixos read request is malformed".to_owned(),
                 })?;
-            let response = read_guest_config_typed(
-                state,
-                &zone,
-                sync.guest_ref.name().as_str(),
-            )?;
+            let response = read_guest_config_typed(state, &zone, sync.guest_ref.name().as_str())?;
             serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
                 detail: "config-nixos response encoding failed".to_owned(),
             })
@@ -4996,11 +6549,7 @@ fn dispatch_config_nixos_service_request(
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
-                .diff(
-                    d2b_provider_config_nixos::ConfigCaller::Admin,
-                    &zone,
-                    &diff,
-                )
+                .diff(d2b_provider_config_nixos::ConfigCaller::Admin, &zone, &diff)
                 .map_err(config_nixos_wire_error)?;
             serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
                 detail: "config-nixos diff response encoding failed".to_owned(),
@@ -5108,6 +6657,63 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
     }
+    if [
+        "subject",
+        "subjectRef",
+        "subjectUid",
+        "principal",
+        "principalRef",
+        "role",
+        "uid",
+        "user",
+        "userRef",
+    ]
+    .iter()
+    .any(|field| request.value().get(*field).is_some())
+    {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::RequestInvalid,
+        ));
+    }
+    let method = request.method().unwrap_or("Resource");
+    if matches!(peer.role, PeerRole::HostShutdown) && method != "Stop" {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
+        ));
+    }
+    let runtime = match resolve_resource_runtime(state, &request.value()) {
+        Ok(runtime) => runtime,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
+    let gateway_route = match classify_gateway_zone_request(state, &runtime, &request.value()) {
+        Ok(route) => route,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
+    if gateway_route == GatewayZoneRequestRoute::Forward {
+        match admit_gateway_zone_request(state, &runtime, &request.value(), peer.uid) {
+            Ok(value) => return Ok(value),
+            Err(error) => return Ok(resource_runtime_error_frame(error)),
+        }
+    }
+    if matches!(request.method(), Some("Start" | "Stop" | "Restart")) {
+        let resource_type = request
+            .value()
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .map(|value| value.resource_type().as_str().to_owned());
+        return match resource_type.as_deref() {
+            Some("Guest") => {
+                dispatch_guest_lifecycle_resource_request(state, peer, runtime, &request.value())
+            }
+            Some("Process") => {
+                dispatch_process_lifecycle_resource_request(peer, runtime, &request.value())
+            }
+            _ => Err(TypedError::WireInvalidFrame {
+                detail: "lifecycle requires a Guest or Process resourceRef".to_owned(),
+            }),
+        };
+    }
     if request.value().get("service").and_then(Value::as_str)
         == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
     {
@@ -5195,8 +6801,551 @@ fn dispatch_resource_request(
     // request-scoped ComponentSession subject before invoking Resource API.
     match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
-        Err(error) => Ok(resource_runtime_error_frame(error)),
+        Err(error) => {
+            tracing::warn!(
+                zone = %runtime.zone().as_str(),
+                method,
+                peer_uid = peer.uid,
+                error = ?error,
+                "public Resource request failed",
+            );
+            Ok(resource_runtime_error_frame(error))
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayZoneRequestRoute {
+    Local,
+    HostControl,
+    Forward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayZonePresence {
+    Local,
+    Composed,
+    Refused,
+}
+
+fn classify_gateway_zone_request(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+) -> Result<GatewayZoneRequestRoute, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let presence = if plane.gateway_zone_link_is_refused(runtime.zone()) {
+        GatewayZonePresence::Refused
+    } else if plane.gateway_zone_link(runtime.zone()).is_some() {
+        GatewayZonePresence::Composed
+    } else {
+        GatewayZonePresence::Local
+    };
+    classify_gateway_zone_request_kind(presence, request)
+}
+
+fn classify_gateway_zone_request_kind(
+    presence: GatewayZonePresence,
+    request: &Value,
+) -> Result<GatewayZoneRequestRoute, resource_runtime::ResourceRuntimeError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if is_zone_link_control_request(request) {
+        if gateway_zone_link_control_method(method) {
+            return Ok(GatewayZoneRequestRoute::HostControl);
+        }
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
+    match presence {
+        GatewayZonePresence::Local => Ok(GatewayZoneRequestRoute::Local),
+        GatewayZonePresence::Composed if gateway_forwardable_request(request) => {
+            Ok(GatewayZoneRequestRoute::Forward)
+        }
+        GatewayZonePresence::Composed => {
+            Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable)
+        }
+        GatewayZonePresence::Refused => {
+            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        }
+    }
+}
+
+fn gateway_zone_link_control_method(method: &str) -> bool {
+    matches!(
+        method,
+        "Get" | "List" | "Create" | "UpdateSpec" | "UpdateStatus" | "UpdateFinalizers" | "Delete"
+    )
+}
+
+fn gateway_forwardable_method(method: &str) -> bool {
+    gateway_zone_link_control_method(method)
+}
+
+fn gateway_forwardable_request(request: &Value) -> bool {
+    let Some(method) = request.get("method").and_then(Value::as_str) else {
+        return false;
+    };
+    gateway_forwardable_method(method)
+        && !matches!(method, "Start" | "Stop" | "Restart" | "Reconcile")
+        && !matches!(
+            method,
+            "DeviceUsbAttach" | "DeviceUsbDetach" | "DeviceUsbProbe"
+        )
+        && request.get("service").and_then(Value::as_str)
+            != Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
+        && !process_resource_owner_request(request)
+        && !process_resource_detached_create_request(request)
+        && !process_resource_management_request(request)
+        && !is_gateway_shell_resource_request(request)
+        && !is_gateway_ephemeral_process_request(request)
+}
+
+fn is_gateway_shell_resource_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str)
+        == Some("shell-terminal.d2bus.org.ShellSession")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .is_some_and(is_typed_shell_resource_ref)
+}
+
+fn is_gateway_ephemeral_process_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .is_some_and(|value| value.resource_type().as_str() == "EphemeralProcess")
+}
+
+fn admit_gateway_zone_request(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+    peer_uid: u32,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    if plane.gateway_zone_link_is_refused(runtime.zone()) {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let composition = plane
+        .gateway_zone_link(runtime.zone())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let gateway_guest = block_on_future(gateway_guest_for_provider(
+        runtime,
+        composition.transport_provider_ref(),
+    ))
+    .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if composition
+        .last_gateway_guest()
+        .as_ref()
+        .is_some_and(|previous| !previous.same_guest_identity(&gateway_guest))
+    {
+        if let Some(previous) = composition.last_gateway_guest() {
+            block_on_future(invalidate_guest_component_session_for_guest(
+                state, &previous,
+            ));
+        }
+        composition
+            .reset_gateway_guest_identity()
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    }
+    if composition.gateway_guest().as_ref() != Some(&gateway_guest) {
+        if composition.gateway_guest().is_some() {
+            composition.fence_gateway_session();
+        }
+        composition.set_gateway_guest(gateway_guest.clone());
+    }
+    if !composition.has_gateway_session() {
+        let session = block_on_future(connect_guest_component_session_for_guest(
+            state,
+            &gateway_guest,
+        ))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        composition
+            .bind_gateway_session(session)
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    }
+    let gateway_guest_for_invalidation = gateway_guest.clone();
+    let target_zone = composition.child_path().clone();
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = gateway_route_operation_id(request, peer_uid, method);
+    composition
+        .admit_request(&operation_id, target_zone)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    debug_assert!(gateway_forwardable_request(request));
+    let session = composition
+        .gateway_session()
+        .ok_or(resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
+    let result = block_on_future(runtime.dispatch_gateway_resource_request(
+        &session,
+        request,
+        &operation_id,
+    ));
+    if matches!(
+        &result,
+        Err(
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                | resource_runtime::ResourceRuntimeError::AuthenticationUnavailable
+        )
+    ) {
+        composition.fence_gateway_session();
+        block_on_future(invalidate_guest_component_session_for_guest(
+            state,
+            &gateway_guest_for_invalidation,
+        ));
+    }
+    result
+}
+
+fn gateway_route_operation_id(request: &Value, peer_uid: u32, method: &str) -> String {
+    let public_operation_id =
+        d2bd_runtime::resource_runtime_support::public_operation_id(request, peer_uid, method);
+    let target = request
+        .get("resourceRef")
+        .or_else(|| request.get("resourceType"))
+        .and_then(Value::as_str)
+        .unwrap_or("unaddressed");
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .unwrap_or("unaddressed");
+    let digest = Sha256::digest(
+        format!("d2b:gateway-route:v1:{peer_uid}:{public_operation_id}:{method}:{zone}:{target}")
+            .as_bytes(),
+    );
+    format!(
+        "gateway-route-{}",
+        digest
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn is_zone_link_control_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("ZoneLink")
+        || request
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .is_some_and(|value| value.resource_type().as_str() == "ZoneLink")
+}
+
+fn dispatch_guest_lifecycle_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let target = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Guest lifecycle requires a Guest resourceRef".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Guest lifecycle request is missing method".to_owned(),
+        })?;
+    let operation = match method {
+        "Start" => provider_effects::GuestLifecycleOperation::Start,
+        "Stop" => provider_effects::GuestLifecycleOperation::Stop,
+        "Restart" => provider_effects::GuestLifecycleOperation::Restart,
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    let verb = format!("guest {}", method.to_ascii_lowercase());
+    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+        return Ok(response);
+    }
+    let caller_role = broker_caller_role_for_peer(peer);
+    let force = request
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let wait_for_ready = request
+        .get("waitForReady")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let request_operation_id =
+        d2bd_runtime::resource_runtime_support::public_operation_id(request, peer.uid, method);
+    let base_operation_id = provider_registry::next_lifecycle_operation_id(
+        operation.as_str(),
+        target.name().as_str(),
+        &request_operation_id,
+    );
+    let provider_ref = match block_on_future(runtime.guest_provider_ref(&target)) {
+        Ok(provider_ref) => provider_ref,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
+    let dispatch_one = |operation: provider_effects::GuestLifecycleOperation,
+                        operation_id: &str|
+     -> Result<
+        (Value, Option<provider_effects::LifecycleAuthorization>),
+        TypedError,
+    > {
+        let admission = match block_on_future(runtime.admit_guest_lifecycle(
+            peer.uid,
+            target.clone(),
+            operation_id,
+        )) {
+            Ok(admission) => admission,
+            Err(error) => return Ok((resource_runtime_error_frame(error), None)),
+        };
+        let authorization = match provider_effects::LifecycleAuthorization::from_lease(
+            admission.lease,
+            target.clone(),
+            admission.guest_uid,
+            admission.guest_generation,
+            admission.provider_assignment_generation,
+        ) {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                return Ok((
+                    provider_lifecycle_failure_response(&verb, target.name().as_str(), error),
+                    None,
+                ));
+            }
+        };
+        let effect = DaemonGuestLifecycleEffect {
+            state,
+            runtime: Arc::clone(&runtime),
+            guest: target.clone(),
+            caller_role: caller_role.clone(),
+            force,
+            wait_for_ready,
+            operation,
+            authorization: authorization.clone(),
+        };
+        let response = match state.provider_runtime.dispatch_v3_lifecycle(
+            &caller_role,
+            &provider_ref,
+            target.clone(),
+            operation,
+            operation_id.to_owned(),
+            authorization.clone(),
+            &effect,
+        ) {
+            Ok(provider_registry::ProviderRuntimeDispatch::Active(
+                provider_effects::EffectDispatch::Dispatched(response),
+            )) => response,
+            Ok(provider_registry::ProviderRuntimeDispatch::Active(
+                provider_effects::EffectDispatch::Duplicate,
+            )) => applied_response(
+                &verb,
+                format!(
+                    "guest {}: duplicate Provider lifecycle request",
+                    target.name().as_str()
+                ),
+            ),
+            Err(error) => provider_lifecycle_failure_response(&verb, target.name().as_str(), error),
+        };
+        Ok((response, Some(authorization)))
+    };
+
+    if operation == provider_effects::GuestLifecycleOperation::Restart {
+        let stop_id = format!("{base_operation_id}:stop");
+        let (stop, stop_authorization) =
+            dispatch_one(provider_effects::GuestLifecycleOperation::Stop, &stop_id)?;
+        if response_outcome(&stop) != Some("applied") {
+            return Ok(retarget_mutating_response(&stop, &verb));
+        }
+        let Some(stop_authorization) = stop_authorization else {
+            return Ok(retarget_mutating_response(
+                &provider_lifecycle_failure_response(
+                    &verb,
+                    target.name().as_str(),
+                    provider_effects::ProviderEffectError::StateUnavailable,
+                ),
+                &verb,
+            ));
+        };
+        let stop_is_latest = match state.provider_runtime.lifecycle_admission_is_latest_v3(
+            &caller_role,
+            &provider_ref,
+            provider_effects::GuestLifecycleOperation::Stop,
+            &stop_authorization,
+        ) {
+            Ok(is_latest) => is_latest,
+            Err(error) => {
+                return Ok(retarget_mutating_response(
+                    &provider_lifecycle_failure_response(&verb, target.name().as_str(), error),
+                    &verb,
+                ));
+            }
+        };
+        if !stop_is_latest {
+            return Ok(retarget_mutating_response(
+                &provider_lifecycle_failure_response(
+                    &verb,
+                    target.name().as_str(),
+                    provider_effects::ProviderEffectError::MutationPending,
+                ),
+                &verb,
+            ));
+        }
+        let start_id = format!("{base_operation_id}:start");
+        let (start, _) = dispatch_one(provider_effects::GuestLifecycleOperation::Start, &start_id)?;
+        if response_outcome(&start) != Some("applied") {
+            return Ok(retarget_mutating_response(&start, &verb));
+        }
+        return Ok(applied_response(
+            &verb,
+            format!(
+                "guest {}: {}; {}",
+                target.name().as_str(),
+                response_summary(&stop).unwrap_or("stop applied"),
+                response_summary(&start).unwrap_or("start applied"),
+            ),
+        ));
+    }
+    dispatch_one(operation, &base_operation_id).map(|(response, _)| response)
+}
+
+fn resource_runtime_failure(error: resource_runtime::ResourceRuntimeError) -> TypedError {
+    TypedError::RuntimeCapabilityUnsupported {
+        vm: "guest".to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: error.code().to_owned(),
+        verb: "lifecycle".to_owned(),
+    }
+}
+
+fn dispatch_process_lifecycle_resource_request(
+    peer: &PeerIdentity,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let target = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Process")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Process lifecycle requires a Process resourceRef".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Process lifecycle request is missing method".to_owned(),
+        })?;
+    let desired = match method {
+        "Start" => "running",
+        "Stop" => "stopped",
+        "Restart" => "restart",
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    let verb = format!("process {}", method.to_ascii_lowercase());
+    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+        return Ok(response);
+    }
+    let base_operation_id =
+        d2bd_runtime::resource_runtime_support::public_operation_id(request, peer.uid, method);
+    let apply_one = |lifecycle: &str, operation_id: &str| -> Result<Value, TypedError> {
+        let get_request = json!({
+            "method": "Get",
+            "service": "d2b.resource.v3",
+            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+            "resourceRef": target.to_canonical_string(),
+        });
+        let current = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))
+            .map_err(resource_runtime_failure)?;
+        if current.get("type").and_then(Value::as_str) == Some("error") {
+            return Ok(current);
+        }
+        let revision = current
+            .pointer("/metadata/revision")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "Process lifecycle resource revision is missing".to_owned(),
+            })?;
+        let mut spec =
+            current
+                .get("spec")
+                .cloned()
+                .ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail: "Process lifecycle resource spec is missing".to_owned(),
+                })?;
+        spec.as_object_mut()
+            .ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "Process lifecycle resource spec is invalid".to_owned(),
+            })?
+            .insert(
+                "desiredLifecycle".to_owned(),
+                Value::String(lifecycle.to_owned()),
+            );
+        let update_request = json!({
+            "method": "UpdateSpec",
+            "service": "d2b.resource.v3",
+            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+            "resourceRef": target.to_canonical_string(),
+            "expectedRevision": revision,
+            "operationId": operation_id,
+            "spec": spec,
+            "waitForReconcile": request.get("waitForReady").and_then(Value::as_bool).unwrap_or(true),
+        });
+        block_on_future(runtime.dispatch_public_cli_request(&update_request, peer.uid))
+            .map_err(resource_runtime_failure)
+    };
+    if desired == "restart" {
+        let stop = apply_one("stopped", &format!("{base_operation_id}:stop"))?;
+        if stop.get("type").and_then(Value::as_str) == Some("error") {
+            return Ok(stop);
+        }
+        return apply_one("running", &format!("{base_operation_id}:start"));
+    }
+    apply_one(desired, &base_operation_id)
 }
 
 fn dispatch_device_usb_resource_request(
@@ -5265,8 +7414,7 @@ fn dispatch_device_usb_resource_request(
     {
         return Ok(device);
     }
-    if device.pointer("/spec/providerRef").and_then(Value::as_str)
-        != Some("Provider/device-usbip")
+    if device.pointer("/spec/providerRef").and_then(Value::as_str) != Some("Provider/device-usbip")
     {
         return Err(TypedError::RuntimeCapabilityUnsupported {
             vm: device_ref.name().as_str().to_owned(),
@@ -5369,6 +7517,7 @@ fn resolve_volume_storage_ref(
 fn resolve_network_effect_context(
     resource: &Value,
     resolver: &BundleResolver,
+    admission: &NetworkAdmissionProof,
 ) -> Result<NetworkEffectContext, resource_runtime::ResourceRuntimeError> {
     let spec = resource
         .get("spec")
@@ -5380,62 +7529,103 @@ fn resolve_network_effect_context(
     if provider_ref != "Provider/network-local" {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let env_name = resolve_network_env_name(spec, resolver)?;
-    let net_vm_name = resolve_network_vm_name(spec, &env_name)?;
-    let bridge_id = intent_id_bridge_env(&env_name);
-    let projection_id = intent_id_nft_projection_env(&env_name);
-    if resolver.find_bridge_intent(&bridge_id).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    let projection = resolver
-        .find_nft_projection_intent(&projection_id)
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let nm_id = intent_id_nm_unmanaged_host();
-    if resolver.find_nm_unmanaged_intent(&nm_id).is_none()
+    let network_name = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provenance = d2b_contracts_resource::v3::NetworkProvenance::new(
+        admission.key().zone_uid().clone(),
+        admission.key().network_uid().clone(),
+        admission.key().network_generation(),
+        admission.key().attachment_generation(),
+        admission.key().bundle_generation().clone(),
+    );
+    let bridge_id = intent_id_network_bridge_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+        false,
+    );
+    let uplink_bridge_id = intent_id_network_bridge_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+        true,
+    );
+    let projection_id = intent_id_network_projection_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+    );
+    if resolver
+        .resolve_network_bridge_intent(&bridge_id, &provenance)
+        .is_none()
         || resolver
-            .find_hosts_intent(&intent_id_hosts_host())
+            .resolve_network_bridge_intent(&uplink_bridge_id, &provenance)
             .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let route_ids = resolver
-        .route_intent_ids()
-        .filter(|id| id.starts_with(&format!("route:env:{env_name}:")))
-        .map(|id| BundleOpId::new(id.to_owned()))
-        .collect::<Vec<_>>();
-    if route_ids
-        .iter()
-        .any(|id| resolver.find_route_intent(id.as_str()).is_none())
+    let projection = resolver
+        .resolve_network_projection_intent(&projection_id, &provenance)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let nm_id = intent_id_nm_unmanaged_host();
+    if resolver.find_nm_unmanaged_intent(&nm_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let hosts_id = intent_id_network_hosts_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+    );
+    if resolver
+        .resolve_network_hosts_intent(&hosts_id, &provenance)
+        .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let bridge_names = resolver
-        .host
-        .environments
-        .iter()
-        .find(|environment| environment.env == env_name)
-        .into_iter()
-        .flat_map(|environment| {
-            std::iter::once(environment.bridge.as_str().to_owned()).chain(
-                resolver
-                    .find_manifest_vm(&net_vm_name)
-                    .and_then(|vm| vm.bridge.clone()),
-            )
+    let route_ids = (0..admission.intent().routes().len())
+        .map(|index| {
+            BundleOpId::new(intent_id_network_route_uids(
+                provenance.zone_uid(),
+                provenance.network_uid(),
+                network_name,
+                index,
+            ))
         })
-        .collect::<BTreeSet<_>>();
-    let sysctl_ids = resolver
-        .sysctl_intent_ids()
-        .filter(|id| {
-            bridge_names
-                .iter()
-                .any(|bridge| id.starts_with(&format!("sysctl:env:{env_name}:if:{bridge}:")))
-        })
-        .map(|id| BundleOpId::new(id.to_owned()))
         .collect::<Vec<_>>();
-    if sysctl_ids
-        .iter()
-        .any(|id| resolver.find_sysctl_intent(id.as_str()).is_none())
-    {
+    if route_ids.iter().any(|id| {
+        resolver
+            .resolve_network_route_intent(id.as_str(), &provenance)
+            .is_none()
+    }) {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let sysctl_ids = ["lan", "uplink"]
+        .into_iter()
+        .flat_map(|role| {
+            let zone_uid = provenance.zone_uid().clone();
+            let network_uid = provenance.network_uid().clone();
+            let network_name = network_name.to_owned();
+            ["disable-ipv6", "accept-ra", "autoconf"]
+                .into_iter()
+                .map(move |key| {
+                    BundleOpId::new(intent_id_network_sysctl_uids(
+                        &zone_uid,
+                        &network_uid,
+                        &network_name,
+                        role,
+                        key,
+                    ))
+                })
+        })
+        .collect::<Vec<_>>();
+    if sysctl_ids.iter().any(|id| {
+        resolver
+            .resolve_network_sysctl_intent(id.as_str(), &provenance)
+            .is_none()
+    }) {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let generation = resolver
@@ -5444,63 +7634,21 @@ fn resolve_network_effect_context(
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let projection_digest = projection_digest_bytes(&projection.script_body)
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    Ok(NetworkEffectContext::new(
-        ScopeId::new(format!("env:{env_name}")),
+    let net_vm_name = derive_network_child_name(admission.key().network_uid(), "vm");
+    Ok(NetworkEffectContext::for_network(
+        admission.clone(),
         VmId::new(net_vm_name),
         BundleOpId::new(bridge_id),
         BundleOpId::new(projection_id),
         BundleOpId::new(nm_id),
-        BundleOpId::new(intent_id_hosts_host()),
+        BundleOpId::new(hosts_id),
         route_ids,
         sysctl_ids,
         generation,
         projection_digest,
         resolver.host.site.allow_unsafe_east_west,
-    ))
-}
-
-fn resolve_network_env_name(
-    spec: &Value,
-    resolver: &BundleResolver,
-) -> Result<String, resource_runtime::ResourceRuntimeError> {
-    let attachments = spec
-        .get("attachments")
-        .and_then(Value::as_array)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let mut env_name = None;
-    for attachment in attachments {
-        let execution_ref = attachment
-            .get("executionRef")
-            .and_then(Value::as_str)
-            .and_then(|value| value.strip_prefix("Guest/"))
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let env = resolver
-            .find_manifest_vm(execution_ref)
-            .and_then(|vm| vm.env.as_deref())
-            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-        if env_name.as_deref().is_some_and(|selected| selected != env) {
-            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-        }
-        env_name = Some(env.to_owned());
-    }
-    let env_name = env_name.ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    if resolver.find_host_env(&env_name).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    Ok(env_name)
-}
-
-fn resolve_network_vm_name(
-    spec: &Value,
-    env_name: &str,
-) -> Result<String, resource_runtime::ResourceRuntimeError> {
-    match spec.get("netVmNameOverride") {
-        Some(value) if !value.is_null() => value
-            .as_str()
-            .map(ToOwned::to_owned)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid),
-        _ => Ok(format!("sys-{env_name}-net")),
-    }
+    )
+    .with_additional_bridge_intent(BundleOpId::new(uplink_bridge_id)))
 }
 
 #[derive(Clone)]
@@ -5732,6 +7880,9 @@ impl NetworkResourcePort for PublicNetworkResourceBoundary {
         &self,
         content: &NetworkConfigContent,
     ) -> Result<(), NetworkEffectError> {
+        if content.provenance().is_none() {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
         let bytes = content
             .dnsmasq
             .len()
@@ -5866,12 +8017,23 @@ fn dispatch_wave6_resource_reconcile(
         .get("operationId")
         .and_then(Value::as_str)
         .unwrap_or("wave6-public-reconcile");
-    let resolver = load_bundle_resolver(state)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-
+    if resource_type == "Network" && network_deletion_completed(&resource) {
+        release_completed_network_admission(state, runtime, peer, &resource)?;
+        return Ok(json!({
+            "authenticated": true,
+            "effect": "network-admission-released",
+            "operationId": operation_id,
+            "providerRef": provider_ref,
+            "ready": true,
+            "resourceRef": resource_ref.to_canonical_string(),
+            "resources": [resource],
+        }));
+    }
     let mut ready = true;
     let effect = match resource_type {
         "Volume" => {
+            let resolver = load_bundle_resolver(state)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
             let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
             let response = dispatch_broker_request_as(
                 state,
@@ -5900,6 +8062,8 @@ fn dispatch_wave6_resource_reconcile(
             }
         }
         "Network" => {
+            let resolver = load_bundle_resolver(state)
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
             block_on_future(runtime.persist_public_reconcile_phase(
                 &resource_ref,
                 &uid,
@@ -5944,109 +8108,21 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
-            ensure_guest_networks_reconciled(
-                state,
-                peer,
-                runtime,
-                &resource,
-                &resolver,
-                operation_id,
-            )?;
-            let guest_vm = resource_ref.name().as_str();
-            let providers = state.provider_runtime.process_providers().ok_or_else(|| {
-                tracing::warn!(
-                    guest = guest_vm,
-                    "Guest Provider process runtime is unavailable"
-                );
-                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-            })?;
-            let node = providers
-                .node_for_role(guest_vm, "ch-runner")
-                .ok_or_else(|| {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        "Guest Provider Cloud Hypervisor node is missing"
-                    );
-                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                })?;
-            let adoption =
-                block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        error = %error,
-                        "Guest Provider Cloud Hypervisor adoption failed"
-                    );
-                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                })?;
-            let effect = match adoption {
-                process_provider_runtime::ProviderAdoption::Adopted(_) => {
-                    "cloud-hypervisor-adopted"
-                }
-                process_provider_runtime::ProviderAdoption::Quarantined(_) => {
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                process_provider_runtime::ProviderAdoption::Absent => {
-                    block_on_future(providers.launch_node(
-                        guest_vm,
-                        &node,
-                        Duration::from_secs(30),
-                    ))
-                    .map_err(|error| {
-                        tracing::warn!(
-                            guest = guest_vm,
-                            error = %error,
-                            "Guest Provider Cloud Hypervisor launch failed"
-                        );
-                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                    })?;
-                    let deadline = Instant::now() + Duration::from_secs(30);
-                    loop {
-                        match block_on_future(providers.probe_node(guest_vm, &node)).map_err(
-                            |error| {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    error = %error,
-                                    "Guest Provider liveness probe failed after launch"
-                                );
-                                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                            },
-                        )? {
-                            process_provider_runtime::ProviderLiveness::Alive => break,
-                            process_provider_runtime::ProviderLiveness::Exited => {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    "Guest Provider exited before becoming Ready"
-                                );
-                                return Err(
-                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
-                                );
-                            }
-                            process_provider_runtime::ProviderLiveness::Unknown
-                                if Instant::now() >= deadline =>
-                            {
-                                tracing::warn!(
-                                    guest = guest_vm,
-                                    "Guest Provider liveness remained unknown after launch"
-                                );
-                                return Err(
-                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
-                                );
-                            }
-                            process_provider_runtime::ProviderLiveness::Unknown => {
-                                std::thread::sleep(Duration::from_millis(25));
-                            }
-                        }
-                    }
-                    "cloud-hypervisor-started"
-                }
-            };
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &resource_ref,
-                &uid,
-                operation_id,
-                "Ready",
-            ))?;
-            effect
+            block_on_future(runtime.reconcile_cloud_hypervisor_guests(Arc::new(state.clone())))?;
+            ready = resource
+                .get("status")
+                .and_then(|status| status.get("phase"))
+                .and_then(Value::as_str)
+                == Some("Ready")
+                && resource
+                    .get("status")
+                    .and_then(|status| status.get("observedGeneration"))
+                    .and_then(Value::as_u64)
+                    == resource
+                        .get("metadata")
+                        .and_then(|metadata| metadata.get("generation"))
+                        .and_then(Value::as_u64);
+            "controller-managed"
         }
         _ => unreachable!(),
     };
@@ -6076,94 +8152,6 @@ fn public_resource_get_error(resource: &Value) -> Option<resource_runtime::Resou
     )
 }
 
-fn ensure_guest_networks_reconciled(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    guest: &Value,
-    resolver: &BundleResolver,
-    operation_id: &str,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let Some(network_attachments) = guest
-        .get("spec")
-        .and_then(|spec| spec.get("networkAttachments"))
-        .and_then(Value::as_array)
-    else {
-        return Ok(());
-    };
-    for attachment in network_attachments {
-        let network_ref = attachment
-            .get("networkRef")
-            .and_then(Value::as_str)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let network_ref = ResourceRef::parse(network_ref)
-            .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        if network_ref.resource_type().as_str() != "Network" {
-            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-        }
-        let get_request = json!({
-            "method": "Get",
-            "service": "d2b.resource.v3",
-            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
-            "resourceRef": network_ref.to_canonical_string(),
-        });
-        let network = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
-        if let Some(error) = public_resource_get_error(&network) {
-            return Err(error);
-        }
-        let network_uid = network
-            .get("metadata")
-            .and_then(|metadata| metadata.get("uid"))
-            .and_then(Value::as_str)
-            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let generation = network
-            .get("metadata")
-            .and_then(|metadata| metadata.get("generation"))
-            .and_then(Value::as_u64)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let ready = network
-            .get("status")
-            .and_then(|status| status.get("phase"))
-            .and_then(Value::as_str)
-            == Some("Ready")
-            && network
-                .get("status")
-                .and_then(|status| status.get("observedGeneration"))
-                .and_then(Value::as_u64)
-                == Some(generation);
-        if !ready {
-            tracing::warn!(
-                stage = "guest-network-readiness",
-                "Guest Provider is re-running Network reconciliation before launch"
-            );
-            let network_operation_id =
-                format!("{operation_id}-network-{}", network_ref.name().as_str());
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &network_ref,
-                &network_uid,
-                &network_operation_id,
-                "Pending",
-            ))?;
-            let network_ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
-                state,
-                peer,
-                runtime,
-                resolver,
-                resource_ref: &network_ref,
-                uid: &network_uid,
-                resource: &network,
-                operation_id: &network_operation_id,
-                ensure_host_base: false,
-            })?;
-            if !network_ready {
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-            }
-        }
-    }
-    Ok(())
-}
-
 struct Wave6NetworkEffectRequest<'a> {
     state: &'a ServerState,
     peer: &'a PeerIdentity,
@@ -6174,6 +8162,294 @@ struct Wave6NetworkEffectRequest<'a> {
     resource: &'a Value,
     operation_id: &'a str,
     ensure_host_base: bool,
+}
+
+fn parse_committed_network_spec(
+    resource: &Value,
+) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
+    let mut spec = resource
+        .get("spec")
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let object = spec
+        .as_object_mut()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_resource_uid(
+    resource: &Value,
+) -> Result<ResourceUid, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("uid"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_resource_generation(
+    resource: &Value,
+) -> Result<ResourceGeneration, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| ResourceGeneration::new(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_resource_revision(
+    resource: &Value,
+) -> Result<ZoneRevision, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("revision"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value != 0)
+        .map(ZoneRevision::new)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_zone_resource_identity(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    resource: &Value,
+) -> Result<ZoneResourceIdentity, resource_runtime::ResourceRuntimeError> {
+    let metadata = resource
+        .get("metadata")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_zone = metadata
+        .get("zone")
+        .and_then(Value::as_str)
+        .and_then(|value| ZoneId::parse(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if resource_zone != *runtime.zone() {
+        return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+    }
+    let resource_type = resource
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_name = metadata
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_ref_text = format!("{resource_type}/{resource_name}");
+    let resource_ref = ResourceRef::parse(&resource_ref_text)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone_uid = runtime
+        .authority_zone_uid()
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::IdentityUnbound)?;
+    Ok(ZoneResourceIdentity::new(
+        resource_zone,
+        zone_uid,
+        resource_ref,
+        committed_resource_uid(resource)?,
+        committed_resource_generation(resource)?,
+        committed_resource_revision(resource)?,
+    ))
+}
+
+/// Resolve the committed execution resource for the same-UID unsafe-local
+/// helper. The helper owns workload scopes, but the daemon may only bind them
+/// to an identity read from the authoritative topology-root resource store.
+fn authoritative_unsafe_local_resource_identity(
+    state: &ServerState,
+) -> Result<ZoneResourceIdentity, resource_runtime::ResourceRuntimeError> {
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
+    let root_zone = plane
+        .topology_root()
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let runtime = plane.zone(&root_zone)?;
+    let hosts = block_on_future(runtime.committed_resources_of_type("Host"))?;
+    let [host] = hosts.as_slice() else {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    };
+    committed_zone_resource_identity(&runtime, host)
+}
+
+fn same_zone_resource_identity(left: &ZoneResourceIdentity, right: &ZoneResourceIdentity) -> bool {
+    left.matches(
+        right.zone(),
+        right.zone_uid(),
+        right.resource_ref(),
+        right.resource_uid(),
+        right.generation(),
+        right.revision(),
+    )
+}
+
+fn network_deletion_completed(resource: &Value) -> bool {
+    resource
+        .get("status")
+        .and_then(|status| status.get("phase"))
+        .and_then(Value::as_str)
+        == Some("Deleted")
+        && resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("finalizers"))
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+}
+
+fn release_completed_network_admission(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource: &Value,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let network_uid = committed_resource_uid(resource)?;
+    let zone_ref = ResourceRef::parse(&format!("Zone/{}", runtime.zone().as_str()))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
+    let zone_uid = committed_resource_uid(&zone)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
+        .clone()
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let index = plane.network_admission_index();
+    block_on_future(async move {
+        index
+            .lock()
+            .await
+            .release_owner_after_finalizer(&zone_uid, &network_uid, true);
+    });
+    Ok(())
+}
+
+fn resolve_network_admission(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource: &Value,
+    resolver: &BundleResolver,
+    network_uid: &ResourceUid,
+    network_generation: ResourceGeneration,
+) -> Result<NetworkAdmissionProof, resource_runtime::ResourceRuntimeError> {
+    let spec = parse_committed_network_spec(resource)?;
+    let zone_ref_text = format!("Zone/{}", runtime.zone().as_str());
+    let zone_ref = ResourceRef::parse(&zone_ref_text)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
+    let zone_uid = committed_resource_uid(&zone)?;
+    let network_ref_text = format!(
+        "Network/{}",
+        resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
+    );
+    let network_ref = ResourceRef::parse(&network_ref_text)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let network_ref_string = network_ref.to_canonical_string();
+
+    let mut guest_uids = Vec::new();
+    let mut attachment_generation = network_generation.get();
+    for attachment in spec.attachments() {
+        let attached = fetch_public_resource(runtime, peer, attachment.execution_ref())?;
+        let attached_zone = attached
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str);
+        if attached_zone != Some(runtime.zone().as_str()) {
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+        let attached_uid = committed_resource_uid(&attached)?;
+        attachment_generation =
+            attachment_generation.max(committed_resource_generation(&attached)?.get());
+        if attachment.execution_ref().resource_type().as_str() == "Guest" {
+            guest_uids.push(attached_uid);
+        }
+        let reciprocal = attached
+            .get("spec")
+            .and_then(|value| value.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .is_some_and(|attachments| {
+                attachments.iter().any(|candidate| {
+                    candidate.get("networkRef").and_then(Value::as_str)
+                        == Some(network_ref_string.as_str())
+                })
+            });
+        if !reciprocal {
+            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+        }
+    }
+    let committed_guests = block_on_future(runtime.committed_resources_of_type("Guest"))?;
+    for guest in committed_guests {
+        let attached = guest
+            .get("spec")
+            .and_then(|value| value.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .is_some_and(|attachments| {
+                attachments.iter().any(|candidate| {
+                    candidate.get("networkRef").and_then(Value::as_str)
+                        == Some(network_ref_string.as_str())
+                })
+            });
+        if !attached {
+            continue;
+        }
+        let guest_zone = guest
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str);
+        if guest_zone != Some(runtime.zone().as_str()) {
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+        guest_uids.push(committed_resource_uid(&guest)?);
+        attachment_generation =
+            attachment_generation.max(committed_resource_generation(&guest)?.get());
+    }
+    let attachment_generation = ResourceGeneration::new(attachment_generation)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let installed_generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if committed_resource_uid(resource)? != *network_uid {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    }
+    let key = NetworkAdmissionKey::new(
+        zone_uid,
+        network_uid.clone(),
+        network_generation,
+        attachment_generation,
+        installed_generation,
+    );
+    NetworkAdmissionIntent::new(key, spec, guest_uids)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        .and_then(|intent| {
+            let plane = state
+                .resource_plane
+                .lock()
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
+                .clone()
+                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            let occupancy = observe_host_network()
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            let index = plane.network_admission_index();
+            block_on_future(async move {
+                index
+                    .lock()
+                    .await
+                    .admit(intent, &occupancy)
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+            })
+        })
 }
 
 fn reconcile_wave6_network_effect(
@@ -6191,6 +8467,37 @@ fn reconcile_wave6_network_effect(
         ensure_host_base,
     } = request;
     let caller_role = broker_caller_role_for_peer(peer);
+    let spec = parse_committed_network_spec(resource).map_err(|_| {
+        tracing::warn!(
+            stage = "parse-network-spec",
+            "Network Provider spec is not a valid NetworkSpec"
+        );
+        resource_runtime::ResourceRuntimeError::RequestInvalid
+    })?;
+    if spec.isolation().allow_east_west && !resolver.host.site.allow_unsafe_east_west {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let generation = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| ResourceGeneration::new(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let installed_generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let admission =
+        resolve_network_admission(state, runtime, peer, resource, resolver, uid, generation)?;
+    let context =
+        resolve_network_effect_context(resource, resolver, &admission).inspect_err(|error| {
+            tracing::warn!(
+                stage = "resolve-network-effect-context",
+                error = error.code(),
+                "Network Provider path resolution failed"
+            );
+        })?;
+    let attachment_generation = admission.key().attachment_generation();
     if ensure_host_base {
         let base_response = dispatch_broker_request_as(
             state,
@@ -6217,67 +8524,6 @@ fn reconcile_wave6_network_effect(
             _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
         }
     }
-    let context = resolve_network_effect_context(resource, resolver).inspect_err(|error| {
-        tracing::warn!(
-            stage = "resolve-network-effect-context",
-            error = error.code(),
-            "Network Provider path resolution failed"
-        );
-    })?;
-    let mut spec_value = resource
-        .get("spec")
-        .cloned()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    spec_value
-        .as_object_mut()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
-        .remove("providerRef");
-    let spec = serde_json::from_value::<NetworkSpec>(spec_value).map_err(|_| {
-        tracing::warn!(
-            stage = "parse-network-spec",
-            "Network Provider spec is not a valid NetworkSpec"
-        );
-        resource_runtime::ResourceRuntimeError::RequestInvalid
-    })?;
-    let env_name = resolve_network_env_name(
-        resource
-            .get("spec")
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
-        resolver,
-    )
-    .inspect_err(|error| {
-        tracing::warn!(
-            stage = "resolve-network-environment",
-            error = error.code(),
-            "Network Provider environment resolution failed"
-        );
-    })?;
-    let generation = resource
-        .get("metadata")
-        .and_then(|metadata| metadata.get("generation"))
-        .and_then(Value::as_u64)
-        .and_then(|value| ResourceGeneration::new(value).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let installed_generation = resolver
-        .installed_generation_identity()
-        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let net_vm_name = resolve_network_vm_name(
-        resource
-            .get("spec")
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
-        &env_name,
-    )?;
-    if !resolver
-        .find_manifest_vm(&net_vm_name)
-        .is_some_and(|vm| vm.is_net_vm)
-    {
-        tracing::warn!(
-            stage = "resolve-network-net-vm",
-            "Network Provider net VM is absent from the trusted manifest"
-        );
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
     let mdns_enabled = resource
         .get("spec")
         .and_then(|value| value.get("mdns"))
@@ -6291,12 +8537,13 @@ fn reconcile_wave6_network_effect(
         mdns_enabled,
         network_uid: uid.clone(),
         network_generation: generation,
+        attachment_generation,
         installed_generation,
+        admission,
         artifact_catalog: vec![ArtifactCatalogEntry::new(
             spec.net_vm_system_artifact_id().clone(),
             ArtifactKind::NixosSystem,
         )],
-        peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: CONFIG_VOLUME_MAX_BYTES * 2,
         volume_ready: false,
@@ -6310,7 +8557,11 @@ fn reconcile_wave6_network_effect(
         volume_deleted: true,
         attachments: Vec::new(),
     };
-    let effects = network_effect_port::production_port(state, caller_role, context);
+    let effects = network_effect_port::production_port(
+        state,
+        caller_role,
+        context.with_host_global_nic_admission(),
+    );
     let reconciler = NetworkReconciler::new(effects, resources);
     let mut durable_resource = resource.clone();
     for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
@@ -6531,6 +8782,23 @@ fn dispatch_device_tpm_reconcile_inner(
         d2b_provider_device_tpm::BinaryKind::Swtpm,
         tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
     );
+    let guest_ref = ResourceRef::parse(&format!("Guest/{vm_id}"))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let lifecycle_operation_id =
+        provider_registry::next_lifecycle_operation_id("tpm-start", vm_id, operation_id);
+    let lifecycle_admission = block_on_future(runtime.admit_guest_lifecycle(
+        peer.uid,
+        guest_ref.clone(),
+        &lifecycle_operation_id,
+    ))?;
+    let lifecycle_authorization = provider_effects::LifecycleAuthorization::from_lease(
+        lifecycle_admission.lease,
+        guest_ref,
+        lifecycle_admission.guest_uid,
+        lifecycle_admission.guest_generation,
+        lifecycle_admission.provider_assignment_generation,
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
     let outcome = runtime
         .device_tpm_controller()
         .reconcile(
@@ -6545,6 +8813,7 @@ fn dispatch_device_tpm_reconcile_inner(
                 zone.as_str(),
                 ResourceRef::parse("Host/host-system")
                     .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
+                lifecycle_authorization,
             ),
             intent,
             d2b_provider_device_tpm::SwtpmSettings { log_level },
@@ -6627,7 +8896,13 @@ fn resolve_resource_runtime(
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    plane.zone(&zone)
+    plane.zone(&zone).map_err(|error| {
+        if error == resource_runtime::ResourceRuntimeError::PlaneUnavailable {
+            resource_runtime::ResourceRuntimeError::RouteMismatch
+        } else {
+            error
+        }
+    })
 }
 
 fn resolve_typed_shell_runtime(
@@ -6635,7 +8910,14 @@ fn resolve_typed_shell_runtime(
     request: &Value,
 ) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
     let runtime = resolve_resource_runtime(state, request)?;
-    if runtime.zone().as_str() != "local-root" {
+    let root = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    if runtime.zone() != &root {
         return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
     }
     Ok(runtime)
@@ -7099,7 +9381,7 @@ fn prepare_workload_launch(
 
 struct ObservedWorkload<'a> {
     entry: &'a workload_dispatch::CatalogEntry,
-    state: d2b_realm_core::WorkloadState,
+    state: d2b_contracts::WorkloadState,
     availability: public_wire::WorkloadAvailability,
 }
 
@@ -7127,11 +9409,11 @@ fn workload_runtime_status(
     requester_uid: u32,
     entry: &workload_dispatch::CatalogEntry,
 ) -> (
-    d2b_realm_core::WorkloadState,
+    d2b_contracts::WorkloadState,
     public_wire::WorkloadAvailability,
 ) {
+    use d2b_contracts::WorkloadState;
     use d2b_contracts_control::unsafe_local_wire::HelperScopeState;
-    use d2b_realm_core::WorkloadState;
     use workload_dispatch::WorkloadRoute;
 
     match &entry.route {
@@ -7142,14 +9424,16 @@ fn workload_runtime_status(
                     .unsafe_local_helpers
                     .last_failure(requester_uid, &entry.metadata.identity.canonical_target),
             );
+            let authoritative_identity = authoritative_unsafe_local_resource_identity(state).ok();
             let workload_state = state
                 .unsafe_local_helpers
                 .snapshot(requester_uid)
                 .and_then(|snapshot| {
+                    let identity = authoritative_identity.as_ref()?;
                     snapshot
                         .scopes
                         .into_iter()
-                        .find(|scope| scope.workload == entry.metadata.identity)
+                        .find(|scope| same_zone_resource_identity(&scope.workload, identity))
                 })
                 .map_or(WorkloadState::Stopped, |scope| match scope.state {
                     HelperScopeState::Starting => WorkloadState::Starting,
@@ -7189,16 +9473,26 @@ fn workload_runtime_status(
 fn dispatch_unsafe_local_launcher(
     state: &ServerState,
     requester_uid: u32,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts_control::unsafe_local_wire::{
         HelperLaunchRequest, HelperOperationDisposition,
     };
+    let target = resolved.identity.canonical_target.clone();
+    let workload = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: target.to_canonical(),
+            runtime_kind: "unsafe-local".to_owned(),
+            capability: "committed-resource-identity".to_owned(),
+            verb: "launch".to_owned(),
+        }
+    })?;
     let request = HelperLaunchRequest {
         request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
-        workload: resolved.identity.clone(),
+        workload,
+        target,
         item_id: resolved.item_id.clone(),
         argv: resolved.argv.clone(),
         graphical: resolved.graphical,
@@ -7222,10 +9516,22 @@ fn dispatch_local_vm_launcher(
     state: &ServerState,
     requester_uid: u32,
     vm: &str,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
+    let root_zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(|| TypedError::RuntimeCapabilityUnsupported {
+            vm: vm.to_owned(),
+            runtime_kind: "resource-plane".to_owned(),
+            capability: "committed-zone-topology".to_owned(),
+            verb: "launch".to_owned(),
+        })?;
     let mut fingerprint = Sha256::new();
     fingerprint.update(requester_uid.to_le_bytes());
     fingerprint.update(operation_id.as_str().as_bytes());
@@ -7254,7 +9560,7 @@ fn dispatch_local_vm_launcher(
         }
     })?;
     let resource_request = serde_json::json!({
-        "zoneRef": "Zone/local-root",
+        "zoneRef": format!("Zone/{}", root_zone.as_str()),
         "requestId": request_id,
     });
     let client = exec_detached::ResourceDetachedClient::new(
@@ -7271,11 +9577,11 @@ fn dispatch_local_vm_launcher(
     ))
 }
 
-const WORKLOAD_PROVIDERS: [d2b_realm_core::WorkloadProviderKind; 4] = [
-    d2b_realm_core::WorkloadProviderKind::LocalVm,
-    d2b_realm_core::WorkloadProviderKind::QemuMedia,
-    d2b_realm_core::WorkloadProviderKind::ProviderManaged,
-    d2b_realm_core::WorkloadProviderKind::UnsafeLocal,
+const WORKLOAD_PROVIDERS: [d2b_contracts::WorkloadProviderKind; 4] = [
+    d2b_contracts::WorkloadProviderKind::LocalVm,
+    d2b_contracts::WorkloadProviderKind::QemuMedia,
+    d2b_contracts::WorkloadProviderKind::ProviderManaged,
+    d2b_contracts::WorkloadProviderKind::UnsafeLocal,
 ];
 const WORKLOAD_COMPONENTS: [&str; 5] = ["helper", "scope", "proxy", "launcher", "shell"];
 const WORKLOAD_AVAILABILITY_STATES: [&str; 9] = [
@@ -7310,7 +9616,7 @@ fn record_workload_availability_metrics(
             let applicable = match component {
                 "shell" => items
                     .iter()
-                    .any(|item| item.kind == d2b_realm_core::LauncherItemKind::Shell),
+                    .any(|item| item.kind == d2b_contracts::LauncherItemKind::Shell),
                 "helper" | "scope" | "proxy" => provider == "unsafe-local",
                 _ => true,
             };
@@ -7362,7 +9668,7 @@ struct WorkloadLaunchAuditContext {
 impl WorkloadLaunchAuditContext {
     fn from_entry(
         entry: &workload_dispatch::CatalogEntry,
-        requested_item: &d2b_realm_core::ProtocolToken,
+        requested_item: &d2b_contracts::ProtocolToken,
     ) -> Self {
         let (provider_label, audit_provider) = match entry.route {
             workload_dispatch::WorkloadRoute::LocalVm { .. } => (
@@ -7404,7 +9710,7 @@ fn record_workload_launch_result(
     state: &ServerState,
     peer_uid: u32,
     context: &WorkloadLaunchAuditContext,
-    operation_id: &d2b_realm_core::OperationId,
+    operation_id: &d2b_contracts::OperationId,
     exec_id: Option<&str>,
     result: WorkloadLaunchResult,
 ) -> Result<(), TypedError> {
@@ -7448,25 +9754,102 @@ fn record_workload_launch_result(
 }
 
 #[cfg(test)]
+mod network_tap_provenance_tests {
+    use super::*;
+    use d2b_provider_network_local::controller::{NetworkAdmissionIntent, NetworkAdmissionKey};
+
+    #[test]
+    fn tap_context_copies_live_admission_tuple_and_all_interfaces() {
+        let zone_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let network_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let first_guest = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let second_guest = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
+        let bundle_generation = ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .unwrap(),
+        )
+        .unwrap();
+        let proof = NetworkAdmissionIntent::new(
+            NetworkAdmissionKey::new(
+                zone_uid,
+                network_uid,
+                ResourceGeneration::new(4).unwrap(),
+                ResourceGeneration::new(9).unwrap(),
+                bundle_generation,
+            ),
+            spec,
+            vec![first_guest.clone(), second_guest.clone()],
+        )
+        .unwrap()
+        .proof();
+
+        let first = network_tap_context_from_admission(&proof, first_guest);
+        let second = network_tap_context_from_admission(&proof, second_guest);
+        assert_eq!(first.zone_uid, second.zone_uid);
+        assert_eq!(first.network_uid, second.network_uid);
+        assert_eq!(
+            first.network_generation,
+            ResourceGeneration::new(4).unwrap()
+        );
+        assert_eq!(
+            first.attachment_generation,
+            ResourceGeneration::new(9).unwrap()
+        );
+        assert_eq!(
+            first.admitted_interface_names,
+            proof.intent().interface_names()
+        );
+        assert_ne!(first.attachment_id, second.attachment_id);
+        assert_eq!(
+            second.admitted_interface_names,
+            proof.intent().interface_names()
+        );
+    }
+
+    #[test]
+    fn network_admission_release_requires_deleted_resource_without_finalizers() {
+        assert!(!network_deletion_completed(&json!({
+            "type": "ZoneLink",
+            "metadata": {"finalizers": ["network.d2bus.org/cleanup"]},
+            "status": {"phase": "Deleted"}
+        })));
+        assert!(!network_deletion_completed(&json!({
+            "metadata": {"finalizers": []},
+            "status": {"phase": "Ready"}
+        })));
+        assert!(network_deletion_completed(&json!({
+            "metadata": {"finalizers": []},
+            "status": {"phase": "Deleted"}
+        })));
+    }
+}
+
+#[cfg(test)]
 mod workload_observability_tests {
     use super::*;
-    use d2b_core::{
-        configured_argv::ConfiguredArgv,
-        contract_id::ContractId,
-        realm_workloads_launcher::LauncherWorkloadSummary,
-        unsafe_local_workloads::{
-            LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
-            UnsafeLocalLauncherItem, UnsafeLocalWorkload, UnsafeLocalWorkloadsJson,
-        },
-        workload_identity::{WorkloadIdentity, WorkloadTarget},
-    };
-    use d2b_realm_core::{
+    use d2b_contracts::{
         CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
         IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, OperationId,
         ProtocolToken, SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind,
         WorkloadState,
         ids::{RealmId, WorkloadId},
+        launcher::LauncherWorkloadSummary,
         realm::RealmPath,
+        workload_identity::{WorkloadIdentity, WorkloadTarget},
+    };
+    use d2b_core::{
+        configured_argv::ConfiguredArgv,
+        contract_id::ContractId,
+        unsafe_local_workloads::{
+            LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
+            UnsafeLocalLauncherItem, UnsafeLocalWorkload, UnsafeLocalWorkloadsJson,
+        },
     };
 
     fn test_state() -> (ServerState, tempfile::TempDir) {
@@ -7486,7 +9869,6 @@ mod workload_observability_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
-            gateway_display: new_gateway_display_runtime_for_tests(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -7500,7 +9882,7 @@ mod workload_observability_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -7805,6 +10187,75 @@ mod workload_observability_tests {
                 )
             ),
             public_wire::WorkloadAvailability::WaylandUnavailable
+        );
+    }
+
+    #[test]
+    fn snapshot_identity_matching_fences_every_zone_resource_field() {
+        let identity = ZoneResourceIdentity::new(
+            ZoneId::parse("local-root").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
+        );
+        assert!(same_zone_resource_identity(&identity, &identity));
+
+        let variants = [
+            ZoneResourceIdentity::new(
+                ZoneId::parse("other").unwrap(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                ResourceRef::parse("Host/other").unwrap(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap(),
+                identity.generation(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                ResourceGeneration::new(2).unwrap(),
+                identity.revision(),
+            ),
+            ZoneResourceIdentity::new(
+                identity.zone().clone(),
+                identity.zone_uid().clone(),
+                identity.resource_ref().clone(),
+                identity.resource_uid().clone(),
+                identity.generation(),
+                ZoneRevision::new(2),
+            ),
+        ];
+        assert!(
+            variants
+                .iter()
+                .all(|variant| !same_zone_resource_identity(&identity, variant))
         );
     }
 
@@ -8218,769 +10669,6 @@ fn build_read_output_result(
     }
 }
 
-fn dispatch_gateway_display(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    op: public_wire::GatewayDisplayOp,
-) -> Result<Value, TypedError> {
-    let response = match op {
-        public_wire::GatewayDisplayOp::Start(args) => {
-            if !matches!(peer.role, PeerRole::Admin) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                });
-            }
-            let target = parse_gateway_display_lifecycle_target(
-                &args.target,
-                &args.operation_id,
-                &args.principal,
-            )?;
-            let lifecycle_state = block_on_future(state.gateway_display.lifecycle.start(&target))
-                .map_err(gateway_error_to_typed)?;
-            public_wire::GatewayDisplayOpResponse::Start(public_wire::GatewayDisplayStartResult {
-                target: args.target,
-                state: lifecycle_state,
-            })
-        }
-        public_wire::GatewayDisplayOp::Stop(args) => {
-            if !matches!(peer.role, PeerRole::Admin) {
-                return Err(TypedError::AuthzNotAdmin {
-                    verb: "gatewayDisplay".to_owned(),
-                });
-            }
-            let target = parse_gateway_display_lifecycle_target(
-                &args.target,
-                &args.operation_id,
-                &args.principal,
-            )?;
-            close_gateway_sessions_for_target(state, &args.target)?;
-            let lifecycle_state = block_on_future(state.gateway_display.lifecycle.stop(&target))
-                .map_err(gateway_error_to_typed)?;
-            public_wire::GatewayDisplayOpResponse::Stop(public_wire::GatewayDisplayStopResult {
-                target: args.target,
-                state: lifecycle_state,
-            })
-        }
-        public_wire::GatewayDisplayOp::Open(args) => {
-            let target_text = args.target.clone();
-            let target =
-                TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay target parse failed: {err}"),
-                })?;
-            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id.clone())
-                .map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay operation_id invalid: {err}"),
-                })?;
-            let correlation_id =
-                d2b_realm_core::CorrelationId::parse(args.operation_id).map_err(|err| {
-                    TypedError::WireInvalidFrame {
-                        detail: format!(
-                            "gatewayDisplay operation_id cannot be used as correlation_id: {err}"
-                        ),
-                    }
-                })?;
-            let principal = gateway_display_peer_principal(peer);
-            let app =
-                AppCommand::new(args.app_argv).ok_or_else(|| TypedError::WireInvalidFrame {
-                    detail:
-                        "gatewayDisplay app_argv must be non-empty and contain no empty arguments"
-                            .to_owned(),
-                })?;
-            validate_gateway_display_open_preflight(state)?;
-            let target_key = TargetKey {
-                realm: target.realm.target_form(),
-                workload: target.workload.as_str().to_owned(),
-            };
-            let seed = ContextSeed {
-                realm: target.realm.clone(),
-                operation_id,
-                correlation_id,
-                principal,
-                node: target.node.clone(),
-                workload: target.workload.clone(),
-            };
-            let owner_principal = seed.principal.to_string();
-            gateway_display_gc(state);
-            let open = block_on_future(state.gateway_display.orchestrator.open(
-                target_key,
-                seed,
-                app,
-                args.request_hash,
-            ))
-            .map_err(gateway_error_to_typed)?;
-            let session_id = open.session_id.to_string();
-            let mut sessions =
-                state
-                    .gateway_display
-                    .sessions
-                    .lock()
-                    .map_err(|_| TypedError::InternalIo {
-                        context: "lock gateway display sessions".to_owned(),
-                        detail: "mutex poisoned".to_owned(),
-                    })?;
-            match sessions.entry(session_id.clone()) {
-                Entry::Occupied(_) => {}
-                Entry::Vacant(slot) => {
-                    slot.insert(GatewayDisplaySession {
-                        target: target_text,
-                        principal: owner_principal,
-                        open,
-                        opened_at: Instant::now(),
-                    });
-                }
-            }
-            public_wire::GatewayDisplayOpResponse::Open(public_wire::GatewayDisplayOpenResult {
-                session_id,
-                state: "running".to_owned(),
-            })
-        }
-        public_wire::GatewayDisplayOp::Close(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let session =
-                {
-                    let mut sessions = state.gateway_display.sessions.lock().map_err(|_| {
-                        TypedError::InternalIo {
-                            context: "lock gateway display sessions".to_owned(),
-                            detail: "mutex poisoned".to_owned(),
-                        }
-                    })?;
-                    let unauthorized = sessions.get(&args.session_id).is_some_and(|session| {
-                        !matches!(peer.role, PeerRole::Admin) && session.principal != peer_principal
-                    });
-                    if unauthorized {
-                        return Err(TypedError::AuthzNotAdmin {
-                            verb: "gatewayDisplay close".to_owned(),
-                        });
-                    }
-                    sessions.remove(&args.session_id)
-                };
-            let closed = if let Some(session) = session {
-                if let Err(err) =
-                    block_on_future(state.gateway_display.orchestrator.close(&session.open))
-                {
-                    tracing::warn!(error = %err, "gateway display close cleanup failed");
-                }
-                true
-            } else {
-                false
-            };
-            public_wire::GatewayDisplayOpResponse::Close(public_wire::GatewayDisplayCloseResult {
-                closed,
-            })
-        }
-        public_wire::GatewayDisplayOp::List(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let target_by_id: HashMap<String, String> = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .values()
-                .map(|session| (session.open.session_id.to_string(), session.target.clone()))
-                .collect();
-            let sessions = state
-                .gateway_display
-                .orchestrator
-                .list_sessions()
-                .map_err(gateway_error_to_typed)?
-                .into_iter()
-                .filter_map(|summary| {
-                    let session_id = summary.session_id.to_string();
-                    let target = target_by_id.get(&session_id)?.clone();
-                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
-                        return None;
-                    }
-                    if !matches!(peer.role, PeerRole::Admin)
-                        && summary.peer_principal.as_str() != peer_principal.as_str()
-                    {
-                        return None;
-                    }
-                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
-                    Some(public_wire::GatewayDisplaySessionSummary {
-                        session_id,
-                        target,
-                        state,
-                    })
-                })
-                .collect();
-            public_wire::GatewayDisplayOpResponse::List(public_wire::GatewayDisplayListResult {
-                sessions,
-            })
-        }
-        public_wire::GatewayDisplayOp::ListDetailed(args) => {
-            gateway_display_gc(state);
-            let peer_principal = gateway_display_peer_principal_string(peer);
-            let target_by_id: HashMap<String, String> = state
-                .gateway_display
-                .sessions
-                .lock()
-                .map_err(|_| TypedError::InternalIo {
-                    context: "lock gateway display sessions".to_owned(),
-                    detail: "mutex poisoned".to_owned(),
-                })?
-                .values()
-                .map(|session| (session.open.session_id.to_string(), session.target.clone()))
-                .collect();
-            let sessions = state
-                .gateway_display
-                .orchestrator
-                .list_sessions()
-                .map_err(gateway_error_to_typed)?
-                .into_iter()
-                .filter_map(|summary| {
-                    let session_id = summary.session_id.to_string();
-                    let target = target_by_id.get(&session_id)?.clone();
-                    if args.target.as_ref().is_some_and(|wanted| wanted != &target) {
-                        return None;
-                    }
-                    if !matches!(peer.role, PeerRole::Admin)
-                        && summary.peer_principal.as_str() != peer_principal.as_str()
-                    {
-                        return None;
-                    }
-                    let state = format!("{:?}", summary.state).to_ascii_lowercase();
-                    Some(public_wire::GatewayDisplaySessionDetail {
-                        session_id,
-                        target,
-                        state,
-                        operation_id: summary.operation_id.to_string(),
-                        principal: summary.peer_principal.to_string(),
-                    })
-                })
-                .collect();
-            public_wire::GatewayDisplayOpResponse::ListDetailed(
-                public_wire::GatewayDisplayListDetailedResult { sessions },
-            )
-        }
-    };
-    let mut value = serde_json::to_value(response).map_err(|err| TypedError::InternalIo {
-        context: "serialize gatewayDisplay response".to_owned(),
-        detail: err.to_string(),
-    })?;
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("gatewayDisplayResponse".to_owned()),
-        );
-    }
-    Ok(value)
-}
-
-fn parse_gateway_display_lifecycle_target(
-    target: &str,
-    operation_id: &str,
-    principal: &str,
-) -> Result<TargetName, TypedError> {
-    let target = TargetName::parse(target).map_err(|err| TypedError::WireInvalidFrame {
-        detail: format!("gatewayDisplay target parse failed: {err}"),
-    })?;
-    let _operation_id = d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
-        TypedError::WireInvalidFrame {
-            detail: format!("gatewayDisplay operation_id invalid: {err}"),
-        }
-    })?;
-    let _principal = d2b_realm_core::PrincipalId::parse(principal).map_err(|err| {
-        TypedError::WireInvalidFrame {
-            detail: format!("gatewayDisplay principal invalid: {err}"),
-        }
-    })?;
-    Ok(target)
-}
-
-fn validate_gateway_display_open_preflight(state: &ServerState) -> Result<(), TypedError> {
-    if let Some(preflight) = state.gateway_display.preflight.as_ref() {
-        let guard_config = GatewayFileConfig {
-            gateway: String::new(),
-            realm: String::new(),
-            state_dir: None,
-            credential_path: None,
-            seal_key_path: None,
-            allow_host_relay_credentials: preflight.allow_host_relay_credentials,
-            relay: GatewayRelayFileConfig::default(),
-            aca: GatewayAcaFileConfig::default(),
-            display: GatewayDisplayFileConfig::default(),
-        };
-        validate_gateway_host_relay_transition_guard(&guard_config)?;
-        let waypipe_socket_path = preflight.waypipe_socket_path.as_ref().ok_or_else(|| {
-            gateway_display_config_error(
-                "gateway config field display.waypipeSocket is required; set it to the operator Waypipe receiver Unix socket path",
-            )
-        })?;
-        validate_waypipe_receiver_socket(waypipe_socket_path)?;
-    }
-    Ok(())
-}
-
-fn close_gateway_sessions_for_target(state: &ServerState, target: &str) -> Result<(), TypedError> {
-    gateway_display_gc(state);
-    let sessions: Vec<(String, GatewayDisplaySession)> = state
-        .gateway_display
-        .sessions
-        .lock()
-        .map_err(|_| TypedError::InternalIo {
-            context: "lock gateway display sessions".to_owned(),
-            detail: "mutex poisoned".to_owned(),
-        })?
-        .extract_if(|_, session| session.target == target)
-        .collect();
-    for (_id, session) in sessions {
-        if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, target = %target, "gateway display target cleanup failed");
-        }
-    }
-    Ok(())
-}
-
-fn gateway_error_to_typed(error: GatewayError) -> TypedError {
-    tracing::warn!(
-        gateway_error = error.slug(),
-        "gateway display request failed"
-    );
-    TypedError::GatewayDisplayUnavailable {
-        detail: error.slug().to_owned(),
-    }
-}
-
-fn gateway_display_gc(state: &ServerState) {
-    let now = Instant::now();
-    let expired: Vec<(String, GatewayDisplaySession)> = match state.gateway_display.sessions.lock()
-    {
-        Ok(mut sessions) => sessions
-            .extract_if(|_, session| {
-                now.duration_since(session.opened_at) >= GATEWAY_DISPLAY_SESSION_TTL
-            })
-            .collect(),
-        Err(_) => {
-            tracing::warn!("gateway display GC skipped because session mutex was poisoned");
-            return;
-        }
-    };
-    for (_id, session) in expired {
-        if let Err(err) = block_on_future(state.gateway_display.orchestrator.close(&session.open)) {
-            tracing::warn!(error = %err, "gateway display GC cleanup failed");
-        }
-    }
-}
-
-fn gateway_deps_from_config(config: &GatewayFileConfig) -> Result<GatewayDeps, TypedError> {
-    Ok(production_deps(
-        Box::new(ConfiguredGatewayWorkload {
-            config: config.clone(),
-        }),
-        Box::new(ConfiguredDisplayListener {
-            config: config.clone(),
-            listeners: Mutex::new(HashMap::new()),
-        }),
-    ))
-}
-
-struct ConfiguredGatewayWorkload {
-    config: GatewayFileConfig,
-}
-
-#[async_trait]
-impl GatewayWorkload for ConfiguredGatewayWorkload {
-    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        let provider = aca_provider_from_gateway_config(&self.config)?;
-        let workload = AcaGatewayWorkload::for_workload_labels(
-            provider,
-            relay_coords_from_config(&self.config)?,
-        )
-        .with_binaries(agent_bins_from_config(&self.config))
-        .with_relay_auth_snippet(relay_auth_snippet_from_config(&self.config)?);
-        workload.spawn_agent(req).await
-    }
-
-    async fn cleanup(&self, handle: &AgentHandle) -> Result<(), GatewayError> {
-        let provider = aca_provider_from_gateway_config(&self.config)?;
-        let workload = AcaGatewayWorkload::for_workload_labels(
-            provider,
-            relay_coords_from_config(&self.config)?,
-        )
-        .with_binaries(agent_bins_from_config(&self.config));
-        workload.cleanup(handle).await
-    }
-}
-
-struct ConfiguredDisplayListener {
-    config: GatewayFileConfig,
-    listeners: Mutex<HashMap<String, Arc<RelayDisplayListener>>>,
-}
-
-#[async_trait]
-impl DisplayListener for ConfiguredDisplayListener {
-    async fn arm(
-        &self,
-        ctx: &DisplaySessionContext,
-        binding: &SessionBinding,
-        secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        let listener = Arc::new(display_listener_from_config(&self.config)?);
-        let handle = listener.arm(ctx, binding, secret).await?;
-        // Azure Relay listener registration is asynchronous after the control
-        // channel is spawned. Give the listener a short head start before the
-        // sandbox sender dials; otherwise the service can reset the sender
-        // rendezvous instead of returning the retryable 404.
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        self.listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .insert(handle.0.clone(), listener);
-        Ok(handle)
-    }
-
-    async fn await_handshake(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
-        let listener = self
-            .listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .get(&handle.0)
-            .cloned()
-            .ok_or(GatewayError::ProviderAllocationFailed)?;
-        listener.await_handshake(handle).await
-    }
-
-    async fn close(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
-        let listener = self
-            .listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .remove(&handle.0);
-        if let Some(listener) = listener {
-            listener.close(handle).await?;
-        }
-        Ok(())
-    }
-}
-
-fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, GatewayError> {
-    Ok(RelayCoords {
-        namespace: required_gateway_field(&config.relay.namespace)?,
-        entity: required_gateway_field(&config.relay.entity)?,
-        ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".to_owned()),
-        managed_identity_client_id: config.aca.managed_identity_client_id.clone(),
-    })
-}
-
-fn relay_endpoint_from_config(config: &GatewayFileConfig) -> Result<RelayEndpoint, GatewayError> {
-    Ok(RelayEndpoint {
-        namespace: required_gateway_field(&config.relay.namespace)?,
-        entity: required_gateway_field(&config.relay.entity)?,
-    })
-}
-
-fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
-    let mut bins = AgentBinaries::default();
-    if let Some(compression) = config
-        .display
-        .waypipe_compression
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        bins.compression = compression.clone();
-    }
-    bins
-}
-
-fn gateway_credential_from_config(
-    config: &GatewayFileConfig,
-) -> Result<GatewayCredential, GatewayError> {
-    let credential_path = config
-        .credential_path
-        .as_ref()
-        .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let seal_key_path = config
-        .seal_key_path
-        .as_ref()
-        .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let policy = CredentialFilePolicy::default();
-    let key = SealingKey::load(seal_key_path, &policy)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-    GatewayCredential::load_sealed(credential_path, &key, &policy, system_now_unix())
-        .map_err(|_| GatewayError::ProviderAllocationFailed)
-}
-
-fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
-    let credential = gateway_credential_from_config(config)?;
-    let token = credential
-        .mint_send_token(&relay_endpoint_from_config(config)?, DEFAULT_SAS_TTL_SECS)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-    Ok(relay_sas_token_snippet(token.expose()))
-}
-
-fn display_listener_from_config(
-    config: &GatewayFileConfig,
-) -> Result<RelayDisplayListener, GatewayError> {
-    let credential = gateway_credential_from_config(config)?;
-    let waypipe_socket = required_gateway_field(&config.display.waypipe_socket)?;
-    let validated = match validate_waypipe_receiver_socket(Path::new(&waypipe_socket)) {
-        Ok(validated) => validated,
-        Err(error) => {
-            tracing::warn!(
-                error = %error.message(),
-                "gateway display waypipe receiver socket rejected",
-            );
-            return Err(GatewayError::ProviderAllocationFailed);
-        }
-    };
-    Ok(RelayDisplayListener::new(
-        relay_endpoint_from_config(config)?,
-        credential.listener_credential(),
-        LocalTarget::UnixConnectChecked {
-            path: waypipe_socket,
-            uid: validated.uid,
-            mode: validated.mode,
-        },
-        DEFAULT_SAS_TTL_SECS,
-        None,
-        system_now_fn(),
-    ))
-}
-
-fn unavailable_gateway_deps() -> GatewayDeps {
-    GatewayDeps {
-        workload: Box::new(UnavailableGatewayWorkload),
-        listener: Box::new(UnavailableDisplayListener),
-        clock: Box::new(DaemonGatewayClock),
-        ids: Box::new(DaemonGatewayIds),
-        audit: Box::new(NoopGatewayAudit),
-    }
-}
-
-#[cfg(test)]
-fn daemon_gateway_deps() -> GatewayDeps {
-    GatewayDeps {
-        workload: Box::new(DaemonGatewayWorkload),
-        listener: Box::new(DaemonDisplayListener),
-        clock: Box::new(DaemonGatewayClock),
-        ids: Box::new(DaemonGatewayIds),
-        audit: Box::new(NoopGatewayAudit),
-    }
-}
-
-struct UnavailableGatewayLifecycle;
-
-#[async_trait]
-impl GatewayLifecycle for UnavailableGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-}
-
-struct UnavailableGatewayWorkload;
-
-#[async_trait]
-impl GatewayWorkload for UnavailableGatewayWorkload {
-    async fn spawn_agent(&self, _req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-struct UnavailableDisplayListener;
-
-#[async_trait]
-impl DisplayListener for UnavailableDisplayListener {
-    async fn arm(
-        &self,
-        _ctx: &DisplaySessionContext,
-        _binding: &SessionBinding,
-        _secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Err(GatewayError::ProviderAllocationFailed)
-    }
-
-    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct DaemonGatewayLifecycle;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for DaemonGatewayLifecycle {
-    async fn start(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("ready".to_owned())
-    }
-
-    async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
-        Ok("stopped".to_owned())
-    }
-}
-
-struct AcaGatewayLifecycle {
-    provider: Arc<AcaWorkloadProvider>,
-}
-
-#[async_trait]
-impl GatewayLifecycle for AcaGatewayLifecycle {
-    async fn start(&self, target: &TargetName) -> Result<String, GatewayError> {
-        self.provider
-            .start(target.workload.clone())
-            .await
-            .map_err(|err| {
-                tracing::warn!(error = %err, target = %target, "aca gateway lifecycle start failed");
-                GatewayError::ProviderAllocationFailed
-            })?;
-        Ok("running".to_owned())
-    }
-
-    async fn stop(&self, target: &TargetName) -> Result<String, GatewayError> {
-        self.provider
-            .stop(target.workload.clone())
-            .await
-            .map_err(|err| {
-                tracing::warn!(error = %err, target = %target, "aca gateway lifecycle stop failed");
-                GatewayError::ProviderAllocationFailed
-            })?;
-        Ok("stopped".to_owned())
-    }
-}
-
-fn required_gateway_field(value: &Option<String>) -> Result<String, GatewayError> {
-    value
-        .as_ref()
-        .filter(|s| !s.trim().is_empty())
-        .cloned()
-        .ok_or(GatewayError::ProviderAllocationFailed)
-}
-
-fn aca_provider_from_gateway_config(
-    config: &GatewayFileConfig,
-) -> Result<AcaWorkloadProvider, GatewayError> {
-    let aca = &config.aca;
-    let provider_config = AcaConfig {
-        subscription: required_gateway_field(&aca.subscription)?,
-        resource_group: required_gateway_field(&aca.resource_group)?,
-        sandbox_group: required_gateway_field(&aca.sandbox_group)?,
-        region: required_gateway_field(&aca.region)?,
-        endpoint: aca.endpoint.clone(),
-        managed_identity_client_id: aca.managed_identity_client_id.clone(),
-    };
-    let disk_image = if let Some(id) = aca.disk_image_id.as_ref().filter(|s| !s.trim().is_empty()) {
-        AcaDiskImageSource::ExistingDiskId(id.clone())
-    } else {
-        AcaDiskImageSource::ContainerImage {
-            image: required_gateway_field(&aca.image)?,
-            name: aca
-                .disk_name
-                .as_ref()
-                .filter(|s| !s.trim().is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("d2b-{}-wayland", config.gateway)),
-            managed_identity_resource_id: aca.managed_identity_resource_id.clone(),
-            labels: BTreeMap::new(),
-        }
-    };
-    let mut defaults = AcaSandboxDefaults::new(disk_image);
-    defaults.cpu = aca.cpu.clone().unwrap_or_else(|| "1000m".to_owned());
-    defaults.memory = aca.memory.clone().unwrap_or_else(|| "2048Mi".to_owned());
-    defaults.auto_suspend_interval_secs = aca.auto_suspend_interval_secs.unwrap_or(600);
-    defaults.managed_identity_resource_id = aca.managed_identity_resource_id.clone();
-    defaults
-        .labels
-        .insert("d2b-realm".to_owned(), config.realm.clone());
-    let provider = AcaWorkloadProvider::new(
-        provider_config,
-        d2b_realm_core::NodeId::parse("gateway")
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?,
-    )
-    .map_err(|err| {
-        tracing::warn!(error = %err, "aca gateway provider initialization failed");
-        GatewayError::ProviderAllocationFailed
-    })?
-    .with_sandbox_defaults(defaults);
-    Ok(provider)
-}
-
-#[cfg(test)]
-struct DaemonGatewayWorkload;
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayWorkload for DaemonGatewayWorkload {
-    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        Ok(AgentHandle(format!("daemon-agent-{}", req.ctx.session_id)))
-    }
-
-    async fn cleanup(&self, _handle: &AgentHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct DaemonDisplayListener;
-
-#[cfg(test)]
-#[async_trait]
-impl DisplayListener for DaemonDisplayListener {
-    async fn arm(
-        &self,
-        ctx: &DisplaySessionContext,
-        _binding: &SessionBinding,
-        _secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        Ok(ListenerHandle(format!(
-            "daemon-listener-{}",
-            ctx.session_id
-        )))
-    }
-
-    async fn await_handshake(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-
-    async fn close(&self, _handle: &ListenerHandle) -> Result<(), GatewayError> {
-        Ok(())
-    }
-}
-
-struct DaemonGatewayClock;
-
-impl Clock for DaemonGatewayClock {
-    fn now_unix(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    }
-}
-
-struct DaemonGatewayIds;
-
-impl IdSource for DaemonGatewayIds {
-    fn new_session_id(&self) -> d2b_gateway::DisplaySessionId {
-        let mut raw = [0u8; 16];
-        getrandom::getrandom(&mut raw).unwrap_or(());
-        d2b_gateway::DisplaySessionId::new(format!("gw-{}", hex_bytes(&raw)))
-    }
-
-    fn new_secret(&self) -> SessionSecret {
-        let mut raw = [0u8; SECRET_LEN];
-        getrandom::getrandom(&mut raw).unwrap_or(());
-        SessionSecret::from_bytes(raw)
-    }
-}
-
-
 fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
     let bundle: Bundle = load_json(&state.config.artifacts.bundle_path)?;
     let manifest: ManifestV04 = load_json(&state.config.artifacts.public_manifest_path)?;
@@ -9088,8 +10776,10 @@ fn dispatch_broker_usbip_bind(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
     if !request.flags.dry_run && !request.flags.apply {
-        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-            .expect("missing mutation flags produce a preflight response"));
+        return Ok(
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+                .expect("missing mutation flags produce a preflight response"),
+        );
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -9394,10 +11084,12 @@ impl d2b_provider_device_usbip::reconcile_state::UsbipVmStartReconcileExecutor
         d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState,
         d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError,
     > {
-        Err(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
-            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-            "target-local USBIP Process status is unavailable",
-        ))
+        Err(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                "target-local USBIP Process status is unavailable",
+            ),
+        )
     }
 
     fn guest_import(
@@ -9405,10 +11097,12 @@ impl d2b_provider_device_usbip::reconcile_state::UsbipVmStartReconcileExecutor
         _claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
         _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
-        Err(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
-            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-            "target-local USBIP Process import is unavailable",
-        ))
+        Err(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                "target-local USBIP Process import is unavailable",
+            ),
+        )
     }
 }
 
@@ -9861,7 +11555,7 @@ fn ensure_usbipd_env_ready_for_attach(
         vm,
         env,
         intent_id_usbip_bind(env, vm, bus_id),
-        intent_id_runner(vm, "usbip"),
+        intent_id_legacy_runner(vm, "usbip"),
         format!("{env}:{bus_id}").as_bytes(),
     )
     .map_err(|error| daemon_failure_response(verb, error.to_string()))?;
@@ -9926,8 +11620,10 @@ fn dispatch_broker_usbip_unbind(
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
     if !request.flags.dry_run && !request.flags.apply {
-        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-            .expect("missing mutation flags produce a preflight response"));
+        return Ok(
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+                .expect("missing mutation flags produce a preflight response"),
+        );
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -10147,11 +11843,7 @@ fn dispatch_broker_usbip_probe(
         .iter()
         .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
-        .map(|intent| {
-            usbip_probe_entry_from_intent(
-                intent,
-            )
-        })
+        .map(|intent| usbip_probe_entry_from_intent(intent))
         .collect();
     entries.extend(qemu_media_probe_entries(&resolver));
     Ok(d2bd_runtime::wire::usbip_probe_response(
@@ -10753,29 +12445,15 @@ fn broker_socket_path(state: &ServerState) -> PathBuf {
     }
 }
 
-/// Canonical group owning the per-VM state directory `<stateDir>/vms/<vm>`.
-/// The tmpfiles seed line uses `microvm:kvm`, but host activation chowns the
-/// per-VM directory to `<daemon-user>:users` mode 2770, so the runtime owner
-/// is `d2bd:users`. Existing-code-is-canon: the probe reconciles its
-/// `expected_state_root_uid/gid` to the actual runtime owner; the tmpfiles vs
-/// activation divergence is to be confirmed against a live host.
-const COMPONENT_SESSION_STATE_ROOT_GROUP: &str = "users";
+/// Canonical broker-owned group for per-Guest runtime state.
+const COMPONENT_SESSION_STATE_ROOT_GROUP: &str = "d2bd";
 
 /// Resolve the canonical runtime owner `(uid, gid)` of the per-VM state
 /// directory for the ComponentSession endpoint's ownership checks.
 /// Derived independently of the peer-credential identity. Fails CLOSED if
 /// either identity is unresolvable.
-fn resolve_component_session_state_root_owner(state: &ServerState) -> Result<(u32, u32), String> {
-    let uid = User::from_name(&state.config.daemon_user)
-        .ok()
-        .flatten()
-        .map(|user| user.uid.as_raw())
-        .ok_or_else(|| {
-            format!(
-                "component-session:unresolved-state-root-user:{}",
-                state.config.daemon_user
-            )
-        })?;
+fn resolve_component_session_state_root_owner(_state: &ServerState) -> Result<(u32, u32), String> {
+    let uid = 0;
     let gid = Group::from_name(COMPONENT_SESSION_STATE_ROOT_GROUP)
         .ok()
         .flatten()
@@ -10799,6 +12477,321 @@ fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
             .split(',')
             .find_map(|field| field.strip_prefix("socket=").map(PathBuf::from))
     })
+}
+
+fn status_generation(value: &Value) -> Option<ResourceGeneration> {
+    value
+        .pointer("/status/resource/endpointGeneration")
+        .or_else(|| value.pointer("/status/resource/endpoint_generation"))
+        .and_then(Value::as_u64)
+        .and_then(|generation| ResourceGeneration::new(generation).ok())
+}
+
+/// Resolve one committed Guest and its controller-owned guest-control
+/// Endpoint. The returned target contains only store identities; endpoint
+/// carriage remains private to the Process Provider intent.
+pub(crate) async fn resolve_committed_guest_session_target(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    guest_ref: &ResourceRef,
+) -> Result<CommittedGuestSessionTarget, String> {
+    if guest_ref.resource_type().as_str() != "Guest" {
+        return Err("guest-session:guest-ref-invalid".to_owned());
+    }
+    let guest_value = runtime
+        .committed_resource_value(guest_ref, "guest-session-guest")
+        .await
+        .map_err(|_| "guest-session:guest-unavailable".to_owned())?;
+    let guest = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:guest-invalid".to_owned())?;
+    if guest.metadata().zone() != runtime.zone()
+        || guest.metadata().uid().as_str().is_empty()
+        || guest.metadata().generation().get() == 0
+        || matches!(
+            guest.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+    {
+        return Err("guest-session:guest-identity-invalid".to_owned());
+    }
+    let provider_ref = guest
+        .spec()
+        .provider_ref()
+        .cloned()
+        .ok_or_else(|| "guest-session:provider-ref-missing".to_owned())?;
+    if !d2b_provider_runtime_cloud_hypervisor::is_provider_ref(&provider_ref) {
+        return Err("guest-session:provider-ref-unsupported".to_owned());
+    }
+    let provider_value = runtime
+        .committed_resource_value(&provider_ref, "guest-session-provider")
+        .await
+        .map_err(|_| "guest-session:provider-unavailable".to_owned())?;
+    let provider = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&provider_value)
+            .map_err(|_| "guest-session:provider-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:provider-invalid".to_owned())?;
+    if provider.metadata().zone() != runtime.zone()
+        || provider.metadata().generation().get() == 0
+        || matches!(
+            provider.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+    {
+        return Err("guest-session:provider-identity-invalid".to_owned());
+    }
+    let endpoint_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+        guest_ref,
+        d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
+    )
+    .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
+    let endpoint_value = runtime
+        .committed_resource_value(&endpoint_ref, "guest-session-endpoint")
+        .await
+        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&endpoint_value)
+            .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    let endpoint_spec = serde_json::from_slice::<EndpointSpec>(
+        &endpoint
+            .spec()
+            .base_with_provider_ref()
+            .to_canonical_bytes(),
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    if endpoint.metadata().zone() != runtime.zone()
+        || endpoint.metadata().owner_ref() != Some(guest_ref)
+        || endpoint_spec.producer_ref() != guest_ref
+        || endpoint_spec.purpose().as_str() != "guest-control"
+        || endpoint_spec.provider_ref() != &provider_ref
+        || endpoint_spec.endpoint_class() != EndpointClass::Control
+        || endpoint_spec.transport() != EndpointTransport::OpaqueCarriage
+        || endpoint_spec.locality() != EndpointLocality::CrossDomain
+        || endpoint_spec.visibility() != EndpointVisibility::Provider
+        || !endpoint_spec
+            .consumer_policy()
+            .allowed_operations()
+            .contains(&EndpointOperation::Resolve)
+        || matches!(
+            endpoint.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        )
+        || endpoint.metadata().generation().get() == 0
+    {
+        return Err("guest-session:endpoint-identity-invalid".to_owned());
+    }
+    Ok(CommittedGuestSessionTarget {
+        zone: runtime.zone().clone(),
+        guest_ref: guest_ref.clone(),
+        guest_uid: guest.metadata().uid().clone(),
+        guest_generation: guest.metadata().generation(),
+        endpoint_ref,
+        endpoint_uid: endpoint.metadata().uid().clone(),
+        endpoint_resource_generation: endpoint.metadata().generation(),
+        endpoint_generation: status_generation(&endpoint_value)
+            .ok_or_else(|| "guest-session:endpoint-generation-missing".to_owned())?,
+        provider_uid: provider.metadata().uid().clone(),
+        provider_generation: provider.metadata().generation(),
+    })
+}
+
+/// Resolve the private ComponentSession carriage for a committed Guest
+/// target. The public Guest and Endpoint resources fence the lookup; only the
+/// trusted private VMM intent supplies the socket and peer credentials.
+async fn resolve_component_session_endpoint_for_guest(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    target: &CommittedGuestSessionTarget,
+) -> Result<d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint, String> {
+    let guest_value = runtime
+        .committed_resource_value(target.guest_ref(), "guest-session-guest")
+        .await
+        .map_err(|_| "guest-session:guest-unavailable".to_owned())?;
+    let guest = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:guest-invalid".to_owned())?;
+    if guest.metadata().zone() != target.zone()
+        || guest.metadata().uid() != target.guest_uid()
+        || guest.metadata().generation() != target.guest_generation
+    {
+        return Err("guest-session:committed-identity-changed".to_owned());
+    }
+    let provider_ref = guest
+        .spec()
+        .provider_ref()
+        .ok_or_else(|| "guest-session:provider-ref-missing".to_owned())?;
+    let provider_value = runtime
+        .committed_resource_value(provider_ref, "guest-session-provider")
+        .await
+        .map_err(|_| "guest-session:provider-unavailable".to_owned())?;
+    let provider = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&provider_value)
+            .map_err(|_| "guest-session:provider-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:provider-invalid".to_owned())?;
+    if provider.metadata().zone() != target.zone()
+        || provider.metadata().uid() != target.provider_uid()
+        || provider.metadata().generation() != target.provider_generation()
+    {
+        return Err("guest-session:committed-identity-changed".to_owned());
+    }
+    let endpoint_value = runtime
+        .committed_resource_value(target.endpoint_ref(), "guest-session-endpoint")
+        .await
+        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+    let endpoint = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&endpoint_value)
+            .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    let endpoint_generation = status_generation(&endpoint_value)
+        .ok_or_else(|| "guest-session:endpoint-generation-missing".to_owned())?;
+    let endpoint_spec = serde_json::from_slice::<EndpointSpec>(
+        &endpoint
+            .spec()
+            .base_with_provider_ref()
+            .to_canonical_bytes(),
+    )
+    .map_err(|_| "guest-session:endpoint-invalid".to_owned())?;
+    if endpoint.metadata().zone() != target.zone()
+        || endpoint.metadata().owner_ref() != Some(target.guest_ref())
+        || endpoint.metadata().uid() != target.endpoint_uid()
+        || endpoint.metadata().generation() != target.endpoint_resource_generation()
+    {
+        return Err("guest-session:endpoint-identity-changed".to_owned());
+    }
+    if endpoint_generation != target.endpoint_generation()
+        || endpoint_spec.producer_ref() != target.guest_ref()
+        || endpoint_spec.provider_ref() != provider_ref
+        || endpoint_spec.purpose().as_str() != "guest-control"
+        || endpoint_spec.endpoint_class() != EndpointClass::Control
+        || endpoint_spec.transport() != EndpointTransport::OpaqueCarriage
+        || endpoint_spec.locality() != EndpointLocality::CrossDomain
+        || endpoint_spec.visibility() != EndpointVisibility::Provider
+        || !endpoint_spec
+            .consumer_policy()
+            .allowed_operations()
+            .contains(&EndpointOperation::Resolve)
+    {
+        return Err("guest-session:endpoint-invalid".to_owned());
+    }
+    if endpoint.status().phase() != ResourcePhase::Ready {
+        return Err("guest-session:endpoint-not-ready".to_owned());
+    }
+    let descriptor_bytes = resolver
+        .guest_setup_descriptor_bytes(target.zone().as_str(), target.guest_ref().name().as_str())
+        .ok_or_else(|| "guest-session:descriptor-unavailable".to_owned())?;
+    let descriptor =
+        d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+            descriptor_bytes,
+        )
+        .map_err(|_| "guest-session:descriptor-invalid".to_owned())?;
+    let expected_key = resolver
+        .guest_setup_descriptor_catalog_key(
+            target.zone().as_str(),
+            target.guest_ref().name().as_str(),
+        )
+        .ok_or_else(|| "guest-session:descriptor-key-unavailable".to_owned())?;
+    let descriptor = descriptor
+        .verify_with(&resource_runtime::CatalogDescriptorVerifier {
+            expected_key: expected_key.to_owned(),
+        })
+        .map_err(|_| "guest-session:descriptor-untrusted".to_owned())?;
+    if descriptor.descriptor().provider_generation() != target.provider_generation() {
+        return Err("guest-session:provider-generation-mismatch".to_owned());
+    }
+    let process_ref = d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+        target.guest_ref(),
+        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+    )
+    .map_err(|_| "guest-session:process-ref-invalid".to_owned())?;
+    let process_value = runtime
+        .committed_resource_value(&process_ref, "guest-session-process")
+        .await
+        .map_err(|_| "guest-session:process-unavailable".to_owned())?;
+    let process = ResourceEnvelope::from_json(
+        &serde_json::to_vec(&process_value)
+            .map_err(|_| "guest-session:process-invalid".to_owned())?,
+    )
+    .map_err(|_| "guest-session:process-invalid".to_owned())?;
+    if process.metadata().zone() != runtime.zone()
+        || process.metadata().owner_ref() != Some(target.guest_ref())
+        || process.status().phase() != ResourcePhase::Ready
+    {
+        return Err("guest-session:process-identity-invalid".to_owned());
+    }
+    let process_spec =
+        serde_json::from_slice::<ProcessSpec>(&process.spec().base().to_canonical_bytes())
+            .map_err(|_| "guest-session:process-spec-invalid".to_owned())?;
+    let execution = process_spec.execution();
+    if execution.execution_ref().resource_type().as_str() != "Host" {
+        return Err("guest-session:process-execution-invalid".to_owned());
+    }
+    let execution_domain = match execution
+        .domain()
+        .unwrap_or(d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System)
+    {
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System => {
+            d2b_core::processes::ProcessExecutionDomain::System
+        }
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User => {
+            d2b_core::processes::ProcessExecutionDomain::User
+        }
+    };
+    let intent = resolver
+        .find_guest_vmm_intent(
+            target.zone().as_str(),
+            target.guest_ref(),
+            descriptor.descriptor().descriptor_digest(),
+            &execution.execution_ref().to_canonical_string(),
+            execution_domain,
+            execution.template().as_str(),
+        )
+        .ok_or_else(|| "guest-session:vmm-intent-unavailable".to_owned())?;
+    let socket_path = cloud_hypervisor_vsock_socket(&intent.argv)
+        .ok_or_else(|| "guest-session:vmm-socket-unavailable".to_owned())?;
+    let state_root = socket_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "guest-session:vmm-socket-parent-unavailable".to_owned())?;
+    let (expected_state_root_uid, expected_state_root_gid) =
+        resolve_component_session_state_root_owner(state)?;
+    let endpoint = d2b_provider_runtime_cloud_hypervisor::GuestControlEndpoint::new(
+        target.endpoint_ref().clone(),
+        target.guest_ref().clone(),
+        target.zone().clone(),
+        endpoint.metadata().uid().clone(),
+        endpoint.metadata().generation(),
+        endpoint_generation,
+        target.provider_generation(),
+        descriptor.descriptor().seed().fingerprint().clone(),
+        true,
+    )
+    .map_err(|_| "guest-session:endpoint-contract-invalid".to_owned())?;
+    endpoint
+        .validate_for(
+            target.endpoint_ref(),
+            target.guest_ref(),
+            target.provider_generation(),
+            descriptor.descriptor().seed().fingerprint(),
+        )
+        .map_err(|_| "guest-session:endpoint-contract-invalid".to_owned())?;
+    Ok(
+        d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
+            socket_path,
+            state_root,
+            expected_state_root_uid,
+            expected_state_root_gid,
+            expected_peer_uid: intent.uid,
+            expected_peer_gid: intent.gid,
+            setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        },
+    )
 }
 
 /// Resolve the ComponentSession endpoint for `vm` from the trusted bundle:
@@ -10827,15 +12820,17 @@ fn resolve_component_session_endpoint(
         .ok_or_else(|| "component-session:vsock-socket-no-parent".to_owned())?;
     let (expected_state_root_uid, expected_state_root_gid) =
         resolve_component_session_state_root_owner(state)?;
-    Ok(d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
-        socket_path,
-        state_root,
-        expected_state_root_uid,
-        expected_state_root_gid,
-        expected_peer_uid: ch.profile.uid,
-        expected_peer_gid: ch.profile.gid,
-        setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
-    })
+    Ok(
+        d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
+            socket_path,
+            state_root,
+            expected_state_root_uid,
+            expected_state_root_gid,
+            expected_peer_uid: ch.profile.uid,
+            expected_peer_gid: ch.profile.gid,
+            setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        },
+    )
 }
 
 /// Establish one authenticated Guest ComponentSession from host-published
@@ -10844,11 +12839,8 @@ fn resolve_component_session_endpoint(
 pub(crate) async fn connect_guest_component_session(
     state: &ServerState,
     vm: &str,
-) -> Result<
-    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-    String,
-> {
-    connect_guest_component_session_with_mode(
+) -> Result<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>, String> {
+    connect_guest_component_session_legacy_with_mode(
         state,
         vm,
         GuestComponentSessionCacheMode::Reuse,
@@ -10856,14 +12848,23 @@ pub(crate) async fn connect_guest_component_session(
     .await
 }
 
+fn kernel_guest_uid() -> Option<String> {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
+    let mut values = cmdline
+        .split_ascii_whitespace()
+        .filter_map(|argument| argument.strip_prefix("d2b.guest_uid="));
+    let value = values.next()?;
+    if values.next().is_some() || ResourceUid::parse(value).is_err() {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
 async fn connect_guest_component_session_fresh(
     state: &ServerState,
     vm: &str,
-) -> Result<
-    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-    String,
-> {
-    connect_guest_component_session_with_mode(
+) -> Result<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>, String> {
+    connect_guest_component_session_legacy_with_mode(
         state,
         vm,
         GuestComponentSessionCacheMode::Fresh,
@@ -10872,7 +12873,7 @@ async fn connect_guest_component_session_fresh(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum GuestComponentSessionCacheMode {
+pub(crate) enum GuestComponentSessionCacheMode {
     Reuse,
     Fresh,
 }
@@ -10896,18 +12897,16 @@ where
     }
 }
 
-async fn connect_guest_component_session_with_mode(
+async fn connect_guest_component_session_legacy_with_mode(
     state: &ServerState,
     vm: &str,
     mode: GuestComponentSessionCacheMode,
-) -> Result<
-    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-    String,
-> {
+) -> Result<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>, String> {
+    let key = GuestComponentSessionKey::for_legacy_vm(vm);
     let key_lock = {
         let mut locks = state.guest_component_session_locks.lock().await;
         locks
-            .entry(vm.to_owned())
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     };
@@ -10917,15 +12916,17 @@ async fn connect_guest_component_session_with_mode(
     let state_root = endpoint.state_root.clone();
     let config =
         d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
-            state_root,
-            endpoint,
+            state_root, endpoint,
         )
         .map_err(|_| "session-material-unavailable".to_owned())?;
     {
         let sessions = state.guest_component_sessions.lock().await;
+        let cached = sessions
+            .get(&key)
+            .filter(|session| session.route_binding().liveness().is_live());
         if let Some(session) = select_cached_guest_component_session(
             mode,
-            sessions.get(vm),
+            cached,
             |session| session.identity(),
             &config.identity,
         ) {
@@ -10939,7 +12940,13 @@ async fn connect_guest_component_session_with_mode(
     )
     .await
     .map_err(|_| "session-timeout".to_owned())?
-    .map_err(|_| "session-unavailable".to_owned())?;
+    .inspect_err(|error| {
+        tracing::warn!(
+            error = %error,
+            "Guest ComponentSession authentication failed",
+        );
+    })
+    .map_err(component_session_connect_error)?;
     if client.identity() != &expected_identity
         || client.identity().guest_ref().resource_type().as_str() != "Guest"
         || client.identity().guest_ref().name().as_str() != vm
@@ -10948,20 +12955,165 @@ async fn connect_guest_component_session_with_mode(
     }
     let client = Arc::new(client);
     let mut sessions = state.guest_component_sessions.lock().await;
+    let cached = sessions
+        .get(&key)
+        .filter(|session| session.route_binding().liveness().is_live());
     if let Some(session) = select_cached_guest_component_session(
         mode,
-        sessions.get(vm),
+        cached,
         |session| session.identity(),
         &expected_identity,
     ) {
         return Ok(Arc::clone(session));
     }
-    sessions.insert(vm.to_owned(), Arc::clone(&client));
+    sessions.insert(key, Arc::clone(&client));
     Ok(client)
 }
 
+/// Establish one authenticated v3 Guest session from the committed Guest and
+/// guest-control Endpoint identities.
+pub(crate) async fn connect_guest_component_session_for_guest(
+    state: &ServerState,
+    target: &CommittedGuestSessionTarget,
+) -> Result<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>, String> {
+    connect_guest_component_session_for_guest_with_mode(
+        state,
+        target,
+        GuestComponentSessionCacheMode::Reuse,
+    )
+    .await
+}
+
+pub(crate) async fn connect_guest_component_session_for_guest_with_mode(
+    state: &ServerState,
+    target: &CommittedGuestSessionTarget,
+    mode: GuestComponentSessionCacheMode,
+) -> Result<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>, String> {
+    let key = target.key();
+    let key_lock = {
+        let mut locks = state.guest_component_session_locks.lock().await;
+        locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _connect_lock = key_lock.lock().await;
+    let plane = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .ok_or_else(|| "guest-session:resource-plane-unavailable".to_owned())?;
+    let runtime = plane
+        .zone(target.zone())
+        .map_err(|_| "guest-session:zone-runtime-unavailable".to_owned())?;
+    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let endpoint =
+        resolve_component_session_endpoint_for_guest(state, &resolver, &runtime, target).await?;
+    let state_root = endpoint.state_root.clone();
+    let config =
+        d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
+            state_root, endpoint,
+        )
+        .map_err(|_| "session-material-unavailable".to_owned())?;
+    if config.identity.zone() != target.zone()
+        || config.identity.guest_ref() != target.guest_ref()
+        || config.identity.guest_uid() != target.guest_uid()
+    {
+        return Err("guest-session:descriptor-identity-mismatch".to_owned());
+    }
+    {
+        let sessions = state.guest_component_sessions.lock().await;
+        let cached = sessions
+            .get(&key)
+            .filter(|session| session.route_binding().liveness().is_live());
+        if let Some(session) = select_cached_guest_component_session(
+            mode,
+            cached,
+            |session| session.identity(),
+            &config.identity,
+        ) {
+            return Ok(Arc::clone(session));
+        }
+    }
+    let expected_identity = config.identity.clone();
+    let client = tokio::time::timeout(
+        d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        config.connect(),
+    )
+    .await
+    .map_err(|_| "session-timeout".to_owned())?
+    .inspect_err(|error| {
+        tracing::warn!(
+            error = %error,
+            "Zone Guest ComponentSession authentication failed",
+        );
+    })
+    .map_err(component_session_connect_error)?;
+    if client.identity() != &expected_identity
+        || client.identity().zone() != target.zone()
+        || client.identity().guest_ref() != target.guest_ref()
+        || client.identity().guest_uid() != target.guest_uid()
+    {
+        return Err("guest-session:authenticated-identity-mismatch".to_owned());
+    }
+    if mode == GuestComponentSessionCacheMode::Fresh {
+        // The Guest installs the replacement ttrpc services immediately after
+        // the authenticated handshake completes. Give that handoff a bounded
+        // scheduling turn before issuing the first request on the new route.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let client = Arc::new(client);
+    let mut sessions = state.guest_component_sessions.lock().await;
+    let cached = sessions
+        .get(&key)
+        .filter(|session| session.route_binding().liveness().is_live());
+    if let Some(session) = select_cached_guest_component_session(
+        mode,
+        cached,
+        |session| session.identity(),
+        &expected_identity,
+    ) {
+        return Ok(Arc::clone(session));
+    }
+    sessions.retain(|candidate, _| {
+        !candidate.is_guest_identity(target.zone(), target.guest_ref(), target.guest_uid())
+            || candidate == &key
+    });
+    sessions.insert(key, Arc::clone(&client));
+    Ok(client)
+}
+
+fn component_session_connect_error(
+    error: d2bd_runtime::guest_component_session::GuestComponentSessionClientError,
+) -> String {
+    use d2bd_runtime::guest_component_session::GuestComponentSessionClientError;
+
+    match error {
+        GuestComponentSessionClientError::Transport => "session-unavailable",
+        GuestComponentSessionClientError::Session => "session-authentication-failed",
+        GuestComponentSessionClientError::StaleSession => "session-generation-stale",
+    }
+    .to_owned()
+}
+
 pub(crate) async fn invalidate_guest_component_session(state: &ServerState, vm: &str) {
-    state.guest_component_sessions.lock().await.remove(vm);
+    state
+        .guest_component_sessions
+        .lock()
+        .await
+        .remove(&GuestComponentSessionKey::for_legacy_vm(vm));
+}
+
+pub(crate) async fn invalidate_guest_component_session_for_guest(
+    state: &ServerState,
+    target: &CommittedGuestSessionTarget,
+) {
+    state
+        .guest_component_sessions
+        .lock()
+        .await
+        .remove(&target.key());
 }
 
 #[cfg(test)]
@@ -11052,18 +13204,12 @@ fn read_guest_config_typed(
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
         });
     }
-    ensure_vm_runtime_capability(
-        state,
-        vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "config sync",
-    )?;
+    ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::ConfigSync, "config sync")?;
     let guest_ref_text = format!("Guest/{vm}");
-    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
-        TypedError::ConfigReadFailed {
+    let guest_ref =
+        ResourceRef::parse(&guest_ref_text).map_err(|_| TypedError::ConfigReadFailed {
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
-        }
-    })?;
+        })?;
     let sync = d2b_provider_config_nixos::ConfigSyncRequest::new(guest_ref).map_err(|_| {
         TypedError::ConfigReadFailed {
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
@@ -11087,16 +13233,15 @@ fn read_guest_config_typed(
         result.map_err(config_read_error_kind)
     })
     .map_err(|kind| TypedError::ConfigReadFailed { kind })?;
-    d2b_provider_config_nixos::decode_document(&response)
-        .map_err(|_| TypedError::ConfigReadFailed {
+    d2b_provider_config_nixos::decode_document(&response).map_err(|_| {
+        TypedError::ConfigReadFailed {
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::Protocol,
-        })?;
+        }
+    })?;
     Ok(response)
 }
 
-fn config_read_error_kind(
-    error: ttrpc::Error,
-) -> d2bd_runtime::typed_error::ConfigReadErrorKind {
+fn config_read_error_kind(error: ttrpc::Error) -> d2bd_runtime::typed_error::ConfigReadErrorKind {
     use d2bd_runtime::typed_error::ConfigReadErrorKind as Kind;
     if matches!(
         &error,
@@ -11119,9 +13264,9 @@ fn config_read_error_kind(
         "config-document-invalid-utf8" => Kind::Protocol,
         "config-document-unavailable" => Kind::ReadDenied,
         "config-session-stale" | "config-unauthorized" => Kind::AuthFailed,
-        "config-request-invalid"
-        | "config-document-empty"
-        | "config-document-encoding-failed" => Kind::Protocol,
+        "config-request-invalid" | "config-document-empty" | "config-document-encoding-failed" => {
+            Kind::Protocol
+        }
         _ => Kind::Transport,
     }
 }
@@ -11319,7 +13464,13 @@ fn daemon_shell_authority(state: &ServerState) -> Arc<DaemonShellAuthority> {
 fn shell_resource_client(
     state: &ServerState,
 ) -> Result<(ZoneId, Arc<DaemonResourceApiClient>), TypedError> {
-    let zone = ZoneId::parse("local-root").map_err(|_| shell_protocol_failed())?;
+    let zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(shell_capability_failed)?;
     let authority = daemon_shell_authority(state);
     let client = authority
         .client_for_zone(&zone)
@@ -11620,10 +13771,11 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::List {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -11719,11 +13871,12 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let name = name.unwrap_or_else(|| policy.default_name.clone());
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::Detach {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -11815,10 +13968,11 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::UnsafeLocal => {
-                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let (identity, workload_target, policy) =
+                        unsafe_shell_request_parts(state, &resolved)?;
                     let operation_id = new_internal_shell_operation_id()?;
                     let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
-                    let target = identity.canonical_target.to_canonical();
+                    let target = workload_target.to_canonical();
                     let request = HelperShellRequest::Kill {
                         request_id: next_internal_shell_request_id(),
                         operation_id,
@@ -11886,10 +14040,12 @@ fn dispatch_shell_management(
 }
 
 fn unsafe_shell_request_parts(
+    state: &ServerState,
     resolved: &workload_dispatch::ResolvedShell,
 ) -> Result<
     (
-        d2b_core::workload_identity::WorkloadIdentity,
+        ZoneResourceIdentity,
+        WorkloadTarget,
         d2b_contracts_control::unsafe_local_wire::HelperShellPolicy,
     ),
     TypedError,
@@ -11899,12 +14055,18 @@ fn unsafe_shell_request_parts(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
         )
     })?;
+    let workload_target = identity.canonical_target.clone();
+    let resource_identity = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
+        d2bd_runtime::shell_backend::unsafe_shell_failed(
+            d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
+        )
+    })?;
     let policy = resolved.policy.clone().ok_or_else(|| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
         )
     })?;
-    Ok((identity, policy))
+    Ok((resource_identity, workload_target, policy))
 }
 
 fn dispatch_unsafe_shell_management(
@@ -11928,7 +14090,7 @@ fn dispatch_unsafe_shell_management(
 
 fn shell_route_capability_error(
     target: &str,
-    provider: d2b_realm_core::WorkloadProviderKind,
+    provider: d2b_contracts::WorkloadProviderKind,
 ) -> TypedError {
     TypedError::RuntimeCapabilityUnsupported {
         vm: target.to_owned(),
@@ -12012,7 +14174,7 @@ fn record_resolved_shell_failure(
             vm.clone(),
         ),
         WorkloadRoute::CapabilityUnavailable { provider } => (
-            if *provider == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
+            if *provider == d2b_contracts::WorkloadProviderKind::UnsafeLocal {
                 d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
             } else {
                 d2bd_runtime::shell_backend::ShellProvider::ComponentSession
@@ -12202,10 +14364,17 @@ fn guest_shell_session(
         .ssh_user
         .as_deref()
         .ok_or_else(shell_capability_failed)?;
+    let root_zone = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.topology_root().cloned())
+        .ok_or_else(shell_capability_failed)?;
     let pool_name = format!("{vm}-shell");
     let pool = ShellPool::new(
         pool_name,
-        "local-root",
+        root_zone.as_str(),
         PoolSpec::new(
             ExecutionTarget::guest(vm.to_owned()),
             workload_user,
@@ -13411,22 +15580,14 @@ async fn establish_shell_backend(
             })
         }
         WorkloadRoute::UnsafeLocal => {
-            let identity = resolved.identity.ok_or_else(|| {
-                d2bd_runtime::shell_backend::unsafe_shell_failed(
-                    d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                )
-            })?;
-            let policy = resolved.policy.ok_or_else(|| {
-                d2bd_runtime::shell_backend::unsafe_shell_failed(
-                    d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Protocol,
-                )
-            })?;
+            let (identity, workload_target, policy) = unsafe_shell_request_parts(state, &resolved)?;
             let operation_id = new_internal_shell_operation_id()?;
             let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+            let target = workload_target.to_canonical();
             emit_provider_shell_audit(
                 state,
                 ProviderShellAudit {
-                    target: &identity.canonical_target.to_canonical(),
+                    target: &target,
                     peer_uid,
                     provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
                     action: d2bd_runtime::daemon_audit::ShellAuditAction::Create,
@@ -13484,7 +15645,7 @@ async fn establish_shell_backend(
                     state: ready.result.state,
                     force_evicted: ready.result.force_evicted,
                 },
-                target: identity.canonical_target.to_canonical(),
+                target,
                 provider: d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal,
                 operation_digest: Some(operation_digest),
                 initial_control_sequence: 0,
@@ -13566,14 +15727,14 @@ fn next_internal_shell_request_id() -> u64 {
     next_internal_helper_request_id()
 }
 
-fn new_internal_shell_operation_id() -> Result<d2b_realm_core::OperationId, TypedError> {
+fn new_internal_shell_operation_id() -> Result<d2b_contracts::OperationId, TypedError> {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).map_err(|_| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
         )
     })?;
-    d2b_realm_core::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
+    d2b_contracts::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
         d2bd_runtime::shell_backend::unsafe_shell_failed(
             d2bd_runtime::typed_error::UnsafeLocalShellErrorKind::Internal,
         )
@@ -13759,6 +15920,10 @@ fn dispatch_broker_request(
     )
 }
 
+fn records_broker_response_evidence(request: &BrokerRequest) -> bool {
+    !matches!(request, BrokerRequest::ResourceActivationAudit(_))
+}
+
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -13766,6 +15931,7 @@ fn dispatch_broker_request_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
@@ -13782,7 +15948,9 @@ fn dispatch_broker_request_as(
             path: socket_path,
             detail: err.to_string(),
         })?;
-    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    if ingest_response_evidence {
+        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    }
     Ok(decoded)
 }
 
@@ -13809,9 +15977,10 @@ fn dispatch_broker_request_with_timeout_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let result =
         dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout));
-    if let Ok(response) = &result {
+    if ingest_response_evidence && let Ok(response) = &result {
         ingest_broker_response_evidence(state, audit_join.as_ref(), response);
     }
     result
@@ -13846,7 +16015,7 @@ fn ingest_broker_response_evidence(
         .ok()
         .and_then(|plane| plane.clone());
     if let Some(plane) = plane
-        && let Err(error) = plane.ingest_broker_evidence(evidence)
+        && let Err(error) = plane.record_broker_evidence(evidence)
     {
         tracing::debug!(error = ?error, "broker evidence ingestion skipped");
     }
@@ -13992,6 +16161,7 @@ fn dispatch_broker_request_with_optional_request_fds(
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
+    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
@@ -14023,22 +16193,10 @@ fn dispatch_broker_request_with_optional_request_fds(
             detail: err.to_string(),
         }
     })?;
-    ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    if ingest_response_evidence {
+        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
+    }
     Ok((decoded, received_fds))
-}
-
-fn load_host_artifact(state: &ServerState) -> Result<HostJson, TypedError> {
-    load_json(&state.config.artifacts.host_path)
-}
-
-fn ipv6_sysctl_short_keys(_entry: &Ipv6SysctlEntry) -> [&'static str; 5] {
-    [
-        "disable_ipv6",
-        "accept_ra",
-        "autoconf",
-        "addr_gen_mode",
-        "arp_ignore",
-    ]
 }
 
 fn dispatch_broker_ack_request(
@@ -14150,7 +16308,7 @@ fn open_zone_store_from_broker(
     let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
         state,
         BrokerRequest::OpenZoneStore(BrokerOpenZoneStoreRequest { zone_store_id }),
-        Duration::from_secs(10),
+        Duration::from_secs(60),
     )?;
     if received_fds.len() != 1 {
         close_received_fds(&received_fds);
@@ -14194,51 +16352,75 @@ fn open_zone_store_from_broker(
     }
 }
 
-fn ensure_resource_activation_broker_evidence(
+async fn ensure_resource_activation_broker_evidence(
     state: &ServerState,
     zone: &ZoneId,
-    bundle: &ResourceBundle,
+    operation_id: &str,
     broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let operation_id = resource_runtime::resource_bundle_materialization_operation_id(zone, bundle);
+) -> Result<DurabilityEvidence, resource_runtime::ResourceRuntimeError> {
     let zone_identity = AuditZoneId::derive(zone.as_str())
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let operation_identity = OperationIdentity::derive(&operation_id)
+    let operation_identity = OperationIdentity::derive(operation_id)
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
     let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
-    if broker_evidence
+    let evidence = if let Some(evidence) = broker_evidence
         .get(&key)
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
-        .is_some()
     {
-        return Ok(());
-    }
-    let audit_join = AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-        operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
-            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-    };
-    let response = dispatch_broker_request_with_timeout(
-        state,
-        BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest { audit_join }),
-        Duration::from_secs(10),
-    )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    match response {
-        BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
-            broker_evidence
-                .insert(DurabilityEvidence {
+        evidence
+    } else {
+        let audit_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+            operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+        };
+        let response = dispatch_broker_request_with_timeout(
+            state,
+            BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest {
+                audit_join,
+            }),
+            Duration::from_secs(10),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+        match response {
+            BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
+                DurabilityEvidence {
                     key,
                     outcome: d2b_audit::DurabilityOutcome::Success,
                     effect_durable: true,
-                })
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-            Ok(())
+                }
+            }
+            BrokerResponse::Error(_) => {
+                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+            }
+            _ => return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
         }
-        BrokerResponse::Error(_) => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
-        _ => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
+    };
+    Ok(evidence)
+}
+
+async fn shutdown_unpublished_runtimes(
+    runtimes: &mut Vec<(
+        ZoneId,
+        resource_runtime::ZoneResourceRuntime,
+        ResourceBundle,
+    )>,
+) {
+    while let Some((_, runtime, _)) = runtimes.pop() {
+        let _ = runtime.shutdown().await;
     }
+}
+
+fn committed_zone_topology(
+    resolver: &BundleResolver,
+    zones: &BTreeSet<ZoneId>,
+) -> Result<CommittedZoneTopology, resource_runtime::ResourceRuntimeError> {
+    let topology = resolver
+        .zone_topology()
+        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    CommittedZoneTopology::from_allocator(zones, topology)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)
 }
 
 async fn open_resource_plane(
@@ -14264,60 +16446,77 @@ async fn open_resource_plane(
             return Err(resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid);
         }
     };
-    for zone in zones {
-        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+    let topology = match committed_zone_topology(resolver, &zones) {
+        Ok(topology) => topology,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource topology validation failed");
+            return Err(error);
+        }
+    };
+    plane.set_topology_root(topology.root.clone());
+    let mut prepared_inputs = BTreeMap::new();
+    let mut prepared_generations = BTreeMap::new();
+    for zone in &zones {
         let desired_bundle = resolver
             .zone_resource_bundle_bytes(zone.as_str())
-            .ok_or_else(|| {
-                tracing::error!(zone = %zone.as_str(), "resource plane Zone bundle is missing");
-                resource_runtime::ResourceRuntimeError::HandlerNotReady
-            })
+            .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)
             .and_then(|bytes| {
-                let bundle = ResourceBundle::from_json(bytes).map_err(|error| {
+                ResourceBundle::from_json(bytes).map_err(|error| {
                     tracing::error!(
                         zone = %zone.as_str(),
                         error = ?error,
                         "resource plane Zone bundle is invalid"
                     );
                     resource_runtime::ResourceRuntimeError::HandlerNotReady
-                })?;
-                if bundle.zone.as_str() != zone.as_str() {
-                    tracing::error!(
-                        requested_zone = %zone.as_str(),
-                        bundle_zone = %bundle.zone.as_str(),
-                        "resource plane Zone bundle identity mismatch"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-                }
+                })
+            })?;
+        let storage = resolver
+            .zone_storage_row(zone.as_str())
+            .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+        let authority =
+            d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
+                zone,
+                &desired_bundle,
+                storage,
+            )
+            .map_err(|error| {
                 tracing::error!(
                     zone = %zone.as_str(),
-                    resource_count = bundle.resources.len(),
-                    "resource plane Zone bundle loaded"
+                    error = %error,
+                    "resource plane Zone identity binding failed"
                 );
-                Ok(bundle)
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
+        prepared_generations.insert(zone.clone(), authority.bundle_generation().clone());
+        prepared_inputs.insert(zone.clone(), (desired_bundle, authority));
+    }
+
+    let set_generation = complete_generation_set_digest(&zones, &prepared_generations)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let mut prepared_runtimes = Vec::with_capacity(zones.len());
+    for zone in zones {
+        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+        let (desired_bundle, authority) = match prepared_inputs.remove(&zone) {
+            Some(input) => input,
+            None => {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+            }
+        };
+        tracing::error!(
+            zone = %zone.as_str(),
+            resource_count = desired_bundle.resources.len(),
+            "resource plane Zone bundle loaded"
+        );
+        let materialization_bundle = desired_bundle.clone();
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
             Err(error) => {
                 tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
-                let _ = plane.shutdown().await;
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
-        if let Err(error) = ensure_resource_activation_broker_evidence(
-            state,
-            &zone,
-            &desired_bundle,
-            &broker_evidence,
-        ) {
-            tracing::error!(
-                zone = %zone.as_str(),
-                error = ?error,
-                "resource activation broker evidence unavailable"
-            );
-            let _ = plane.shutdown().await;
-            return Err(error);
-        }
         let zone_state_dir = state
             .daemon_state_dir
             .parent()
@@ -14328,7 +16527,7 @@ async fn open_resource_plane(
         let telemetry_path = zone_state_dir.join("telemetry").join("emitter.sock");
         #[cfg(not(test))]
         if !audit_dir.is_absolute() {
-            let _ = plane.shutdown().await;
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         }
         let audit_sink = match AuditSink::open(&audit_dir) {
@@ -14340,35 +16539,199 @@ async fn open_resource_plane(
                     error = ?error,
                     "Zone resource audit sink open failed",
                 );
-                let _ = plane.shutdown().await;
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
         let zone_name = zone.as_str().to_owned();
         let mut runtime =
-            match resource_runtime::ZoneResourceRuntime::open_production_with_audit_and_evidence_and_telemetry(
-                zone,
+            match resource_runtime::ZoneResourceRuntime::open_production_with_identity(
+                zone.clone(),
                 opened,
                 audit_sink,
                 Arc::clone(&broker_evidence),
                 telemetry_path,
                 desired_bundle,
+                authority,
             )
             .await
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
-                    let _ = plane.shutdown().await;
+                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                     return Err(error);
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
+        let descriptors = materialization_bundle
+            .resources
+            .iter()
+            .filter(|resource| resource.resource_type().as_str() == "Guest")
+            .filter_map(|resource| {
+                resolver
+                    .guest_setup_descriptor_bytes(
+                        zone.as_str(),
+                        resource.metadata().name().as_str(),
+                    )
+                    .map(|bytes| {
+                        (
+                            resource.metadata().name().as_str().to_owned(),
+                            bytes.to_vec(),
+                        )
+                    })
+            });
+        runtime.set_guest_setup_descriptors(descriptors);
+        let descriptor_catalog_keys = materialization_bundle
+            .resources
+            .iter()
+            .filter(|resource| resource.resource_type().as_str() == "Guest")
+            .filter_map(|resource| {
+                resolver
+                    .guest_setup_descriptor_catalog_key(
+                        zone.as_str(),
+                        resource.metadata().name().as_str(),
+                    )
+                    .map(|key| {
+                        (
+                            resource.metadata().name().as_str().to_owned(),
+                            key.to_owned(),
+                        )
+                    })
+            });
+        runtime.set_guest_setup_descriptor_catalog_keys(descriptor_catalog_keys);
+        prepared_runtimes.push((zone, runtime, materialization_bundle));
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let validation = {
+            let (zone, runtime, bundle) = &prepared_runtimes[index];
+            runtime
+                .validate_desired_bundle(bundle)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        error = ?error,
+                        "resource plane Zone bundle validation failed"
+                    );
+                })
+        };
+        if let Err(error) = validation {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
+    let coordinator_index = prepared_runtimes
+        .iter()
+        .position(|(zone, _, _)| zone == &topology.root)
+        .ok_or_else(|| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let prepare_result = prepared_runtimes[coordinator_index]
+        .1
+        .prepare_generation_publication(&set_generation, &prepared_generations)
+        .await
+        .inspect_err(|error| {
+            tracing::error!(
+                zone = %topology.root.as_str(),
+                error = ?error,
+                "resource plane generation publication prepare failed"
+            );
+        });
+    if let Err(error) = prepare_result {
+        shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+        return Err(error);
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let preparation = {
+            let (zone, runtime, bundle) = &prepared_runtimes[index];
+            runtime
+                .prepare_published_bundle(bundle)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        error = ?error,
+                        "resource plane Zone bundle preparation failed"
+                    );
+                })
+        };
+        if let Err(error) = preparation {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let (zone, runtime, _) = &prepared_runtimes[index];
+        let pending_operation_ids = match runtime.pending_trusted_activation_operation_ids().await {
+            Ok(operation_ids) => operation_ids,
+            Err(error) => {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(error);
+            }
+        };
+        for operation_id in pending_operation_ids {
+            let evidence = match ensure_resource_activation_broker_evidence(
+                state,
+                zone,
+                &operation_id,
+                &broker_evidence,
+            )
+            .await
+            {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = runtime
+                .ingest_broker_evidence(&operation_id, evidence)
+                .await
+            {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(error);
+            }
+        }
+        if let Err(error) = runtime.require_trusted_activation_outboxes_drained().await {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
+    let commit_result = prepared_runtimes[coordinator_index]
+        .1
+        .commit_generation_publication(&set_generation, &prepared_generations)
+        .await
+        .inspect_err(|error| {
+            tracing::error!(
+                zone = %topology.root.as_str(),
+                error = ?error,
+                "resource plane generation publication commit failed"
+            );
+        });
+    if let Err(error) = commit_result {
+        shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+        return Err(error);
+    }
+
+    let mut remaining = prepared_runtimes.into_iter();
+    while let Some((_zone, mut runtime, _)) = remaining.next() {
         let installed_provider_count = state
             .provider_runtime
             .registered_provider_count()
             .try_into()
             .unwrap_or(u32::MAX);
+        if let Err(error) = runtime.activate_published_bundle().await {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
         let _ = runtime.publish_provider_counts(
             installed_provider_count,
             if provider_ready {
@@ -14383,49 +16746,327 @@ async fn open_resource_plane(
         {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if let Err(error) = runtime
             .reconcile_activation_resources(Arc::new(state.clone()))
             .await
         {
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            return Err(error);
+            tracing::warn!(
+                zone = %runtime.zone().as_str(),
+                error = ?error,
+                "activation reconciliation degraded during startup",
+            );
         }
         if let Err(error) = runtime
             .reconcile_audio_resources(Arc::new(state.clone()))
             .await
         {
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            return Err(error);
+            tracing::warn!(
+                zone = %runtime.zone().as_str(),
+                error = ?error,
+                "audio reconciliation degraded during startup",
+            );
         }
         if let Err(error) = runtime.reconcile_semantic_binding_resources().await {
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            return Err(error);
+            tracing::warn!(
+                zone = %runtime.zone().as_str(),
+                error = ?error,
+                "semantic binding reconciliation degraded during startup",
+            );
         }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if !runtime.device_tpm_controller_registered() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
         }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
     }
+    compose_gateway_zone_links(state, &mut plane, &topology).await;
     if plane.ready_zone_count() == 0 {
+        let _ = plane.shutdown().await;
         return Err(resource_runtime::ResourceRuntimeError::PlaneUnavailable);
     }
     Ok(Arc::new(plane))
+}
+
+/// Compose child-local ZoneLink state after every Zone has passed the
+/// generation publication barrier. The host keeps only route metadata and
+/// placement refs; credential acquisition remains a Gateway Guest concern.
+async fn compose_gateway_zone_links(
+    state: &ServerState,
+    plane: &mut resource_runtime::ResourcePlane,
+    topology: &CommittedZoneTopology,
+) {
+    let Some(root) = plane.zone(&topology.root).ok() else {
+        return;
+    };
+    let Some(authority_digest) = root
+        .authority_bundle_generation()
+        .map(|value| value.as_str().to_owned())
+    else {
+        tracing::error!("Gateway Guest composition refused: root Zone generation unavailable");
+        return;
+    };
+    let authority_generation = root.current_revision().get().max(1);
+    let zones = plane.zone_ids();
+    for zone in zones {
+        if zone == topology.root {
+            continue;
+        }
+        let Some(parent_zone) = topology.parent(&zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: parent Zone topology is unavailable",
+            );
+            continue;
+        };
+        let Some(parent_path) = topology.path(parent_zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: parent Zone path is unavailable",
+            );
+            continue;
+        };
+        let Some(child_path) = topology.path(&zone) else {
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: child Zone path is unavailable",
+            );
+            continue;
+        };
+        let Some(parent) = plane.zone(parent_zone).ok() else {
+            tracing::warn!(
+                zone = %zone,
+                parent = %parent_zone,
+                "Gateway Guest composition skipped: parent Zone runtime unavailable",
+            );
+            continue;
+        };
+        let Some(parent_uid) = parent.authority_zone_uid().cloned() else {
+            tracing::warn!(
+                zone = %zone,
+                parent = %parent_zone,
+                "Gateway Guest composition skipped: parent Zone identity unavailable",
+            );
+            continue;
+        };
+        let Some(runtime) = plane.zone(&zone).ok() else {
+            continue;
+        };
+        let links = match runtime.committed_resources_of_type("ZoneLink").await {
+            Ok(links) => links,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone,
+                    error = ?error,
+                    "Gateway Guest composition skipped: ZoneLink rows unavailable",
+                );
+                continue;
+            }
+        };
+        let matching_links = links
+            .into_iter()
+            .filter(|resource| {
+                resource
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("zone"))
+                    .and_then(Value::as_str)
+                    == Some(zone.as_str())
+            })
+            .collect::<Vec<_>>();
+        let link = match matching_links.as_slice() {
+            [] => continue,
+            [link] => link,
+            _ => {
+                if matching_links.iter().any(is_gateway_zone_link) {
+                    plane.refuse_gateway_zone_link(zone.clone());
+                }
+                tracing::warn!(
+                    zone = %zone,
+                    "Gateway Guest composition refused: multiple committed ZoneLink rows",
+                );
+                continue;
+            }
+        };
+        if !is_gateway_zone_link(link) {
+            continue;
+        }
+        let Some(child_uid) = runtime.authority_zone_uid().cloned() else {
+            plane.refuse_gateway_zone_link(zone.clone());
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition skipped: child Zone identity unavailable",
+            );
+            continue;
+        };
+        let composition = match ZoneLinkGatewayComposition::from_committed_resources(
+            zone.clone(),
+            parent_path,
+            child_path,
+            parent_uid,
+            child_uid,
+            authority_generation,
+            &authority_digest,
+            link,
+        ) {
+            Ok(composition) => composition,
+            Err(error) => {
+                plane.refuse_gateway_zone_link(zone.clone());
+                tracing::warn!(
+                    zone = %zone,
+                    error = error.code(),
+                    "Gateway Guest composition refused",
+                );
+                continue;
+            }
+        };
+        let Some(gateway_guest) = gateway_guest_for_link(&runtime, link).await else {
+            plane.refuse_gateway_zone_link(zone.clone());
+            tracing::warn!(
+                zone = %zone,
+                "Gateway Guest composition refused: transport Provider Guest is unavailable",
+            );
+            if let Err(error) = plane.insert_gateway_zone_link(composition) {
+                tracing::warn!(
+                    zone = %zone,
+                    error = ?error,
+                    "Gateway Guest composition skipped: duplicate ZoneLink",
+                );
+            }
+            continue;
+        };
+        composition.set_gateway_guest(gateway_guest.clone());
+        let composition =
+            match connect_guest_component_session_for_guest(state, &gateway_guest).await {
+                Ok(session) => {
+                    if let Err(error) = composition.bind_gateway_session(session) {
+                        tracing::warn!(
+                            zone = %zone,
+                            error = error.code(),
+                            "Gateway Guest session binding refused",
+                        );
+                    }
+                    composition
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        zone = %zone,
+                        gateway = %gateway_guest.guest_ref().name().as_str(),
+                        error = %error,
+                        "Gateway Guest ComponentSession unavailable",
+                    );
+                    composition
+                }
+            };
+        if let Err(error) = plane.insert_gateway_zone_link(composition) {
+            tracing::warn!(
+                zone = %zone,
+                error = ?error,
+                "Gateway Guest composition skipped: duplicate ZoneLink",
+            );
+        }
+    }
+}
+
+async fn gateway_guest_for_link(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    link: &Value,
+) -> Option<CommittedGuestSessionTarget> {
+    let provider_ref = link
+        .get("spec")
+        .and_then(|spec| spec.get("transportProviderRef"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())?;
+    gateway_guest_for_provider(runtime, &provider_ref).await
+}
+
+async fn gateway_guest_for_provider(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    provider_ref: &ResourceRef,
+) -> Option<CommittedGuestSessionTarget> {
+    let provider = runtime
+        .committed_resource_value(provider_ref, "gateway-guest-provider")
+        .await
+        .ok()?;
+    let guest_ref = provider
+        .get("spec")
+        .and_then(|spec| spec.get("config"))
+        .and_then(|config| config.get("executionRef"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")?;
+    resolve_committed_guest_session_target(runtime, &guest_ref)
+        .await
+        .ok()
+}
+
+fn is_gateway_zone_link(link: &Value) -> bool {
+    link.get("spec")
+        .and_then(|spec| spec.get("transportProviderRef"))
+        .and_then(Value::as_str)
+        == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
+}
+
+#[cfg(test)]
+mod zone_publication_order_tests {
+    #[test]
+    fn complete_set_validation_and_durable_prepare_precede_all_mutating_reconcile() {
+        let full_source = include_str!("composition.rs");
+        let source = full_source
+            .split_once("async fn open_resource_plane")
+            .and_then(|(_, source)| source.split_once("const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT"))
+            .map(|(source, _)| source)
+            .expect("resource-plane source span");
+        let position = |needle: &str| {
+            source
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing publication step: {needle}"))
+        };
+        let validation = position("validate_desired_bundle");
+        let durable_prepare = position("prepare_generation_publication");
+        let store_open = position("open_zone_store_from_broker");
+        let materialization = position("prepare_published_bundle");
+        let pending_query = position("pending_trusted_activation_operation_ids");
+        let evidence = position("ensure_resource_activation_broker_evidence(");
+        let ingest = position("runtime\n                .ingest_broker_evidence");
+        let barrier = position("require_trusted_activation_outboxes_drained");
+        let durable_commit = position("commit_generation_publication");
+        let activation = position("activate_published_bundle");
+        let process_reconcile = position("reconcile_process_resources");
+
+        assert!(validation < durable_prepare);
+        assert!(durable_prepare < materialization);
+        assert!(store_open < materialization);
+        assert!(materialization < pending_query);
+        assert!(pending_query < evidence);
+        assert!(evidence < ingest);
+        assert!(ingest < barrier);
+        assert!(barrier < durable_commit);
+        assert!(durable_commit < activation);
+        assert!(activation < process_reconcile);
+    }
 }
 
 const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
@@ -14448,7 +17089,8 @@ fn load_broker_audit_evidence(
     state: &ServerState,
 ) -> Result<Arc<d2b_resource_store_redb::BrokerEvidenceIndex>, resource_runtime::ResourceRuntimeError>
 {
-    let mut evidence = BTreeMap::new();
+    let mut evidence: BTreeMap<d2b_audit::ZoneOperationKey, d2b_audit::DurabilityEvidence> =
+        BTreeMap::new();
     let mut cursor = None;
     for _ in 0..1024 {
         let response = dispatch_broker_request_as(
@@ -14463,19 +17105,33 @@ fn load_broker_audit_evidence(
                 uid: state.daemon_uid,
             },
         )
+        .inspect_err(|error| {
+            tracing::error!(
+                error = ?error,
+                "broker audit evidence export dispatch failed",
+            );
+        })
         .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
         let BrokerResponse::ExportBrokerAudit(response) = response else {
+            tracing::error!("broker audit evidence export returned an unexpected response");
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         };
         for entry in response.entries {
-            if entry.error.is_some() {
+            if let Some(error) = entry.error {
+                tracing::error!(
+                    error = ?error,
+                    "broker audit evidence entry reported an error",
+                );
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
             let value = entry
                 .record
                 .ok_or(resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let record_class = value.get("record_class").and_then(Value::as_str);
-            let diagnostic_or_legacy = record_class != Some("durability")
+            let record_class = value
+                .get("record_class")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let diagnostic_or_legacy = record_class.as_deref() != Some("durability")
                 || value
                     .get("durability")
                     .and_then(Value::as_bool)
@@ -14484,6 +17140,9 @@ fn load_broker_audit_evidence(
                 continue;
             }
             let parsed = serde_json::from_value::<BrokerAuditEvidenceLine>(value)
+                .inspect_err(|_| {
+                    tracing::error!("broker durability evidence entry failed schema decoding");
+                })
                 .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
             let (
                 Some(zone_id),
@@ -14499,6 +17158,10 @@ fn load_broker_audit_evidence(
                 parsed.zone_operation_key,
             )
             else {
+                tracing::error!(
+                    record_class = ?record_class,
+                    "broker durability evidence entry is incomplete",
+                );
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             };
             let item = evidence_from_decision_result(
@@ -14508,14 +17171,29 @@ fn load_broker_audit_evidence(
                 Some(&decision),
                 Some(&result),
             )
+            .inspect_err(|_| {
+                tracing::error!("broker durability evidence entry failed semantic conversion");
+            })
             .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
             let key = item.key.clone();
-            if let Some(previous) = evidence.insert(key, item.clone())
-                && (previous.outcome != item.outcome
-                    || previous.effect_durable != item.effect_durable)
-            {
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            if let Some(previous) = evidence.get(&key) {
+                let retry_succeeded = previous.outcome == d2b_audit::DurabilityOutcome::Failure
+                    && !previous.effect_durable
+                    && item.outcome == d2b_audit::DurabilityOutcome::Success
+                    && item.effect_durable;
+                if previous != &item && !retry_succeeded {
+                    tracing::error!(
+                        operation_identity = %item.key.operation().as_str(),
+                        previous_outcome = ?previous.outcome,
+                        current_outcome = ?item.outcome,
+                        previous_effect_durable = previous.effect_durable,
+                        current_effect_durable = item.effect_durable,
+                        "broker durability evidence entries conflict for one operation",
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+                }
             }
+            evidence.insert(key, item);
         }
         if response.complete {
             return Ok(Arc::new(d2b_resource_store_redb::BrokerEvidenceIndex::new(
@@ -14524,9 +17202,11 @@ fn load_broker_audit_evidence(
         }
         cursor = response.next_cursor;
         if cursor.is_none() {
+            tracing::error!("broker audit evidence pagination omitted its continuation cursor");
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         }
     }
+    tracing::error!("broker audit evidence pagination exceeded its bounded page count");
     Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed)
 }
 
@@ -14663,18 +17343,151 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
 enum VmRunnerLaunch {
     Legacy(Box<d2b_contracts_broker::broker_wire::SpawnRunnerResponse>),
     Provider,
+    ControllerOwned,
+}
+
+fn network_tap_context_from_admission(
+    admission: &NetworkAdmissionProof,
+    attachment_id: ResourceUid,
+) -> d2b_contracts_broker::broker_wire::NetworkTapContext {
+    let key = admission.key();
+    d2b_contracts_broker::broker_wire::NetworkTapContext {
+        zone_uid: key.zone_uid().clone(),
+        network_uid: key.network_uid().clone(),
+        attachment_id,
+        network_generation: key.network_generation(),
+        attachment_generation: key.attachment_generation(),
+        bundle_generation: key.bundle_generation().clone(),
+        admitted_interface_names: admission.intent().interface_names().to_vec(),
+    }
+}
+
+fn network_tap_context_for_vm(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm_name: &str,
+) -> Option<d2b_contracts_broker::broker_wire::NetworkTapContext> {
+    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let mut resolved = None;
+    for zone in plane.zone_ids() {
+        let Ok(runtime) = plane.zone(&zone) else {
+            continue;
+        };
+        let Ok(guests) = block_on_future(runtime.committed_resources_of_type("Guest")) else {
+            continue;
+        };
+        let Some(guest) = guests.into_iter().find(|guest| {
+            guest
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some(vm_name)
+        }) else {
+            continue;
+        };
+        let guest_uid = guest
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let Some(attachment) = guest
+            .get("spec")
+            .and_then(|spec| spec.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .and_then(|attachments| attachments.first())
+        else {
+            continue;
+        };
+        let Some(network_ref) = attachment
+            .get("networkRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+        else {
+            continue;
+        };
+        let Ok(networks) = block_on_future(runtime.committed_resources_of_type("Network")) else {
+            continue;
+        };
+        let Some(network) = networks.into_iter().find(|network| {
+            network
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some(network_ref.name().as_str())
+        }) else {
+            continue;
+        };
+        let network_uid = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let network_generation = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("generation"))
+            .and_then(Value::as_u64)
+            .and_then(|value| ResourceGeneration::new(value).ok())?;
+        let Ok(zone_resources) = block_on_future(runtime.committed_resources_of_type("Zone"))
+        else {
+            continue;
+        };
+        let Some(zone_resource) = zone_resources.first() else {
+            continue;
+        };
+        let zone_uid = zone_resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let admission_index = plane.network_admission_index();
+        let admission_zone_uid = zone_uid.clone();
+        let admission_network_uid = network_uid.clone();
+        let Some(admission) = block_on_future(async move {
+            admission_index
+                .lock()
+                .await
+                .proof_for(&admission_zone_uid, &admission_network_uid)
+        }) else {
+            continue;
+        };
+        if admission.key().network_generation() != network_generation
+            || resolver
+                .installed_generation_identity()
+                .is_none_or(|identity| {
+                    identity.as_str() != admission.key().bundle_generation().as_str()
+                })
+        {
+            continue;
+        }
+        let Some(bundle_bytes) = resolver.zone_resource_bundle_bytes(zone.as_str()) else {
+            continue;
+        };
+        let Ok(bundle) = ResourceBundle::from_json(bundle_bytes) else {
+            continue;
+        };
+        if bundle.zone_uid.as_ref() != Some(&zone_uid) {
+            continue;
+        }
+        if resolved.is_some() {
+            return None;
+        }
+        resolved = Some(network_tap_context_from_admission(&admission, guest_uid));
+    }
+    resolved
 }
 
 struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
     caller_role: BrokerCallerRole,
+    lifecycle_authorization: Option<provider_effects::LifecycleAuthorization>,
     /// Workload identity from the `VmProcessDag` this runner was constructed
     /// for.  `None` for VMs that predate realm workload declarations; `Some`
     /// for VMs declared as realm workloads.  Threaded into every
     /// `SpawnRunner` request so the broker can record the identity in the
     /// audit trail and privilege metadata without re-reading the process DAG.
     workload_identity: Option<WorkloadIdentity>,
+    network_tap_context: Option<d2b_contracts_broker::broker_wire::NetworkTapContext>,
 }
 
 impl VmStartRunner<'_> {
@@ -14729,7 +17542,10 @@ impl VmStartRunner<'_> {
         runner_role: RunnerRole,
         timeout: Duration,
     ) -> Result<VmRunnerLaunch, String> {
-        let intent_id = intent_id_runner(vm, &node.id.0);
+        if node.role == ProcessRole::CloudHypervisorRunner {
+            return Ok(VmRunnerLaunch::ControllerOwned);
+        }
+        let intent_id = intent_id_legacy_runner(vm, &node.id.0);
         let intent = self
             .resolver
             .find_runner_intent(&intent_id)
@@ -14809,10 +17625,15 @@ impl VmStartRunner<'_> {
                 role_id: RoleId::new(role_id.clone()),
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                owner_uid: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 guest_execution: None,
@@ -14820,6 +17641,8 @@ impl VmStartRunner<'_> {
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
                 tracing_span_id: None,
+                inherited_fd_count: 0,
+                network_tap_context: self.network_tap_context.clone(),
             }),
             self.caller_role.clone(),
             timeout,
@@ -14917,13 +17740,15 @@ impl VmStartRunner<'_> {
         // failure path below would self-deadlock: `cleanup_vm_start_registration`
         // re-acquires this same non-reentrant guard.
         drop(_mguard);
-        if let Err(error) = write_runner_snapshot(
+        if let Err(error) = write_runner_snapshot_with_authorization(
             self.state,
             vm,
             &role_id,
             runner_role,
             response.pid,
             response.start_time_ticks,
+            None,
+            self.lifecycle_authorization.as_ref(),
         ) {
             cleanup_vm_start_registration(self.state, vm, &role_id);
             return Err(error);
@@ -15030,9 +17855,7 @@ impl VmStartRunner<'_> {
                 return Err(format!("guest-component-session-not-ready:{node_id}"));
             }
             let attempt = tokio::time::timeout(
-                remaining.min(
-                    d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
-                ),
+                remaining.min(d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP),
                 connect_guest_component_session_fresh(self.state, vm),
             )
             .await;
@@ -15081,7 +17904,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         // `wait_for_readiness` path. Intercept it here; this also covers the
         // `spawn_and_check_process_alive` fall-through, which delegates here.
         if node.role == ProcessRole::ComponentSessionHealth {
-            return self.wait_for_guest_component_session(vm, node, budget).await;
+            return self
+                .wait_for_guest_component_session(vm, node, budget)
+                .await;
         }
         if node.role == ProcessRole::SecurityKeyFrontend {
             // Security-key relay/frontend ownership belongs to the
@@ -15114,10 +17939,16 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                             .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
                         block_on_future(providers.wait_for_exit(vm, node, budget.readiness))
                     }
+                    VmRunnerLaunch::ControllerOwned => {
+                        Err("controller-owned-one-shot-process-invalid".to_owned())
+                    }
                 }
             }
             VmStartNodeMode::LongLived(runner_role) => {
                 let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                if matches!(launch, VmRunnerLaunch::ControllerOwned) {
+                    return wait_for_readiness(node, readiness, budget.readiness, None);
+                }
                 let provider_liveness;
                 let legacy_liveness;
                 let liveness: &dyn d2bd_runtime::supervisor::readiness_liveness::LivenessProbe =
@@ -15145,6 +17976,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                         );
                             &legacy_liveness
                         }
+                        VmRunnerLaunch::ControllerOwned => unreachable!("handled above"),
                     };
                 wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
@@ -15195,6 +18027,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         timeout: Duration,
     ) -> d2bd_runtime::supervisor::dag::ApiReadyState {
         if is_guest_owned_process_node(node) {
+            return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
+        }
+        if node.role == ProcessRole::CloudHypervisorRunner {
             return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
         }
         if is_durable_wayland_process_node(node) {
@@ -15353,6 +18188,13 @@ fn signal_unregistered_spawned_runner(
         expected_start_time_ticks: Some(response.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        zone_uid: None,
+        owner_ref: None,
+        provider_ref: None,
+        provider_identity: None,
+        template_identity: None,
+        generation: None,
+        runtime_scope: None,
         guest_execution: None,
         tracing_span_id: None,
     });
@@ -15414,9 +18256,19 @@ fn write_runner_snapshot(
     pid: i32,
     start_time_ticks: u64,
 ) -> Result<(), String> {
-    write_runner_snapshot_owned(state, vm, role_id, role, pid, start_time_ticks, None)
+    write_runner_snapshot_with_authorization(
+        state,
+        vm,
+        role_id,
+        role,
+        pid,
+        start_time_ticks,
+        None,
+        None,
+    )
 }
 
+#[allow(dead_code)]
 fn write_runner_snapshot_owned(
     state: &ServerState,
     vm: &str,
@@ -15425,6 +18277,28 @@ fn write_runner_snapshot_owned(
     pid: i32,
     start_time_ticks: u64,
     owner_resource_uid: Option<&str>,
+) -> Result<(), String> {
+    write_runner_snapshot_with_authorization(
+        state,
+        vm,
+        role_id,
+        role,
+        pid,
+        start_time_ticks,
+        owner_resource_uid,
+        None,
+    )
+}
+
+pub(crate) fn write_runner_snapshot_with_authorization(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    role: RunnerRole,
+    pid: i32,
+    start_time_ticks: u64,
+    owner_resource_uid: Option<&str>,
+    authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<(), String> {
     let store =
         d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
@@ -15435,6 +18309,13 @@ fn write_runner_snapshot_owned(
             role_id: role_id.to_owned(),
             role,
             owner_resource_uid: owner_resource_uid.map(str::to_owned),
+            zone_uid: authorization.map(|value| value.zone_uid().clone()),
+            guest_uid: authorization.map(|value| value.guest_uid().clone()),
+            guest_generation: authorization.map(|value| value.guest_generation()),
+            provider_assignment_generation: authorization
+                .map(|value| value.provider_assignment_generation()),
+            policy_revision: authorization.map(|value| value.policy_revision()),
+            operation_id: authorization.map(|value| value.operation_id().to_owned()),
             pid,
             start_time_ticks,
             snapshotted_at: chrono_like_rfc3339(),
@@ -15471,11 +18352,8 @@ fn reconcile_display_before_vm_start(
     if !dag.nodes.iter().any(is_durable_wayland_process_node) {
         return Ok(());
     }
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-        &state.zone_coordinator,
-        vm,
-    )
-    .map_err(|_| "display-session-zone-unavailable".to_owned())?;
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+        .map_err(|_| "display-session-zone-unavailable".to_owned())?;
     let plane = state
         .resource_plane
         .lock()
@@ -15497,13 +18375,7 @@ fn reconcile_display_before_vm_start(
             .as_mut()
             .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
         runtime_set
-            .reconcile_committed_display_for_vm_start(
-                &zone,
-                vm,
-                &session_ref,
-                &session_uid,
-                &spec,
-            )
+            .reconcile_committed_display_for_vm_start(&zone, vm, &session_ref, &session_uid, &spec)
             .map_err(|error| error.to_string())?
     };
     if result.status.phase == d2b_provider_display_wayland::Phase::Failed {
@@ -15957,7 +18829,8 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
     match caller_role {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
-        | BrokerCallerRole::RootUid { uid } => *uid,
+        | BrokerCallerRole::RootUid { uid }
+        | BrokerCallerRole::HostShutdownUid { uid } => *uid,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }
@@ -15979,7 +18852,10 @@ fn load_vm_stop_role_index(state: &ServerState, vm: &str) -> HashMap<String, Run
 }
 
 fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
-    if role_id == VM_RUNNER_ROLE_ID {
+    if role_id == RunnerRole::ProviderController.as_str() || role_id.contains("provider-controller")
+    {
+        Some(RunnerRole::ProviderController)
+    } else if role_id == VM_RUNNER_ROLE_ID {
         Some(RunnerRole::CloudHypervisor)
     } else if role_id == RunnerRole::QemuMedia.as_str() || role_id.contains("qemu-media") {
         Some(RunnerRole::QemuMedia)
@@ -16020,6 +18896,7 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
 
 fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
     match role {
+        Some(RunnerRole::ProviderController) => 0,
         Some(RunnerRole::CloudHypervisor) => 0,
         Some(RunnerRole::QemuMedia) => 0,
         Some(RunnerRole::Gpu) => 1,
@@ -16125,6 +19002,13 @@ fn signal_via_broker(
         expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        zone_uid: None,
+        owner_ref: None,
+        provider_ref: None,
+        provider_identity: None,
+        template_identity: None,
+        generation: None,
+        runtime_scope: None,
         guest_execution: None,
         tracing_span_id: None,
     });
@@ -16192,6 +19076,13 @@ fn deregister_runner_pidfd_via_broker(
             .map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        zone_uid: None,
+        owner_ref: None,
+        provider_ref: None,
+        provider_identity: None,
+        template_identity: None,
+        generation: None,
+        runtime_scope: None,
         guest_execution: None,
         tracing_span_id: None,
     });
@@ -17518,6 +20409,9 @@ fn execute_host_prep_dag(
     let per_vm_state_dir: Option<PathBuf> = load_bundle_resolver(state)
         .ok()
         .and_then(|r| r.manifest.vms.get(vm).map(|m| PathBuf::from(&m.state_dir)));
+    let network_tap_context = load_bundle_resolver(state)
+        .ok()
+        .and_then(|resolver| network_tap_context_for_vm(state, &resolver, vm));
     for step in steps {
         let op_name = step.kind.broker_op_name();
         let request = match step.kind {
@@ -17532,6 +20426,15 @@ fn execute_host_prep_dag(
                     .scope_id
                     .clone()
                     .unwrap_or_else(|| ScopeId::new("host"));
+                if scope_id.as_str().starts_with("env:") {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep env firewall application refused: Network admission context is required"
+                    );
+                    continue;
+                }
                 BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
                     bundle_nft_intent_ref: nft_ref,
                     scope_id,
@@ -17540,17 +20443,15 @@ fn execute_host_prep_dag(
                     tracing_span_id: None,
                 })
             }
-            HostPrepStepKind::SeedDnsmasqLease => BrokerRequest::SeedDnsmasqLease(
-                d2b_contracts_broker::broker_wire::SeedDnsmasqLeaseRequest {
-                    vm_id: step.bundle_ref.vm_id.clone(),
-                    scope_id: step
-                        .bundle_ref
-                        .scope_id
-                        .clone()
-                        .unwrap_or_else(|| ScopeId::new("host")),
-                    tracing_span_id: None,
-                },
-            ),
+            HostPrepStepKind::SeedDnsmasqLease => {
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep DHCP seeding refused: Network admission context is required"
+                );
+                continue;
+            }
             HostPrepStepKind::BindMountFromHardlinkFarm => {
                 BrokerRequest::BindMountFromHardlinkFarm(
                     d2b_contracts_broker::broker_wire::BindMountFromHardlinkFarmRequest {
@@ -17617,24 +20518,65 @@ fn execute_host_prep_dag(
             // Live broker dispatch for the step kinds that previously
             // skipped-with-log. Each arm composes an existing broker op.
             HostPrepStepKind::BringUpTapInterface => {
-                // Compose CreatePersistentTap. The DAG anchors tap ownership via
-                // `runner:vm:<vm>:role:ch`; the host-prep DAG is
-                // about the persistent-side setup (ifname pinned,
-                // bridge port flags eventually applied), so we use
-                // CreatePersistentTap rather than CreateTapFd.
-                // CreateTapFd is the per-launch op that ships an
-                // SCM_RIGHTS fd back; the runner re-opens it at
-                // spawn time. Skipping in unit-test contexts is
-                // controlled by `D2B_HOST_PREP_DAG_EXECUTE`
-                // upstream; here we always issue the request.
+                let Some(context) = network_tap_context.as_ref() else {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep TAP creation refused: Network admission context is required"
+                    );
+                    return Err(broker_failure_response(
+                        VERB,
+                        "Network admission context is required for TAP creation".to_owned(),
+                        "Refresh the committed Network and attachment state before retrying VM start."
+                            .to_owned(),
+                        None,
+                    ));
+                };
                 let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
+                let provenance = NetworkProvenance::new(
+                    context.zone_uid.clone(),
+                    context.network_uid.clone(),
+                    context.network_generation,
+                    context.attachment_generation,
+                    context.bundle_generation.clone(),
+                );
+                let tap_identity = match resolve_tap_identity(
+                    &provenance,
+                    &step.bundle_ref.vm_id,
+                    role_id.as_str(),
+                    &context.attachment_id,
+                ) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = error.code(),
+                            "host-prep TAP identity resolution refused"
+                        );
+                        return Err(broker_failure_response(
+                            VERB,
+                            "Network TAP identity resolution was refused".to_owned(),
+                            "Refresh the committed Network admission before retrying VM start."
+                                .to_owned(),
+                            None,
+                        ));
+                    }
+                };
                 let req = BrokerRequest::CreatePersistentTap(
                     d2b_contracts_broker::broker_wire::CreatePersistentTapRequest {
-                        role_id,
+                        role_id: role_id.clone(),
                         vm_id: step.bundle_ref.vm_id.clone(),
-                        attachment_id: None,
-                        network_generation: None,
-                        attachment_generation: None,
+                        bundle_tap_intent_ref: tap_identity.intent_ref,
+                        attachment_id: context.attachment_id.clone(),
+                        network_generation: context.network_generation,
+                        attachment_generation: context.attachment_generation,
+                        zone_uid: context.zone_uid.clone(),
+                        network_uid: context.network_uid.clone(),
+                        bundle_generation: context.bundle_generation.clone(),
+                        admitted_interface_names: context.admitted_interface_names.clone(),
                         tracing_span_id: None,
                     },
                 );
@@ -17645,7 +20587,7 @@ fn execute_host_prep_dag(
                         vm = %vm,
                         step_id = %step.id,
                         op_kind = op_name,
-                        "host-prep DAG step failed"
+                        "host-prep step failed"
                     );
                     return Err(response);
                 }
@@ -17708,107 +20650,21 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplySysctl => {
-                // Iterate the resolver's sysctl intent ids for this VM's env
-                // and dispatch ApplySysctl per key. The bundle's per-iface entries (bridges + TAPs)
-                // are keyed by `sysctl:env:<env>:if:<if>:<key>`; we
-                // filter by the env-scoped prefix so a single
-                // workload VM start doesn't apply sysctls for the
-                // entire host. If the bundle has no env scope on
-                // this step, we skip with a log (a host-prep DAG
-                // never emits ApplySysctl for env-less VMs today).
-                let env_scope = match step.bundle_ref.scope_id.clone() {
-                    Some(scope) => scope,
-                    None => {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            "ApplySysctl step has no env scope; skipping",
-                        );
-                        continue;
-                    }
-                };
-                let env_prefix = format!(
-                    "{}:if:",
-                    env_scope.as_str().replacen("env:", "sysctl:env:", 1)
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep sysctl application refused: Network admission context is required"
                 );
-                let resolver_for_sysctls = match load_bundle_resolver(state) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            "ApplySysctl: bundle resolver unavailable; skipping",
-                        );
-                        continue;
-                    }
-                };
-                let intent_ids: Vec<String> = resolver_for_sysctls
-                    .sysctl_intent_ids()
-                    .filter(|id| id.starts_with(env_prefix.as_str()))
-                    .map(ToOwned::to_owned)
-                    .collect();
-                for intent_id in intent_ids {
-                    let req = BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id.clone()),
-                        scope_id: env_scope.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    });
-                    if let Err(response) = dispatch_broker_ack_request_as(
-                        state,
-                        VERB,
-                        op_name,
-                        req,
-                        caller_role.clone(),
-                    ) {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            op_kind = op_name,
-                            intent_id = %intent_id,
-                            "host-prep DAG step failed"
-                        );
-                        return Err(response);
-                    }
-                }
                 continue;
             }
             HostPrepStepKind::SetBridgePortFlags => {
-                // Dispatch SetBridgePortFlags for the workload LAN port. The broker
-                // returns a typed
-                // BridgePortFlagsResponse, not an Ack; the host-prep
-                // dispatcher accepts any non-Error response.
-                let role_id = load_bundle_resolver(state)
-                    .ok()
-                    .and_then(|resolver| {
-                        resolver.find_manifest_vm(vm).map(|manifest_vm| {
-                            if manifest_vm.is_net_vm {
-                                "net-vm-lan"
-                            } else {
-                                "workload-lan"
-                            }
-                        })
-                    })
-                    .unwrap_or("workload-lan");
-                let role_id = RoleId::new(role_id);
-                let req = BrokerRequest::SetBridgePortFlags(
-                    d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
-                        vm_id: step.bundle_ref.vm_id.clone(),
-                        role_id,
-                        tracing_span_id: None,
-                    },
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep bridge-port mutation refused: Network admission context is required"
                 );
-                if let Err(response) =
-                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
-                {
-                    tracing::warn!(
-                        vm = %vm,
-                        step_id = %step.id,
-                        op_kind = op_name,
-                        "host-prep DAG step failed"
-                    );
-                    return Err(response);
-                }
                 continue;
             }
             // HostNetRoutePreflight is host-scope and is executed inline
@@ -17846,12 +20702,27 @@ fn dispatch_broker_vm_start(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_start_as(
+    if load_bundle_resolver(state).ok().is_some_and(|resolver| {
+        resolver
+            .usbip_bind_intent_ids()
+            .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+            .any(|intent| intent.vm_name == request.vm)
+    }) {
+        return dispatch_broker_vm_start_as(
+            state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+        );
+    }
+    dispatch_broker_vm_start_inner(
         state,
         request,
         BrokerCallerRole::AdminUid {
             uid: state.daemon_uid,
         },
+        None,
     )
 }
 
@@ -17876,23 +20747,9 @@ fn dispatch_broker_vm_start_as(
         return Err(usbip_guest_import_unavailable(&request.vm, VERB));
     }
 
-    let provider_route_available = match state
-        .provider_runtime
-        .lifecycle_route_available(&request.vm)
-    {
-        Ok(available) => available,
-        Err(error) => {
-            return Ok(provider_lifecycle_failure_response(
-                VERB,
-                &request.vm,
-                error,
-            ));
-        }
-    };
-    if !provider_route_available {
-        return dispatch_broker_vm_start_inner(state, request, caller_role);
-    }
-
+    let operation_id = next_provider_lifecycle_operation_id("start", &request);
+    let authorization =
+        provider_lifecycle_authorization(state, &request.vm, &caller_role, &operation_id)?;
     let effect = DaemonProviderLifecycleEffect {
         state,
         request: request.clone(),
@@ -17900,17 +20757,16 @@ fn dispatch_broker_vm_start_as(
         term_timeout: VM_STOP_TIMEOUT,
         kill_timeout: VM_STOP_TIMEOUT,
         operation: provider_effects::GuestLifecycleOperation::Start,
+        authorization: authorization.clone(),
     };
     match state.provider_runtime.dispatch_lifecycle(
         &effect.caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("start", &request),
+        operation_id,
+        authorization,
         &effect,
     ) {
-        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
-            dispatch_broker_vm_start_inner(state, request, caller_role)
-        }
         Ok(provider_registry::ProviderRuntimeDispatch::Active(
             provider_effects::EffectDispatch::Dispatched(response),
         )) => Ok(response),
@@ -17931,6 +20787,98 @@ fn dispatch_broker_vm_start_as(
     }
 }
 
+struct DaemonGuestLifecycleEffect<'a> {
+    state: &'a ServerState,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
+    guest: ResourceRef,
+    caller_role: BrokerCallerRole,
+    force: bool,
+    wait_for_ready: bool,
+    operation: provider_effects::GuestLifecycleOperation,
+    authorization: provider_effects::LifecycleAuthorization,
+}
+
+impl DaemonGuestLifecycleEffect<'_> {
+    fn verify_identity(&self) -> Result<(), provider_effects::ProviderEffectError> {
+        let (zone_uid, guest_uid, guest_generation, provider_generation) =
+            block_on_future(self.runtime.guest_lifecycle_identity(&self.guest))
+                .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)?;
+        if zone_uid != *self.authorization.zone_uid()
+            || guest_uid != *self.authorization.guest_uid()
+            || guest_generation != self.authorization.guest_generation()
+            || provider_generation != self.authorization.provider_assignment_generation()
+            || self.runtime.committed_policy_snapshot().policy_revision
+                != self.authorization.policy_revision()
+        {
+            return Err(provider_effects::ProviderEffectError::IdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffect<'_> {
+    type Output = Value;
+
+    fn actual_state(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<provider_effects::GuestLifecycleState, provider_effects::ProviderEffectError> {
+        self.verify_identity()?;
+        block_on_future(
+            self.runtime
+                .cloud_hypervisor_lifecycle_state(Arc::new(self.state.clone()), &self.guest),
+        )
+        .map_err(|_| provider_effects::ProviderEffectError::StateUnavailable)
+    }
+
+    fn apply(
+        &self,
+        _request: &provider_effects::GuestLifecycleRequest,
+    ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        self.verify_identity()?;
+        consume_lifecycle_lease(
+            self.state,
+            &self.authorization,
+            self.operation,
+            &self.caller_role,
+        )?;
+        let _ = self.force;
+        block_on_future(self.runtime.apply_cloud_hypervisor_lifecycle(
+            Arc::new(self.state.clone()),
+            &self.guest,
+            self.authorization.guest_uid(),
+            self.authorization.guest_generation(),
+            self.operation,
+        ))
+        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        if self.wait_for_ready {
+            block_on_future(self.runtime.wait_cloud_hypervisor_lifecycle(
+                Arc::new(self.state.clone()),
+                &self.guest,
+                self.authorization.guest_uid(),
+                self.authorization.guest_generation(),
+                self.operation,
+            ))
+            .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        }
+        let mut response = applied_response(
+            "guest lifecycle",
+            format!(
+                "{} {}: controller-owned VMM Process lifecycle applied",
+                self.guest.to_canonical_string(),
+                self.operation.as_str()
+            ),
+        );
+        if !self.wait_for_ready {
+            response
+                .as_object_mut()
+                .expect("mutating response is an object")
+                .insert("apiReady".to_owned(), Value::String("pending".to_owned()));
+        }
+        Ok(response)
+    }
+}
+
 struct DaemonProviderLifecycleEffect<'a> {
     state: &'a ServerState,
     request: public_wire::VmLifecycleRequest,
@@ -17938,6 +20886,7 @@ struct DaemonProviderLifecycleEffect<'a> {
     term_timeout: Duration,
     kill_timeout: Duration,
     operation: provider_effects::GuestLifecycleOperation,
+    authorization: provider_effects::LifecycleAuthorization,
 }
 
 impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEffect<'_> {
@@ -17976,11 +20925,18 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        consume_lifecycle_lease(
+            self.state,
+            &self.authorization,
+            self.operation,
+            &self.caller_role,
+        )?;
         let result = match self.operation {
             provider_effects::GuestLifecycleOperation::Start => dispatch_broker_vm_start_inner(
                 self.state,
                 self.request.clone(),
                 self.caller_role.clone(),
+                Some(&self.authorization),
             ),
             provider_effects::GuestLifecycleOperation::Stop => {
                 dispatch_broker_vm_stop_with_timeout_as_inner(
@@ -17991,11 +20947,74 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                     self.kill_timeout,
                 )
             }
+            provider_effects::GuestLifecycleOperation::Restart => {
+                let stop = dispatch_broker_vm_stop_with_timeout_as_inner(
+                    self.state,
+                    self.request.clone(),
+                    self.caller_role.clone(),
+                    self.term_timeout,
+                    self.kill_timeout,
+                );
+                match stop {
+                    Ok(response) if response_outcome(&response) == Some("applied") => {
+                        dispatch_broker_vm_start_inner(
+                            self.state,
+                            self.request.clone(),
+                            self.caller_role.clone(),
+                            Some(&self.authorization),
+                        )
+                    }
+                    Ok(response) => Ok(response),
+                    Err(error) => Err(error),
+                }
+            }
         };
         match result {
             Ok(response) if response_outcome(&response) == Some("applied") => Ok(response),
             Ok(_) | Err(_) => Err(provider_effects::ProviderEffectError::EffectRejected),
         }
+    }
+}
+
+pub(crate) fn consume_lifecycle_lease(
+    state: &ServerState,
+    authorization: &provider_effects::LifecycleAuthorization,
+    operation: provider_effects::GuestLifecycleOperation,
+    caller_role: &BrokerCallerRole,
+) -> Result<(), provider_effects::ProviderEffectError> {
+    let operation = match operation {
+        provider_effects::GuestLifecycleOperation::Start => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Start
+        }
+        provider_effects::GuestLifecycleOperation::Stop => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
+        }
+        provider_effects::GuestLifecycleOperation::Restart => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Restart
+        }
+    };
+    let response = dispatch_broker_request_as(
+        state,
+        BrokerRequest::ConsumeLifecycleLease(
+            d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest {
+                zone_uid: authorization.zone_uid().clone(),
+                guest_uid: authorization.guest_uid().clone(),
+                guest_generation: authorization.guest_generation().get(),
+                provider_assignment_generation: authorization
+                    .provider_assignment_generation()
+                    .get(),
+                policy_revision: authorization.policy_revision(),
+                operation_id: authorization.operation_id().to_owned(),
+                operation,
+                stop_only: authorization.is_stop_only(),
+            },
+        ),
+        caller_role.clone(),
+    )
+    .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+    match response {
+        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed => Ok(()),
+        _ => Err(provider_effects::ProviderEffectError::EffectRejected),
     }
 }
 
@@ -18012,6 +21031,121 @@ fn next_provider_lifecycle_operation_id(
         request.flags.json
     );
     provider_registry::next_lifecycle_operation_id(operation, &request.vm, &fingerprint)
+}
+
+fn provider_lifecycle_authorization(
+    state: &ServerState,
+    guest: &str,
+    caller_role: &BrokerCallerRole,
+    operation_id: &str,
+) -> Result<provider_effects::LifecycleAuthorization, TypedError> {
+    let target =
+        ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest lifecycle target is invalid".to_owned(),
+        })?;
+    let zone =
+        d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, guest)
+            .map_err(|_| TypedError::InternalConfig {
+                detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
+            })?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Guest lifecycle resource plane is unavailable".to_owned(),
+        })?
+        .clone();
+    let runtime = plane.as_ref().and_then(|plane| plane.zone(&zone).ok());
+    let Some(runtime) = runtime else {
+        #[cfg(test)]
+        {
+            if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
+                return provider_effects::LifecycleAuthorization::host_shutdown(
+                    ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+                    target,
+                    ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+                    ResourceGeneration::new(1).expect("Guest generation"),
+                    ResourceGeneration::new(1).expect("Provider assignment generation"),
+                    1,
+                    operation_id.to_owned(),
+                )
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+                });
+            }
+            return Ok(provider_effects::LifecycleAuthorization::for_test(
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                operation_id,
+            ));
+        }
+        #[cfg(not(test))]
+        {
+            return Err(TypedError::InternalConfig {
+                detail: "Guest lifecycle resource runtime is unavailable".to_owned(),
+            });
+        }
+    };
+    if matches!(caller_role, BrokerCallerRole::RootUid { .. }) {
+        let admission =
+            block_on_future(runtime.admit_internal_guest_lifecycle(target.clone(), operation_id))
+                .map_err(|_| TypedError::InternalConfig {
+                detail: "internal Guest lifecycle authorization is unavailable".to_owned(),
+            })?;
+        return provider_effects::LifecycleAuthorization::from_lease(
+            admission.lease,
+            target,
+            admission.guest_uid,
+            admission.guest_generation,
+            admission.provider_assignment_generation,
+        )
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "internal Guest lifecycle authorization lease is invalid".to_owned(),
+        });
+    }
+    let (zone_uid, guest_uid, guest_generation, provider_generation) =
+        block_on_future(runtime.guest_lifecycle_identity(&target)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "Guest lifecycle identity is unavailable".to_owned(),
+            }
+        })?;
+    if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
+        return provider_effects::LifecycleAuthorization::host_shutdown(
+            zone_uid,
+            target,
+            guest_uid,
+            guest_generation,
+            provider_generation,
+            runtime.committed_policy_snapshot().policy_revision,
+            operation_id.to_owned(),
+        )
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+        });
+    }
+    let admission = block_on_future(runtime.admit_guest_lifecycle(
+        broker_caller_uid(caller_role),
+        target,
+        operation_id,
+    ))
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle authorization is unavailable".to_owned(),
+    })?;
+    provider_effects::LifecycleAuthorization::from_lease(
+        admission.lease,
+        ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest lifecycle target is invalid".to_owned(),
+        })?,
+        admission.guest_uid,
+        admission.guest_generation,
+        admission.provider_assignment_generation,
+    )
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle authorization lease is invalid".to_owned(),
+    })
 }
 
 fn provider_lifecycle_failure_response(
@@ -18044,89 +21178,11 @@ fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
+    lifecycle_authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
     let resolver = load_bundle_resolver(state)?;
-
-    // For net VMs (`sys-<env>-net`), refuse start if the on-disk
-    // dnsmasq.conf hash diverges from
-    // the bundle's nft/route/hosts intent hash for the same env.
-    // This catches the case where the bundle was updated but the
-    // dnsmasq render step (host singleton or systemd unit) did not
-    // rerun. Workload VMs short-circuit with no I/O. Default
-    // dnsmasq parent dir is `/var/lib/d2b/dnsmasq`; the
-    // `D2B_DNSMASQ_DIR` env var overrides it for hermetic
-    // tests. Runs BEFORE the host-prep DAG so the failure surfaces
-    // early and no host mutations are attempted on a stale net VM.
-    {
-        let dnsmasq_dir = std::env::var_os("D2B_DNSMASQ_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(net_vm_bundle_gate::DEFAULT_DNSMASQ_DIR));
-        match net_vm_bundle_gate::check_net_vm_bundle_gate(&resolver, &request.vm, &dnsmasq_dir) {
-            net_vm_bundle_gate::BundleGateOutcome::NotANetVm
-            | net_vm_bundle_gate::BundleGateOutcome::Ok => {}
-            net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
-                let path = drift.path();
-                let reason = drift.reason();
-                // ConfigMissing is a SOFT-DEFER, not a hard fail. The
-                // dnsmasq config render is owned by a v1.1.1 daemon
-                // host-prep DAG op
-                // (`RenderDnsmasqEnvConf{env}`) that has not landed
-                // yet; until it does, a fresh-install net-VM start
-                // can legitimately hit ConfigMissing on the first
-                // run. Soft-deferring lets the VM come up; the
-                // operator sees a stderr warning explaining the
-                // gap. HashMismatch / ConfigReadFailed / EnvMissing
-                // remain hard fails because they indicate a real
-                // contract violation (bundle vs disk drift, or a
-                // malformed env declaration).
-                if matches!(
-                    drift,
-                    net_vm_bundle_gate::BundleGateDrift::ConfigMissing { .. }
-                ) {
-                    tracing::warn!(
-                        vm = %request.vm,
-                        env = drift.env(),
-                        path = %path.display(),
-                        "net VM start: dnsmasq.conf missing (soft-defer per v1.1-final; v1.1.1 RenderDnsmasqEnvConf host-prep op will render before first start)",
-                    );
-                    // Fall through to normal start path.
-                } else {
-                    tracing::warn!(
-                        vm = %request.vm,
-                        env = drift.env(),
-                        path = %path.display(),
-                        "net VM start refused: bundle/dnsmasq drift",
-                    );
-                    let (env, expected, actual) = match &drift {
-                        net_vm_bundle_gate::BundleGateDrift::HashMismatch {
-                            env,
-                            expected,
-                            actual,
-                            ..
-                        } => (env.clone(), expected.clone(), actual.clone()),
-                        net_vm_bundle_gate::BundleGateDrift::ConfigMissing { env, .. }
-                        | net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed { env, .. } => {
-                            (env.clone(), String::new(), String::new())
-                        }
-                        net_vm_bundle_gate::BundleGateDrift::EnvMissing { .. } => {
-                            (String::new(), String::new(), String::new())
-                        }
-                    };
-                    return Ok(TypedError::BundleDnsmasqDrift {
-                        vm: request.vm.clone(),
-                        env,
-                        path,
-                        expected,
-                        actual,
-                        reason,
-                    }
-                    .to_envelope_value());
-                }
-            }
-        }
-    }
 
     // Build the host-prep DAG for this VM and (optionally) execute it
     // before driving the per-VM process DAG. The DAG is logged
@@ -18163,7 +21219,9 @@ fn dispatch_broker_vm_start_inner(
         state,
         resolver: &resolver,
         caller_role: caller_role.clone(),
+        lifecycle_authorization: lifecycle_authorization.cloned(),
         workload_identity: dag.workload_identity.clone(),
+        network_tap_context: network_tap_context_for_vm(state, &resolver, request.vm.as_str()),
     };
 
     // StoreSync owns the guest-served live marker
@@ -18882,7 +21940,13 @@ fn dispatch_broker_vm_stop(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
+    dispatch_broker_vm_stop_with_timeout_as_inner(
+        state,
+        request,
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        VM_STOP_TIMEOUT,
+        VM_STOP_TIMEOUT,
+    )
 }
 
 fn dispatch_broker_vm_stop_as(
@@ -18906,7 +21970,7 @@ fn dispatch_broker_vm_stop_with_timeout(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    dispatch_broker_vm_stop_with_timeout_as_inner(
         state,
         request,
         BrokerCallerRole::LauncherUid { uid: 0 },
@@ -18929,20 +21993,11 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         return Ok(response);
     }
 
-    let provider_route_available = match state
-        .provider_runtime
-        .lifecycle_route_available(&request.vm)
-    {
-        Ok(available) => available,
-        Err(error) => {
-            return Ok(provider_lifecycle_failure_response(
-                VERB,
-                &request.vm,
-                error,
-            ));
-        }
-    };
-    if !provider_route_available {
+    // The state-persistence support binary intentionally exercises pidfd
+    // cleanup without requiring a host Provider bundle or live resource
+    // plane. Production builds keep the fail-closed Provider path below.
+    #[cfg(feature = "test-support")]
+    if state.provider_runtime.process_providers().is_none() {
         return dispatch_broker_vm_stop_with_timeout_as_inner(
             state,
             request,
@@ -18952,6 +22007,9 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         );
     }
 
+    let operation_id = next_provider_lifecycle_operation_id("stop", &request);
+    let authorization =
+        provider_lifecycle_authorization(state, &request.vm, &caller_role, &operation_id)?;
     let effect = DaemonProviderLifecycleEffect {
         state,
         request: request.clone(),
@@ -18959,23 +22017,16 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         term_timeout,
         kill_timeout,
         operation: provider_effects::GuestLifecycleOperation::Stop,
+        authorization: authorization.clone(),
     };
     match state.provider_runtime.dispatch_lifecycle(
         &caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("stop", &request),
+        operation_id,
+        authorization,
         &effect,
     ) {
-        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
-            dispatch_broker_vm_stop_with_timeout_as_inner(
-                state,
-                request,
-                caller_role,
-                term_timeout,
-                kill_timeout,
-            )
-        }
         Ok(provider_registry::ProviderRuntimeDispatch::Active(
             provider_effects::EffectDispatch::Dispatched(response),
         )) => Ok(response),
@@ -19153,7 +22204,34 @@ fn dispatch_broker_vm_restart(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_restart_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
+    let stop_response = dispatch_broker_vm_stop_with_timeout_as_inner(
+        state,
+        request.clone(),
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        VM_STOP_TIMEOUT,
+        VM_STOP_TIMEOUT,
+    )?;
+    if response_outcome(&stop_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&stop_response, "vm restart"));
+    }
+    let start_response = dispatch_broker_vm_start_inner(
+        state,
+        request.clone(),
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        None,
+    )?;
+    if response_outcome(&start_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&start_response, "vm restart"));
+    }
+    Ok(applied_response(
+        "vm restart",
+        format!(
+            "vm restart {}: {}; {}",
+            request.vm,
+            response_summary(&stop_response).unwrap_or("stop applied"),
+            response_summary(&start_response).unwrap_or("start applied"),
+        ),
+    ))
 }
 
 fn dispatch_broker_vm_restart_as(
@@ -19216,7 +22294,6 @@ fn dispatch_broker_host_prepare_as(
             dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
         };
 
-    let host = load_host_artifact(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19232,61 +22309,6 @@ fn dispatch_broker_host_prepare_as(
         return Ok(response);
     }
 
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: false,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UpdateHostsFile",
-        BrokerRequest::UpdateHostsFile(BrokerUpdateHostsFileRequest {
-            bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
-            destroy: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
-    }
     let resolver = load_bundle_resolver(state)?;
     let generation =
         resolver
@@ -19320,7 +22342,7 @@ fn dispatch_broker_host_prepare_as(
     Ok(applied_response(
         VERB,
         format!(
-            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged ops"
+            "host prepare: applied 1 host nft + 1 hosts + 1 nm-unmanaged op; Network resources own per-Network effects"
         ),
     ))
 }
@@ -19354,10 +22376,6 @@ fn dispatch_broker_host_destroy_as(
             dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
         };
 
-    let host = load_host_artifact(state)?;
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19365,62 +22383,6 @@ fn dispatch_broker_host_destroy_as(
         BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
             bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
             scope_id: ScopeId::new("host"),
-            destroy: true,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
-    }
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: true,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-    }
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: true,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UpdateHostsFile",
-        BrokerRequest::UpdateHostsFile(BrokerUpdateHostsFileRequest {
-            bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
             destroy: true,
             tracing_span_id: None,
         }),
@@ -19445,14 +22407,13 @@ fn dispatch_broker_host_destroy_as(
     Ok(applied_response(
         VERB,
         format!(
-            "host destroy: applied 1 nm-unmanaged-remove + {route_ops} route-del + {sysctl_ops} sysctl-revert + 1 hosts-remove + 1 nft-flush ops"
+            "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
         ),
     ))
 }
 
 /// Focused mutating recovery verb for network host-prep drift. Re-applies
-/// the network slice of `host prepare` (host-scope nftables +
-/// per-env routes + per-env ipv6 sysctls) - explicitly NOT the
+/// the host-owned firewall slice of `host prepare` - explicitly NOT the
 /// `/etc/hosts` mutation or NetworkManager unmanaged file: those
 /// are scoped to full `host prepare`. On success the persistent
 /// preflight history is reset so the next daemon startup begins with
@@ -19492,7 +22453,6 @@ fn dispatch_broker_host_reconcile_as(
         });
     }
 
-    let host = load_host_artifact(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19508,63 +22468,10 @@ fn dispatch_broker_host_reconcile_as(
         return Ok(response);
     }
 
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: false,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-
-    let history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
-    if let Err(err) = history.reset_after_reconcile() {
-        tracing::warn!(
-            path = %history.path().display(),
-            error = %err,
-            "host reconcile: failed to reset net-route preflight history (apply succeeded; counter will clear on next successful startup pass)",
-        );
-    }
-
     Ok(applied_response(
         VERB,
         format!(
-            "host reconcile --network: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl ops; net-route preflight counter reset"
+            "host reconcile --network: applied host-owned firewall projection; Network resources own per-Network effects"
         ),
     ))
 }
@@ -19990,12 +22897,7 @@ fn dispatch_broker_activation(
     }
 
     if mode == BrokerActivationMode::Boot {
-        ensure_vm_runtime_capability(
-            state,
-            &request.vm,
-            RuntimeCapabilityGate::ConfigSync,
-            verb,
-        )?;
+        ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::ConfigSync, verb)?;
         return dispatch_broker_activation_metadata_only(
             state,
             request,
@@ -20006,8 +22908,13 @@ fn dispatch_broker_activation(
         );
     }
 
-    let _ = caller_role;
-    dispatch_live_guest_activation_resource(state, request, verb, mode)
+    dispatch_live_guest_activation_resource(
+        state,
+        request,
+        verb,
+        mode,
+        broker_caller_uid(&caller_role),
+    )
 }
 
 fn dispatch_live_guest_activation_resource(
@@ -20015,6 +22922,7 @@ fn dispatch_live_guest_activation_resource(
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
+    peer_uid: u32,
 ) -> Result<Value, TypedError> {
     if mode != BrokerActivationMode::Rollback && request.to_generation.is_some() {
         return Ok(invalid_request_response_with_summary(
@@ -20039,17 +22947,14 @@ fn dispatch_live_guest_activation_resource(
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
         })?;
-    let runtime = plane
-        .zone(&zone)
-        .map_err(|_| TypedError::InternalConfig {
-            detail: "activation Zone runtime unavailable".to_owned(),
-        })?;
-    let guest_ref_text = format!("Guest/{}", request.vm);
-    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
-        TypedError::InternalConfig {
-            detail: "activation Guest reference invalid".to_owned(),
-        }
+    let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
+        detail: "activation Zone runtime unavailable".to_owned(),
     })?;
+    let guest_ref_text = format!("Guest/{}", request.vm);
+    let guest_ref =
+        ResourceRef::parse(&guest_ref_text).map_err(|_| TypedError::InternalConfig {
+            detail: "activation Guest reference invalid".to_owned(),
+        })?;
     let guest_ref_canonical = guest_ref.to_canonical_string();
     let get_guest = json!({
         "zoneRef": format!("Zone/{}", zone.as_str()),
@@ -20057,22 +22962,21 @@ fn dispatch_live_guest_activation_resource(
         "method": "Get",
         "resourceRef": guest_ref_canonical,
     });
-    let guest = block_on_future(runtime.dispatch_cli_request(&get_guest)).map_err(|_| {
-        TypedError::InternalConfig {
+    let guest = block_on_future(runtime.dispatch_public_cli_request(&get_guest, peer_uid))
+        .map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
-        }
-    })?;
+        })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
         });
     }
     let (ordinal, artifact) = if mode == BrokerActivationMode::Rollback {
-        let target_ordinal = request.to_generation.ok_or_else(|| {
-            TypedError::InternalConfig {
+        let target_ordinal = request
+            .to_generation
+            .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation unavailable".to_owned(),
-            }
-        })?;
+            })?;
         let list = json!({
             "zoneRef": format!("Zone/{}", zone.as_str()),
             "service": "d2b.resource.v3",
@@ -20081,11 +22985,10 @@ fn dispatch_live_guest_activation_resource(
             "executionRef": guest_ref.to_canonical_string(),
             "limit": 256,
         });
-        let resources = block_on_future(runtime.dispatch_cli_request(&list)).map_err(|_| {
-            TypedError::InternalConfig {
+        let resources = block_on_future(runtime.dispatch_public_cli_request(&list, peer_uid))
+            .map_err(|_| TypedError::InternalConfig {
                 detail: "rollback generations unavailable".to_owned(),
-            }
-        })?;
+            })?;
         let artifact = resources
             .get("resources")
             .and_then(Value::as_array)
@@ -20096,7 +22999,7 @@ fn dispatch_live_guest_activation_resource(
                     .get("spec")
                     .and_then(|spec| spec.get("executionRef"))
                     .and_then(Value::as_str)
-                        == Some(guest_ref_canonical.as_str())
+                    == Some(guest_ref_canonical.as_str())
                     && resource
                         .pointer("/metadata/name")
                         .and_then(Value::as_str)
@@ -20150,11 +23053,12 @@ fn dispatch_live_guest_activation_resource(
         "spec": spec,
         "waitForReconcile": false,
     });
-    let created = block_on_future(runtime.dispatch_cli_request(&create)).map_err(|_| {
-        TypedError::InternalConfig {
-            detail: "activation resource create failed".to_owned(),
-        }
-    })?;
+    let created =
+        block_on_future(runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "activation resource create failed".to_owned(),
+            }
+        })?;
     if created
         .get("kind")
         .and_then(Value::as_str)
@@ -20170,7 +23074,10 @@ fn dispatch_live_guest_activation_resource(
             return Ok(broker_failure_response(
                 verb,
                 format!("activation resource for vm '{}' timed out", request.vm),
-                format!("retry `d2b {verb} {} --apply` after the Guest session recovers", request.vm),
+                format!(
+                    "retry `d2b {verb} {} --apply` after the Guest session recovers",
+                    request.vm
+                ),
                 None,
             ));
         }
@@ -20180,20 +23087,15 @@ fn dispatch_live_guest_activation_resource(
             "method": "Get",
             "resourceRef": generation_ref,
         });
-        let current = block_on_future(runtime.dispatch_cli_request(&get)).map_err(|_| {
-            TypedError::InternalConfig {
+        let current = block_on_future(runtime.dispatch_public_cli_request(&get, peer_uid))
+            .map_err(|_| TypedError::InternalConfig {
                 detail: "activation resource status unavailable".to_owned(),
-            }
-        })?;
+            })?;
         let current_spec = current.get("spec");
-        if current_spec
-            .and_then(|spec| spec.get("executionRef"))
-            != spec.get("executionRef")
-            || current_spec
-                .and_then(|spec| spec.get("systemArtifactId"))
+        if current_spec.and_then(|spec| spec.get("executionRef")) != spec.get("executionRef")
+            || current_spec.and_then(|spec| spec.get("systemArtifactId"))
                 != spec.get("systemArtifactId")
-            || current_spec
-                .and_then(|spec| spec.get("activationMode"))
+            || current_spec.and_then(|spec| spec.get("activationMode"))
                 != spec.get("activationMode")
         {
             return Ok(invalid_request_response_with_summary(
@@ -21548,7 +24450,6 @@ mod public_status_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -21562,7 +24463,7 @@ mod public_status_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -21576,13 +24477,6 @@ mod public_status_tests {
 
     fn write_public_status_artifacts(root: &Path) -> ArtifactPaths {
         write_public_status_artifacts_with_state_dir(root, None)
-    }
-
-    fn admin_peer() -> PeerIdentity {
-        PeerIdentity {
-            role: PeerRole::Admin,
-            uid: 1000,
-        }
     }
 
     fn launcher_peer() -> PeerIdentity {
@@ -21612,656 +24506,6 @@ mod public_status_tests {
         let json = serde_json::to_string(&envelope).unwrap();
         assert!(json.contains("\"role\":\"LauncherUid\""));
         assert!(!json.contains("\"role\":\"AdminUid\""));
-    }
-
-    fn gateway_config_for_waypipe(
-        path: &Path,
-        allow_host_relay_credentials: bool,
-    ) -> GatewayFileConfig {
-        GatewayFileConfig {
-            gateway: "gateway".to_owned(),
-            realm: "demo".to_owned(),
-            state_dir: None,
-            credential_path: Some(PathBuf::from("/run/d2b/test-gateway-credential.json")),
-            seal_key_path: Some(PathBuf::from("/run/d2b/test-gateway-seal.key")),
-            allow_host_relay_credentials,
-            relay: GatewayRelayFileConfig {
-                namespace: Some("relay.example.invalid".to_owned()),
-                entity: Some("gateway".to_owned()),
-            },
-            aca: GatewayAcaFileConfig::default(),
-            display: GatewayDisplayFileConfig {
-                vsock_port: None,
-                waypipe_compression: None,
-                waypipe_socket: Some(path.display().to_string()),
-            },
-        }
-    }
-
-    fn bind_test_waypipe_socket(root: &Path, name: &str, mode: u32) -> PathBuf {
-        let socket_path = root.join(name);
-        let _listener =
-            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind test socket");
-        fs::set_permissions(&socket_path, fs::Permissions::from_mode(mode))
-            .expect("set socket mode");
-        socket_path
-    }
-
-    fn gateway_unavailable_detail(error: &TypedError) -> &str {
-        match error {
-            TypedError::GatewayDisplayUnavailable { detail } => detail,
-            other => panic!("expected GatewayDisplayUnavailable, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn gateway_host_relay_guard_accepts_default_guest_owned_store() {
-        let dir = tempfile::tempdir().expect("gateway guard dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let config = gateway_config_for_waypipe(&socket_path, false);
-        validate_gateway_host_relay_transition_guard(&config)
-            .expect("default guest-owned credential store is accepted");
-    }
-
-    #[test]
-    fn gateway_host_relay_guard_rejects_retired_escape_hatch() {
-        let dir = tempfile::tempdir().expect("gateway guard dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let config = gateway_config_for_waypipe(&socket_path, true);
-        let preflight = gateway_display_preflight_from_config(&config)
-            .expect("display preflight stores config without touching the user-session socket");
-        assert_eq!(preflight.waypipe_socket_path.as_ref(), Some(&socket_path));
-        assert!(preflight.allow_host_relay_credentials);
-        let err = validate_gateway_host_relay_transition_guard(&config)
-            .expect_err("retired escape hatch is rejected");
-        assert!(gateway_unavailable_detail(&err).contains("retired"));
-        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
-    }
-
-    #[test]
-    fn waypipe_receiver_socket_validation_rejects_symlink() {
-        let dir = tempfile::tempdir().expect("waypipe symlink dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        let link_path = dir.path().join("waypipe-link.sock");
-        std::os::unix::fs::symlink(&socket_path, &link_path).expect("symlink test socket");
-        let err = validate_waypipe_receiver_socket(&link_path)
-            .expect_err("waypipe socket validation must not follow symlinks");
-        assert!(gateway_unavailable_detail(&err).contains("symlink"));
-    }
-
-    #[test]
-    fn waypipe_receiver_socket_validation_requires_0600() {
-        let dir = tempfile::tempdir().expect("waypipe mode dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o660);
-        let err = validate_waypipe_receiver_socket(&socket_path)
-            .expect_err("waypipe socket must be private to the owner");
-        assert!(gateway_unavailable_detail(&err).contains("mode 0600"));
-    }
-
-    #[test]
-    fn gateway_display_open_refuses_retired_host_relay_before_orchestrator() {
-        let (mut state, _dir) = test_state();
-        let dir = tempfile::tempdir().expect("waypipe dispatch dir");
-        let socket_path = bind_test_waypipe_socket(dir.path(), "waypipe.sock", 0o600);
-        state.gateway_display = Arc::new(GatewayDisplayRuntime {
-            orchestrator: GatewayOrchestrator::new(
-                daemon_gateway_deps(),
-                1,
-                LedgerLimits::default(),
-            ),
-            sessions: Mutex::new(HashMap::new()),
-            lifecycle: Box::new(DaemonGatewayLifecycle),
-            preflight: Some(GatewayDisplayPreflight {
-                allow_host_relay_credentials: true,
-                waypipe_socket_path: Some(socket_path),
-            }),
-        });
-
-        let err = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-invalid-waypipe".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect_err("retired host relay credential path blocks gateway open");
-        assert!(gateway_unavailable_detail(&err).contains("retired"));
-        assert!(gateway_unavailable_detail(&err).contains("enroll inside gateway then retry"));
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_open_dispatches_to_orchestrator() {
-        let (state, _dir) = test_state();
-        let value = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect("gateway display open dispatches");
-        assert_eq!(
-            value.get("type").and_then(Value::as_str),
-            Some("gatewayDisplayResponse")
-        );
-        assert_eq!(value.get("op").and_then(Value::as_str), Some("open"));
-        assert_eq!(
-            value
-                .get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("running")
-        );
-        let session_id = value
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("open response has session id")
-            .to_owned();
-
-        let list = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("gateway display list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("sessionId").and_then(Value::as_str),
-            Some(session_id.as_str())
-        );
-        assert_eq!(
-            sessions[0].get("operationId").and_then(Value::as_str),
-            Some("gw-exec-1")
-        );
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1000")
-        );
-
-        let close = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: session_id.clone(),
-                },
-            )),
-        )
-        .expect("gateway display close dispatches");
-        assert_eq!(
-            close
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let empty = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("gateway display list after close dispatches");
-        assert_eq!(
-            empty
-                .get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn gateway_display_open_uses_peer_uid_as_trusted_principal() {
-        let (state, _dir) = test_state();
-        dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-launcher".to_owned(),
-                    principal: "uid-9999".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 43,
-                },
-            )),
-        )
-        .expect("launcher can open owned gateway display session");
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("launcher list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1001")
-        );
-    }
-
-    #[test]
-    fn gateway_display_open_rejects_invalid_operation_id() {
-        let (state, _dir) = test_state();
-        let err = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "not valid".to_owned(),
-                    principal: "uid-1001".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 46,
-                },
-            )),
-        )
-        .expect_err("invalid operation id is rejected before ledger insert");
-        match err {
-            TypedError::WireInvalidFrame { detail } => {
-                assert!(detail.starts_with("gatewayDisplay operation_id invalid:"));
-            }
-            other => panic!("expected WireInvalidFrame, got {other:?}"),
-        }
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_list_and_close_are_owner_scoped_for_launchers() {
-        let (state, _dir) = test_state();
-        let other_peer = PeerIdentity {
-            role: PeerRole::Launcher,
-            uid: 1002,
-        };
-
-        let first = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-owner".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 44,
-                },
-            )),
-        )
-        .expect("first launcher open dispatches");
-        let first_session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("first open response has session id")
-            .to_owned();
-
-        dispatch_request(
-            &state,
-            &other_peer,
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "other.work.d2b".to_owned(),
-                    operation_id: "gw-exec-other".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 45,
-                },
-            )),
-        )
-        .expect("second launcher open dispatches");
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(
-                public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                    target: None,
-                }),
-            ),
-        )
-        .expect("owner list dispatches");
-        let sessions = list
-            .get("result")
-            .and_then(|r| r.get("sessions"))
-            .and_then(Value::as_array)
-            .expect("list response sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].get("principal").and_then(Value::as_str),
-            Some("uid-1001")
-        );
-
-        let denied = dispatch_request(
-            &state,
-            &other_peer,
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: first_session_id.clone(),
-                },
-            )),
-        )
-        .expect_err("other launcher cannot close session");
-        assert!(matches!(denied, TypedError::AuthzNotAdmin { .. }));
-
-        let closed = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: first_session_id,
-                },
-            )),
-        )
-        .expect("owner close dispatches");
-        assert_eq!(
-            closed
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn gateway_display_launcher_close_absent_session_is_idempotent() {
-        let (state, _dir) = test_state();
-        let close = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs {
-                    session_id: "missing-session".to_owned(),
-                },
-            )),
-        )
-        .expect("absent close dispatches");
-        assert_eq!(
-            close
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn gateway_display_launcher_can_close_owned_terminal_tracked_session() {
-        let (state, _dir) = test_state();
-        let first = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-terminal".to_owned(),
-                    principal: "ignored".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 47,
-                },
-            )),
-        )
-        .expect("launcher open dispatches");
-        let session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .expect("open response has session id")
-            .to_owned();
-        let open = state
-            .gateway_display
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .expect("session still tracked")
-            .open
-            .clone();
-        block_on_future(state.gateway_display.orchestrator.close(&open))
-            .expect("orchestrator can mark session terminal");
-
-        let closed = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Close(
-                public_wire::GatewayDisplayCloseArgs { session_id },
-            )),
-        )
-        .expect("owner close dispatches for terminal tracked session");
-        assert_eq!(
-            closed
-                .get("result")
-                .and_then(|r| r.get("closed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn gateway_display_start_and_stop_dispatch_lifecycle() {
-        let (state, _dir) = test_state();
-        let start = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 41,
-                },
-            )),
-        )
-        .expect("gateway display start dispatches");
-        assert_eq!(
-            start.get("type").and_then(Value::as_str),
-            Some("gatewayDisplayResponse")
-        );
-        assert_eq!(start.get("op").and_then(Value::as_str), Some("start"));
-        assert_eq!(
-            start
-                .get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("ready")
-        );
-
-        let stop = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Stop(
-                public_wire::GatewayDisplayStopArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-stop-1".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 42,
-                },
-            )),
-        )
-        .expect("gateway display stop dispatches");
-        assert_eq!(stop.get("op").and_then(Value::as_str), Some("stop"));
-        assert_eq!(
-            stop.get("result")
-                .and_then(|r| r.get("state"))
-                .and_then(Value::as_str),
-            Some("stopped")
-        );
-    }
-
-    #[test]
-    fn gateway_display_unconfigured_runtime_fails_closed() {
-        let (mut state, _dir) = test_state();
-        state.gateway_display = crate::new_gateway_display_runtime();
-        let err = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-unconfigured".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    request_hash: 41,
-                },
-            )),
-        )
-        .expect_err("unconfigured gateway runtime must fail closed");
-        assert!(matches!(err, TypedError::GatewayDisplayUnavailable { .. }));
-    }
-
-    #[test]
-    fn gateway_display_replay_preserves_real_session_handles() {
-        let (state, _dir) = test_state();
-        let request = || {
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-replay".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 42,
-                },
-            ))
-        };
-        let first = dispatch_request(&state, &admin_peer(), request()).expect("first open");
-        let session_id = first
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        let second = dispatch_request(&state, &admin_peer(), request()).expect("replay open");
-        assert_eq!(
-            second
-                .get("result")
-                .and_then(|r| r.get("sessionId"))
-                .and_then(Value::as_str),
-            Some(session_id.as_str())
-        );
-        let sessions = state.gateway_display.sessions.lock().unwrap();
-        let session = sessions.get(&session_id).expect("session retained");
-        assert!(!session.open.agent.0.is_empty());
-        assert!(!session.open.listener.0.is_empty());
-    }
-
-    #[test]
-    fn gateway_display_list_gc_expires_stale_sessions() {
-        let (state, _dir) = test_state();
-        let value = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
-                public_wire::GatewayDisplayOpenArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-exec-gc".to_owned(),
-                    principal: "uid-1000".to_owned(),
-                    app_argv: vec!["foot".to_owned()],
-                    request_hash: 43,
-                },
-            )),
-        )
-        .expect("open session");
-        let session_id = value
-            .get("result")
-            .and_then(|r| r.get("sessionId"))
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_owned();
-        {
-            let mut sessions = state.gateway_display.sessions.lock().unwrap();
-            sessions
-                .get_mut(&session_id)
-                .expect("session exists")
-                .opened_at = Instant::now() - GATEWAY_DISPLAY_SESSION_TTL - Duration::from_secs(1);
-        }
-        let list = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                public_wire::GatewayDisplayListArgs { target: None },
-            )),
-        )
-        .expect("list after gc");
-        assert_eq!(
-            list.get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn gateway_display_lifecycle_requires_admin_but_listing_is_launcher_scoped() {
-        let (state, _dir) = test_state();
-        let err = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
-                public_wire::GatewayDisplayStartArgs {
-                    target: "demo.work.d2b".to_owned(),
-                    operation_id: "gw-start-launcher".to_owned(),
-                    principal: "uid-1001".to_owned(),
-                    request_hash: 1,
-                },
-            )),
-        )
-        .expect_err("launcher must not start gateway display lifecycle");
-        assert!(matches!(err, TypedError::AuthzNotAdmin { .. }));
-
-        let list = dispatch_request(
-            &state,
-            &launcher_peer(),
-            d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                public_wire::GatewayDisplayListArgs { target: None },
-            )),
-        )
-        .expect("launcher can list its own gateway display sessions");
-        assert_eq!(
-            list.get("result")
-                .and_then(|r| r.get("sessions"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
     }
 
     fn write_public_status_artifacts_with_state_dir(
@@ -22867,13 +25111,7 @@ mod public_status_tests {
         assert_eq!(public_runtime_capabilities(&explicit), vec!["usb-hotplug"]);
         assert_eq!(
             public_unsupported_capabilities(&explicit),
-            vec![
-                "config-sync",
-                "exec",
-                "keys",
-                "ssh",
-                "store-sync"
-            ]
+            vec!["config-sync", "exec", "keys", "ssh", "store-sync"]
         );
     }
 
@@ -23598,12 +25836,30 @@ mod public_status_tests {
             term_timeout: VM_STOP_TIMEOUT,
             kill_timeout: VM_STOP_TIMEOUT,
             operation: provider_effects::GuestLifecycleOperation::Start,
+            authorization: provider_effects::LifecycleAuthorization::for_test_with_guest(
+                "Guest/vm-a",
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                "failed-state",
+            ),
         };
         let lifecycle_request = provider_effects::GuestLifecycleRequest::new(
             ZoneId::parse("work").expect("Zone"),
             d2b_contracts_resource::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
             provider_effects::GuestLifecycleOperation::Start,
             "failed-state",
+            provider_effects::LifecycleAuthorization::for_test_with_guest(
+                "Guest/vm-a",
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                "failed-state",
+            ),
         )
         .expect("lifecycle request");
 
@@ -23908,7 +26164,7 @@ mod detached_exec_routing_tests {
             .find("fn handle_connection_authorized(")
             .expect("authorized connection handler");
         let connection_end = source[connection_start..]
-            .find("\nfn run_gateway_display_owner(")
+            .find("\nfn dispatch_request(")
             .map(|offset| connection_start + offset)
             .expect("authorized connection handler end");
         let connection = &source[connection_start..connection_end];
@@ -24338,7 +26594,6 @@ mod detached_exec_routing_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -24352,7 +26607,7 @@ mod detached_exec_routing_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -24376,8 +26631,6 @@ mod detached_exec_routing_tests {
             uid: 1000,
         }
     }
-
-
 }
 
 /// The public.sock accept loop is serial: it accepts one connection, runs
@@ -24436,7 +26689,6 @@ mod accept_loop_concurrency_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -24450,7 +26702,7 @@ mod accept_loop_concurrency_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25060,10 +27312,10 @@ mod broker_dispatch_tests {
 
     use d2b_contracts::types::{RoleId, VmId};
     use d2b_contracts_broker::broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
-        BrokerResponse, ChildExitKind, ChildExitStatus, ChildReapedNotification,
-        DeregisterRunnerPidfdResponse, PollChildReapedResponse, RunnerRole, RunnerSignal,
-        SignalRunnerResponse, SpawnRunnerResponse,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind,
+        ChildExitStatus, ChildReapedNotification, DeregisterRunnerPidfdResponse,
+        PollChildReapedResponse, RunnerRole, RunnerSignal, SignalRunnerResponse,
+        SpawnRunnerResponse,
     };
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
@@ -25071,6 +27323,7 @@ mod broker_dispatch_tests {
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
         ShellSessionState, TrustRequest, VmLifecycleRequest,
     };
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
     use nix::sys::socket::{
@@ -25081,26 +27334,25 @@ mod broker_dispatch_tests {
     use serde::Serialize;
     use serde_json::{Value, json};
 
+    use super::provider_effects::LifecycleAuthorization;
     use super::provider_shutdown::GracefulVmShutdown;
     use super::{
-        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole,
-        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
-        UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
-        adopt_orphaned_runners_on_startup_with, block_on_future,
-        bounded_usbip_owner_label, dispatch_broker_gc,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ProviderGracefulInputs,
+        QemuBrokerShutdownProvider, ServerState, UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID,
+        VmShutdownOutcome, VmStartNodeMode, adopt_orphaned_runners_on_startup_with,
+        block_on_future, bounded_usbip_owner_label, dispatch_broker_gc,
         dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
         dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
         dispatch_broker_run_migrate, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, force_shutdown_generation,
-        note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
-        reconcile_display_before_vm_start, rollback_failed_vm_start, run_provider_graceful_shutdown,
-        same_vm_declared_usbip_start_claims_with_reader,
+        dispatch_request, force_shutdown_generation, note_force_shutdown_request,
+        prove_role_cgroup_empty_or_escalate, provider_shutdown, reconcile_display_before_vm_start,
+        redact_broker_dispatch_failure_for_launcher, redact_broker_error_for_launcher,
+        resolve_store_view_intent_for_vm, rollback_failed_vm_start, run_provider_graceful_shutdown,
+        runner_snapshot_is_eligible, same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, usbip_start_reconciles_synchronously,
-        vm_start_node_mode,
+        vm_start_node_mode, write_runner_snapshot_with_authorization,
     };
     use d2bd_runtime::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
@@ -25181,7 +27433,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -25195,7 +27446,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25233,7 +27484,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -25247,7 +27497,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25703,13 +27953,12 @@ mod broker_dispatch_tests {
             .expect("bare VM name resolves store-view intent");
         assert_eq!(
             intent.intent_id,
-            d2b_core::bundle_resolver::intent_id_store_view("vm-a")
+            d2b_core::bundle_resolver::intent_id_legacy_store_view("vm-a")
         );
-        assert!(
-            resolver
-                .find_store_view_intent(&d2b_core::bundle_resolver::intent_id_store_view("vm-a"))
-                .is_none(),
-            "passing a pre-wrapped store-view id double-wraps and must not be used"
+        assert_eq!(
+            resolver.find_store_view_intent(&intent.intent_id),
+            Some(intent),
+            "store-view lookup accepts the already-qualified intent id"
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -26403,9 +28652,9 @@ mod broker_dispatch_tests {
                     Err(TypedError::RuntimeCapabilityUnsupported { capability, .. }) => {
                         assert_eq!(capability, "usbip-guest-import");
                     }
-                    Ok(response) => panic!(
-                        "admin USBIP dry-run unexpectedly returned success: {response}"
-                    ),
+                    Ok(response) => {
+                        panic!("admin USBIP dry-run unexpectedly returned success: {response}")
+                    }
                     Err(error) => panic!("admin USBIP dry-run returned wrong error: {error:?}"),
                 }
                 continue;
@@ -26547,7 +28796,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn host_shutdown_peer_is_denied_for_read_only_and_gateway_display_requests() {
+    fn host_shutdown_peer_is_denied_for_read_only_requests() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("host-shutdown-read"));
         let peer = host_shutdown_peer();
@@ -26567,12 +28816,6 @@ mod broker_dispatch_tests {
                 }),
             ),
             ("authStatus", d2bd_runtime::wire::Request::AuthStatus),
-            (
-                "gatewayDisplay",
-                d2bd_runtime::wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::List(
-                    public_wire::GatewayDisplayListArgs { target: None },
-                )),
-            ),
         ];
         for (expected_verb, request) in requests {
             let err = dispatch_request(&state, &peer, request)
@@ -26823,7 +29066,9 @@ mod broker_dispatch_tests {
             "graphics start must fail closed before the display socket wait"
         );
         assert!(
-            !state.pidfd_table.contains("vm-a", RunnerRole::WaylandProxy.as_str()),
+            !state
+                .pidfd_table
+                .contains("vm-a", RunnerRole::WaylandProxy.as_str()),
             "missing committed display state must not fall back to direct DAG spawning"
         );
     }
@@ -26879,7 +29124,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -26893,7 +29137,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26931,6 +29175,11 @@ mod broker_dispatch_tests {
                     vm_id: VmId::new("vm-a"),
                     role_id: RoleId::new(VM_RUNNER_ROLE_ID),
                     role: RunnerRole::CloudHypervisor,
+                    resource_ref: None,
+                    resource_uid: None,
+                    zone_uid: None,
+                    owner_ref: None,
+                    runtime_scope: None,
                     execution_ref: None,
                     execution_domain: None,
                     user_ref: None,
@@ -26942,6 +29191,7 @@ mod broker_dispatch_tests {
                     pid: child.child().id() as i32,
                     start_time_ticks: read_child_start_time(child.child()),
                     pidfd_index: 0,
+                    controller_bootstrap_fd_index: None,
                     console_fd_index: None,
                 }),
                 &[pidfd.as_raw_fd()],
@@ -27128,7 +29378,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -27142,7 +29391,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -27227,6 +29476,11 @@ mod broker_dispatch_tests {
                         vm_id: VmId::new("vm-a"),
                         role_id: RoleId::new(request.role_id.as_str()),
                         role: expected_runner_role,
+                        resource_ref: None,
+                        resource_uid: None,
+                        zone_uid: None,
+                        owner_ref: None,
+                        runtime_scope: None,
                         execution_ref: None,
                         execution_domain: None,
                         user_ref: None,
@@ -27238,6 +29492,7 @@ mod broker_dispatch_tests {
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
+                        controller_bootstrap_fd_index: None,
                         console_fd_index: None,
                     }),
                     &[pidfd.as_raw_fd()],
@@ -27332,7 +29587,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn startup_adoption_reads_runner_snapshots() {
+    fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
         struct FixedProcReader;
 
         impl ProcReader for FixedProcReader {
@@ -27384,6 +29639,18 @@ mod broker_dispatch_tests {
                 role_id: "virtiofsd-ro-store".to_owned(),
                 role: RunnerRole::Virtiofsd,
                 owner_resource_uid: None,
+                zone_uid: Some(
+                    ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+                ),
+                guest_uid: Some(
+                    ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+                ),
+                guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
+                provider_assignment_generation: Some(
+                    ResourceGeneration::new(1).expect("Provider assignment generation"),
+                ),
+                policy_revision: Some(1),
+                operation_id: Some("startup-adoption-operation".to_owned()),
                 pid: 4242,
                 start_time_ticks: 55,
                 snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),
@@ -27409,7 +29676,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -27423,7 +29689,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -27434,13 +29700,110 @@ mod broker_dispatch_tests {
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
-            .expect("adopt startup snapshots");
+            .expect("quarantine startup snapshots");
 
-        assert_eq!(
-            *opener.calls.lock().expect("lock opener calls"),
-            vec![("vm-a".to_owned(), "virtiofsd-ro-store".to_owned(), 4242, 55)]
+        assert!(
+            opener.calls.lock().expect("lock opener calls").is_empty(),
+            "without current lifecycle identity, startup must not open pidfds"
         );
-        assert!(state.pidfd_table.contains("vm-a", "virtiofsd-ro-store"));
+        assert!(!state.pidfd_table.contains("vm-a", "virtiofsd-ro-store"));
+        assert!(
+            SnapshotStore::get(&store, "vm-a", "virtiofsd-ro-store")
+                .expect("read quarantined snapshot")
+                .is_some(),
+            "quarantined snapshots remain available for forensics"
+        );
+    }
+
+    #[test]
+    fn provider_startup_adoption_requires_a_current_lifecycle_snapshot() {
+        let snapshot = RunnerSnapshotRecord {
+            vm: "vm-a".to_owned(),
+            role_id: "ch-runner".to_owned(),
+            role: RunnerRole::CloudHypervisor,
+            owner_resource_uid: None,
+            zone_uid: Some(
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ),
+            guest_uid: Some(
+                ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+            ),
+            guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
+            provider_assignment_generation: Some(
+                ResourceGeneration::new(1).expect("Provider generation"),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("lifecycle-attempt".to_owned()),
+            pid: 4242,
+            start_time_ticks: 55,
+            snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),
+        };
+        assert!(!runner_snapshot_is_eligible(&snapshot, None));
+
+        let mismatched = (
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333")
+                .expect("replacement Guest UID"),
+            ResourceGeneration::new(1).expect("Guest generation"),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            1,
+        );
+        assert!(!runner_snapshot_is_eligible(&snapshot, Some(&mismatched)));
+
+        let matching = (
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+            ResourceGeneration::new(1).expect("Guest generation"),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            1,
+        );
+        assert!(runner_snapshot_is_eligible(&snapshot, Some(&matching)));
+    }
+
+    #[test]
+    fn authorized_runner_snapshot_persists_the_complete_lifecycle_tuple() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("authorized-snapshot"));
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lifecycle-attempt",
+        );
+        write_runner_snapshot_with_authorization(
+            &state,
+            "vm-a",
+            "ch-runner",
+            RunnerRole::CloudHypervisor,
+            4242,
+            55,
+            None,
+            Some(&authorization),
+        )
+        .expect("write authorized runner snapshot");
+        let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
+        let snapshot = SnapshotStore::get(&store, "vm-a", "ch-runner")
+            .expect("read snapshot")
+            .expect("snapshot");
+        assert!(snapshot.has_complete_lifecycle_identity());
+        assert_eq!(snapshot.zone_uid, Some(authorization.zone_uid().clone()));
+        assert_eq!(snapshot.guest_uid, Some(authorization.guest_uid().clone()));
+        assert_eq!(
+            snapshot.guest_generation,
+            Some(authorization.guest_generation())
+        );
+        assert_eq!(
+            snapshot.provider_assignment_generation,
+            Some(authorization.provider_assignment_generation())
+        );
+        assert_eq!(
+            snapshot.policy_revision,
+            Some(authorization.policy_revision())
+        );
+        assert_eq!(snapshot.operation_id.as_deref(), Some("lifecycle-attempt"));
     }
 
     #[test]
@@ -28310,6 +30673,11 @@ mod broker_dispatch_tests {
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role),
                 role: RunnerRole::Video,
+                resource_ref: None,
+                resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                runtime_scope: None,
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
@@ -28321,6 +30689,7 @@ mod broker_dispatch_tests {
                 pid,
                 start_time_ticks,
                 pidfd_index: 0,
+                controller_bootstrap_fd_index: None,
                 console_fd_index: None,
             },
             &[],
@@ -29131,7 +31500,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn host_destroy_deletes_routes_before_restoring_sysctls_and_flushing_nft() {
+    fn host_destroy_removes_only_host_owned_network_state() {
         use d2b_contracts_broker::broker_wire::{
             AckResponse, BrokerRequestEnvelope, BrokerResponse,
         };
@@ -29211,7 +31580,7 @@ mod broker_dispatch_tests {
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
             let mut operations = Vec::new();
-            for _ in 0..9 {
+            for _ in 0..2 {
                 let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
                     .expect("accept broker peer");
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
@@ -29246,17 +31615,7 @@ mod broker_dispatch_tests {
 
         assert_eq!(
             broker.join().expect("join broker thread"),
-            vec![
-                "ApplyNmUnmanaged",
-                "ApplyRoute",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "UpdateHostsFile",
-                "ApplyNftables",
-            ]
+            vec!["ApplyNmUnmanaged", "ApplyNftables",]
         );
         assert_eq!(
             response.get("type").and_then(serde_json::Value::as_str),
@@ -29273,7 +31632,7 @@ mod broker_dispatch_tests {
         assert_eq!(
             response.get("summary").and_then(serde_json::Value::as_str),
             Some(
-                "host destroy: applied 1 nm-unmanaged-remove + 1 route-del + 5 sysctl-revert + 1 hosts-remove + 1 nft-flush ops"
+                "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
             )
         );
 
@@ -29335,7 +31694,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -29349,7 +31707,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -30461,7 +32819,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -30475,7 +32832,7 @@ mod broker_dispatch_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             config_staging: Arc::new(Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -30600,7 +32957,6 @@ mod broker_dispatch_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
-            gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
             op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(
@@ -30616,7 +32972,7 @@ mod broker_dispatch_tests {
                 d2b_provider_config_nixos::ConfigStagingStore::default(),
             )),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),

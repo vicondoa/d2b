@@ -12,43 +12,23 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceEnvelope,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
-    device::DeviceSpec,
-    guest::GuestSpec,
-    storage::ZoneStoreId,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-    STANDARD_RESOURCE_TYPES,
-};
-use d2b_provider_display_wayland::{DisplayIdentity, WaylandSessionSpec};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    STANDARD_RESOURCE_TYPES, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+    TransportBinding,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision, canonical_digest, device::DeviceSpec,
+    guest::GuestSpec, storage::ZoneStoreId,
+};
 use d2b_core_controller::controller_assignment::ScopedCommitTransport;
+use d2b_provider_display_wayland::{DisplayIdentity, WaylandSessionSpec};
 use d2b_resource_api::{
     RedbBackend, ResourceBusAdapter, ResourceService,
     authz::{
@@ -64,7 +44,8 @@ use d2b_resource_store_redb::{
 };
 use d2bd::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, GuestLifecycleState,
-    ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
+    LifecycleAuthorization, ProviderEffectError, ProviderLifecycleDispatch,
+    ProviderLifecycleEffectPort,
 };
 use d2bd::provider_registry::{ProviderBinding, ProviderRuntime, ProviderRuntimeDispatch};
 use d2bd::resource_runtime::ZoneResourceRuntime;
@@ -133,6 +114,7 @@ impl ProviderLifecycleEffectPort for FilesystemLifecycle {
         let state = match request.operation() {
             GuestLifecycleOperation::Start => ("started", GuestLifecycleState::Started),
             GuestLifecycleOperation::Stop => ("stopped", GuestLifecycleState::Stopped),
+            GuestLifecycleOperation::Restart => ("started", GuestLifecycleState::Started),
         };
         self.write_state(request, state.0);
         Ok(state.1)
@@ -159,8 +141,27 @@ fn request(operation: GuestLifecycleOperation, key: &str) -> GuestLifecycleReque
         ResourceRef::parse("Guest/workstation").expect("valid Guest ref"),
         operation,
         key,
+        LifecycleAuthorization::for_test(
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            1,
+            1,
+            1,
+            key,
+        ),
     )
     .expect("valid lifecycle request")
+}
+
+fn authorization(operation_id: &str) -> LifecycleAuthorization {
+    LifecycleAuthorization::for_test(
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        1,
+        1,
+        1,
+        operation_id,
+    )
 }
 
 #[test]
@@ -186,6 +187,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
                 "workstation",
                 GuestLifecycleOperation::Start,
                 "activate-workstation",
+                authorization("activate-workstation"),
                 &effect,
             )
             .expect("activate Guest"),
@@ -202,6 +204,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
             "workstation",
             GuestLifecycleOperation::Stop,
             "refused-stop",
+            authorization("refused-stop"),
             &effect,
         ),
         Err(ProviderEffectError::CallerRoleDenied)
@@ -219,6 +222,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
                 "workstation",
                 GuestLifecycleOperation::Stop,
                 "remove-workstation",
+                authorization("remove-workstation"),
                 &effect,
             )
             .expect("remove Guest"),
@@ -315,6 +319,13 @@ fn operator_context(
             ReconnectGeneration::new(1).unwrap(),
             TranscriptHash::from_bytes([3; 32]),
         ),
+    )
+}
+
+fn test_operator_subject_identity() -> (ResourceRef, ResourceUid) {
+    (
+        ResourceRef::parse("User/d2bd-operator").unwrap(),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
     )
 }
 
@@ -503,8 +514,7 @@ async fn open_seeded_resource_api(
     ResourceBusAdapter<RedbBackend, d2b_resource_api::service::UnavailableUpgradeDispatcher>,
 ) {
     let (catalog, policy, state) = resource_policy(zone, snapshot);
-    let authorizer =
-        std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy)).unwrap());
+    let authorizer = std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy)).unwrap());
     let acceptor = authorizer
         .take_store_seal(store_identity.seal_identity())
         .unwrap();
@@ -592,14 +602,8 @@ async fn seed_host_resource(
     store_identity: StoreIdentity,
     snapshot: PolicySnapshot,
 ) {
-    let (store, adapter) = open_seeded_resource_api(
-        zone,
-        database_path,
-        marker_path,
-        store_identity,
-        snapshot,
-    )
-    .await;
+    let (store, adapter) =
+        open_seeded_resource_api(zone, database_path, marker_path, store_identity, snapshot).await;
     drop(adapter);
     let store = std::sync::Arc::try_unwrap(store).expect("release seed store");
     store
@@ -634,10 +638,8 @@ async fn create_operator_resource(
                 ResourceRef::parse("Guest/workstation").expect("valid Guest ref"),
                 ResourceRef::parse("Host/host-system").expect("valid Host ref"),
                 ResourceRef::parse("User/alice").expect("valid User ref"),
-                ResourceRef::parse(
-                    "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
-                )
-                .expect("valid WaylandPolicy ref"),
+                ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
+                    .expect("valid WaylandPolicy ref"),
                 DisplayIdentity::new("display", "#112233", "#223344", "#334455")
                     .expect("valid display identity"),
                 true,
@@ -886,9 +888,9 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
     println!("runtime readiness: {:?}", runtime.readiness());
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     let response = client.list(list_request("Volume")).await;
     assert!(
@@ -901,7 +903,7 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
             .map_or("<none>", |error| error.reason.as_str())
     );
 
-    let refused = runtime.bind_operator_resource_client(operator_context(
+    let refused = runtime.bind_operator_resource_client_for_test(operator_context(
         &zone,
         ResourceRef::parse("User/not-authorized").unwrap(),
         ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
@@ -968,9 +970,9 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
     runtime.set_provider_path_ready(true);
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     let session_owner = None;
     create_operator_resource(
@@ -1069,18 +1071,16 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
         "delete Endpoint failed: {:?}",
         delete_endpoint.error
     );
-    let delete_endpoint = client
-        .delete(delete_request(
+    let removed_endpoint = client
+        .get(get_request(
             "Endpoint",
             "display-host-endpoint",
-            delete_endpoint.revision,
-            "delete-drained-display-host-endpoint",
+            "get-deleted-display-host-endpoint",
         ))
         .await;
     assert!(
-        delete_endpoint.error.is_none(),
-        "delete drained Endpoint failed: {:?}",
-        delete_endpoint.error
+        removed_endpoint.resource.is_none() && removed_endpoint.error.is_some(),
+        "finalizer-free Endpoint must be removed by the deletion request"
     );
 
     let process = client
@@ -1177,19 +1177,6 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
         "remove Process finalizer failed: {:?}",
         remove_finalizer.error
     );
-    let delete_drained = client
-        .delete(delete_request(
-            "Process",
-            "display-host-proxy",
-            remove_finalizer.revision,
-            "delete-drained-display-host-proxy",
-        ))
-        .await;
-    assert!(
-        delete_drained.error.is_none(),
-        "delete drained Process failed: {:?}",
-        delete_drained.error
-    );
     let removed = client
         .get(get_request(
             "Process",
@@ -1229,9 +1216,9 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
     .await
     .expect("reopen production Zone runtime");
     reopened.set_provider_path_ready(true);
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = reopened
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("rebind authenticated operator Resource API client");
     let remaining = client.list(list_request("Process")).await;
     assert!(
@@ -1451,20 +1438,29 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
         ))
         .await;
     assert_eq!(
-        blocked
-            .error
-            .as_ref()
-            .map(|error| error.reason.as_str()),
+        blocked.error.as_ref().map(|error| error.reason.as_str()),
         Some("owned-children-remain"),
         "owner deletion must remain blocked until child resources drain"
     );
 
     for (resource_type, name, operation_id) in [
-        ("Endpoint", "display-host-endpoint", "delete-wayland-host-endpoint"),
-        ("Endpoint", "display-guest-endpoint", "delete-wayland-guest-endpoint"),
+        (
+            "Endpoint",
+            "display-host-endpoint",
+            "delete-wayland-host-endpoint",
+        ),
+        (
+            "Endpoint",
+            "display-guest-endpoint",
+            "delete-wayland-guest-endpoint",
+        ),
     ] {
         let endpoint = client
-            .get(get_request(resource_type, name, &format!("get-{operation_id}")))
+            .get(get_request(
+                resource_type,
+                name,
+                &format!("get-{operation_id}"),
+            ))
             .await;
         let endpoint = endpoint.resource.as_ref().expect("Endpoint before delete");
         let revision = endpoint
@@ -1481,31 +1477,16 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
             "Endpoint deletion request failed: {:?}",
             requested.error
         );
-        let retained = client
+        let removed = client
             .get(get_request(
                 resource_type,
                 name,
-                &format!("get-deleting-{operation_id}"),
-            ))
-            .await;
-        let retained = retained.resource.as_ref().expect("deleting Endpoint");
-        let drained = client
-            .delete(delete_request(
-                resource_type,
-                name,
-                retained
-                    .identity
-                    .as_ref()
-                    .expect("deleting Endpoint identity")
-                    .revision
-                    .expect("deleting Endpoint revision"),
-                &format!("drain-{operation_id}"),
+                &format!("get-deleted-{operation_id}"),
             ))
             .await;
         assert!(
-            drained.error.is_none(),
-            "Endpoint drain failed: {:?}",
-            drained.error
+            removed.resource.is_none() && removed.error.is_some(),
+            "finalizer-free Endpoint must be removed by the deletion request"
         );
     }
 
@@ -1514,11 +1495,7 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
         ("display-guest-frontend", "delete-wayland-guest-process"),
     ] {
         let process = client
-            .get(get_request(
-                "Process",
-                name,
-                &format!("get-{operation_id}"),
-            ))
+            .get(get_request("Process", name, &format!("get-{operation_id}")))
             .await;
         let process = process.resource.as_ref().expect("Process before delete");
         let requested = client
@@ -1539,33 +1516,16 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
             "Process deletion request failed: {:?}",
             requested.error
         );
-        let retained = client
+        let removed = client
             .get(get_request(
                 "Process",
                 name,
-                &format!("get-deleting-{operation_id}"),
-            ))
-            .await;
-        let drained = client
-            .delete(delete_request(
-                "Process",
-                name,
-                retained
-                    .resource
-                    .as_ref()
-                    .expect("deleting Process")
-                    .identity
-                    .as_ref()
-                    .expect("deleting Process identity")
-                    .revision
-                    .expect("deleting Process revision"),
-                &format!("drain-{operation_id}"),
+                &format!("get-deleted-{operation_id}"),
             ))
             .await;
         assert!(
-            drained.error.is_none(),
-            "Process drain failed: {:?}",
-            drained.error
+            removed.resource.is_none() && removed.error.is_some(),
+            "finalizer-free Process must be removed by the deletion request"
         );
     }
 
@@ -1611,7 +1571,10 @@ async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
     drop(client);
     drop(adapter);
     let store = std::sync::Arc::try_unwrap(store).expect("release seeded resource store");
-    store.shutdown().await.expect("shutdown seeded resource store");
+    store
+        .shutdown()
+        .await
+        .expect("shutdown seeded resource store");
 }
 
 #[tokio::test]
@@ -1667,13 +1630,13 @@ async fn scoped_status_finalizer_batch_reaches_redb_atomically_and_rebinds_assig
     .expect("open production Zone runtime");
     runtime.set_provider_path_ready(true);
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let controller_generation = runtime
         .committed_policy_snapshot()
         .controller_generation
         .expect("runtime controller generation");
     let client = runtime
-        .bind_operator_resource_client(
+        .bind_operator_resource_client_for_test(
             operator_context(&zone, operator_ref, operator_uid)
                 .with_controller_generation(controller_generation),
         )
@@ -1765,7 +1728,7 @@ async fn scoped_status_finalizer_batch_reaches_redb_atomically_and_rebinds_assig
     };
     let transport = ScopedCommitTransport::decode(
         format!(
-            r#"{{"version":1,"assignment":{{"resourceUid":"{}","resourceRevision":{},"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"execution","targetKind":"host","reference":"Host/host-system"}},"sessionGeneration":1,"epoch":1}},"mutations":[{{"target":"Host/host-system","verb":"UpdateStatus"}},{{"target":"Host/host-system","verb":"UpdateFinalizers"}}]}}"#,
+            r#"{{"version":1,"assignment":{{"resourceUid":"{}","resourceRevision":{},"providerRef":"Provider/system-core","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"execution","targetKind":"host","reference":"Host/host-system"}},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":1}},"mutations":[{{"target":"Host/host-system","verb":"UpdateStatus"}},{{"target":"Host/host-system","verb":"UpdateFinalizers"}}]}}"#,
             uid.as_str(),
             initial_revision,
         )
@@ -1930,9 +1893,9 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
     runtime.set_provider_path_ready(true);
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     for (resource_type, name, operation_id) in [
         ("Volume", "store", "seed-wave6-volume"),
@@ -1978,7 +1941,7 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
         "Guest/workstation"
     );
 
-    let refused = runtime.bind_operator_resource_client(operator_context(
+    let refused = runtime.bind_operator_resource_client_for_test(operator_context(
         &zone,
         ResourceRef::parse("User/not-authorized").unwrap(),
         ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),

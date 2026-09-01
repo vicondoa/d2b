@@ -1,307 +1,151 @@
 # Critical subsystems
 
-Invariants for subsystems where a careless change can cause silent data loss,
-security regression, or an unrecoverable device-tampering signal to a remote
-identity provider.
+Read this page before changing a load-bearing boundary. The repository root
+[`AGENTS.md`](../../AGENTS.md) is the binding index; current code and owner
+tests are authoritative.
 
-[`../../AGENTS.md`](../../AGENTS.md) carries the index: critical subsystem,
-location, and one-line risk. **Read its row first, then this subsystem's
-section.** Touch none without a clear plan and corresponding test run.
+## Zone networking and firewall
 
-## Net VM networking / firewall
+**Where:** `packages/d2b-provider-network-local/nix/net.nix`,
+`packages/d2b-provider-network-local/src/`, and broker Network operations.
 
-**Where:** `packages/d2b-provider-network-local/nix/net.nix` (`lib.mkForce` neutralizes `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS and east-west wiring)
+Network Providers own Zone topology, gateway policy, interface names, and
+firewall neutralization. Preserve the `10-eth-dhcp` `lib.mkForce` neutralizer,
+fail closed on foreign ownership markers, and keep east-west access explicit.
+Validate Nix behavior with
+`tests/unit/nix/cases/net-vm-network.nix`.
 
-Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env
-isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
+## Per-Guest store views
 
-## Per-VM `/nix/store` hardlink farm
+**Where:** `packages/d2b-provider-volume-local/nix/`, the storage bundle
+contract, and broker `StoreSync` operations.
 
-**Where:** `packages/d2b-provider-volume-local/nix/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm`
+Each Guest sees only its declared closure through a broker-owned store view.
+The host's complete `/nix/store` is never shared as a Guest filesystem.
+Restart adoption, anchored paths, OFD locks, explicit fd transfer, and the
+single repair owner rule are load-bearing. No broad cleanup, chmod, chown,
+or runtime-directory sweep is permitted.
 
-The guest's `/nix/store` MUST be the per-VM closure-only farm
-`/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`:
-virtiofsd-ro-store's `--shared-dir` points at that farm (the
-`share.source == "/nix/store"` string stays as the eval-time sentinel - do not
-"simplify" it back to serving `/nix/store`, which re-leaks the whole host
-store). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** -
-hardlinks cannot cross FS boundaries; if split, `d2b vm switch` refuses with a
-fatal error. The broker builds the farm inside a private mount namespace where
-`/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a
-same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct
-from fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a
-`--optimise`d store's saturated empty-file inode falls back to a byte copy. The
-daemon owns sync; there is no per-VM `store-sync` unit.
+## TPM and mediated devices
 
-## TPM persistence (per-VM swtpm)
+**Where:** device Providers under `packages/d2b-provider-device-*` and their
+broker operations.
 
-**Where:** `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-provider-device-tpm/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink - emitting the path-free `PrepareSwtpmDir` audit op.
+TPM state is persistent and identity-bound. A missing or replaced previously
+provisioned state directory fails closed rather than silently creating a new
+identity. USBIP, GPU, video, audio, and security-key effects use typed
+Provider contracts, exact Zone/Guest identity, bounded device allowlists, and
+broker-spawned runners. No caller-supplied device path or per-Guest systemd
+unit may be introduced.
 
-Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-broker/src/ops/swtpm_dir.rs` tests.
+## ComponentSession and Zone bus
 
-## USBIP passthrough
+**Where:** `packages/d2b-session/`, `packages/d2b-session-unix/`,
+`packages/d2b-bus/`, and `packages/d2b-resource-api/`.
 
-**Where:** `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`)
-
-Eval-time gating still scopes attach to opted-in envs (validated by `tests/unit/nix/cases/usbip-gating.nix`). At runtime, attach/detach runs through the broker - there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env.
-
-## GPU sidecar (graphics VMs)
-
-**Where:** `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd`
-
-Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate the evaluated graphics shape with `tests/unit/nix/cases/video-contract.nix`.
-
-## Video sidecar (graphics VMs)
-
-**Where:** `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-provider-device-gpu/src/video_argv.rs`, broker `SpawnRunner{role: Video}`
-
-`graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. No per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox behavior are covered by the owning provider and broker tests.
-
-## UI color contract / niri backend
-
-**Where:** `nixos-modules/ui-colors.nix`, `packages/d2b-provider-display-wayland/nix/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol`
-
-The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly.
-
-## ComponentSession capability boundary
-
-**Where:** `packages/d2b-contracts/src/v3/component_session.rs`, `packages/d2b-session/`, `packages/d2b-session-unix/`
-
-Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets callers reuse admission evidence. **`SessionAuthority` is sealed** by a private supertrait in a private module (`admission.rs`), so no crate outside `d2b-session` can implement it - that seal is load-bearing, because a foreign authority implementation is a direct path to minting a genuine admission. Prove exact Zone equality before every capability mint, and never expose a store path, socket, or handle through the session. These crates are tested but deliberately unwired from production listeners until the full authenticated registration path lands.
-
-## Zone message bus boundary
-
-**Where:** `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`, `packages/d2b-resource-api/src/adapter.rs`
-
-Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. No wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together.
-
-## Resource mutation seal
-
-**Where:** `packages/d2b-resource-store/src/mutation_seal.rs`, `packages/d2b-resource-store-redb/src/`, and `packages/d2b-resource-api/src/`
-
-The resource write boundary is a concrete, process-local capability. Its
-invariants are:
-
-1. `SealedMutation` has one constructor, `MutationSealIssuer::seal`.
-2. `mutation_seal_pair` and `MutationSealIssuer::seal` each have one
-   non-test call site in the resource API.
-3. The store and redb crates never depend on the resource API or import RBAC
-   evaluator types.
-4. `RedbResourceStore::commit_verified` is the only mutating backend method
-   and consumes `SealedMutation` by value.
-5. The seal module has no test-only or non-test-only configuration branch.
-6. The external seal harness forces the real resource boundary through the
-   compiled test configuration rather than opening a test escape hatch.
-7. Seal types do not implement formatting, serialization, or comparison
-   traits, and the module renders no identity.
-8. A UUID, authority address, or database path never appears in diagnostics,
-   telemetry, or audit data.
-9. A store UUID is the canonical `ResourceUid`; it is compared only as a
-   diagnosable identity component after the private authority check.
-10. `StoreSlot` is a bounded, deterministic composition correlator. It is
-    never persisted, serialized, placed on the wire, or compared as identity.
-11. Store opening checks Zone, store UUID, and slot agreement for the acceptor,
-    and every startup error carries the slot of the store producing it.
-
-The issuer is retained by the native authorizer and the acceptor crosses into
-the concrete backend by value. A downstream crate can construct an inert pair
-for a store it owns, but it cannot open evidence against a store instance
-whose acceptor it does not hold.
-
-## Authoritative subject resolution
-
-**Where:** `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs`
-
-`ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. No public subject-configuration type and no raw-claim registration path, and there must not be one - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. Production currently fails closed because no authoritative resolver is wired, which is the intended state until the Zone runtime supplies one; do not "fix" that by accepting claims from the caller. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by defining-crate compiler assertions and compile-fail fixtures rather than by convention.
-
-## Capability mint surface allowlist
-
-**Where:** `packages/{d2b-bus,d2b-session,d2b-session-unix}/` defining crates,
-`packages/d2b-resource-store/`, and
-`packages/d2b-controller-toolkit/src/context.rs`
-
-The capability boundary is enforced by stable trait-solver ambiguity assertions
-in the defining crates. These reject prohibited `Clone`, `Copy`, `Default`, and
-`From` implementations for the capability types in every compiled
-configuration, including the generic and concrete uses that exist in the
-workspace. Private construction fields, sealed traits, instance identity, and
-consumed authority remain the primary boundary because bounded downstream
-implementations cannot be exhaustively enumerated.
-
-Keep the defining-crate compiler assertions and compile-fail doctests, the
-public wire/API contract tests, and the resource mutation seals. These
-defining-item tests are the capability-boundary evidence; no generated
-inventory, snapshot, or nested fixture workspace is required.
-
-## Resource controller effects boundary
-
-**Where:** `packages/d2b-controller-toolkit/src/{runner,queue,context,result,owner_hints}.rs`, `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`
-
-Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. An EffectPort call is permitted only after durable resource commit and consumption of the matching `CommittedRevisionProof`; abort, conflict, stale proof, or restart ambiguity cannot release an effect. Preserve per-resource single flight, bounded fair admission, deterministic owner/dependency propagation, and restart-safe idempotency when wiring the production path.
-
-## Controller assignment and scoped routing
-
-**Where:** `packages/d2b-contracts-provider/src/v3/provider.rs`, `packages/d2b-core-controller/src/controller_assignment.rs`, `packages/d2b-bus/src/{authorization,router,session_seam_tests}.rs`, and `packages/d2bd/tests/resource_operator_activation.rs`
-
-Provider manifests carry a closed controller placement contract:
-`instanceScope`, supported target kinds, per-target component artifacts, and
-required EffectPort classes. Core owns one assignment registry. Each lease
-binds the resource UID and revision, provider and controller generations,
-controller role, exact target, session generation, and assignment epoch.
-Target readiness, role scope, and resource placement are checked without a
-fallback target.
-
-Resource-client leases are non-clonable and cannot widen their query or
-mutation scope. Queries always add the assignment-owned resource filter and
-reject caller-supplied attempts to replace it; mutating verbs carry the same
-assignment identity. Scoped commit transport is versioned, size-bounded, and
-rejects stale, forged, released, or revoked-session evidence. Host and Guest
-controller routes therefore remain target-scoped and single-owner across
-reconnects and handoff.
-
-## Broker host and guest profiles
-
-**Where:** `packages/d2b-broker/src/{runtime,protocol}.rs`, `packages/d2b-broker/tests/{guest_profile,host_profile,profile_separation}.rs`, `nixos-modules/{host-broker,guest-broker}.nix`, and `tests/unit/nix/surfaces/broker-profiles.nix`
-
-The broker profile is selected only at process start. Host and Guest
-instances have distinct authority, socket, state, and audit bindings; a
-request cannot select or switch profiles. The Guest profile admits only its
-closed local operation set and rejects host-only effects before bundle
-dispatch or mutation, while the Host profile retains the complete host
-operation catalog. Keep these checks in the owner-local broker tests and
-broker profile Nix cases; do not restore the retired central policy package.
-
-## Unsafe-local provider, launcher, and persistent-shell helper
-
-**Where:** `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts-control/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md`
-
-`unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope - not the reconnectable helper or d2bd - owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup.
-
-## Manifest contract
-
-**Where:** `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`
-
-Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The generated-artifact drift gate catches partial updates.
-
-## Manifest bundle - private artifacts
-
-**Where:** `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`)
-
-Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and `//packages/xtask:gen_schemas_drift` enforces their owner-local generator through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer.
-
-## Control plane - `d2bd` + `d2b-broker`
-
-**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the fixed daemon Layer-1 gate set
-
-The **only** persistent root surfaces the framework declares. `d2b-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. Security-critical behavior remains owner-local or structural. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
-
-## Storage lifecycle / restart / synchronization
-
-**Where:** Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](../explanation/storage-lifecycle.md)
-
-Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority.
-
-## Eval-time assertions
-
-**Where:** `nixos-modules/assertions.nix`
-
-These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/unit/nix/cases/assertions.nix`.
-
-## ComponentSession exec session table
-
-**Where:** `packages/d2bd-runtime/src/{exec_session,exec_session_real}.rs`,
-`packages/d2b/src/exec_client.rs`, and
-`packages/d2b-contracts-control/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`)
-
-Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM
-items may use the same target-local Process backend with launcher authority
-because argv is resolved exclusively from the hash-verified private bundle.
-Both paths run through `d2bd` and an authenticated ComponentSession. Attached
-exec uses the daemon's in-process **session table**, while target-local
-Processes own command execution and the guest PTY. Detached non-TTY exec is
-represented by `EphemeralProcess` resources and managed through bounded
-Resource API operations. There is **no per-VM systemd unit, no direct feature
-spawn, no broker operation for exec, and no SSH fallback**. The admin
-`SO_PEERCRED` check runs before arbitrary exec session setup; configured launch
-instead requires local launcher/admin authority and a trusted configured item.
-Old or incompatible peers fail closed before controller authority or feature
-behavior. Session-table caps, detached slot/log quotas, and rate limits are
-enforced before connect/auth or create. Attached audit emits redacted
-session-establishment events, while detached create/kill audit carries only
-bounded target, peer, action/result, and opaque execution correlation. Opaque
-session handles, argv, stdio, env, cwd, and paths never reach any
-Debug/trace/audit/metric surface. Validate with the `exec_session` and
-`exec_client` hermetic test matrices.
-
-## Unsafe-local persistent shells
-
-**Where:** `packages/d2bd/src/{workload_dispatch,unsafe_local_helper,unsafe_local_terminal,shell_backend}.rs`, shell owner dispatch in `packages/d2bd/src/lib.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor}.rs`, and `tests/host-integration/unsafe-local-helper.nix`
-
-`d2b shell` remains **admin-only** for every provider. Unsafe-local target identity and `defaultName`/`maxSessions` come only from the hash-verified private bundle; public `ShellOp` keeps protocol v3 and carries no policy, uid, argv, env, cwd, or path. The daemon dispatches helper protocol v2 to the exact `SO_PEERCRED` uid, validates exactly one connected CLOEXEC stream fd, and multiplexes terminal protocol v1 behind a fresh opaque public handle. Disconnect/`CloseAttach` detach but never kill; `Kill` targets only the helper-verified transient user scope. Shells survive CLI, daemon, and helper reconnects while that scope and the non-lingering user manager live. User logout ends them by design. User scopes provide lifecycle ownership, **not containment from other processes with the same host uid**. No root unit, broker op, per-VM service, SSH path, host-shell fallback, direct-compositor fallback, or automatic replay after an ambiguous daemon timeout. Never log/audit/label shell names, supervisor ids, public handles, terminal bytes, helper diagnostics, PIDs, unit names, argv, env, cwd, or paths; audit may use configured target/peer uid and fixed digests, while metrics use closed provider/component/operation/outcome/error labels.
-
-## Lifecycle permission group
-
-**Where:** `nixos-modules/host-users.nix`
-
-Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. No polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check.
-
-## SSH key generation / rotation
-
-**Where:** `nixos-modules/host-keys.nix`, `host-activation.nix`
-
-The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NOT touch consumer-supplied keys.
-
-## virtiofsd sandbox model
-
-**Where:** `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit)
-
-virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; ComponentSession enrollment keys are not delivered through a virtiofs share. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-meta`, and host-key shares). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage is owned by the provider and broker tests.
-
-## cgroup slice naming and ownership markers
-
-The privileged broker's host-prepare dispatch (see the Control plane
-row above) carries two operational conventions that ground every
-broker op mutating host state.
-
-### cgroup slice naming
-
-- Single canonical slice: **`/sys/fs/cgroup/d2b.slice`** (no
-  `system-` prefix, no `d2b-launcher.slice` parent). The broker
-  creates it on `host prepare --apply` if absent.
-- Per-VM directories live one level below the slice:
-  `d2b.slice/<vm>/<role>/`. The VM layer is **process-free**; only
-  the per-role leaves hold processes.
-- Delegation: the broker `fchown`s the delegated subtree (the
-  `d2b.slice` directory and every descendant) to the `d2bd`
-  system user. The host cgroup root is never chowned.
-- Forbidden surfaces: writing `cpuset.cpus.partition` on
-  d2b-owned cgroups (the cgroup v2 root and other ancestors
-  are out of scope; d2b never reads/writes them), threaded
-  cgroups, `cgroup.kill` on `d2b.slice` or any ancestor of
-  a daemon-owned leaf, and **Phase B (post-delegation) runtime
-  mutation while running as uid 0** (Phase A privileged setup -
-  `+controllers` cascade, slice/leaf `mkdir`, `fchown` to
-  `d2bd`'s uid/gid - legitimately runs as root per ADR 0011
-  Decision item 2; the uid != 0 invariant applies to the
-  steady-state cgroup code path after privilege drop). See
-  [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
-  and ADR 0011 for the algorithm + audit shape.
-
-### Ownership-marker conventions
-
-The broker writes its host mutations inside greppable ownership
-markers so foreign-rule preservation can be enforced fail-closed:
-
-| Surface | Marker shape |
-| --- | --- |
-| nftables (`inet d2b` table) | every rule + chain carries `comment "d2b managed: <ownership-id>"`; foreign tables are never flushed |
-| `/etc/hosts` | block delimited by `# d2b-managed begin` and `# d2b-managed end`; foreign lines outside the block are byte-preserved |
-| NetworkManager unmanaged config | `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf`, contents delimited by `# d2b-managed begin` / `# d2b-managed end` |
-| systemd-networkd | detection-only; coexistence requires an operator-shipped configured-unmanaged file matching the `d2b-`/`d2bv-` prefix (no d2b write) |
-
-Discovering a foreign ownership marker where d2b expects its own
-is fail-closed (`path-safety-violation`,
-`nm-managed-foreign-conflict`, `foreign-nft-rule-preserved`). See
-[`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
-§ "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
-the rationale.
+Authenticated evidence is consumed by one session owner. Zone equality,
+Resource UID, revision, Provider generation, capability, and cursor are
+checked before every authority mint. Capability types remain sealed and
+non-clonable; no public subject-registration or raw-claim constructor may
+appear. The default bus is deny-all until authenticated Zone runtime
+composition installs the registrar-bound capability.
+
+## Resource mutation and controller effects
+
+**Where:** `packages/d2b-resource-store/`,
+`packages/d2b-resource-store-redb/`, `packages/d2b-resource-api/`, and
+`packages/d2b-core-controller/`.
+
+The store accepts mutations only through the concrete sealed capability and
+the matching committed revision proof. Controllers create desired Resources
+and observe status; effect owners perform effects only after durable commit.
+Single-flight reconciliation, deterministic owner propagation, stale-proof
+rejection, and restart-safe idempotency must remain intact.
+
+## Guest lifecycle
+
+**Where:** `packages/d2b-core-controller/`, `packages/d2bd/`,
+`packages/d2bd-runtime/`, and the Cloud Hypervisor Provider.
+
+The Guest controller derives deterministic direct children from the Guest
+Resource and private Provider contract. It does not spawn, mount, provision,
+bind, or call the broker. Direct children carry exact ownerRefs and are fenced
+by Guest UID, child UID, generation, and revision. Readiness is status-first;
+session loss is degraded and reconnect-safe; deletion drains descendants in
+reverse order and clears the Guest finalizer last.
+
+## Daemon and broker control plane
+
+**Where:** `packages/d2bd/`, `packages/d2bd-runtime/`,
+`packages/d2b-broker/`, and `packages/d2b-contracts/`.
+
+Only `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service` are
+framework-declared root units. The broker owns delegated cgroup mutation,
+runner launch, pidfd handoff, host-device access, and child reaping. d2bd
+adopts only matching immutable identity and quarantines PID/start-time drift.
+Raw PIDs, host paths, credentials, argv, and private broker handles never
+cross the public API.
+
+## Provider assignment and scoped routing
+
+**Where:** `packages/d2b-contracts-provider/`,
+`packages/d2b-core-controller/`, and Zone bus/session tests.
+
+Provider manifests carry a closed placement contract and required effect
+classes. Assignments bind Resource UID/revision, Provider and controller
+generations, target, session generation, and assignment epoch. Queries add the
+assignment-owned filter; mutations reject forged or stale evidence. There is
+no fallback target or caller-selected Provider identity.
+
+## Unsafe-local and shell Providers
+
+**Where:** `packages/d2b-unsafe-local-helper/`,
+`packages/d2b-provider-shell-terminal/`, and
+`packages/d2b-contracts-control/src/unsafe_local_wire.rs`.
+
+Unsafe-local is an explicit, default-denied Host execution posture. It runs
+only as the authenticated requester UID and never becomes a Guest or a
+cross-identity launcher. Shell sessions use bounded names, exact requester
+identity, a validated terminal fd, and bounded output cursors. No configured
+argv, environment, host path, root service, or broad same-UID cleanup may be
+exposed.
+
+## Generated contracts
+
+**Where:** `docs/reference/schemas/`, `docs/reference/cli-output/`,
+`nixos-modules/generated/`, Provider manifests, and `packages/xtask/`.
+
+Generate artifacts from owner-local Rust/Nix sources:
+
+```bash
+bazel run //packages/xtask:xtask -- gen-schemas
+bazel run //packages/xtask:xtask -- gen-cli-schemas
+bazel run //packages/xtask:xtask -- gen-zone-schemas
+bazel run //packages/xtask:xtask -- gen-resource-schemas
+```
+
+Update schemas, emitters, manifests, signatures, fixtures, policy closures,
+prose, and changelog together. Do not add a second inventory or drift gate.
+
+## Required evidence
+
+Use the smallest owner-local test first, then the applicable public aliases:
+
+```bash
+make test-nix-unit
+make test-fixture-contracts
+make test-rust-supply-chain
+make test-policy
+make test-drift
+make test-flake
+make test-unit
+make check
+```
+
+Host and VM acceptance are separate higher tiers owned by U20. U20's scope is
+the `/etc/nixos` switch, d2b startup, and Cloud Hypervisor Guest boot; an
+advisory skip is not evidence for those checks. U20 must also run both
+`make test-host-integration` and `make test-integration`, which may be
+scheduled alongside real-host testing. U19 only converges their declarations
+and current inputs. The host lane injects the Bazel-built d2b binary bundle
+through `D2B_HOST_TOOL_BUNDLE`; it does not rebuild d2b binaries through Nix.

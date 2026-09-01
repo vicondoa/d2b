@@ -9,6 +9,7 @@
 //! independent audit owner of the mutation.
 
 use std::future::Future;
+use std::os::fd::OwnedFd;
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ObservedIdentity, PidfdEvidence, ProcessIdentityDigest, WaitReapOwner};
@@ -99,6 +100,26 @@ pub trait ProcessLaunchEffectPort: Send + Sync {
         &self,
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send;
+
+    /// Launch with owned descriptors that must be inherited by the child.
+    ///
+    /// Descriptor-bearing launches are opt-in at the concrete effect owner.
+    /// Existing test doubles and descriptor-free owners reject a non-empty
+    /// vector without changing their ordinary launch behavior.
+    fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
+        async move {
+            if inherited_fds.is_empty() {
+                self.launch(ticket).await
+            } else {
+                drop(inherited_fds);
+                Err(ProcessConformanceError::InvalidTicket)
+            }
+        }
+    }
 
     /// Observe whether a process for this ticket is already running,
     /// without opening a pidfd for it.

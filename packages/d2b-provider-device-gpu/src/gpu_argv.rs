@@ -15,10 +15,9 @@
 //!   --params '{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'
 //! ```
 //!
-//! CH then connects via `--gpu socket=corp-desktop-gpu.sock` - that
-//! flag is appended by the daemon caller into
-//! [`crate::ch_argv::ChArgvInput::extra_args`] when assembling the
-//! graphics VM's CH argv.
+//! CH then connects via `--gpu socket=corp-desktop-gpu.sock`. The Process
+//! Provider composes that private CH argument from the sealed launch ticket;
+//! the Guest controller does not receive or assemble it.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 #![allow(missing_docs)]

@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use d2b_contracts_resource::v3::ResourceRef;
+
 use crate::{
     AcaControl, AcaControlContext, AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDesiredDiskImage,
@@ -9,7 +11,6 @@ use crate::{
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxProfile, AcaSandboxRecord, AcaTypeError,
     AcaWorkloadQuery,
 };
-use d2b_contracts::ResourceRef;
 
 use crate::controller::{AcaClock, SystemAcaClock};
 use tokio::sync::Semaphore;

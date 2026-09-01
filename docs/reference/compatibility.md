@@ -1,71 +1,54 @@
-# Compatibility matrix
+# Compatibility policy
 
-## Compatibility policy
+The current d2b contract is the Zone resource plane, controller-owned Guest
+lifecycle, and daemon-only `d2bd` plus `d2b-broker` control plane. Consumers
+must use the exact `nixpkgs` input pinned by the current flake.
 
-`d2b` targets the exact `nixpkgs` revision pinned by the bundled
-`flake.lock`. That lock is part of the supported surface.
+## Clean break
 
-If a downstream consumer makes `d2b` follow a different `nixpkgs`,
-that combination is **unsupported**. The intended model is to make
-companion flakes follow `d2b`'s `nixpkgs`, not to retarget
-`d2b` to some other package set.
+The current release line is a clean break from the v1/v2 hierarchy and
+lifecycle. Older Realm, environment, VM-first, Gateway-daemon, and bash
+configuration is not a supported upgrade input. d2b makes no v1/v2 data
+retention, state migration, or rollback-preservation promise.
 
-## Release matrix
+After switching a current host configuration, the operator may remove old
+host declarations and old host-path state once it is no longer needed. The
+current daemon and Guest controller do not adopt or preserve those paths.
 
-The table below is derived from each release tag's `flake.lock` and the
-release history in [`CHANGELOG.md`](../../CHANGELOG.md).
+Historical migration pages remain only as archaeology. They must not be used
+as current runbooks or evidence of compatibility.
 
-| d2b version | nixpkgs branch / channel | microvm.nix version | Host NixOS major version | Known incompatibilities |
-|---|---|---|---|---|
-| `0.3.0` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | No release-specific incompatibility called out in the changelog beyond the global "do not mix nixpkgs" policy. |
-| `0.2.0` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Manifest schema bumped to v2. Tooling built only for the v0.1.x manifest schema is incompatible. |
-| `0.1.7` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | No release-specific incompatibility called out; this is the first v0.1.x release where the sidecar restart policy works as documented. |
-| `0.1.6` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | GPU, swtpm, and audio sidecars still used the broken `unitConfig.X-RestartIfChanged` form. Upgrade to `0.1.7`. |
-| `0.1.5` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Shipped the initial lifecycle-policy change, but three sidecars still needed the `0.1.7` restart-policy fix. Pre-`0.1.6` docs also use the legacy `[pending switch]` wording. |
-| `0.1.4` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Predates the `d2b restart` / `pending-restart` workflow and later lifecycle fixes from `0.1.5`-`0.1.7`. |
-| `0.1.3` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Predates the graphics/TPM bring-up fixes that landed in `0.1.4`. |
-| `0.1.2` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Predates the `d2b@` wrapper and autostart fixes that landed in `0.1.3`. |
-| `0.1.1` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | Predates the `ConfigureWithoutCarrier` uplink-bridge fix from `0.1.2`; real host bring-up could deadlock. |
-| `0.1.0` | `nixos-unstable` (`d233902339c0`) | `77024c22f4dd` (locked git rev) | `nixos-unstable` | First public alpha. Later `0.1.x` patch releases fixed consumer migration, networking bootstrap, wrapper/autostart, graphics/TPM, and lifecycle bugs. |
+## Host and Guest validation
 
-## Notes
+Current host acceptance is performed against the operator's `/etc/nixos`
+consumer configuration. The acceptance sequence is owned by the host lane:
 
-- `microvm.nix` is not pinned by tag in `flake.lock`; this matrix
-  reports the locked git revision instead.
-- For numbered host-release expectations, read the `nixpkgs` input's
-  branch name: e.g. `nixos-24.11` implies NixOS 24.11 hosts, while
-  `nixos-unstable` is the rolling unstable branch.
+1. evaluate and build the selected configuration;
+2. run `nixos-rebuild dry-activate`;
+3. switch the host generation;
+4. start d2bd and the broker;
+5. boot a Cloud Hypervisor Guest.
 
-## Host-prepare tier matrix (v0.4.0 baseline)
+The U20 `make test-host-integration` lane builds the d2b host-tool set with
+local Bazel, stages it as `D2B_HOST_TOOL_BUNDLE`, and injects it into the
+selected NixOS `vmChecks`. Nix must realize the test harness around those
+binaries rather than rebuild `d2b`, `d2bd`, `d2b-broker`, or the injected
+helper tools.
 
-The privileged broker host-prepare contract defines tiers
-gate which host verbs are supported per platform and what level of
-pre-merge verification each row carries. The authoritative source
-is [`docs/reference/support-matrix.md`](support-matrix.md); this
-table is the at-a-glance summary.
+U19 does not claim that host acceptance or any remote Provider acceptance has
+passed. U20 must run both `make test-host-integration` and
+`make test-integration`; they may run alongside the real-host sequence. ACA
+testing is deferred until after the U20 host switch and Cloud Hypervisor Guest
+boot.
+U19 only leaves those declarations and current inputs converged; it does not
+run host acceptance.
 
-| Tier | Platform | `d2b host check` | `d2b host prepare --dry-run` | `d2b host prepare --apply` | `d2b host destroy --apply` | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Tier 0** | NixOS x86_64 (NixOS-legacy host with no daemon-owned d2b bundle to reconcile) | supported | supported (reports `nothing-to-do`) | refused (`tier-0-legacy-uses-nixos-module`, exit 78) | refused | The per-VM `supervisor` option was removed in v1.1 (per ADR 0015); every enabled VM is daemon-supervised and uses the separate `d2b-*`/`d2bv-*` ifname space. |
-| **Tier 1** | Ubuntu 24.04 LTS x86_64, kernel ≥ 6.6 | supported | supported | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `tests/golden/l3-matrix/w3-ubuntu.txt`. NetworkManager 1.46, nftables 1.0.9, Cloud Hypervisor v40+, Nix-built minijail v17. |
-| **Tier 1-later** | Fedora Server 40+ | supported (best-effort) | supported (best-effort) | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `w3-fedora.txt`. v1.0 SLA only applies to Tier 0/1. |
-| **Tier 2** | Arch Linux current, or other Linux x86_64 with cgroup v2 unified | supported (advisory) | supported (advisory) | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | Arch carries `w3-arch.txt`. Any unconfirmed prerequisite surfaces as `host-check-warning`. Operator reads the audit log + the per-distro troubleshooting anchor in `docs/how-to/host-prepare.md`. |
+## Input alignment
 
-> **v1.0 status note (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)).**
-> v1.0 ships the `host prepare` / `host destroy` verbs with
-> `--dry-run` reconcile dispatch (read-only audit) wired live. The
-> mutating `--apply` path is **not yet wired**: the daemon-side
-> typed-intent dispatch and bundle resolver that back it are pending,
-> so `host prepare --apply` / `host destroy --apply` return the typed
-> `daemon-down` envelope (exit 1) today - use `--dry-run` for now.
-> When the daemon-side dispatch ships, `--apply` will dispatch through
-> the broker reconcile ops (`ApplyNftables`, `ApplyRoute`,
-> `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`), with broker
-> failures surfacing as the typed `broker-error` envelope (exit 78,
-> per [`docs/reference/error-codes.md`](./error-codes.md)). A Tier 0
-> NixOS-legacy host (no daemon-owned d2b bundle to reconcile)
-> returns the typed `tier-0-legacy-uses-nixos-module` envelope
-> (exit 78). See ADR 0015 and CHANGELOG.
+```nix
+inputs.d2b.inputs.nixpkgs.follows = "nixpkgs";
+```
 
-The full ADR rationale for what is and is not supported lives in
-[ADR 0008 - Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md).
+Do not retarget d2b to an unrelated nixpkgs revision. Use the current
+[Zone Nix authoring](./zone-control-nix.md), [CLI contract](./cli-contract.md),
+and [daemon lifecycle](../explanation/daemon-lifecycle.md) references.

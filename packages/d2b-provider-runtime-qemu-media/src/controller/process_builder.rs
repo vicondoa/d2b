@@ -2,23 +2,9 @@
 
 pub use d2b_contracts_resource::v3::ProcessSpec;
 use d2b_contracts_resource::v3::{
-    DesiredLifecycle,
-    DeviceAccess,
-    DeviceUsageSpec,
-    EnvironmentClass,
-    ExecutionSpec,
-    HealthCheckClass,
-    HealthCheckSpec,
-    MountAccess,
-    MountSpec,
-    NamespaceClass,
-    NetworkUsageSpec,
-    ProcessClass,
-    ReadinessClass,
-    ReadinessSpec,
-    RestartClass,
-    RestartPolicySpec,
-    SandboxSpec,
+    DesiredLifecycle, DeviceAccess, DeviceUsageSpec, EnvironmentClass, ExecutionSpec,
+    HealthCheckClass, HealthCheckSpec, MountAccess, MountSpec, NamespaceClass, NetworkUsageSpec,
+    ProcessClass, ReadinessClass, ReadinessSpec, RestartClass, RestartPolicySpec, SandboxSpec,
     TelemetrySpec,
 };
 use d2b_contracts_resource::v3::{

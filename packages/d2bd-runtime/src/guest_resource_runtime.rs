@@ -5,19 +5,21 @@
 //! the currently admitted parent-Zone ComponentSession.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     sync::{Arc, Mutex},
 };
 
+use async_trait::async_trait;
+use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceEnvelope, ResourceGeneration,
-    ResourceRef, ResourceTypeName, ResourceUid, RetryClass, ZoneId,
-    ZoneRevision,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, RetryClass, SchemaFingerprint,
+    ZoneId, ZoneRevision,
     activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
-    resource_schema::SCHEMA_DOMAIN_TAG,
+    resource_schema::{RESOURCE_ENVELOPE_DOMAIN_TAG, SCHEMA_DOMAIN_TAG},
 };
 use d2b_resource_api::{
     ResourceApiClient, ResourceBusAdapter, ResourceService, ResourceStoreBackend,
@@ -32,17 +34,16 @@ use d2b_resource_store::{
     ExpectedRevision, MutationSealBody, ResourceMutationKind, SealedMutation, StoreCommitResult,
     StoreError, StoreErrorKind, StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest,
     StoreListResult, StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt,
-    StoreWatchRequest, StoredResource, StoredSchema,
-    mutation_seal::MutationSealAcceptor,
+    StoreWatchRequest, StoredResource, StoredSchema, mutation_seal::MutationSealAcceptor,
 };
-use d2b_resource_store_redb::{
-    RedbResourceStore, StoreIdentity, write_provisioning_marker,
+use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
+use protobuf::Message;
+use ttrpc::{
+    r#async::{MethodHandler, TtrpcContext},
+    proto::{Request as TtrpcRequest, Response as TtrpcResponse},
 };
 
-use crate::{
-    guest_mode::GuestIdentity,
-    resource_runtime_support::{initial_policy_snapshot, store_identity},
-};
+use crate::{guest_mode::GuestIdentity, resource_runtime_support::store_identity};
 
 #[cfg(test)]
 const STORE_SLOT: u32 = 0;
@@ -51,7 +52,16 @@ const STORE_MARKER_NAME: &str = "resource-store.marker";
 const ROLE_REF: &str = "Role/guest-component-session";
 const WATCH_STREAM_PREFIX: &str = "guest-watch";
 const SCHEMA_BYTES: &[u8] = br#"{"apiVersion":"d2b-cjson/v1","resourceType":"target-local"}"#;
+const GUEST_SEED_DIGEST_DOMAIN: &str = "d2b-guest-local-seed-v1";
 type CommitFence = Arc<dyn Fn() -> Result<(), StoreError> + Send + Sync>;
+
+/// Target-local ResourceTypes accepted by the Guest-control seed API.
+pub const GUEST_SEED_RESOURCE_TYPES: &[&str] = &[
+    "Process",
+    "EphemeralProcess",
+    "Endpoint",
+    NIXOS_GENERATION_RESOURCE_TYPE,
+];
 
 /// Authenticated target-local resource runtime for Guest mode.
 #[derive(Clone)]
@@ -80,16 +90,12 @@ impl GuestResourceRuntime {
             .map_err(|_| GuestResourceRuntimeError::Policy)?;
         let catalog = ApiCatalog::with_extensions([activation_type.clone()])
             .map_err(|_| GuestResourceRuntimeError::Policy)?;
-        let resource_types = [
-            "Process",
-            "EphemeralProcess",
-            "Endpoint",
-            NIXOS_GENERATION_RESOURCE_TYPE,
-        ]
-        .into_iter()
-        .map(ResourceTypeName::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| GuestResourceRuntimeError::Policy)?;
+        let resource_types = GUEST_SEED_RESOURCE_TYPES
+            .iter()
+            .copied()
+            .map(ResourceTypeName::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| GuestResourceRuntimeError::Policy)?;
         let resource_verbs = [
             ResourceVerb::Get,
             ResourceVerb::List,
@@ -126,9 +132,8 @@ impl GuestResourceRuntime {
             .collect::<Result<Vec<_>, _>>()?;
         let role_ref =
             ResourceRef::parse(ROLE_REF).map_err(|_| GuestResourceRuntimeError::Policy)?;
-        let role =
-            CompiledRole::new(role_ref.clone(), rules)
-                .map_err(|_| GuestResourceRuntimeError::Policy)?;
+        let role = CompiledRole::new(role_ref.clone(), rules)
+            .map_err(|_| GuestResourceRuntimeError::Policy)?;
         let binding_scope = BindingScope {
             zones: [zone.clone()].into_iter().collect(),
             ..BindingScope::default()
@@ -144,9 +149,8 @@ impl GuestResourceRuntime {
         )
         .map_err(|_| GuestResourceRuntimeError::Policy)?;
         let policy_revision = 1;
-        let policy =
-            PolicySet::new(&catalog, policy_revision, vec![role], vec![binding])
-                .map_err(|_| GuestResourceRuntimeError::Policy)?;
+        let policy = PolicySet::new(&catalog, policy_revision, vec![role], vec![binding])
+            .map_err(|_| GuestResourceRuntimeError::Policy)?;
         let authorization_state = AuthorizationState {
             snapshot: d2b_resource_store::PolicySnapshot {
                 policy_revision,
@@ -166,11 +170,10 @@ impl GuestResourceRuntime {
             NativeAuthorizer::new(catalog, Some(policy))
                 .map_err(|_| GuestResourceRuntimeError::Policy)?,
         );
-        let store_identity = store_identity(&zone, &format!("guest-target:{}", identity.guest_uid()))
-            .map_err(|_| GuestResourceRuntimeError::Store)?
-            .with_revisions(
-                initial_policy_snapshot().map_err(|_| GuestResourceRuntimeError::Store)?,
-            );
+        let store_identity =
+            store_identity(&zone, &format!("guest-target:{}", identity.guest_uid()))
+                .map_err(|_| GuestResourceRuntimeError::Store)?
+                .with_revisions(authorization_state.snapshot.clone());
         let acceptor = authorizer
             .take_store_seal(store_identity.seal_identity())
             .map_err(|_| GuestResourceRuntimeError::Store)?;
@@ -208,6 +211,57 @@ impl GuestResourceRuntime {
         &self,
         route: &d2b_session::AuthenticatedSessionRouteBinding,
     ) -> Result<GuestResourceSession, GuestResourceRuntimeError> {
+        let (store, adapter) = self.bind_session_parts(route)?;
+        Ok(GuestResourceSession {
+            store,
+            adapter,
+            generation: route.reconnect_generation().get(),
+        })
+    }
+
+    /// Bind the target-local Resource API to the narrow Guest seed contract.
+    ///
+    /// This capability exposes only `CommitBatch` mutations and revision
+    /// watches for the descriptor's approved target-local ResourceTypes. The
+    /// route and session generation remain sealed by the authenticated
+    /// ComponentSession.
+    pub fn bind_seed_session(
+        &self,
+        route: &d2b_session::AuthenticatedSessionRouteBinding,
+        descriptor_digest: SchemaFingerprint,
+        approved_types: impl IntoIterator<Item = ResourceTypeName>,
+    ) -> Result<GuestResourceSeedSession, GuestResourceRuntimeError> {
+        let (store, adapter) = self.bind_session_parts(route)?;
+        let approved_types = approved_types.into_iter().collect::<BTreeSet<_>>();
+        if approved_types.is_empty()
+            || approved_types
+                .iter()
+                .any(|resource_type| !GUEST_SEED_RESOURCE_TYPES.contains(&resource_type.as_str()))
+        {
+            return Err(GuestResourceRuntimeError::SeedPolicy);
+        }
+        Ok(GuestResourceSeedSession {
+            store,
+            adapter,
+            guest_ref: self.identity.guest_ref().clone(),
+            guest_uid: self.identity.guest_uid().clone(),
+            zone: self.identity.zone().clone(),
+            descriptor_digest,
+            approved_types,
+            generation: route.reconnect_generation().get(),
+        })
+    }
+
+    fn bind_session_parts(
+        &self,
+        route: &d2b_session::AuthenticatedSessionRouteBinding,
+    ) -> Result<
+        (
+            Arc<SessionBoundStore>,
+            Arc<ResourceBusAdapter<SessionBoundStore, UnavailableUpgradeDispatcher>>,
+        ),
+        GuestResourceRuntimeError,
+    > {
         self.identity
             .validate_route(route)
             .map_err(|_| GuestResourceRuntimeError::SessionBinding)?;
@@ -222,16 +276,18 @@ impl GuestResourceRuntime {
         });
         let session_store = Arc::clone(&backend);
         let service = Arc::new(
-            ResourceService::new(backend, Arc::clone(&self.authorizer))
+            ResourceService::new_session_bound(backend, Arc::clone(&self.authorizer))
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        error = ?error,
+                        "Guest Resource API service construction failed",
+                    );
+                })
                 .map_err(|_| GuestResourceRuntimeError::Store)?,
         );
         let adapter = ResourceBusAdapter::bind_component_session(service, subject)
             .map_err(|_| GuestResourceRuntimeError::Authorization)?;
-        Ok(GuestResourceSession {
-            store: session_store,
-            adapter: Arc::new(adapter),
-            generation: route.reconnect_generation().get(),
-        })
+        Ok((session_store, Arc::new(adapter)))
     }
 }
 
@@ -240,6 +296,105 @@ pub struct GuestResourceSession {
     store: Arc<SessionBoundStore>,
     adapter: Arc<ResourceBusAdapter<SessionBoundStore, UnavailableUpgradeDispatcher>>,
     generation: u64,
+}
+
+/// Narrow target-local Resource API capability used by Guest-local seeding.
+pub struct GuestResourceSeedSession {
+    store: Arc<SessionBoundStore>,
+    adapter: Arc<ResourceBusAdapter<SessionBoundStore, UnavailableUpgradeDispatcher>>,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    zone: ZoneId,
+    descriptor_digest: SchemaFingerprint,
+    approved_types: BTreeSet<ResourceTypeName>,
+    generation: u64,
+}
+
+impl core::fmt::Debug for GuestResourceSeedSession {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("GuestResourceSeedSession")
+            .field("generation", &"<redacted>")
+            .field("approved_type_count", &self.approved_types.len())
+            .field("has_descriptor_digest", &true)
+            .finish()
+    }
+}
+
+impl GuestResourceSeedSession {
+    /// Return the authenticated reconnect generation.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Borrow the descriptor digest bound to this seed capability.
+    pub const fn descriptor_digest(&self) -> &SchemaFingerprint {
+        &self.descriptor_digest
+    }
+
+    /// Borrow the closed ResourceType allowlist.
+    pub fn approved_types(&self) -> &BTreeSet<ResourceTypeName> {
+        &self.approved_types
+    }
+
+    /// Build the target-local server map with only seed mutation and watch
+    /// methods exposed.
+    pub fn ttrpc_services(&self) -> std::collections::HashMap<String, ttrpc::r#async::Service> {
+        restricted_seed_services(
+            Arc::clone(&self.adapter).ttrpc_services(),
+            &self.guest_ref,
+            &self.guest_uid,
+            &self.zone,
+            Some(&self.descriptor_digest),
+            &self.approved_types,
+        )
+    }
+
+    /// Validate one UID-free, descriptor-approved seed request.
+    pub fn validate_commit_batch(
+        &self,
+        request: &wire::CommitBatchRequest,
+    ) -> Result<(), GuestResourceRuntimeError> {
+        validate_seed_request(
+            request,
+            &self.guest_ref,
+            &self.guest_uid,
+            &self.zone,
+            Some(&self.descriptor_digest),
+            &self.approved_types,
+        )
+    }
+
+    /// Execute one validated target-local seed CommitBatch.
+    pub async fn commit_batch(
+        &self,
+        request: wire::CommitBatchRequest,
+    ) -> Result<wire::CommitBatchResponse, GuestResourceRuntimeError> {
+        self.validate_commit_batch(&request)?;
+        Ok(self.adapter.client().commit_batch(request).await)
+    }
+
+    /// Validate one revision-resumable target-local Watch request.
+    pub fn validate_watch(
+        &self,
+        request: &wire::WatchRequest,
+    ) -> Result<(), GuestResourceRuntimeError> {
+        validate_watch_request(request, &self.approved_types)
+    }
+
+    /// Open a target-local Watch from an exact previous revision.
+    pub async fn watch(
+        &self,
+        request: wire::WatchRequest,
+    ) -> Result<wire::WatchResponse, GuestResourceRuntimeError> {
+        self.validate_watch(&request)?;
+        Ok(self.adapter.client().watch(request).await)
+    }
+
+    /// Borrow the session-fenced store for target-local controller wiring.
+    pub fn store_backend(&self) -> Arc<SessionBoundStore> {
+        Arc::clone(&self.store)
+    }
 }
 
 impl core::fmt::Debug for GuestResourceSession {
@@ -284,6 +439,8 @@ pub enum GuestResourceRuntimeError {
     StoreQuarantined,
     SessionBinding,
     Authorization,
+    SeedPolicy,
+    SeedInvalid,
 }
 
 impl core::fmt::Display for GuestResourceRuntimeError {
@@ -294,6 +451,8 @@ impl core::fmt::Display for GuestResourceRuntimeError {
             Self::StoreQuarantined => "guest-resource-store-quarantined",
             Self::SessionBinding => "guest-resource-session-binding-invalid",
             Self::Authorization => "guest-resource-authorization-denied",
+            Self::SeedPolicy => "guest-resource-seed-policy-invalid",
+            Self::SeedInvalid => "guest-resource-seed-request-invalid",
         })
     }
 }
@@ -355,8 +514,8 @@ impl GuestResourceStore {
         identity: StoreIdentity,
         acceptor: MutationSealAcceptor,
     ) -> Result<Self, GuestResourceRuntimeError> {
-        let metadata = fs::symlink_metadata(state_dir)
-            .map_err(|_| GuestResourceRuntimeError::Store)?;
+        let metadata =
+            fs::symlink_metadata(state_dir).map_err(|_| GuestResourceRuntimeError::Store)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.mode() & 0o002 != 0 {
             return Err(GuestResourceRuntimeError::Store);
         }
@@ -407,10 +566,9 @@ impl GuestResourceStore {
     fn resource_count(&self) -> usize {
         match &self.backend {
             GuestStoreBackend::Durable(_) => 0,
-            GuestStoreBackend::Memory { state, .. } => state
-                .lock()
-                .map(|state| state.resources.len())
-                .unwrap_or(0),
+            GuestStoreBackend::Memory { state, .. } => {
+                state.lock().map(|state| state.resources.len()).unwrap_or(0)
+            }
         }
     }
 
@@ -476,9 +634,8 @@ impl GuestResourceStore {
         target: &ResourceRef,
         canonical: &[u8],
     ) -> Result<(ResourceUid, ResourceGeneration), StoreError> {
-        let envelope = ResourceEnvelope::from_json(canonical).map_err(|_| Self::invalid(
-            "guest-target-resource-envelope-invalid",
-        ))?;
+        let envelope = parse_uid_free_envelope(canonical)
+            .map_err(|_| Self::invalid("guest-target-resource-envelope-invalid"))?;
         let envelope_ref = ResourceRef::new(
             envelope.resource_type().clone(),
             envelope.metadata().name().clone(),
@@ -618,25 +775,25 @@ impl GuestResourceStore {
                         return Err(Self::conflict(state.revision));
                     }
                     if mutation.kind == ResourceMutationKind::Delete {
-                        let removed =
-                            resources.remove(&mutation.target).ok_or_else(Self::not_found)?;
+                        let removed = resources
+                            .remove(&mutation.target)
+                            .ok_or_else(Self::not_found)?;
                         changed.push(removed);
                         continue;
                     }
                     let canonical = mutation
                         .canonical_resource
                         .clone()
-                        .or_else(|| current.as_ref().map(|resource| resource.canonical_json.clone()))
+                        .or_else(|| {
+                            current
+                                .as_ref()
+                                .map(|resource| resource.canonical_json.clone())
+                        })
                         .ok_or_else(|| Self::invalid("guest-target-resource-body-missing"))?;
-                    let (envelope_uid, generation) = self.parse_resource(&mutation.target, &canonical)?;
-                    let uid = prepared
-                        .resource_uid()
-                        .cloned()
-                        .unwrap_or(envelope_uid);
-                    if current
-                        .as_ref()
-                        .is_some_and(|resource| resource.uid != uid)
-                    {
+                    let (envelope_uid, generation) =
+                        self.parse_resource(&mutation.target, &canonical)?;
+                    let uid = prepared.resource_uid().cloned().unwrap_or(envelope_uid);
+                    if current.as_ref().is_some_and(|resource| resource.uid != uid) {
                         return Err(Self::conflict(state.revision));
                     }
                     let payload_digest = prepared
@@ -830,7 +987,6 @@ impl ResourceStoreBackend for GuestResourceStore {
     ) -> Result<StoreCommitResult, StoreError> {
         self.commit_verified_with_fence(sealed, None).await
     }
-
 }
 
 fn open_owned_file(path: &Path) -> Result<File, GuestResourceRuntimeError> {
@@ -856,6 +1012,395 @@ fn map_store_error(error: StoreError) -> GuestResourceRuntimeError {
     } else {
         GuestResourceRuntimeError::Store
     }
+}
+
+#[derive(Clone, Copy)]
+enum GuestSeedMethod {
+    CommitBatch,
+    Watch,
+}
+
+struct GuestSeedMethodHandler {
+    inner: Box<dyn MethodHandler + Send + Sync>,
+    method: GuestSeedMethod,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    zone: ZoneId,
+    descriptor_digest: Option<SchemaFingerprint>,
+    approved_types: BTreeSet<ResourceTypeName>,
+}
+
+#[async_trait]
+impl MethodHandler for GuestSeedMethodHandler {
+    async fn handler(
+        &self,
+        context: TtrpcContext,
+        request: TtrpcRequest,
+    ) -> ttrpc::Result<TtrpcResponse> {
+        match self.method {
+            GuestSeedMethod::CommitBatch => {
+                let request = wire::CommitBatchRequest::parse_from_bytes(&request.payload)
+                    .map_err(|_| {
+                        ttrpc::Error::Others("guest-resource-seed-request-invalid".to_owned())
+                    })?;
+                validate_seed_request(
+                    &request,
+                    &self.guest_ref,
+                    &self.guest_uid,
+                    &self.zone,
+                    self.descriptor_digest.as_ref(),
+                    &self.approved_types,
+                )
+                .map_err(|_| {
+                    ttrpc::Error::Others("guest-resource-seed-request-invalid".to_owned())
+                })?;
+            }
+            GuestSeedMethod::Watch => {
+                let request =
+                    wire::WatchRequest::parse_from_bytes(&request.payload).map_err(|_| {
+                        ttrpc::Error::Others("guest-resource-seed-request-invalid".to_owned())
+                    })?;
+                validate_watch_request(&request, &self.approved_types).map_err(|_| {
+                    ttrpc::Error::Others("guest-resource-seed-request-invalid".to_owned())
+                })?;
+            }
+        }
+        self.inner.handler(context, request).await
+    }
+}
+
+fn restricted_seed_services(
+    mut services: std::collections::HashMap<String, ttrpc::r#async::Service>,
+    guest_ref: &ResourceRef,
+    guest_uid: &ResourceUid,
+    zone: &ZoneId,
+    descriptor_digest: Option<&SchemaFingerprint>,
+    approved_types: &BTreeSet<ResourceTypeName>,
+) -> std::collections::HashMap<String, ttrpc::r#async::Service> {
+    services.retain(|name, _| name == "d2b.resource.v3.ResourceService");
+    let Some(service) = services.get_mut("d2b.resource.v3.ResourceService") else {
+        return services;
+    };
+    let methods = std::mem::take(&mut service.methods);
+    service.methods = methods
+        .into_iter()
+        .filter_map(|(name, inner)| {
+            let method = match name.as_str() {
+                "CommitBatch" if guest_seed_operation_is_admitted(name.as_str()) => {
+                    GuestSeedMethod::CommitBatch
+                }
+                "Watch" => GuestSeedMethod::Watch,
+                _ => return None,
+            };
+            Some((
+                name,
+                Box::new(GuestSeedMethodHandler {
+                    inner,
+                    method,
+                    guest_ref: guest_ref.clone(),
+                    guest_uid: guest_uid.clone(),
+                    zone: zone.clone(),
+                    descriptor_digest: descriptor_digest.cloned(),
+                    approved_types: approved_types.clone(),
+                }) as Box<dyn MethodHandler + Send + Sync>,
+            ))
+        })
+        .collect();
+    service.streams.clear();
+    services
+}
+
+fn guest_seed_operation_is_admitted(method: &str) -> bool {
+    d2b_session::SessionOperation::method(
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
+            .expect("fixed Resource service"),
+        format!("ResourceService/{method}"),
+    )
+    .is_ok_and(|operation| operation.is_guest_resource_commit_batch())
+}
+
+fn validate_seed_request(
+    request: &wire::CommitBatchRequest,
+    guest_ref: &ResourceRef,
+    guest_uid: &ResourceUid,
+    zone: &ZoneId,
+    descriptor_digest: Option<&SchemaFingerprint>,
+    approved_types: &BTreeSet<ResourceTypeName>,
+) -> Result<(), GuestResourceRuntimeError> {
+    let meta = request
+        .meta
+        .as_ref()
+        .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+    if !valid_seed_operation_id(&meta.operation_id)
+        || !valid_seed_operation_id(&meta.idempotency_key)
+        || meta.correlation_id != meta.operation_id
+        || meta.trace_id != meta.operation_id
+        || meta.deadline_ms == 0
+        || request.mutations.is_empty()
+        || request.mutations.len() > 128
+        || !request.scoped_admission.is_empty()
+    {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    let mut resource_digests = Vec::with_capacity(request.mutations.len());
+    let mut seed_targets = Vec::with_capacity(request.mutations.len());
+    for mutation in &request.mutations {
+        if mutation.kind.enum_value() != Ok(wire::MutationKind::MUTATION_KIND_CREATE) {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+        let target = mutation
+            .target
+            .as_ref()
+            .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+        let target_type = ResourceTypeName::parse(&target.resource_type)
+            .map_err(|_| GuestResourceRuntimeError::SeedInvalid)?;
+        if !approved_types.contains(&target_type)
+            || target.zone != zone.as_str()
+            || target.name.is_empty()
+            || target.uid.is_some()
+            || target.generation.is_some()
+            || target.revision.is_some()
+        {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+        seed_targets.push((
+            ResourceRef::new(
+                target_type.clone(),
+                ResourceName::parse(target.name.clone())
+                    .map_err(|_| GuestResourceRuntimeError::SeedInvalid)?,
+            ),
+            ResourceVerb::Create,
+        ));
+        let owner = mutation
+            .owner
+            .as_ref()
+            .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+        if owner.zone != zone.as_str()
+            || owner.resource_type != "Guest"
+            || owner.name != guest_ref.name().as_str()
+            || owner.uid.as_deref() != Some(guest_uid.as_str())
+        {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+        let precondition = mutation
+            .precondition
+            .as_ref()
+            .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+        if precondition.kind.enum_value()
+            != Ok(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT)
+            || precondition.expected_revision.is_some()
+            || precondition.expected_uid.is_some()
+        {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+        let resource = mutation
+            .resource
+            .as_ref()
+            .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+        if resource.identity.as_ref().is_none_or(|identity| {
+            identity.zone != zone.as_str()
+                || identity.resource_type != target.resource_type
+                || identity.name != target.name
+                || identity.uid.is_some()
+                || identity.generation.is_some()
+                || identity.revision.is_some()
+        }) || resource.payload_digest
+            != d2b_contracts_resource::v3::canonical_digest(
+                RESOURCE_ENVELOPE_DOMAIN_TAG,
+                &resource.canonical_json,
+            )
+        {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+        validate_seed_payload(
+            &resource.canonical_json,
+            &target_type,
+            &target.name,
+            guest_ref,
+            zone,
+        )?;
+        resource_digests.push((
+            format!("{}/{}", target.resource_type, target.name),
+            d2b_contracts_resource::v3::canonical_digest(
+                GUEST_SEED_DIGEST_DOMAIN,
+                &resource.canonical_json,
+            ),
+        ));
+    }
+    let call = d2b_bus::ResourceCall::CommitBatch(seed_targets);
+    if call.validate_guest_local_seed(approved_types).is_err() {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    resource_digests.sort_unstable();
+    if let Some(descriptor_digest) = descriptor_digest {
+        let mut key_material = Vec::new();
+        key_material.extend_from_slice(guest_uid.as_str().as_bytes());
+        key_material.extend_from_slice(descriptor_digest.as_str().as_bytes());
+        key_material.extend_from_slice(meta.operation_id.as_bytes());
+        for (target, digest) in resource_digests {
+            key_material.extend_from_slice(target.as_bytes());
+            key_material.extend_from_slice(digest.as_bytes());
+        }
+        if meta.idempotency_key
+            != d2b_contracts_resource::v3::canonical_digest(GUEST_SEED_DIGEST_DOMAIN, &key_material)
+        {
+            return Err(GuestResourceRuntimeError::SeedInvalid);
+        }
+    }
+    Ok(())
+}
+
+fn validate_watch_request(
+    request: &wire::WatchRequest,
+    approved_types: &BTreeSet<ResourceTypeName>,
+) -> Result<(), GuestResourceRuntimeError> {
+    let meta = request
+        .meta
+        .as_ref()
+        .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+    if !valid_seed_operation_id(&meta.operation_id)
+        || request.resource_types.is_empty()
+        || request.resource_types.iter().any(|resource_type| {
+            ResourceTypeName::parse(resource_type)
+                .ok()
+                .is_none_or(|resource_type| !approved_types.contains(&resource_type))
+        })
+        || request
+            .credits
+            .as_ref()
+            .is_none_or(|credits| credits.initial == 0)
+        || request
+            .filters
+            .iter()
+            .any(|filter| filter.field != "metadata.name" || filter.values.is_empty())
+    {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    Ok(())
+}
+
+fn validate_seed_payload(
+    canonical: &[u8],
+    target_type: &ResourceTypeName,
+    target_name: &str,
+    guest_ref: &ResourceRef,
+    zone: &ZoneId,
+) -> Result<(), GuestResourceRuntimeError> {
+    let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(canonical)
+        .map_err(|_| GuestResourceRuntimeError::SeedInvalid)?;
+    if value.to_canonical_bytes() != canonical {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    parse_uid_free_envelope(canonical).map_err(|_| GuestResourceRuntimeError::SeedInvalid)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(canonical).map_err(|_| GuestResourceRuntimeError::SeedInvalid)?;
+    let object = value
+        .as_object()
+        .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+    if object.get("apiVersion").and_then(serde_json::Value::as_str)
+        != Some("resources.d2bus.org/v3")
+        || !object.contains_key("status")
+    {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    if object.get("type").and_then(serde_json::Value::as_str) != Some(target_type.as_str()) {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    let metadata = object
+        .get("metadata")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+    if metadata.get("uid").is_some()
+        || metadata.get("name").and_then(serde_json::Value::as_str) != Some(target_name)
+        || metadata.get("zone").and_then(serde_json::Value::as_str) != Some(zone.as_str())
+        || metadata.get("ownerRef").and_then(serde_json::Value::as_str)
+            != Some(guest_ref.to_canonical_string().as_str())
+        || contains_seed_private_field(&value)
+    {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    let spec = object
+        .get("spec")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(GuestResourceRuntimeError::SeedInvalid)?;
+    let relationship = if target_type.as_str() == "Endpoint" {
+        spec.get("producerRef")
+    } else {
+        spec.get("executionRef")
+    };
+    if relationship.and_then(serde_json::Value::as_str)
+        != Some(guest_ref.to_canonical_string().as_str())
+    {
+        return Err(GuestResourceRuntimeError::SeedInvalid);
+    }
+    Ok(())
+}
+
+fn contains_seed_private_field(value: &serde_json::Value) -> bool {
+    const PRIVATE_KEYS: &[&str] = &[
+        "argv",
+        "cid",
+        "credential",
+        "credentials",
+        "environment",
+        "endpoint",
+        "fd",
+        "gid",
+        "hostpath",
+        "key",
+        "locator",
+        "password",
+        "path",
+        "pid",
+        "port",
+        "secret",
+        "socket",
+        "socketpath",
+        "storepath",
+        "token",
+        "uid",
+        "vsock",
+    ];
+    match value {
+        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            PRIVATE_KEYS.contains(&key.to_ascii_lowercase().as_str())
+                || contains_seed_private_field(value)
+        }),
+        serde_json::Value::Array(values) => values.iter().any(contains_seed_private_field),
+        serde_json::Value::String(value) => value.starts_with('/') || value.contains("/nix/store/"),
+        _ => false,
+    }
+}
+
+fn valid_seed_operation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':'))
+}
+
+fn parse_uid_free_envelope(canonical: &[u8]) -> Result<ResourceEnvelope, ()> {
+    if let Ok(envelope) = ResourceEnvelope::from_json(canonical) {
+        return Ok(envelope);
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(canonical).map_err(|_| ())?;
+    let metadata = value
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or(())?;
+    if metadata.contains_key("uid") {
+        return Err(());
+    }
+    metadata.insert(
+        "uid".to_owned(),
+        serde_json::Value::String("00000000-0000-4000-8000-000000000000".to_owned()),
+    );
+    let with_uid = serde_json::to_vec(&value).map_err(|_| ())?;
+    let with_uid = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&with_uid)
+        .map_err(|_| ())?
+        .to_canonical_bytes();
+    ResourceEnvelope::from_json(&with_uid).map_err(|_| ())
 }
 
 pub struct SessionBoundStore {
@@ -925,7 +1470,9 @@ impl ResourceStoreBackend for SessionBoundStore {
             if *active == Some(generation) {
                 Ok(())
             } else {
-                Err(GuestResourceStore::unavailable("guest-target-session-stale"))
+                Err(GuestResourceStore::unavailable(
+                    "guest-target-session-stale",
+                ))
             }
         });
         self.store
@@ -938,6 +1485,7 @@ impl ResourceStoreBackend for SessionBoundStore {
 mod tests {
     use super::*;
     use d2b_resource_store::mutation_seal::StoreSealIdentity;
+    use protobuf::{EnumOrUnknown, MessageField};
 
     fn test_identity() -> GuestIdentity {
         GuestIdentity::new(
@@ -948,12 +1496,12 @@ mod tests {
                 .expect("boot identity"),
             d2b_contracts_resource::v3::identity::SessionPurpose::parse("zone-link")
                 .expect("purpose"),
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(
-                format!("sha256:{}", "1".repeat(64)),
-            )
+            d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
             .expect("schema"),
-            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1)
-                .expect("generation"),
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1).expect("generation"),
             1,
             1,
             1,
@@ -1035,15 +1583,13 @@ mod tests {
     #[tokio::test]
     async fn target_local_store_rejects_schema_reads_for_zone_types() {
         let zone = ZoneId::parse("work").expect("zone");
-        let uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
         let store_identity = StoreSealIdentity::new(
             d2b_resource_store::StoreSlot::new(STORE_SLOT).expect("store slot"),
             zone.clone(),
             uid,
         );
-        let (_, acceptor) =
-            d2b_resource_store::mutation_seal::mutation_seal_pair(store_identity);
+        let (_, acceptor) = d2b_resource_store::mutation_seal::mutation_seal_pair(store_identity);
         let store = GuestResourceStore::new_in_memory(zone.clone(), acceptor);
         let error = store
             .inspect_schema(StoreInspectSchemaRequest {
@@ -1065,15 +1611,13 @@ mod tests {
     #[tokio::test]
     async fn target_local_store_rejects_watches_for_zone_types() {
         let zone = ZoneId::parse("work").expect("zone");
-        let uid =
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
         let store_identity = StoreSealIdentity::new(
             d2b_resource_store::StoreSlot::new(STORE_SLOT).expect("store slot"),
             zone.clone(),
             uid,
         );
-        let (_, acceptor) =
-            d2b_resource_store::mutation_seal::mutation_seal_pair(store_identity);
+        let (_, acceptor) = d2b_resource_store::mutation_seal::mutation_seal_pair(store_identity);
         let store = GuestResourceStore::new_in_memory(zone.clone(), acceptor);
         let error = store
             .watch(StoreWatchRequest {
@@ -1095,5 +1639,177 @@ mod tests {
             .await
             .expect_err("Zone watch is not target-local");
         assert_eq!(error.kind(), StoreErrorKind::AuthorizationDenied);
+    }
+
+    fn seed_request(kind: &str, name: &str) -> wire::CommitBatchRequest {
+        let guest_ref = ResourceRef::parse("Guest/work").expect("guest ref");
+        let guest_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("guest uid");
+        let zone = ZoneId::parse("work").expect("zone");
+        let descriptor = SchemaFingerprint::parse(format!("sha256:{}", "d".repeat(64)))
+            .expect("descriptor digest");
+        let raw = format!(
+            r#"{{"apiVersion":"resources.d2bus.org/v3","metadata":{{"createdAt":"2026-08-29T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"controller","name":"{name}","ownerRef":"Guest/work","revision":1,"updatedAt":"2026-08-29T00:00:00.000Z","zone":"work"}},"spec":{{"executionRef":"Guest/work"}},"status":{{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{{}},"update":{{"dependencies":{{"count":0,"refs":[]}},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{{"count":0,"refs":[]}},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"startedAt":null}},"type":"{kind}"}}"#
+        );
+        let payload = d2b_contracts_resource::v3::CanonicalJsonValue::parse(raw.as_bytes())
+            .expect("canonical payload")
+            .to_canonical_bytes();
+        let mut target = wire::ResourceIdentity::new();
+        target.zone = zone.as_str().to_owned();
+        target.resource_type = kind.to_owned();
+        target.name = name.to_owned();
+        let mut owner = wire::ResourceIdentity::new();
+        owner.zone = zone.as_str().to_owned();
+        owner.resource_type = "Guest".to_owned();
+        owner.name = guest_ref.name().as_str().to_owned();
+        owner.uid = Some(guest_uid.as_str().to_owned());
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = MessageField::some(target.clone());
+        body.canonical_json = payload.clone();
+        body.payload_digest =
+            d2b_contracts_resource::v3::canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
+        let mut mutation = wire::Mutation::new();
+        mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+        mutation.target = MessageField::some(target);
+        mutation.owner = MessageField::some(owner);
+        mutation.precondition = MessageField::some(precondition);
+        mutation.resource = MessageField::some(body);
+        let resource_digest =
+            d2b_contracts_resource::v3::canonical_digest(GUEST_SEED_DIGEST_DOMAIN, &payload);
+        let mut key_material = Vec::new();
+        key_material.extend_from_slice(guest_uid.as_str().as_bytes());
+        key_material.extend_from_slice(descriptor.as_str().as_bytes());
+        key_material.extend_from_slice(b"seed");
+        key_material.extend_from_slice(format!("{kind}/{name}").as_bytes());
+        key_material.extend_from_slice(resource_digest.as_bytes());
+        let mut meta = wire::RequestMeta::new();
+        meta.operation_id = "seed".to_owned();
+        meta.idempotency_key =
+            d2b_contracts_resource::v3::canonical_digest(GUEST_SEED_DIGEST_DOMAIN, &key_material);
+        meta.correlation_id = "seed".to_owned();
+        meta.trace_id = "seed".to_owned();
+        meta.deadline_ms = 30_000;
+        let mut request = wire::CommitBatchRequest::new();
+        request.meta = MessageField::some(meta);
+        request.mutations = vec![mutation];
+        request
+    }
+
+    #[test]
+    fn guest_seed_admission_is_commit_batch_only_and_descriptor_scoped() {
+        let guest_ref = ResourceRef::parse("Guest/work").expect("guest ref");
+        let guest_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("guest uid");
+        let zone = ZoneId::parse("work").expect("zone");
+        let descriptor = SchemaFingerprint::parse(format!("sha256:{}", "d".repeat(64)))
+            .expect("descriptor digest");
+        let approved = GUEST_SEED_RESOURCE_TYPES
+            .iter()
+            .map(|resource_type| ResourceTypeName::parse(*resource_type).expect("seed type"))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            validate_seed_request(
+                &seed_request("Process", "agent"),
+                &guest_ref,
+                &guest_uid,
+                &zone,
+                Some(&descriptor),
+                &approved,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_seed_request(
+                &seed_request("Zone", "work"),
+                &guest_ref,
+                &guest_uid,
+                &zone,
+                Some(&descriptor),
+                &approved,
+            )
+            .is_err()
+        );
+        let mut update = seed_request("Process", "agent");
+        update.mutations[0].kind =
+            EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_SPEC);
+        assert!(
+            validate_seed_request(
+                &update,
+                &guest_ref,
+                &guest_uid,
+                &zone,
+                Some(&descriptor),
+                &approved,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn target_local_create_validation_accepts_uid_free_envelopes() {
+        let mut value: serde_json::Value = serde_json::from_str(
+            r#"{
+                "apiVersion":"resources.d2bus.org/v3",
+                "metadata":{
+                    "configurationGeneration":7,
+                    "createdAt":"2026-07-22T00:00:00.000Z",
+                    "deletionRequestedAt":null,
+                    "finalizers":[],
+                    "generation":1,
+                    "managedBy":"configuration",
+                    "name":"host-system",
+                    "ownerRef":null,
+                    "revision":1,
+                    "uid":"123e4567-e89b-42d3-a456-426614174000",
+                    "updatedAt":"2026-07-22T00:00:00.000Z",
+                    "zone":"dev"
+                },
+                "spec":{
+                    "providerRef":"Provider/system-core",
+                    "updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}
+                },
+                "status":{
+                    "completedAt":null,
+                    "conditions":[],
+                    "lastReconciledAt":null,
+                    "observedGeneration":0,
+                    "outcome":null,
+                    "phase":"Pending",
+                    "resource":{},
+                    "startedAt":null,
+                    "update":{
+                        "dependencies":{"count":0,"refs":[]},
+                        "disruption":"None",
+                        "lastAssessedAt":null,
+                        "observedGeneration":0,
+                        "operationId":null,
+                        "owned":{"count":0,"refs":[]},
+                        "preserveState":true,
+                        "reasons":[],
+                        "state":"Unknown",
+                        "targetGeneration":1
+                    }
+                },
+                "type":"Host"
+            }"#,
+        )
+        .expect("golden resource");
+        value["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("uid");
+        let bytes = d2b_contracts_resource::v3::CanonicalJsonValue::parse(
+            &serde_json::to_vec(&value).expect("resource bytes"),
+        )
+        .expect("canonical resource")
+        .to_canonical_bytes();
+        let envelope = parse_uid_free_envelope(&bytes).expect("UID-free envelope");
+        assert_eq!(
+            envelope.metadata().uid().as_str(),
+            "00000000-0000-4000-8000-000000000000"
+        );
     }
 }

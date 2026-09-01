@@ -11,14 +11,15 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::{
     BindingChildIntent, BindingChildKind, BindingChildPlacement, BindingChildSet,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceTypeName, ZoneRevision,
-    canonical_digest,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceTypeName, ResourceUid,
+    ZoneRevision, canonical_digest,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::BundleResource;
 
 use crate::{
-    DesiredChild, HintTarget, ObservedChild, OwnerIndex, OwnerLimits, OwnerReconcileError,
-    OwnerReconcilePlan,
+    DesiredChild, HintTarget, ObservedChild, OwnedChildIntent, OwnerBatchRecovery,
+    OwnerBatchResult, OwnerChildBatch, OwnerIndex, OwnerLimits, OwnerReconcileError,
+    OwnerReconcilePlan, TeardownPlan,
 };
 
 /// One provider-supplied desired child body paired with its semantic intent.
@@ -175,14 +176,92 @@ pub fn semantic_child_digest(
 /// convergence.
 pub fn observed_child_from_resource(
     target: HintTarget,
+    owner: &HintTarget,
+    owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
     revision: ZoneRevision,
     canonical_resource: &[u8],
     deletion_requested: bool,
     deletion_ready: bool,
 ) -> Result<ObservedChild, BindingChildMaterializationError> {
     let digest = semantic_child_digest(canonical_resource)?;
-    ObservedChild::with_deletion_state(target, revision, digest, deletion_requested, deletion_ready)
-        .map_err(BindingChildMaterializationError::OwnerReconcile)
+    let value = CanonicalJsonValue::parse(canonical_resource)
+        .map_err(|_| BindingChildMaterializationError::MalformedResource)?;
+    let CanonicalJsonValue::Object(root) = value else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    let Some(CanonicalJsonValue::String(resource_type)) = root.get("type") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    if resource_type != target.resource_ref().resource_type().as_str() {
+        return Err(BindingChildMaterializationError::IdentityMismatch);
+    }
+    let Some(CanonicalJsonValue::Object(metadata)) = root.get("metadata") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    let Some(CanonicalJsonValue::String(name)) = metadata.get("name") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    if name != target.resource_ref().name().as_str() {
+        return Err(BindingChildMaterializationError::IdentityMismatch);
+    }
+    let Some(CanonicalJsonValue::String(zone)) = metadata.get("zone") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    if zone != target.zone().as_str() {
+        return Err(BindingChildMaterializationError::OwnerMismatch);
+    }
+    let Some(CanonicalJsonValue::String(uid)) = metadata.get("uid") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    if ResourceUid::parse(uid).map_err(|_| BindingChildMaterializationError::IdentityMismatch)?
+        != *target.uid()
+    {
+        return Err(BindingChildMaterializationError::IdentityMismatch);
+    }
+    let Some(CanonicalJsonValue::Integer(observed_revision)) = metadata.get("revision") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    let observed_revision = u64::try_from(*observed_revision)
+        .ok()
+        .map(ZoneRevision::new)
+        .filter(|observed_revision| observed_revision.get() != 0)
+        .ok_or(BindingChildMaterializationError::MalformedResource)?;
+    if observed_revision != revision {
+        return Err(BindingChildMaterializationError::OwnerReconcile(
+            OwnerReconcileError::StaleRevision,
+        ));
+    }
+    let Some(owner_ref) = metadata.get("ownerRef") else {
+        return Err(BindingChildMaterializationError::OwnerMismatch);
+    };
+    let CanonicalJsonValue::String(owner_ref) = owner_ref else {
+        return Err(BindingChildMaterializationError::OwnerMismatch);
+    };
+    let owner_ref = ResourceRef::parse(owner_ref)
+        .map_err(|_| BindingChildMaterializationError::OwnerMismatch)?;
+    let Some(CanonicalJsonValue::Integer(generation)) = metadata.get("generation") else {
+        return Err(BindingChildMaterializationError::MalformedResource);
+    };
+    let generation = u64::try_from(*generation)
+        .ok()
+        .and_then(|generation| d2b_contracts_resource::v3::ResourceGeneration::new(generation).ok())
+        .ok_or(BindingChildMaterializationError::MalformedResource)?;
+    let observed = ObservedChild::with_owner_and_dependencies(
+        target,
+        owner,
+        owner_generation,
+        revision,
+        digest,
+        deletion_requested,
+        deletion_ready,
+        std::iter::empty(),
+    )
+    .map_err(BindingChildMaterializationError::OwnerReconcile)?
+    .with_generation(generation);
+    if observed.owner_ref() != Some(&owner_ref) {
+        return Err(BindingChildMaterializationError::OwnerMismatch);
+    }
+    Ok(observed)
 }
 
 /// Build the canonical, UID-free Resource API create payload for one child.
@@ -379,6 +458,28 @@ impl BindingChildReconciler {
         self.owner_index.relist(owner, observed)
     }
 
+    /// Replace a relist while requiring the current owner generation.
+    pub fn relist_with_owner_generation(
+        &mut self,
+        owner: HintTarget,
+        owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        observed: Vec<ObservedChild>,
+    ) -> Result<(), OwnerReconcileError> {
+        self.owner_index
+            .relist_with_owner_generation(owner, owner_generation, observed)
+    }
+
+    /// Replace a relist after consuming the exact U10 owner-child admission.
+    pub fn relist_for_admission(
+        &mut self,
+        owner: HintTarget,
+        scope: &crate::OwnerChildScope,
+        observed: Vec<ObservedChild>,
+    ) -> Result<(), OwnerReconcileError> {
+        self.owner_index
+            .relist_for_admission(owner, scope, observed)
+    }
+
     /// Plan create, repair, and ordered deletion mutations for one Binding.
     ///
     /// The complete child set must be supplied by the Provider controller;
@@ -415,6 +516,8 @@ impl BindingChildReconciler {
                 let payload = resource.create_payload(&zone)?;
                 let digest = semantic_child_digest(&payload)?;
                 DesiredChild::new(resource.intent().resource_ref().clone(), payload, digest)
+                    .map_err(BindingChildMaterializationError::OwnerReconcile)?
+                    .with_dependencies(resource.intent().producer_ref().cloned())
                     .map_err(BindingChildMaterializationError::OwnerReconcile)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -443,11 +546,90 @@ impl BindingChildReconciler {
                 let payload = materialize_child_create_payload(intent, owner.zone())?;
                 let digest = semantic_child_digest(&payload)?;
                 DesiredChild::new(intent.resource_ref().clone(), payload, digest)
+                    .map_err(BindingChildMaterializationError::OwnerReconcile)?
+                    .with_dependencies(intent.producer_ref().cloned())
                     .map_err(BindingChildMaterializationError::OwnerReconcile)
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.owner_index
             .plan(owner, desired)
+            .map_err(BindingChildMaterializationError::OwnerReconcile)
+    }
+
+    /// Plan a generic provider-neutral UID-free child set.
+    pub fn plan_owned(
+        &self,
+        owner: &HintTarget,
+        desired: impl IntoIterator<Item = OwnedChildIntent>,
+    ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
+        self.owner_index
+            .plan_intents(owner, desired)
+            .map_err(BindingChildMaterializationError::OwnerReconcile)
+    }
+
+    /// Plan a semantic Binding only when its admitted owner fence is current.
+    pub fn plan_for_admission(
+        &self,
+        owner: &HintTarget,
+        scope: &crate::OwnerChildScope,
+        child_set: &BindingChildSet,
+    ) -> Result<OwnerReconcilePlan, BindingChildMaterializationError> {
+        if owner.resource_ref() != child_set.owner_ref() {
+            return Err(BindingChildMaterializationError::OwnerMismatch);
+        }
+        let desired = child_set
+            .iter()
+            .map(|intent| {
+                let payload = materialize_child_create_payload(intent, owner.zone())?;
+                let digest = semantic_child_digest(&payload)?;
+                DesiredChild::new(intent.resource_ref().clone(), payload, digest)
+                    .map_err(BindingChildMaterializationError::OwnerReconcile)?
+                    .with_dependencies(intent.producer_ref().cloned())
+                    .map_err(BindingChildMaterializationError::OwnerReconcile)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.owner_index
+            .plan_for_admission(owner, scope, desired)
+            .map_err(BindingChildMaterializationError::OwnerReconcile)
+    }
+
+    /// Return the pending UID-free create batch for one semantic Binding.
+    pub fn create_batch(
+        &self,
+        owner: &HintTarget,
+        child_set: &BindingChildSet,
+    ) -> Result<Option<OwnerChildBatch>, BindingChildMaterializationError> {
+        Ok(self.plan_intents(owner, child_set)?.create_batch().cloned())
+    }
+
+    /// Alias for the complete child CommitBatch planning operation.
+    pub fn plan_batch(
+        &self,
+        owner: &HintTarget,
+        child_set: &BindingChildSet,
+    ) -> Result<Option<OwnerChildBatch>, BindingChildMaterializationError> {
+        self.create_batch(owner, child_set)
+    }
+
+    /// Resolve an uncertain create response and install its complete relist.
+    pub fn recover_batch(
+        &mut self,
+        batch: &OwnerChildBatch,
+        result: &OwnerBatchResult,
+        relisted: &[ObservedChild],
+    ) -> Result<OwnerBatchRecovery, BindingChildMaterializationError> {
+        self.owner_index
+            .recover_batch(batch, result, relisted)
+            .map_err(BindingChildMaterializationError::OwnerReconcile)
+    }
+
+    /// Return a bounded dependent-first teardown projection.
+    pub fn teardown_plan(
+        &self,
+        owner: &HintTarget,
+    ) -> Result<TeardownPlan, BindingChildMaterializationError> {
+        self.owner_index
+            .teardown_plan(owner)
             .map_err(BindingChildMaterializationError::OwnerReconcile)
     }
 
@@ -481,21 +663,20 @@ fn validate_spec(
             {
                 return Err(BindingChildMaterializationError::ExecutionTargetMismatch);
             }
-            if let Some(provider) = intent.process_provider() {
-                if spec.get("providerRef") != Some(&CanonicalJsonValue::String(provider.to_owned()))
-                {
-                    return Err(BindingChildMaterializationError::ProcessContractMismatch);
-                }
+            if let Some(provider) = intent.process_provider()
+                && spec.get("providerRef") != Some(&CanonicalJsonValue::String(provider.to_owned()))
+            {
+                return Err(BindingChildMaterializationError::ProcessContractMismatch);
             }
-            if let Some(template) = intent.process_template() {
-                if spec.get("template") != Some(&CanonicalJsonValue::String(template.to_owned())) {
-                    return Err(BindingChildMaterializationError::ProcessContractMismatch);
-                }
+            if let Some(template) = intent.process_template()
+                && spec.get("template") != Some(&CanonicalJsonValue::String(template.to_owned()))
+            {
+                return Err(BindingChildMaterializationError::ProcessContractMismatch);
             }
-            if let Some(class) = intent.process_class() {
-                if spec.get("processClass") != Some(&CanonicalJsonValue::String(class.to_owned())) {
-                    return Err(BindingChildMaterializationError::ProcessContractMismatch);
-                }
+            if let Some(class) = intent.process_class()
+                && spec.get("processClass") != Some(&CanonicalJsonValue::String(class.to_owned()))
+            {
+                return Err(BindingChildMaterializationError::ProcessContractMismatch);
             }
             if let Some(domain) = intent.process_domain() {
                 let expected = match domain {
@@ -506,12 +687,11 @@ fn validate_spec(
                     return Err(BindingChildMaterializationError::ProcessContractMismatch);
                 }
             }
-            if let Some(user_ref) = intent.process_user() {
-                if spec.get("userRef")
+            if let Some(user_ref) = intent.process_user()
+                && spec.get("userRef")
                     != Some(&CanonicalJsonValue::String(user_ref.to_canonical_string()))
-                {
-                    return Err(BindingChildMaterializationError::ProcessContractMismatch);
-                }
+            {
+                return Err(BindingChildMaterializationError::ProcessContractMismatch);
             }
         }
         BindingChildKind::Endpoint => {
@@ -692,7 +872,13 @@ mod tests {
         let endpoint = child_resource(set.child("guest-endpoint").unwrap());
         let mut reconciler = BindingChildReconciler::new(OwnerLimits::new(4, 8).unwrap());
         let parent = owner(&set);
-        reconciler.relist(parent.clone(), Vec::new()).unwrap();
+        reconciler
+            .relist_with_owner_generation(
+                parent.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
 
         assert_eq!(
             reconciler.plan(&parent, &set, std::slice::from_ref(&process)),
@@ -714,7 +900,13 @@ mod tests {
         let set = child_set();
         let mut reconciler = BindingChildReconciler::new(OwnerLimits::new(4, 8).unwrap());
         let parent = owner(&set);
-        reconciler.relist(parent.clone(), Vec::new()).unwrap();
+        reconciler
+            .relist_with_owner_generation(
+                parent.clone(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+                Vec::new(),
+            )
+            .unwrap();
 
         let plan = reconciler.plan_intents(&parent, &set).unwrap();
         assert_eq!(plan.mutations().len(), 2);
@@ -734,22 +926,17 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let CanonicalJsonValue::Object(root) =
-            CanonicalJsonValue::parse(endpoint_payload).unwrap()
+        let CanonicalJsonValue::Object(root) = CanonicalJsonValue::parse(endpoint_payload).unwrap()
         else {
             unreachable!()
         };
         let endpoint_spec = root.get("spec").unwrap();
-        let endpoint_spec =
-            serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(
-                &endpoint_spec.to_canonical_bytes(),
-            )
-            .unwrap();
+        let endpoint_spec = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(
+            &endpoint_spec.to_canonical_bytes(),
+        )
+        .unwrap();
         assert_eq!(
-            endpoint_spec
-                .provider_ref()
-                .unwrap()
-                .to_canonical_string(),
+            endpoint_spec.provider_ref().unwrap().to_canonical_string(),
             "Provider/audio-pipewire"
         );
         assert!(endpoint_spec.base().get("providerRef").is_none());

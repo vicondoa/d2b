@@ -180,9 +180,7 @@ impl VirtiofsExportEffectPort for &ScriptedPort {
 pub mod fixtures {
     use d2b_contracts_resource::v3::ResourceRef;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-    use d2b_contracts_resource::v3::{
-    volume::{AttachmentSettings, ViewSpec, VolumeSpec},
-};
+    use d2b_contracts_resource::v3::volume::{AttachmentSettings, ViewSpec, VolumeSpec};
     use serde_json::{Value, json};
 
     use crate::export::ExportSpec;
