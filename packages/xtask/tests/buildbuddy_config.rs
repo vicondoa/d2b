@@ -442,6 +442,95 @@ fn committed_profiles_share_authentication_and_worker_policy() {
 }
 
 #[test]
+fn developer_defaults_and_local_opt_out_are_explicit() {
+    let bazelrc = read_text(".bazelrc");
+    assert!(
+        bazelrc.lines().any(|line| line.trim() == "build --config=remote"),
+        "bare Bazel build and test commands must select the remote profile"
+    );
+
+    for option in [
+        "--remote_executor=grpcs://d2b.buildbuddy.io",
+        "--remote_cache=grpcs://d2b.buildbuddy.io",
+        "--bes_backend=grpcs://d2b.buildbuddy.io",
+        "--bes_results_url=https://d2b.buildbuddy.io/invocation/",
+        "--credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check",
+        "--remote_instance_name=d2b/developer/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1",
+        "--platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
+        "--extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64",
+        "--extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64",
+        "--@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd",
+        "--action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "--test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    ] {
+        let expected = format!("build:remote {option}");
+        assert!(
+            bazelrc.lines().any(|line| line.trim() == expected),
+            "remote profile must retain {option}"
+        );
+    }
+
+    for option in [
+        "--remote_executor=",
+        "--remote_cache=",
+        "--bes_backend=",
+        "--bes_results_url=",
+        "--credential_helper=d2b.buildbuddy.io=/bin/false",
+        "--remote_instance_name=",
+        "--platforms=",
+        "--extra_execution_platforms=",
+        "--extra_toolchains=",
+        "--@rules_rust//rust/settings:extra_rustc_flags=",
+        "--@rules_rust//rust/settings:extra_exec_rustc_flags=",
+        "--action_env=PATH",
+        "--test_env=PATH",
+    ] {
+        let expected = format!("build:local {option}");
+        assert!(
+            bazelrc.lines().any(|line| line.trim() == expected),
+            "local profile must neutralize {option}"
+        );
+    }
+
+    let makefile = read_text("Makefile");
+    assert!(
+        !makefile.contains("D2B_BAZEL_PROFILE ?= remote"),
+        "Make must leave the default profile to .bazelrc"
+    );
+    assert!(
+        makefile.contains(
+            "D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))"
+        ),
+        "Make must pass a profile only when the caller sets one"
+    );
+    assert!(
+        makefile
+            .lines()
+            .any(|line| line.trim()
+                .starts_with("D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)")),
+        "public Make aliases must use the conditional profile argument and required test context"
+    );
+    assert!(
+        makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\"")
+            && !makefile.contains("D2B_BAZEL_TEST_TAG_FILTERS")
+            && !makefile.contains("--test_tag_filters")
+            && !makefile.contains("--test_output="),
+        "public Make aliases must preserve the repository-root test environment without adding test selection or output arguments"
+    );
+    assert!(
+        !makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=remote"),
+        "Make must not hard-code the remote profile"
+    );
+
+    let workflow = read_text(".github/workflows/pr-l1-static-fast.yml");
+    assert!(
+        workflow.contains("D2B_BAZEL_PROFILE: local"),
+        "Layer-1 CI must continue to opt into the local profile"
+    );
+}
+
+#[test]
 fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
     let scratch = repo_root().join(".scratch").join(format!(
         "tier0-shellcheck-missing-test-{}-{}",
@@ -500,13 +589,13 @@ fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
     for profile in ["remote", "trusted-seed"] {
         assert!(
             bazelrc.contains(&format!(
-                "build:{profile} --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+                "build:{profile} --@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd"
             )),
             "{profile} target Rust actions must override the deprecated gold linker"
         );
         assert!(
             bazelrc.contains(&format!(
-                "build:{profile} --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+                "build:{profile} --@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd"
             )),
             "{profile} exec Rust actions must override the deprecated gold linker"
         );
@@ -1486,8 +1575,10 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
             && line.contains(repo_root().to_str().expect("repository root path"))
             && line.contains("|/bin/bash|1|")
             && line.contains("-j2")
-            && line.contains("--test_tag_filters=dispatcher-filter")
             && line.contains("test --config=local")
+            && line.contains("--test_env=D2B_REPO_ROOT=")
+            && !line.contains("--test_tag_filters")
+            && !line.contains("--test_output=")
     }));
     assert_eq!(
         bazel_output
@@ -1515,7 +1606,6 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
         .env("D2B_BAZEL_PROFILE", "local")
         .env("D2B_BAZEL_UNTRUSTED", "1")
         .env("BAZEL_SH", "/bin/bash")
-        .env("D2B_BAZEL_TEST_TAG_FILTERS", "direct-filter")
         .env(
             "D2B_BAZEL_CHECK_SCRATCH",
             scratch.join("direct-bazel-check-evidence"),
@@ -1545,7 +1635,11 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
         direct_bazel_output
             .lines()
             .last()
-            .is_some_and(|line| line.contains("--test_tag_filters=direct-filter"))
+            .is_some_and(|line| {
+                line.contains("--test_env=D2B_REPO_ROOT=")
+                    && !line.contains("--test_tag_filters")
+                    && !line.contains("--test_output=")
+            })
     );
     let _ = std::fs::remove_dir_all(scratch);
 }
@@ -1879,7 +1973,10 @@ fn bazel_facade_owns_public_make_composition() {
     assert!(
         makefile.contains("$(D2B_BAZEL_TEST) //bazel/checks:$@")
             && makefile.contains("$(BAZEL_BIN) test")
-            && makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\""),
+            && makefile.lines().any(|line| {
+                line.trim()
+                    .starts_with("D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)")
+            }),
         "Make must dispatch every public Bazel target through a direct bazel test of its facade suite"
     );
     assert!(

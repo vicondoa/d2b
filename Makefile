@@ -22,7 +22,7 @@ D2B_MAKE_LOCAL_TARGETS := \
 	check-ci test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-flake-check
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
-D2B_MAKE_UTILITY_TARGETS := changelog-fold
+D2B_MAKE_UTILITY_TARGETS := changelog-fold generate
 
 D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),$(.DEFAULT_GOAL))
 D2B_MAKE_CLASSIFIED_GOALS := $(filter \
@@ -88,7 +88,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-performance-budgets \
         test-drift test-policy test-changelog \
         test-integration test-host-integration perf \
-        heavy-check heavy-flake-check \
+        heavy-check heavy-flake-check generate \
         clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
@@ -109,13 +109,12 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 #   make heavy-flake-check  full flake realization.
 # ===========================================================================
 
-## Public Bazel aliases invoke `bazel test` directly. Default profile is
-## BuildBuddy `remote`. PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
-D2B_BAZEL_PROFILE ?= remote
-D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
+## Public Bazel aliases invoke `bazel test` directly. The .bazelrc default is
+## BuildBuddy `remote`; PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
+D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) --test_tag_filters="$(D2B_BAZEL_TEST_TAG_FILTERS)" --test_env=D2B_REPO_ROOT="$(CURDIR)" --test_env=D2B_BAZEL_BIN="$(BAZEL_BIN)" --test_env=D2B_PROJECT_SHELL=d2b --test_env=D2B_SHELLCHECK_BIN="$(D2B_SHELLCHECK_BIN)" --test_env=PATH="$(PATH)" --test_output=errors
-export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
+D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) --test_env=D2B_REPO_ROOT="$(CURDIR)"
+export D2B_BAZEL_PROFILE
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
 check-ci:
@@ -123,9 +122,6 @@ check-ci:
 	$(MAKE) test-integration
 
 ## check-fast - compatibility alias for check; check-tier0 is the fast subset.
-
-check-tier0: D2B_BAZEL_TEST_TAG_FILTERS := -gpu,-kvm
-test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
 
 $(D2B_MAKE_BAZEL_TARGETS):
 	$(D2B_BAZEL_TEST) //bazel/checks:$@
@@ -137,6 +133,11 @@ $(D2B_MAKE_BAZEL_TARGETS):
 ## test-integration - L2 podman container integration tests.
 test-integration:
 	bash tests/test-integration.sh
+
+## generate - regenerate committed schemas, docs, bindings, completions, and
+## policy inputs through the one Bazel-owned generator aggregate.
+generate:
+	$(BAZEL_BIN) run --config=local //packages/xtask:generate
 
 # ===========================================================================
 # Additional targets (helper utilities, legacy aliases, meta gates).

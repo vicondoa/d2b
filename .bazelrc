@@ -19,12 +19,27 @@ build --stamp=no
 build --noslim_profile
 build --experimental_profile_include_target_label
 build --experimental_profile_include_primary_output
+# Developer build and test commands use BuildBuddy unless a caller selects
+# another profile explicitly.
+build --config=remote
 # The local profile is the exact same target graph without any provider
 # endpoints. The bazel-check facade supplies the local repository-content
 # option outside the remote profiles.
 build:local --remote_executor=
 build:local --remote_cache=
 build:local --bes_backend=
+build:local --bes_results_url=
+# Bazel rejects an empty credential-helper path; override the remote scope
+# with a helper that cannot provide credentials.
+build:local --credential_helper=d2b.buildbuddy.io=/bin/false
+build:local --remote_instance_name=
+build:local --platforms=
+build:local --extra_execution_platforms=
+build:local --extra_toolchains=
+build:local --@rules_rust//rust/settings:extra_rustc_flags=
+build:local --@rules_rust//rust/settings:extra_exec_rustc_flags=
+build:local --action_env=PATH
+build:local --test_env=PATH
 
 # Remote profiles use the d2b BuildBuddy workspace. Authentication is
 # the credential helper only. Direct API-key headers leak into BEP.
@@ -38,8 +53,8 @@ build:remote --remote_instance_name=d2b/developer/linux-x86_64/rules_rs/worker-v
 build:remote --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:remote --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:remote --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
-build:remote --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd
-build:remote --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd
+build:remote --@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd
+build:remote --@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd
 build:remote --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:remote --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:remote --strategy=TestRunner=local
@@ -60,8 +75,8 @@ build:trusted-seed --remote_instance_name=d2b/trusted-seed/linux-x86_64/rules_rs
 build:trusted-seed --platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:trusted-seed --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64
 build:trusted-seed --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64
-build:trusted-seed --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd
-build:trusted-seed --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd
+build:trusted-seed --@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd
+build:trusted-seed --@rules_rust//rust/settings:extra_exec_rustc_flags=-Clink-arg=-fuse-ld=bfd
 build:trusted-seed --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:trusted-seed --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:trusted-seed --strategy=TestRunner=local
