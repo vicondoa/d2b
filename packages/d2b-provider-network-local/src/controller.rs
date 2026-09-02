@@ -1,25 +1,39 @@
 //! Async Network controller state machine and typed child-resource projection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceRef,
+    IfName, NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
     ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
     guest::GuestSpec,
-    network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec, cidr_overlaps},
-    process::{CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
-    volume::{AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant, LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass, SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind, VolumeSource, VolumeSpec},
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, MacvtapMode, NetworkSpec,
+        SharingPolicy, cidr_overlaps,
+    },
+    process::{
+        CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass,
+        ProcessSpec, SandboxSpec, TelemetrySpec,
+    },
+    volume::{
+        AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy,
+        EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant,
+        LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass,
+        SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind,
+        VolumeSource, VolumeSpec,
+    },
 };
 
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,
 };
+use crate::ifname::{
+    NetworkIfRole, derive_network_child_name, derive_network_ifname, derive_network_route_name_for,
+};
 use crate::observe::{NetworkObservation, ObserveDecision, evaluate_observation};
 use crate::plan::{ActualState, NetworkReconcilePlan, compute_plan};
+use crate::routes::RouteTuple;
 
 /// Config Volume byte ceiling charged to the Host memory budget.
 pub const CONFIG_VOLUME_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -95,6 +109,22 @@ pub enum NetworkEffectError {
     /// An external physical-NIC claim was requested without Host-global
     /// authority admission.
     ExternalNicAuthorityRequired,
+    /// A Network reconcile did not carry Host-global admission evidence.
+    NetworkAdmissionRequired,
+    /// Admission evidence did not match the current Network identity.
+    NetworkAdmissionMismatch,
+    /// A Network admission conflicts with an existing host or Network owner.
+    NetworkAdmissionConflict,
+    /// A derived interface name collides with an occupied host name.
+    NetworkInterfaceCollision,
+    /// A derived route name collides with an occupied host route.
+    NetworkRouteCollision,
+    /// Current host network occupancy could not be observed safely.
+    HostNetworkObservationFailed,
+    /// A committed attachment reference points outside the enclosing Zone.
+    CrossZoneReference,
+    /// A committed attachment reference does not reciprocate the Network.
+    AttachmentReferenceMismatch,
 }
 
 impl NetworkEffectError {
@@ -114,6 +144,14 @@ impl NetworkEffectError {
             Self::InvalidState => "network-controller-invalid-state",
             Self::EastWestHostOptInRequired => "east-west-host-opt-in-required",
             Self::ExternalNicAuthorityRequired => "external-nic-authority-required",
+            Self::NetworkAdmissionRequired => "network-admission-required",
+            Self::NetworkAdmissionMismatch => "network-admission-mismatch",
+            Self::NetworkAdmissionConflict => "network-admission-conflict",
+            Self::NetworkInterfaceCollision => "network-interface-collision",
+            Self::NetworkRouteCollision => "network-route-collision",
+            Self::HostNetworkObservationFailed => "host-network-observation-failed",
+            Self::CrossZoneReference => "network-cross-zone-reference",
+            Self::AttachmentReferenceMismatch => "network-attachment-mismatch",
         }
     }
 }
@@ -132,6 +170,345 @@ impl From<ArtifactResolutionError> for NetworkEffectError {
     }
 }
 
+/// Immutable identity tuple that authorizes one Network host projection.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NetworkAdmissionKey {
+    zone_uid: ResourceUid,
+    network_uid: ResourceUid,
+    network_generation: ResourceGeneration,
+    attachment_generation: ResourceGeneration,
+    bundle_generation: ResourceBundleGenerationId,
+}
+
+impl NetworkAdmissionKey {
+    /// Construct an exact host-admission identity tuple.
+    pub const fn new(
+        zone_uid: ResourceUid,
+        network_uid: ResourceUid,
+        network_generation: ResourceGeneration,
+        attachment_generation: ResourceGeneration,
+        bundle_generation: ResourceBundleGenerationId,
+    ) -> Self {
+        Self {
+            zone_uid,
+            network_uid,
+            network_generation,
+            attachment_generation,
+            bundle_generation,
+        }
+    }
+
+    /// Borrow the enclosing Zone identity.
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    /// Borrow the Network identity.
+    pub const fn network_uid(&self) -> &ResourceUid {
+        &self.network_uid
+    }
+
+    /// Return the committed Network generation.
+    pub const fn network_generation(&self) -> ResourceGeneration {
+        self.network_generation
+    }
+
+    /// Return the committed attachment generation.
+    pub const fn attachment_generation(&self) -> ResourceGeneration {
+        self.attachment_generation
+    }
+
+    /// Borrow the installed bundle generation.
+    pub const fn bundle_generation(&self) -> &ResourceBundleGenerationId {
+        &self.bundle_generation
+    }
+}
+
+fn network_cidrs(spec: &NetworkSpec) -> Vec<Ipv4Cidr> {
+    let mut cidrs = vec![spec.lan_cidr().clone(), spec.uplink_cidr().clone()];
+    if let Some(external) = spec.external_attachment()
+        && let Some(address) = external.ipv4().address()
+    {
+        cidrs.push(address.clone());
+    }
+    cidrs
+}
+
+fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
+    let address = cidr.split_once('/')?.0;
+    let mut octets = address
+        .split('.')
+        .map(|octet| octet.parse::<u8>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if octets.len() != 4 {
+        return None;
+    }
+    let last = octets.last_mut()?;
+    *last = last.checked_add(host)?;
+    Some(
+        octets
+            .into_iter()
+            .map(|octet| octet.to_string())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
+/// Host-fabric names and CIDRs admitted for one immutable Network identity.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NetworkAdmissionIntent {
+    key: NetworkAdmissionKey,
+    cidrs: Vec<Ipv4Cidr>,
+    interface_names: Vec<IfName>,
+    interface_markers: BTreeMap<IfName, String>,
+    route_names: Vec<String>,
+    routes: Vec<RouteTuple>,
+    route_markers: BTreeMap<RouteTuple, String>,
+    ownership_marker: String,
+    external_nic: Option<(IfName, MacvtapMode, SharingPolicy)>,
+}
+
+impl NetworkAdmissionIntent {
+    /// Derive all private host locators from committed Network identity.
+    pub fn new(
+        key: NetworkAdmissionKey,
+        spec: NetworkSpec,
+        guest_uids: Vec<ResourceUid>,
+    ) -> Result<Self, NetworkEffectError> {
+        let mut interface_names = Vec::new();
+        let mut interface_markers = BTreeMap::new();
+        let provenance = NetworkProvenance::new(
+            key.zone_uid().clone(),
+            key.network_uid().clone(),
+            key.network_generation(),
+            key.attachment_generation(),
+            key.bundle_generation().clone(),
+        );
+        for (role, object) in [
+            (NetworkIfRole::LanBridge, "bridge:lan"),
+            (NetworkIfRole::UplinkBridge, "bridge:uplink"),
+            (NetworkIfRole::NetVmLanTap, "tap:net-vm-lan"),
+            (NetworkIfRole::NetVmUplinkTap, "tap:net-vm-uplink"),
+        ] {
+            let ifname = derive_network_ifname(key.zone_uid(), key.network_uid(), role, None)
+                .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            interface_markers.insert(
+                ifname.clone(),
+                d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, object),
+            );
+            interface_names.push(ifname);
+        }
+        let mut sorted_guest_uids = guest_uids;
+        sorted_guest_uids.sort();
+        sorted_guest_uids.dedup();
+        for guest_uid in &sorted_guest_uids {
+            let ifname = derive_network_ifname(
+                key.zone_uid(),
+                key.network_uid(),
+                NetworkIfRole::WorkloadGuestTap,
+                Some(guest_uid),
+            )
+            .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            interface_markers.insert(
+                ifname.clone(),
+                d2b_contracts_resource::v3::derive_network_ownership_marker(
+                    &provenance,
+                    &format!("tap:{}", guest_uid.as_str()),
+                ),
+            );
+            interface_names.push(ifname);
+        }
+        let external_nic = spec.external_attachment().map(|external| {
+            (
+                external.parent_interface().clone(),
+                external.macvtap_mode(),
+                external.sharing_policy(),
+            )
+        });
+        if external_nic.is_some() {
+            let ifname = derive_network_ifname(
+                key.zone_uid(),
+                key.network_uid(),
+                NetworkIfRole::ExternalMacvtap,
+                None,
+            )
+            .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            interface_markers.insert(
+                ifname.clone(),
+                d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "macvtap"),
+            );
+            interface_names.push(ifname);
+        }
+        let mut unique_interfaces = BTreeSet::new();
+        if interface_names
+            .iter()
+            .any(|ifname| !unique_interfaces.insert(ifname.as_str().to_owned()))
+        {
+            return Err(NetworkEffectError::NetworkInterfaceCollision);
+        }
+        let route_count = spec.routing().host_blocklist().len().max(1);
+        let uplink_gateway = network_cidr_host_address(spec.uplink_cidr().as_str(), 2);
+        let route_names = (0..route_count)
+            .map(|index| derive_network_route_name_for(key.zone_uid(), key.network_uid(), index))
+            .collect::<Vec<_>>();
+        let route_destinations = if spec.routing().host_blocklist().is_empty() {
+            vec![spec.lan_cidr().clone()]
+        } else {
+            spec.routing().host_blocklist().to_vec()
+        };
+        let route_device = derive_network_ifname(
+            key.zone_uid(),
+            key.network_uid(),
+            NetworkIfRole::UplinkBridge,
+            None,
+        )
+        .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+        let routes = route_destinations
+            .into_iter()
+            .map(|destination| {
+                Ok(RouteTuple::new(
+                    destination.as_str(),
+                    uplink_gateway.clone(),
+                    Some(route_device.as_str().to_owned()),
+                    "main",
+                ))
+            })
+            .collect::<Result<Vec<_>, NetworkEffectError>>()?;
+        let route_markers = route_names
+            .iter()
+            .zip(&routes)
+            .map(|(route_name, route)| {
+                (
+                    route.clone(),
+                    d2b_contracts_resource::v3::derive_network_ownership_marker(
+                        &provenance,
+                        &format!("route:{route_name}"),
+                    ),
+                )
+            })
+            .collect();
+        let mut unique_routes = BTreeSet::new();
+        if route_names.iter().any(|name| !unique_routes.insert(name)) {
+            return Err(NetworkEffectError::NetworkRouteCollision);
+        }
+        let ownership_marker =
+            d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "network");
+        Ok(Self {
+            key,
+            cidrs: network_cidrs(&spec),
+            interface_names,
+            interface_markers,
+            route_names,
+            routes,
+            route_markers,
+            ownership_marker,
+            external_nic,
+        })
+    }
+
+    /// Borrow the exact identity tuple.
+    pub const fn key(&self) -> &NetworkAdmissionKey {
+        &self.key
+    }
+
+    /// Borrow the Network CIDRs reserved by this intent.
+    pub fn cidrs(&self) -> &[Ipv4Cidr] {
+        &self.cidrs
+    }
+
+    /// Borrow the derived interface names.
+    pub fn interface_names(&self) -> &[IfName] {
+        &self.interface_names
+    }
+
+    /// Borrow the expected ownership marker for one derived interface.
+    pub fn interface_ownership_marker(&self, ifname: &IfName) -> Option<&str> {
+        self.interface_markers.get(ifname).map(String::as_str)
+    }
+
+    /// Borrow the derived route identities.
+    pub fn route_names(&self) -> &[String] {
+        &self.route_names
+    }
+
+    /// Borrow the desired observable route tuples.
+    pub fn routes(&self) -> &[RouteTuple] {
+        &self.routes
+    }
+
+    /// Borrow the expected ownership marker for one derived route tuple.
+    pub fn route_ownership_marker(&self, route: &RouteTuple) -> Option<&str> {
+        self.route_markers.get(route).map(String::as_str)
+    }
+
+    /// Borrow the exact ownership marker expected by host effects.
+    pub fn ownership_marker(&self) -> &str {
+        &self.ownership_marker
+    }
+
+    /// Borrow the optional Host-global physical-NIC claim.
+    pub fn external_nic(&self) -> Option<(&IfName, MacvtapMode, SharingPolicy)> {
+        self.external_nic
+            .as_ref()
+            .map(|(parent, mode, sharing)| (parent, *mode, *sharing))
+    }
+
+    /// Seal this intent for consumption by the Zone-local reconciler.
+    pub fn proof(&self) -> NetworkAdmissionProof {
+        NetworkAdmissionProof {
+            intent: self.clone(),
+        }
+    }
+}
+
+impl core::fmt::Debug for NetworkAdmissionIntent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("NetworkAdmissionIntent(<redacted>)")
+    }
+}
+
+/// Non-serializable proof returned by the root host-admission owner.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NetworkAdmissionProof {
+    intent: NetworkAdmissionIntent,
+}
+
+impl NetworkAdmissionProof {
+    /// Borrow the admitted identity tuple.
+    pub const fn key(&self) -> &NetworkAdmissionKey {
+        self.intent.key()
+    }
+
+    /// Borrow the admitted host intent.
+    pub const fn intent(&self) -> &NetworkAdmissionIntent {
+        &self.intent
+    }
+
+    /// Verify that the proof is still for the supplied Network generation.
+    pub fn matches(
+        &self,
+        network_uid: &ResourceUid,
+        network_generation: ResourceGeneration,
+        installed_generation: &ResourceBundleGenerationId,
+        spec: &NetworkSpec,
+    ) -> bool {
+        self.key().network_uid() == network_uid
+            && self.key().network_generation() == network_generation
+            && self.key().bundle_generation() == installed_generation
+            && self.cidrs_match(spec)
+    }
+
+    fn cidrs_match(&self, spec: &NetworkSpec) -> bool {
+        self.intent.cidrs() == network_cidrs(spec)
+    }
+}
+
+impl core::fmt::Debug for NetworkAdmissionProof {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("NetworkAdmissionProof(<redacted>)")
+    }
+}
+
 /// Readiness input from child resources and private realization state.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReconcileInput {
@@ -143,12 +520,14 @@ pub struct ReconcileInput {
     pub network_uid: ResourceUid,
     /// Current Network resource generation.
     pub network_generation: ResourceGeneration,
+    /// Current aggregate Guest-attachment generation.
+    pub attachment_generation: ResourceGeneration,
     /// Immutable installed configuration generation used as the firewall fence.
     pub installed_generation: ResourceBundleGenerationId,
+    /// Root-owned Host-global admission proof for this Network.
+    pub admission: NetworkAdmissionProof,
     /// Declared private artifact catalog.
     pub artifact_catalog: Vec<ArtifactCatalogEntry>,
-    /// Peer Network specs used for CIDR conflict validation.
-    pub peer_networks: Vec<NetworkSpec>,
     /// Reserved User resource is Ready.
     pub user_ready: bool,
     /// Host memory budget can admit the config tmpfs charge.
@@ -200,6 +579,9 @@ impl core::fmt::Debug for AttachmentRealization {
 #[derive(Clone, PartialEq, Eq)]
 pub struct FirewallIntent {
     network_uid: ResourceUid,
+    zone_uid: Option<ResourceUid>,
+    network_generation: Option<ResourceGeneration>,
+    attachment_generation: Option<ResourceGeneration>,
     expected_generation_id: ResourceBundleGenerationId,
 }
 
@@ -211,6 +593,25 @@ impl FirewallIntent {
     ) -> Self {
         Self {
             network_uid,
+            zone_uid: None,
+            network_generation: None,
+            attachment_generation: None,
+            expected_generation_id,
+        }
+    }
+
+    /// Construct a firewall intent bound to the complete Network admission
+    /// tuple.
+    pub fn from_admission(
+        admission: &NetworkAdmissionProof,
+        expected_generation_id: ResourceBundleGenerationId,
+    ) -> Self {
+        let key = admission.key();
+        Self {
+            network_uid: key.network_uid().clone(),
+            zone_uid: Some(key.zone_uid().clone()),
+            network_generation: Some(key.network_generation()),
+            attachment_generation: Some(key.attachment_generation()),
             expected_generation_id,
         }
     }
@@ -223,6 +624,21 @@ impl FirewallIntent {
     /// Borrow the opaque Network identity for the Core effect adapter.
     pub const fn network_uid(&self) -> &ResourceUid {
         &self.network_uid
+    }
+
+    /// Borrow the bound Zone identity, when this is an admitted intent.
+    pub const fn zone_uid(&self) -> Option<&ResourceUid> {
+        self.zone_uid.as_ref()
+    }
+
+    /// Return the bound Network generation, when present.
+    pub const fn network_generation(&self) -> Option<ResourceGeneration> {
+        self.network_generation
+    }
+
+    /// Return the bound attachment generation, when present.
+    pub const fn attachment_generation(&self) -> Option<ResourceGeneration> {
+        self.attachment_generation
     }
 }
 
@@ -374,6 +790,9 @@ pub struct NetworkConfigContent {
     pub routing: Vec<u8>,
     /// attachment table bytes.
     pub attachments: Vec<u8>,
+    /// Complete Network identity that authorized these bytes, when the
+    /// content was rendered for the production reconcile path.
+    pub provenance: Option<NetworkProvenance>,
     digest: [u8; 32],
 }
 
@@ -381,6 +800,11 @@ impl NetworkConfigContent {
     /// Return the digest used to request an agent reload.
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+
+    /// Borrow the provenance bound to the rendered content.
+    pub const fn provenance(&self) -> Option<&NetworkProvenance> {
+        self.provenance.as_ref()
     }
 }
 
@@ -531,12 +955,23 @@ where
         evaluate_observation(observation)
     }
 
-    /// Adopt only observations that are unambiguous and already match desired
-    /// state. Adoption never creates or deletes host state.
+    /// Refuse adoption without root-owned Network admission evidence.
     pub fn adopt(
         &self,
+        _observation: NetworkObservation,
+    ) -> Result<ObserveDecision, NetworkEffectError> {
+        Err(NetworkEffectError::NetworkAdmissionRequired)
+    }
+
+    /// Adopt an already-converged projection only with root-owned admission.
+    pub fn adopt_with_admission(
+        &self,
+        proof: &NetworkAdmissionProof,
         observation: NetworkObservation,
     ) -> Result<ObserveDecision, NetworkEffectError> {
+        if proof.intent().ownership_marker().is_empty() {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
         self.observe(observation)
     }
 
@@ -555,16 +990,22 @@ where
             return Err(NetworkEffectError::HostMemoryBudgetExceeded);
         }
         self.effects.validate_policy(&input.spec).await?;
+        if !input.admission.matches(
+            &input.network_uid,
+            input.network_generation,
+            &input.installed_generation,
+            &input.spec,
+        ) {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
 
         self.effects
             .create_bridges(&input.network_uid)
             .await
             .map_err(|_| NetworkEffectError::BridgeCreate)?;
         self.effects.apply_sysctls(&input.network_uid).await?;
-        let firewall = FirewallIntent::new(
-            input.network_uid.clone(),
-            input.installed_generation.clone(),
-        );
+        let firewall =
+            FirewallIntent::from_admission(&input.admission, input.installed_generation.clone());
         match self.effects.apply_host_firewall(&firewall).await {
             Err(NetworkEffectError::StaleConfigurationGeneration) => {
                 return Ok(ReconcileProgress::Requeue(
@@ -585,12 +1026,23 @@ where
         self.effects.update_hosts(&input.network_uid).await?;
         self.effects.seed_dhcp(&input.network_uid).await?;
 
-        let volume = config_volume_spec("host-system", None)?;
+        let net_vm_name = derive_network_child_name(&input.network_uid, "vm");
+        let volume = config_volume_spec("host-system", Some(&net_vm_name))?;
         self.resources
             .upsert_volume_backing(&volume)
             .await
             .map_err(|_| NetworkEffectError::ConfigVolume)?;
-        let content = render_config(&input.spec)?;
+        let provenance = NetworkProvenance::new(
+            input.admission.key().zone_uid().clone(),
+            input.admission.key().network_uid().clone(),
+            input.admission.key().network_generation(),
+            input.admission.key().attachment_generation(),
+            input.admission.key().bundle_generation().clone(),
+        );
+        let content = render_config_with_provenance(&input.spec, &provenance)?;
+        if content.provenance() != Some(&provenance) {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
         self.resources.write_volume_content(&content).await?;
         if !input.volume_ready {
             return Ok(ReconcileProgress::Pending(
@@ -611,7 +1063,7 @@ where
             ));
         }
 
-        let attachment = config_volume_attachment("net-vm")?;
+        let attachment = config_volume_attachment(&net_vm_name)?;
         self.resources.attach_volume(&attachment).await?;
         if !input.volume_attachment_ready {
             return Ok(ReconcileProgress::Pending(
@@ -620,7 +1072,7 @@ where
         }
 
         self.resources
-            .upsert_agent(&guest_agent_process_spec("net-vm")?)
+            .upsert_agent(&guest_agent_process_spec(&net_vm_name)?)
             .await?;
         self.resources.reconcile_mdns(input.mdns_enabled).await?;
         for attachment in &input.attachments {
@@ -652,6 +1104,7 @@ where
         &self,
         input: &ReconcileInput,
     ) -> Result<FinalizerStage, NetworkEffectError> {
+        validate_input(input)?;
         if !input.workload_fds_closed || input.attachments.iter().any(|item| !item.vmm_fd_closed) {
             return Ok(FinalizerStage::WorkloadFdClosure);
         }
@@ -684,10 +1137,8 @@ where
             self.resources.delete_volume().await?;
             return Ok(FinalizerStage::Volume);
         }
-        let firewall = FirewallIntent::new(
-            input.network_uid.clone(),
-            input.installed_generation.clone(),
-        );
+        let firewall =
+            FirewallIntent::from_admission(&input.admission, input.installed_generation.clone());
         self.effects.remove_host_firewall(&firewall).await?;
         self.effects.remove_routes(&input.network_uid).await?;
         self.effects.delete_bridges(&input.network_uid).await?;
@@ -702,12 +1153,24 @@ impl<E, R> core::fmt::Debug for NetworkReconciler<E, R> {
 }
 
 fn validate_input(input: &ReconcileInput) -> Result<(), NetworkEffectError> {
-    if input.peer_networks.iter().any(|peer| {
-        cidr_overlaps(input.spec.lan_cidr(), peer.lan_cidr())
-            || cidr_overlaps(input.spec.lan_cidr(), peer.uplink_cidr())
-            || cidr_overlaps(input.spec.uplink_cidr(), peer.lan_cidr())
-            || cidr_overlaps(input.spec.uplink_cidr(), peer.uplink_cidr())
+    if input.network_uid != *input.admission.key().network_uid() {
+        return Err(NetworkEffectError::NetworkAdmissionMismatch);
+    }
+    if input.network_generation != input.admission.key().network_generation() {
+        return Err(NetworkEffectError::NetworkAdmissionMismatch);
+    }
+    if input.attachment_generation != input.admission.key().attachment_generation() {
+        return Err(NetworkEffectError::NetworkAdmissionMismatch);
+    }
+    if input.attachments.iter().any(|attachment| {
+        let fence = attachment.handle.generation_fence();
+        fence.network_uid() != &input.network_uid
+            || fence.network_generation() != input.network_generation
+            || fence.attachment_generation() != input.admission.key().attachment_generation()
     }) {
+        return Err(NetworkEffectError::NetworkAdmissionMismatch);
+    }
+    if cidr_overlaps(input.spec.lan_cidr(), input.spec.uplink_cidr()) {
         return Err(NetworkEffectError::CidrConflict);
     }
     Ok(())
@@ -854,6 +1317,21 @@ pub fn guest_agent_process_spec(guest_name: &str) -> Result<ProcessSpec, Network
 
 /// Render per-Network data into the four config files only.
 pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, NetworkEffectError> {
+    render_config_inner(spec, None)
+}
+
+/// Render per-Network data with the immutable identity that authorized it.
+pub fn render_config_with_provenance(
+    spec: &NetworkSpec,
+    provenance: &NetworkProvenance,
+) -> Result<NetworkConfigContent, NetworkEffectError> {
+    render_config_inner(spec, Some(provenance))
+}
+
+fn render_config_inner(
+    spec: &NetworkSpec,
+    provenance: Option<&NetworkProvenance>,
+) -> Result<NetworkConfigContent, NetworkEffectError> {
     let dnsmasq = format!("lan={}\n", spec.lan_cidr().as_str()).into_bytes();
     let nftables = format!(
         "lan={}\nuplink={}\nblocklist={}\n",
@@ -862,7 +1340,17 @@ pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, Network
         d2b_contracts_resource::v3::network::DEFAULT_HOST_BLOCKLIST.join(",")
     )
     .into_bytes();
-    let routing = format!("uplink={}\n", spec.uplink_cidr().as_str()).into_bytes();
+    let uplink_gateway = cidr_host_address(spec.uplink_cidr(), 2)?;
+    let external_gateway = spec
+        .external_attachment()
+        .and_then(|external| external.ipv4().gateway())
+        .map(|gateway| gateway.as_str().to_owned())
+        .unwrap_or_default();
+    let routing = format!(
+        "uplink={}\ngateway={uplink_gateway}\nexternalGateway={external_gateway}\n",
+        spec.uplink_cidr().as_str()
+    )
+    .into_bytes();
     let attachments = format!(
         "[{}]",
         spec.attachments()
@@ -877,11 +1365,48 @@ pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, Network
         digest_input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
         digest_input.extend_from_slice(bytes);
     }
+    if let Some(provenance) = provenance {
+        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            "network-config",
+        );
+        digest_input.extend_from_slice(&(marker.len() as u64).to_be_bytes());
+        digest_input.extend_from_slice(marker.as_bytes());
+    }
     Ok(NetworkConfigContent {
         dnsmasq,
         nftables,
         routing,
         attachments,
+        provenance: provenance.cloned(),
         digest: crate::nftables::digest_bytes(&digest_input),
     })
+}
+
+fn cidr_host_address(cidr: &Ipv4Cidr, host: u8) -> Result<String, NetworkEffectError> {
+    let address = cidr
+        .as_str()
+        .split_once('/')
+        .map(|(address, _)| address)
+        .ok_or(NetworkEffectError::InvalidState)?;
+    let mut octets = address
+        .split('.')
+        .map(|octet| {
+            octet
+                .parse::<u8>()
+                .map_err(|_| NetworkEffectError::InvalidState)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if octets.len() != 4 {
+        return Err(NetworkEffectError::InvalidState);
+    }
+    let last = octets.last_mut().ok_or(NetworkEffectError::InvalidState)?;
+    *last = last
+        .checked_add(host)
+        .ok_or(NetworkEffectError::InvalidState)?;
+    Ok(octets
+        .into_iter()
+        .map(|octet| octet.to_string())
+        .collect::<Vec<_>>()
+        .join("."))
 }

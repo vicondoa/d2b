@@ -19,19 +19,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use d2b_bus::router::production_rss::ProductionWatchHarness;
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration, ResourceGeneration,
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_controller_toolkit::{
     CommitDecision, CommitOutcome, ControllerDescriptor, ControllerExecutionPolicy,

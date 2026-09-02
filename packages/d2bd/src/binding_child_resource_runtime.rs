@@ -163,6 +163,8 @@ pub(crate) async fn reconcile_binding_children(
                         child.resource_ref.clone(),
                         child.uid.clone(),
                     ),
+                    &owner_target,
+                    owner.resource.generation,
                     child.revision,
                     &child.canonical_json,
                     deletion_requested(child),
@@ -172,7 +174,7 @@ pub(crate) async fn reconcile_binding_children(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| BindingChildRuntimeError::Core(error))?;
         reconciler
-            .relist(owner_target.clone(), observed)
+            .relist_with_owner_generation(owner_target.clone(), owner.resource.generation, observed)
             .map_err(|error| {
                 BindingChildRuntimeError::Core(BindingChildMaterializationError::OwnerReconcile(
                     error,
@@ -239,9 +241,10 @@ pub(crate) fn binding_children_ready(
         return false;
     }
     desired.iter().all(|intent| {
-        let Some(child) = children.iter().find(|child| {
-            child_matches_intent(owner, intent, child)
-        }) else {
+        let Some(child) = children
+            .iter()
+            .find(|child| child_matches_intent(owner, intent, child))
+        else {
             return false;
         };
         child_ready(intent, child)
@@ -800,20 +803,22 @@ mod tests {
                 serde_json::Value::Null
             },
         );
-        metadata.insert(
-            "finalizers".to_owned(),
-            serde_json::json!(finalizers),
-        );
-        resource.canonical_json = CanonicalJsonValue::parse(
-            &serde_json::to_vec(&value).expect("resource serialization"),
-        )
-        .expect("canonical resource")
-        .to_canonical_bytes();
+        metadata.insert("finalizers".to_owned(), serde_json::json!(finalizers));
+        resource.canonical_json =
+            CanonicalJsonValue::parse(&serde_json::to_vec(&value).expect("resource serialization"))
+                .expect("canonical resource")
+                .to_canonical_bytes();
     }
 
     #[test]
     fn relist_deletion_ready_requires_deletion_request() {
         let child_ref = target("Process", "child");
+        let owner = HintTarget::new(
+            ZoneId::parse("dev").unwrap(),
+            ResourceRef::parse("audio.d2bus.org.AudioBinding/owner").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000")
+                .unwrap(),
+        );
         let observe = |resource: &StoredResource| {
             observed_child_from_resource(
                 HintTarget::new(
@@ -821,6 +826,8 @@ mod tests {
                     resource.resource_ref.clone(),
                     resource.uid.clone(),
                 ),
+                &owner,
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
                 resource.revision,
                 &resource.canonical_json,
                 deletion_requested(resource),
@@ -828,18 +835,18 @@ mod tests {
             )
         };
 
-        let live = stored_resource(&child_ref, None, "Ready");
+        let live = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         let observed = observe(&live).expect("live child relists");
         assert!(!observed.deletion_requested());
         assert!(!observed.deletion_ready());
 
-        let mut requested = stored_resource(&child_ref, None, "Ready");
+        let mut requested = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         set_deletion_state(&mut requested, true, &[]);
         let observed = observe(&requested).expect("requested child relists");
         assert!(observed.deletion_requested());
         assert!(observed.deletion_ready());
 
-        let mut finalizing = stored_resource(&child_ref, None, "Ready");
+        let mut finalizing = stored_resource(&child_ref, Some(owner.resource_ref()), "Ready");
         set_deletion_state(&mut finalizing, true, &["child-finalizer"]);
         let observed = observe(&finalizing).expect("finalizing child relists");
         assert!(observed.deletion_requested());

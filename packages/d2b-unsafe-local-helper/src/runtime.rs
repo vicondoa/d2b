@@ -1,17 +1,19 @@
 use crate::environment::EnvironmentError;
 use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
+use d2b_contracts::{
+    ids::OperationId, workload::WorkloadProviderKind, workload_identity::WorkloadTarget,
+};
+use d2b_contracts_control::proxy_readiness::{
+    ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
+};
 use d2b_contracts_control::public_wire::ShellName;
 use d2b_contracts_control::unsafe_local_wire::{
     HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
     HelperScopeSnapshot, HelperScopeState, HelperShellRequest, HelperShellResponse, HelperSnapshot,
     HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
-    MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor,
-};
-use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::{WorkloadProviderKind, ids::OperationId};
-use d2b_contracts_control::proxy_readiness::{
-    ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
+    MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor, ZoneResourceIdentity,
+    validate_unsafe_local_resource_identity,
 };
 use nix::libc;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
@@ -100,7 +102,7 @@ pub(crate) struct PersistedScope {
     pub(crate) operation_id: OperationId,
     #[serde(default)]
     pub(crate) fingerprint: Option<[u8; 32]>,
-    pub(crate) workload: WorkloadIdentity,
+    pub(crate) workload: ZoneResourceIdentity,
     pub(crate) unit_name: String,
     pub(crate) invocation_id: String,
     pub(crate) control_group: String,
@@ -504,6 +506,9 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         &self,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, RuntimeError> {
+        request
+            .validate_bounds()
+            .map_err(|_| RuntimeError::InvalidRequest)?;
         let fingerprint = launch_fingerprint(&request)?;
         let reservation = match self
             .ledger
@@ -564,7 +569,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
                     wayland_proxy_binary,
                     runtime_directory,
                     environment.wayland_display()?.to_owned(),
-                    request.workload.target().clone(),
+                    request.target.clone(),
                     request.realm_accent_color.clone(),
                     self.uid,
                 )
@@ -659,6 +664,9 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
     }
 
     pub fn snapshot(&self, generation: u64) -> Result<HelperSnapshot, RuntimeError> {
+        if generation == 0 {
+            return Err(RuntimeError::InvalidRequest);
+        }
         let entries = self
             .ledger
             .lock()
@@ -706,6 +714,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
 fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], RuntimeError> {
     let encoded = serde_json::to_vec(&(
         &request.workload,
+        &request.target,
         &request.item_id,
         &request.argv,
         request.graphical,
@@ -765,7 +774,7 @@ struct GraphicalSupervisorSpec {
     runtime_directory: PathBuf,
     display: String,
     upstream_display: String,
-    target: d2b_core::workload_identity::WorkloadTarget,
+    target: WorkloadTarget,
     realm_accent_color: RealmAccentColor,
     uid: u32,
     first_client_timeout_ms: u64,
@@ -776,7 +785,7 @@ impl GraphicalSupervisorSpec {
         proxy_binary: PathBuf,
         runtime_directory: PathBuf,
         upstream_display: String,
-        target: d2b_core::workload_identity::WorkloadTarget,
+        target: WorkloadTarget,
         realm_accent_color: RealmAccentColor,
         uid: u32,
     ) -> Result<Self, RuntimeError> {
@@ -1381,6 +1390,13 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     let encoded = fs::read(path).map_err(|_| RuntimeError::LedgerInvalid)?;
     let ledger: PersistedScopeLedger =
         serde_json::from_slice(&encoded).map_err(|_| RuntimeError::LedgerInvalid)?;
+    if ledger
+        .scopes
+        .iter()
+        .any(|scope| validate_unsafe_local_resource_identity(&scope.workload).is_err())
+    {
+        return Err(RuntimeError::LedgerInvalid);
+    }
     let unique_operations = ledger
         .scopes
         .iter()
@@ -1393,7 +1409,7 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
             scope.persistent_shell.as_ref().map(|shell| {
                 format!(
                     "{}\u{1f}{}",
-                    scope.workload.target().to_canonical(),
+                    workload_identity_key(&scope.workload),
                     shell.name.as_str()
                 )
             })
@@ -1427,6 +1443,18 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
         return Err(RuntimeError::LedgerInvalid);
     }
     Ok(ledger)
+}
+
+pub(crate) fn workload_identity_key(identity: &ZoneResourceIdentity) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        identity.zone().as_str(),
+        identity.zone_uid().as_str(),
+        identity.resource_ref().to_canonical_string(),
+        identity.resource_uid().as_str(),
+        identity.generation().get(),
+        identity.revision().get(),
+    )
 }
 
 pub(crate) fn persist_ledger(
@@ -1463,10 +1491,8 @@ pub(crate) fn persist_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::{configured_argv::ConfiguredArgv, token::ProtocolToken};
     use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
-    use d2b_core::configured_argv::ConfiguredArgv;
-    use d2b_core::workload_identity::WorkloadTarget;
-    use d2b_realm_core::token::ProtocolToken;
     use nix::unistd::Uid;
     use std::sync::{Arc, Barrier};
 
@@ -1476,7 +1502,10 @@ mod tests {
         fn new() -> Self {
             let mut random = [0u8; 8];
             getrandom::getrandom(&mut random).unwrap();
-            let path = std::env::temp_dir().join(format!(".d2bt-{}", hex(&random)));
+            let relative_root = PathBuf::from(".scratch").join("urt");
+            fs::create_dir_all(&relative_root).unwrap();
+            let root = PathBuf::from("/proc/self/cwd").join(relative_root);
+            let path = root.join(format!(".d2bt-{}", hex(&random)));
             fs::create_dir(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
             Self(path)
@@ -1527,13 +1556,8 @@ mod tests {
         HelperLaunchRequest {
             request_id: 1,
             operation_id: OperationId::parse(operation_id).unwrap(),
-            workload: serde_json::from_value(serde_json::json!({
-                "workloadId": "tools",
-                "realmId": "host",
-                "realmPath": ["host"],
-                "canonicalTarget": "tools.host.d2b"
-            }))
-            .unwrap(),
+            workload: workload(),
+            target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
@@ -1542,6 +1566,18 @@ mod tests {
             )
             .unwrap(),
         }
+    }
+
+    fn workload() -> ZoneResourceIdentity {
+        serde_json::from_value(serde_json::json!({
+            "zone": "host",
+            "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+            "resourceRef": "Process/tools",
+            "resourceUid": "323e4567-e89b-42d3-a456-426614174002",
+            "generation": 1,
+            "revision": 1
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -1595,6 +1631,23 @@ mod tests {
         let changed = launch("op-fingerprint", "changed");
         assert!(matches!(
             ledger.begin(&changed.operation_id, launch_fingerprint(&changed).unwrap()),
+            Err(RuntimeError::OperationIdConflict)
+        ));
+        let mut stale_identity = launch("op-fingerprint", "first");
+        stale_identity.workload = serde_json::from_value(serde_json::json!({
+            "zone": "host",
+            "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+            "resourceRef": "Process/tools",
+            "resourceUid": "423e4567-e89b-42d3-a456-426614174003",
+            "generation": 1,
+            "revision": 1
+        }))
+        .unwrap();
+        assert!(matches!(
+            ledger.begin(
+                &stale_identity.operation_id,
+                launch_fingerprint(&stale_identity).unwrap()
+            ),
             Err(RuntimeError::OperationIdConflict)
         ));
 
@@ -1652,13 +1705,7 @@ mod tests {
         let persisted = PersistedScope {
             operation_id: OperationId::parse("op-1").unwrap(),
             fingerprint: None,
-            workload: serde_json::from_value(serde_json::json!({
-                "workloadId": "tools",
-                "realmId": "host",
-                "realmPath": ["host"],
-                "canonicalTarget": "tools.host.d2b"
-            }))
-            .unwrap(),
+            workload: workload(),
             unit_name: canary.to_owned(),
             invocation_id: canary.to_owned(),
             control_group: format!("/{canary}"),

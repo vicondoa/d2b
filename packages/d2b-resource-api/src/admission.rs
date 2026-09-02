@@ -12,6 +12,8 @@ use d2b_resource_store::{
 };
 use std::sync::{Arc, Mutex};
 
+use crate::authz::AuthorizationLease;
+
 #[derive(Debug)]
 struct AdmissionAuthority;
 
@@ -31,6 +33,7 @@ impl core::fmt::Debug for AdmissionIssuer {
 }
 
 /// Store-side half of an instance-bound admission capability.
+#[derive(Clone)]
 struct AdmissionVerifier {
     authority: Arc<AdmissionAuthority>,
 }
@@ -42,6 +45,7 @@ impl core::fmt::Debug for AdmissionVerifier {
 }
 
 /// Unique identity owned by one concrete resource-store backend.
+#[derive(Clone)]
 struct StoreIdentity {
     authority: Arc<StoreIdentityAuthority>,
 }
@@ -52,6 +56,7 @@ impl core::fmt::Debug for StoreIdentity {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct StoreAdmissionBinding {
     verifier: AdmissionVerifier,
     store_identity: StoreIdentity,
@@ -90,6 +95,7 @@ pub(crate) struct AdmissionPermit {
     store_identity: Arc<StoreIdentityAuthority>,
     authorization: AdmittedAuthorization,
     policy_snapshot: PolicySnapshot,
+    zone_policy_revision: u64,
 }
 
 impl core::fmt::Debug for AdmissionPermit {
@@ -106,16 +112,31 @@ impl core::fmt::Debug for AdmissionPermit {
 
 impl AdmissionIssuer {
     /// Capture one allow returned by the evaluator that owns this capability.
+    #[cfg(test)]
     pub(crate) fn record_allow(
         &self,
         authorization: AdmittedAuthorization,
         policy_snapshot: PolicySnapshot,
+    ) -> AdmissionPermit {
+        self.record_allow_with_zone_policy_revision(
+            authorization,
+            policy_snapshot,
+            policy_snapshot.policy_revision,
+        )
+    }
+
+    pub(crate) fn record_allow_with_zone_policy_revision(
+        &self,
+        authorization: AdmittedAuthorization,
+        policy_snapshot: PolicySnapshot,
+        zone_policy_revision: u64,
     ) -> AdmissionPermit {
         AdmissionPermit {
             authority: Arc::clone(&self.authority),
             store_identity: Arc::clone(&self.store_identity),
             authorization,
             policy_snapshot,
+            zone_policy_revision,
         }
     }
 }
@@ -124,12 +145,14 @@ impl AdmissionIssuer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmissionError {
     ZoneMismatch(MutationOrdinal),
+    LeaseInvalid,
 }
 
 impl core::fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::ZoneMismatch(_) => f.write_str("mutation Zone does not match admission"),
+            Self::LeaseInvalid => f.write_str("authorization lease is invalid"),
         }
     }
 }
@@ -137,11 +160,57 @@ impl core::fmt::Display for AdmissionError {
 impl std::error::Error for AdmissionError {}
 
 impl AdmissionPermit {
+    pub(crate) fn issue_lifecycle_lease(
+        self,
+        zone_uid: d2b_contracts_resource::v3::ResourceUid,
+        object_uid: d2b_contracts_resource::v3::ResourceUid,
+        object_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        provider_assignment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        operation_id: String,
+    ) -> Result<AuthorizationLease, AdmissionError> {
+        let target = self
+            .authorization
+            .targets
+            .first()
+            .ok_or(AdmissionError::LeaseInvalid)?;
+        AuthorizationLease::issue(
+            self.authorization.subject_uid,
+            zone_uid,
+            Some(object_uid),
+            Some(object_generation),
+            target.verb,
+            self.zone_policy_revision
+                .max(self.policy_snapshot.policy_revision),
+            Some(provider_assignment_generation),
+            operation_id,
+        )
+    }
+
     /// Bind parsed mutations to this exact positive evaluation result.
     pub fn admit(
         self,
         mutations: Vec<StoreMutation>,
         operation: StoreOperationContext,
+    ) -> Result<AdmittedMutation, AdmissionError> {
+        self.admit_inner(mutations, operation, None)
+    }
+
+    /// Bind parsed mutations and a full Zone identity to downstream lease
+    /// evidence. The Zone UID is supplied only by the trusted runtime.
+    pub fn admit_with_zone_uid(
+        self,
+        mutations: Vec<StoreMutation>,
+        operation: StoreOperationContext,
+        zone_uid: d2b_contracts_resource::v3::ResourceUid,
+    ) -> Result<AdmittedMutation, AdmissionError> {
+        self.admit_inner(mutations, operation, Some(zone_uid))
+    }
+
+    fn admit_inner(
+        self,
+        mutations: Vec<StoreMutation>,
+        operation: StoreOperationContext,
+        zone_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
     ) -> Result<AdmittedMutation, AdmissionError> {
         for (ordinal, mutation) in mutations.iter().enumerate() {
             if mutation.zone != self.authorization.zone {
@@ -153,11 +222,41 @@ impl AdmissionPermit {
                 return Err(AdmissionError::ZoneMismatch(ordinal));
             }
         }
+        let authorization_lease = zone_uid
+            .map(|zone_uid| {
+                let target = self
+                    .authorization
+                    .targets
+                    .first()
+                    .ok_or(AdmissionError::LeaseInvalid)?;
+                let mutation = mutations.first().ok_or(AdmissionError::LeaseInvalid)?;
+                let object_generation = mutation
+                    .canonical_resource
+                    .as_deref()
+                    .and_then(|bytes| ResourceEnvelope::from_json(bytes).ok())
+                    .map(|envelope| envelope.metadata().generation());
+                AuthorizationLease::issue(
+                    self.authorization.subject_uid.clone(),
+                    zone_uid,
+                    mutation.expected_uid.clone(),
+                    object_generation,
+                    target.verb,
+                    self.zone_policy_revision
+                        .max(self.policy_snapshot.policy_revision),
+                    mutation
+                        .assignment
+                        .as_ref()
+                        .map(|assignment| assignment.provider_generation),
+                    operation.operation_id.clone(),
+                )
+            })
+            .transpose()?;
         Ok(AdmittedMutation {
             mutations,
             authorization: self.authorization,
             policy_snapshot: self.policy_snapshot,
             operation,
+            authorization_lease,
             authority: self.authority,
             store_identity: self.store_identity,
         })
@@ -188,6 +287,7 @@ pub struct AdmittedMutation {
     authorization: AdmittedAuthorization,
     policy_snapshot: PolicySnapshot,
     operation: StoreOperationContext,
+    authorization_lease: Option<AuthorizationLease>,
     authority: Arc<AdmissionAuthority>,
     store_identity: Arc<StoreIdentityAuthority>,
 }
@@ -208,6 +308,12 @@ impl AdmittedMutation {
     pub const fn operation(&self) -> &StoreOperationContext {
         &self.operation
     }
+
+    /// Borrow sealed downstream authorization evidence, when this mutation
+    /// crossed the trusted Zone-identity handoff.
+    pub const fn authorization_lease(&self) -> Option<&AuthorizationLease> {
+        self.authorization_lease.as_ref()
+    }
 }
 
 impl core::fmt::Debug for AdmittedMutation {
@@ -217,6 +323,10 @@ impl core::fmt::Debug for AdmittedMutation {
             .field("authorization", &"<redacted>")
             .field("policy_snapshot", &"<redacted>")
             .field("operation", &"<redacted>")
+            .field(
+                "has_authorization_lease",
+                &self.authorization_lease.is_some(),
+            )
             .field("authority", &"<redacted>")
             .field("store_identity", &"<redacted>")
             .finish()
@@ -239,6 +349,7 @@ impl StoreAdmissionBinding {
             authorization,
             policy_snapshot,
             operation,
+            authorization_lease: _,
             ..
         } = admitted;
         let mutations = mutations
@@ -456,6 +567,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
+            configuration_generation: None,
             assignment: None,
         }
     }
@@ -471,6 +583,27 @@ mod tests {
 
         assert!(verified.mutations.is_empty());
         assert_eq!(verified.policy_snapshot.policy_revision, 1);
+    }
+
+    #[test]
+    fn zone_identity_handoff_carries_sealed_downstream_lease() {
+        let (issuer, _store_binding) = admission_pair();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let admitted = issuer
+            .record_allow(authorization("work"), snapshot())
+            .admit_with_zone_uid(vec![mutation("work")], operation(), zone_uid.clone())
+            .expect("matching admission");
+        let lease = admitted
+            .authorization_lease()
+            .expect("Zone runtime must attach downstream lease evidence");
+        assert_eq!(lease.zone_uid(), &zone_uid);
+        assert_eq!(
+            lease.subject_uid().as_str(),
+            "123e4567-e89b-42d3-a456-426614174000"
+        );
+        assert_eq!(lease.operation(), d2b_resource_store::AdmittedVerb::Create);
+        assert_eq!(lease.policy_revision(), 1);
+        assert_eq!(lease.operation_id(), "op-1");
     }
 
     #[test]

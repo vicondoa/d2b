@@ -28,6 +28,94 @@ mod vsock;
 #[cfg(feature = "host-socket")]
 mod zone_admission;
 
+/// Fixed bounded marker for the one-shot Provider controller bootstrap
+/// handoff. The packet carries no caller-authored identity.
+#[cfg(feature = "host-socket")]
+pub const CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER: &[u8] = b"d2b-resource-v3-controller-bootstrap-v1";
+
+/// Deadline for the one-shot Provider controller bootstrap handoff.
+#[cfg(feature = "host-socket")]
+pub const CONTROLLER_BOOTSTRAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Raw attachment policy for the one-shot controller bootstrap packet.
+#[cfg(feature = "host-socket")]
+pub fn controller_bootstrap_attachment_policy()
+-> d2b_contracts_zone_session::v3::component_session::AttachmentPolicy {
+    use d2b_contracts_zone_session::v3::component_session::{
+        AttachmentPolicy, AttachmentPolicyKind,
+    };
+    AttachmentPolicy {
+        kind: AttachmentPolicyKind::PacketAtomic,
+        max_per_packet: 1,
+        max_per_request: 1,
+        max_per_operation: 1,
+        max_per_session: 1,
+        credentials_allowed: true,
+    }
+}
+
+/// Bounded credit scopes shared by both sides of a Provider controller
+/// bootstrap and ResourceV3 session.
+#[cfg(feature = "host-socket")]
+pub fn controller_credit_scopes() -> Result<CreditScopeSet, CreditError> {
+    let pool = || CreditPool::new(64);
+    Ok(CreditScopeSet::new(
+        pool()?,
+        pool()?,
+        pool()?,
+        pool()?,
+        pool()?,
+        pool()?,
+    ))
+}
+
+/// Exact local inherited-socket ResourceV3 ComponentSession policy.
+#[cfg(feature = "host-socket")]
+pub fn inherited_resource_v3_endpoint_policy(
+    initiator_role: d2b_contracts_zone_session::v3::component_session::EndpointRole,
+    responder_role: d2b_contracts_zone_session::v3::component_session::EndpointRole,
+) -> d2b_contracts_zone_session::v3::component_session::EndpointPolicy {
+    use d2b_contracts_zone_session::v3::component_session::{
+        AttachmentPolicy, AttachmentPolicyKind, EndpointPolicy, EndpointPurpose,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        ServicePackage, TransportBinding, TransportClass,
+    };
+    EndpointPolicy {
+        purpose: EndpointPurpose::ResourceService,
+        purpose_class: PurposeClass::Local,
+        initiator_role,
+        responder_role,
+        service: ServicePackage::ResourceV3,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::InheritedSocketpair,
+            locality: Locality::HostLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        reconnect_generation: 1,
+        attachment_policy: AttachmentPolicy {
+            kind: AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 1,
+            credentials_allowed: false,
+        },
+    }
+}
+
+/// Exact local ResourceV3 ComponentSession policy used by an external
+/// Provider controller and its daemon responder.
+#[cfg(feature = "host-socket")]
+pub fn controller_resource_endpoint_policy()
+-> d2b_contracts_zone_session::v3::component_session::EndpointPolicy {
+    use d2b_contracts_zone_session::v3::component_session::EndpointRole;
+    inherited_resource_v3_endpoint_policy(EndpointRole::Provider, EndpointRole::ZoneController)
+}
+
 #[cfg(feature = "host-socket")]
 pub use adapter::{
     DescriptorPolicyResolver, NoopUnixTransportObserver, OwnedUnixAttachment, PathnamePeerVerifier,
@@ -64,6 +152,9 @@ pub use systemd::{
     ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
 };
 #[cfg(feature = "native-vsock")]
-pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};
+pub use vsock::{
+    FramedVsockTransport, NativeVsockListener, NativeVsockTransport,
+    guest_control_transport_descriptor, is_guest_control_transport,
+};
 #[cfg(feature = "host-socket")]
 pub use zone_admission::{BootstrapProvider, ZoneAdmissionError, ZoneBootstrapIdentity};

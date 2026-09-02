@@ -1,81 +1,63 @@
-# Install d2b on NixOS (Tier 1)
+# Install d2b on NixOS
 
-This is the module-first Tier-1 path for hosts that already run
-NixOS. Prefer it over the generic host-install scaffold whenever you
-control the host configuration directly.
+This is the current module-first path for a host whose consumer configuration
+lives under `/etc/nixos`.
 
-## 1. Import the module
+## 1. Add the flake input
 
-Add the d2b flake input, follow its pinned `nixpkgs`, and import
-`d2b.nixosModules.default` in your host's `nixosSystem`.
+Import `d2b.nixosModules.default` from the host flake and keep its `nixpkgs`
+input aligned:
 
-The fastest scaffold is still:
+```nix
+inputs.d2b.inputs.nixpkgs.follows = "nixpkgs";
+```
+
+For a new consumer, start with:
 
 ```bash
 nix flake init -t github:vicondoa/d2b
 ```
 
-If you already own the host flake, follow the manual-integration
-block in [`../../README.md`](../../README.md#manual-integration-without-the-template).
+Declare Zone-owned Guest resources and their immutable artifacts. Do not add
+the retired v1/v2 hierarchy.
 
 ## 2. Build and switch
 
 ```bash
-sudo nixos-rebuild build --flake .#desktop
-sudo nixos-rebuild switch --flake .#desktop
+sudo nixos-rebuild build --flake /etc/nixos#desktop
+sudo nixos-rebuild dry-activate --flake /etc/nixos#desktop
+sudo nixos-rebuild switch --flake /etc/nixos#desktop
 ```
 
-On NixOS, this is the canonical install step: the framework's units,
-sidecars, bundles, and CLI all land through the host generation.
+The host switch installs the three-unit d2b control plane:
 
-## 3. Validate host-side prerequisites
+```text
+d2bd.service
+d2b-broker.socket
+d2b-broker.service
+```
 
-Run at least:
+## 3. Start a Guest
 
 ```bash
-d2b auth status --json
-d2b host check --strict
-d2b host doctor --read-only --json
+d2b host check --json
+d2b host doctor --read-only
+d2b guest list --zone local-root
+d2b guest start <name> --zone <zone> --dry-run
+d2b guest start <name> --zone <zone> --apply
 ```
 
-If you are onboarding a non-trivial host or importing pre-existing
-bridges / firewall state, work through
-[`host-prepare.md`](./host-prepare.md) before turning on daemon-owned
-lifecycle for more VMs.
+The Guest controller creates and reconciles child Resources. The `/etc/nixos`
+switch, d2b startup, and Cloud Hypervisor Guest boot are U20 host-lane
+acceptance work; U19 does not claim that evidence.
 
-## 4. Start the first VM with the Rust CLI
+## Clean-break cleanup
 
-```bash
-sudo d2b guest start personal-dev --apply
-```
+The current line does not promise v1/v2 state migration or data retention.
+After the new host generation is healthy, remove obsolete declarations and old
+host-path state according to the operator's cleanup decision. Do not treat
+historical migration pages as a supported preservation or rollback procedure.
 
-Drop `D2B_NATIVE_ONLY=1` if you still want the default
-v1.0 daemon-only behavior (per ADR 0015; D2B_NATIVE_ONLY is a no-op for lifecycle verbs).
-
-For the Entra showcase, the matching command is:
-
-```bash
-sudo d2b guest start work-entra --apply
-```
-
-## 5. Migrating an existing bash-era host
-
-The on-disk VM state, store generations, managed keys, and
-`known_hosts` data carry forward. Start with dry runs, then move the
-host onto daemon-owned lifecycle with
-[`migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md).
-
-Roll back by rebuilding to the prior host generation (the v1.0
-daemon-only contract per ADR 0015 has no env-var escape hatch;
-`D2B_LEGACY_BASH_OPT_IN=1` was retired in v1.0 along with the
-bash CLI).
-
-## See also
-
-- [`host-prepare.md`](./host-prepare.md) - generic Linux Tier-1
-  onboarding and prerequisite reconciliation.
-- [`migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md) -
-  move an existing NixOS host from legacy systemd-owned VMs to
-  `d2bd`.
-- [`install-ubuntu-2404.md`](./install-ubuntu-2404.md)
-- [`install-fedora.md`](./install-fedora.md)
+See [host preparation](./host-prepare.md),
+[Zone Nix authoring](../reference/zone-control-nix.md), and
+[the compatibility policy](../reference/compatibility.md).

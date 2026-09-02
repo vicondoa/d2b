@@ -1,3 +1,7 @@
+> **Compatibility or historical reference.** Current product configuration and lifecycle use Zone-owned Resources, the Guest controller, d2bd, and the typed broker. Any older VM, environment, Realm, or service names on this page are retained only as implementation or migration evidence; do not copy them into new configuration.
+
+> **Historical fragment.** This page preserves the pre-convergence host-preparation notes. Use [`../host-prepare.md`](../host-prepare.md) and the current broker/Zone contracts for new work.
+
 # How to: prepare the host network
 
 > Diataxis category: guide. Operator-facing walkthrough for the bridge /

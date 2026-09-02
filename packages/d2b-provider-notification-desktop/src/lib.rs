@@ -16,10 +16,10 @@ mod metrics;
 mod rbac;
 mod redact;
 mod runtime;
-mod stream_admission;
-mod types;
 #[allow(missing_docs)]
 pub mod security_key;
+mod stream_admission;
+mod types;
 
 pub use action_nonce::{ActionNonce, ActionNonceError, ActionNonceStore};
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};

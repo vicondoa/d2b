@@ -7,13 +7,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    SchemaFingerprint,
+    ResourceGeneration, ResourceRef, SchemaFingerprint,
     execution_policy::{BoundedText, redacted_debug},
 };
-use d2b_contracts_resource::v3::identity::ServiceName;
 
 /// Maximum Provider registry mappings in one publication.
 pub const MAX_PROVIDER_REGISTRY_MAPPINGS: usize = 256;

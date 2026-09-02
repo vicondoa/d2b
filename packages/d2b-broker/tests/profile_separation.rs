@@ -13,8 +13,11 @@ use common::{D2BD_UID, TestBroker};
 use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
+    AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
+    CanonicalAuditDigest, ConsumeLifecycleLeaseRequest, HelloRequest, LifecycleLeaseOperation,
 };
+#[cfg(not(feature = "layer1-bootstrap"))]
+use d2b_contracts_resource::v3::ResourceUid;
 
 fn parse(args: &[&str]) -> BrokerMode {
     parse_command(args.iter().map(|arg| (*arg).to_owned())).expect("profile command should parse")
@@ -143,4 +146,106 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
             .contains(&"ApplyNftables".to_owned())
     );
     assert_ne!(host.audit_path(), guest.audit_path());
+}
+
+#[test]
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn host_executor_consumes_lifecycle_lease_once_and_keeps_shutdown_stop_only() {
+    let broker = TestBroker::spawn_profile("lifecycle-lease-", "host-instance", "host", D2BD_UID);
+    let uid = |value: &str| ResourceUid::parse(value).expect("valid UID");
+    let request_for = |operation_id: &str,
+                       guest_uid: &str,
+                       operation: LifecycleLeaseOperation,
+                       stop_only: bool| {
+        BrokerRequest::ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest {
+            zone_uid: uid("11111111-1111-4111-8111-111111111111"),
+            guest_uid: uid(guest_uid),
+            guest_generation: 4,
+            provider_assignment_generation: 9,
+            policy_revision: 7,
+            operation_id: operation_id.to_owned(),
+            operation,
+            stop_only,
+        })
+    };
+    let request = |operation_id: &str, operation: LifecycleLeaseOperation, stop_only: bool| {
+        request_for(
+            operation_id,
+            "22222222-2222-4222-8222-222222222222",
+            operation,
+            stop_only,
+        )
+    };
+    let send = |request: BrokerRequest, caller_role: BrokerCallerRole| {
+        let client = connect_seqpacket(broker.socket_path()).expect("connect host broker");
+        let audit_join = request
+            .authoritative_audit_join()
+            .map(|(zone_id, operation_identity)| AuditJoinContext {
+                zone_id: CanonicalAuditDigest::parse(zone_id).expect("audit Zone digest"),
+                operation_identity: CanonicalAuditDigest::parse(operation_identity)
+                    .expect("audit operation digest"),
+            });
+        send_json_frame(
+            client.as_raw_fd(),
+            &BrokerRequestEnvelope {
+                request,
+                caller_role,
+                test_peer_uid: Some(D2BD_UID),
+                audit_join,
+            },
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "send lifecycle lease: {error}; broker log: {}",
+                broker.server_log()
+            )
+        });
+        recv_json_frame(client.as_raw_fd())
+            .expect("receive lifecycle lease")
+            .expect("lifecycle lease response")
+    };
+
+    let response = send(
+        request("lease-once", LifecycleLeaseOperation::Start, false),
+        BrokerCallerRole::AdminUid { uid: D2BD_UID },
+    );
+    assert!(matches!(
+        response,
+        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
+    ));
+
+    let replay = send(
+        request("lease-once", LifecycleLeaseOperation::Start, false),
+        BrokerCallerRole::AdminUid { uid: D2BD_UID },
+    );
+    assert!(matches!(replay, BrokerResponse::Error(_)));
+
+    let same_operation_different_guest = send(
+        request_for(
+            "lease-once",
+            "33333333-3333-4333-8333-333333333333",
+            LifecycleLeaseOperation::Start,
+            false,
+        ),
+        BrokerCallerRole::AdminUid { uid: D2BD_UID },
+    );
+    assert!(matches!(
+        same_operation_different_guest,
+        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
+    ));
+
+    let shutdown_start = send(
+        request("shutdown-start", LifecycleLeaseOperation::Start, true),
+        BrokerCallerRole::HostShutdownUid { uid: 0 },
+    );
+    assert!(matches!(shutdown_start, BrokerResponse::Error(_)));
+
+    let shutdown_stop = send(
+        request("shutdown-stop", LifecycleLeaseOperation::Stop, true),
+        BrokerCallerRole::HostShutdownUid { uid: 0 },
+    );
+    assert!(matches!(
+        shutdown_stop,
+        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed
+    ));
 }

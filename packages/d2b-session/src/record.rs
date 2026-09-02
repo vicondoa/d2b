@@ -1,10 +1,8 @@
 use std::{collections::VecDeque, fmt};
 
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     LimitProfile, NOISE_TAG_BYTES, RECORD_HEADER_LEN, RECORD_LENGTH_BYTES, ReceiveSequence,
     RecordHeader, RecordKind, SendSequence, SessionErrorCode,
-},
 };
 use sha2::{Digest, Sha256};
 use snow::TransportState;

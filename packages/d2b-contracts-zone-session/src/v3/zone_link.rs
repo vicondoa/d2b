@@ -10,11 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceRef,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
+    CanonicalJsonObject, ResourceRef, ResourceUid, Timestamp, ZoneId,
     execution_policy::redacted_debug,
 };
 

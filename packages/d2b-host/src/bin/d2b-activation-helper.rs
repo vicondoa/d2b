@@ -75,6 +75,9 @@ const MAX_ARTIFACT_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 struct ArtifactCatalog {
     schema_version: u32,
     entries: Vec<ArtifactCatalogEntry>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    guest_setup_descriptors: Vec<serde_json::Value>,
     #[allow(dead_code)]
     catalog_digest: String,
 }

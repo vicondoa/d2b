@@ -2,9 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, PrimitiveSpecError},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, PrimitiveSpecError};
 
 use crate::error::RegistryBuildError;
 

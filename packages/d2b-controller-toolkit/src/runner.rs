@@ -9,11 +9,7 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourcePhase,
-    ZoneId,
-    ZoneRevision,
+    ConfigurationGeneration, ResourceGeneration, ResourcePhase, ZoneId, ZoneRevision,
 };
 
 use crate::{
@@ -1949,12 +1945,8 @@ mod tests {
     };
 
     use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-};
+        ControllerGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    };
 
     use super::*;
     use crate::{

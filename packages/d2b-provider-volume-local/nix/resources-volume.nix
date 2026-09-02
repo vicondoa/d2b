@@ -34,7 +34,14 @@ let
   attachmentSettingKeys = [
     "posixAcl" "xattr" "cache" "inodeFileHandles" "threadPoolSize" "socketGroup"
   ];
-  sourceSettingKeys = [ "kind" "sourcePolicyId" "imageFormat" "preallocate" ];
+  sourceSettingKeys = [
+    "kind"
+    "sourcePolicyId"
+    "systemArtifactId"
+    "imageFormat"
+    "preallocate"
+  ];
+  sourceKeys = [ "executionRef" "settings" "kind" "systemArtifactId" ];
   quotaKeys = [ "maxBytes" "maxInodes" "enforcement" ];
   exactKeys = allowed: value:
     builtins.isAttrs value
@@ -479,6 +486,10 @@ let
             message = "${where}.access must be read-only, read-write, or shared-write.";
           }
           {
+            assertion = sourceKind != "nix-closure" || access == "read-only";
+            message = "${where}.access must be read-only for a nix-closure source.";
+          }
+          {
             assertion = access == "read-only"
               || (builtins.isList rightsValue && builtins.elem "write" rights);
             message = "${where}.access requires the selected view to grant the write right. Add write to that view's rights under ${path}.views, or set ${where}.access to read-only.";
@@ -505,11 +516,18 @@ let
       safeSource = if builtins.isAttrs source then source else { };
       settings = attrOr source "settings" { };
       safeSettings = if builtins.isAttrs settings then settings else { };
-      kind = attrOr safeSettings "kind" null;
+      kind = attrOr safeSettings "kind" (attrOr safeSource "kind" null);
       policyId = attrOr safeSettings "sourcePolicyId" null;
+      systemArtifactId = attrOr safeSettings "systemArtifactId"
+        (attrOr safeSource "systemArtifactId" null);
       imageFormat = attrOr safeSettings "imageFormat" null;
       preallocate = attrOr safeSettings "preallocate" false;
       hostBacked = builtins.elem kind [ "local-path" "block-image" ];
+      artifact =
+        if builtins.isString systemArtifactId
+          && builtins.hasAttr systemArtifactId (cfg.artifacts or { })
+        then cfg.artifacts.${systemArtifactId}
+        else null;
       maxBytes = attrOr quota "maxBytes" null;
       maxInodes = attrOr quota "maxInodes" null;
       enforcement = attrOr quota "enforcement" "none";
@@ -520,7 +538,7 @@ let
         message = "${path}.source must be an attribute set.";
       }
       {
-        assertion = exactKeys [ "executionRef" "settings" ] safeSource;
+        assertion = exactKeys sourceKeys safeSource;
         message = "${path}.source contains an unsupported field.";
       }
       {
@@ -540,8 +558,13 @@ let
         message = "${path}.source.executionRef must resolve to a Host or Guest in the same Zone.";
       }
       {
-        assertion = builtins.elem kind [ "local-path" "block-image" "tmpfs" ];
-        message = "${path}.source.settings.kind must be local-path, block-image, or tmpfs.";
+        assertion = builtins.elem kind [
+          "local-path"
+          "block-image"
+          "tmpfs"
+          "nix-closure"
+        ];
+        message = "${path}.source.settings.kind is invalid.";
       }
       {
         assertion = !(builtins.hasAttr "path" safeSettings)
@@ -556,6 +579,18 @@ let
       {
         assertion = !hostBacked -> policyId == null;
         message = "${path}.source.settings.sourcePolicyId is accepted only for a host-backed source. Remove sourcePolicyId, or set ${path}.source.settings.kind to local-path or block-image.";
+      }
+      {
+        assertion = kind == "nix-closure"
+          -> builtins.isString systemArtifactId
+            && builtins.match tokenPattern systemArtifactId != null
+            && artifact != null
+            && (artifact.type or null) == "nixos-system";
+        message = "${path}.source.settings.systemArtifactId must name a nixos-system artifact for a nix-closure source.";
+      }
+      {
+        assertion = kind == "nix-closure" || systemArtifactId == null;
+        message = "${path}.source.settings.systemArtifactId is accepted only for a nix-closure source.";
       }
       {
         assertion = kind != "block-image"

@@ -1,15 +1,9 @@
 use d2b_contracts_resource::v3::volume::EntryType;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{ZoneLabelId, ZonePath},
-};
 use d2b_contracts_resource::v3::{
-    MigrationPolicy,
-    PersistenceClass,
-    ResourceGeneration,
-    ResourceRef,
-    SchemaVersion,
+    MigrationPolicy, PersistenceClass, ResourceGeneration, ResourceRef, SchemaVersion,
     VolumeStateSchemaId,
 };
+use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
 use d2b_provider_volume_local::audit::{
     VolumeAuditDigest, VolumeAuditEvent, VolumeAuditKind, VolumeAuditOutcome, VolumeAuditReason,
     VolumeAuditResultClass, VolumeBrokerAuditKind, VolumeRepairAction,

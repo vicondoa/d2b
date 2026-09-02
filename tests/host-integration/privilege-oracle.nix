@@ -22,8 +22,8 @@ pkgs.testers.runNixOSTest {
 
     start_all()
 
-    machine.wait_for_unit("d2b-broker.socket")
-    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2b-broker.socket", timeout=30)
+    machine.wait_for_unit("d2bd.service", timeout=180)
 
     # The broker is socket-activated, but starting the service directly keeps a
     # live Type=notify process long enough to read its /proc posture.

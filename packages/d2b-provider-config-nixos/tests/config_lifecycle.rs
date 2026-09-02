@@ -1,7 +1,7 @@
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_config_nixos::{
     ConfigApproveRequest, ConfigCaller, ConfigDiffRequest, ConfigRejectRequest, ConfigService,
-    ConfigServiceBackend, ConfigStageRequest, ConfigStatusRequest, ConfigStagingStore,
+    ConfigServiceBackend, ConfigStageRequest, ConfigStagingStore, ConfigStatusRequest,
     ConfigSyncRequest, GuestConfigDocument, GuestConfigReader, GuestSessionEvidence,
 };
 
@@ -10,12 +10,9 @@ fn guest_read_requires_current_matching_session() {
     let guest = ResourceRef::parse("Guest/work").expect("guest ref");
     let request = ConfigSyncRequest::new(guest.clone()).expect("request");
     let evidence = GuestSessionEvidence::new(guest, "boot-commitment", 1).expect("evidence");
-    let result = ConfigService.read_guest_config(
-        ConfigCaller::Guest,
-        &request,
-        &evidence,
-        b"{}",
-    ).expect("read");
+    let result = ConfigService
+        .read_guest_config(ConfigCaller::Guest, &request, &evidence, b"{}")
+        .expect("read");
     assert_eq!(result.identifier, "guest-config");
     assert_eq!(result.bytes, 2);
     assert!(result.document().is_ok());
@@ -48,7 +45,8 @@ fn stale_session_and_non_guest_callers_fail_closed() {
                     ResourceRef::parse("Guest/work").expect("guest ref"),
                     "boot-commitment",
                     1
-                ).expect("evidence"),
+                )
+                .expect("evidence"),
                 b"{}"
             )
             .expect_err("user read")
@@ -60,8 +58,8 @@ fn stale_session_and_non_guest_callers_fail_closed() {
 #[test]
 fn host_staging_lifecycle_is_typed_and_consumes_approved_content() {
     let guest = ResourceRef::parse("Guest/work").expect("guest ref");
-    let document = GuestConfigDocument::new(b"services.foo.enable = true;\n".to_vec())
-        .expect("document");
+    let document =
+        GuestConfigDocument::new(b"services.foo.enable = true;\n".to_vec()).expect("document");
     let stage = ConfigStageRequest::new(guest.clone(), &document).expect("stage request");
     let mut store = ConfigStagingStore::default();
 
@@ -85,8 +83,11 @@ fn host_staging_lifecycle_is_typed_and_consumes_approved_content() {
         .diff(
             ConfigCaller::Admin,
             &zone(),
-            &ConfigDiffRequest::new(guest.clone(), "sha256:0000000000000000000000000000000000000000000000000000000000000000")
-                .expect("diff request"),
+            &ConfigDiffRequest::new(
+                guest.clone(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("diff request"),
         )
         .expect("diff");
     assert!(diff.differs);
@@ -95,8 +96,7 @@ fn host_staging_lifecycle_is_typed_and_consumes_approved_content() {
         .approve(
             ConfigCaller::Admin,
             &zone(),
-            &ConfigApproveRequest::new(guest.clone(), "host-config")
-                .expect("approve request"),
+            &ConfigApproveRequest::new(guest.clone(), "host-config").expect("approve request"),
         )
         .expect("approve");
     assert_eq!(approved.bytes, document.len());
@@ -126,8 +126,7 @@ fn approval_retry_is_idempotent_after_downstream_publish_failure() {
         )
         .expect("stage");
 
-    let request =
-        ConfigApproveRequest::new(guest.clone(), "host-config").expect("approve request");
+    let request = ConfigApproveRequest::new(guest.clone(), "host-config").expect("approve request");
     let first = store
         .approve(ConfigCaller::Admin, &zone(), &request)
         .expect("first approval");

@@ -13,6 +13,7 @@ use d2b_contracts_provider::v3::{
     ComponentType, ControllerInstanceScope, ControllerTargetKind, ProviderManifest,
 };
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, PlacementAnchor, PlacementTarget,
     PlacementTargetKind, ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef,
@@ -22,11 +23,27 @@ use serde_json::{Map, Value, json};
 
 /// Maximum encoded assignment evidence carried by one scoped commit.
 pub const MAX_SCOPED_COMMIT_TRANSPORT_BYTES: usize = 64 * 1024;
+/// Maximum encoded controller assignment grant.
+pub const MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES: usize = 64 * 1024;
+/// Named stream channel carrying Core-to-controller assignment grants.
+pub const CONTROLLER_ASSIGNMENT_STREAM_ID: u16 = 0x0101;
+/// Initial credit used for the bounded assignment stream.
+pub const CONTROLLER_ASSIGNMENT_STREAM_CREDIT: u32 = 256 * 1024;
+/// Maximum ResourceTypes retained by one assignment grant.
+pub const MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES: usize = 64;
+/// Maximum verbs retained by one assignment grant.
+pub const MAX_ASSIGNMENT_GRANT_VERBS: usize = 16;
+/// Maximum scope entries retained by one assignment grant.
+pub const MAX_ASSIGNMENT_GRANT_SCOPES: usize = 2;
 
 /// The maximum number of assignments held by one Zone authority.
 pub const MAX_ASSIGNMENTS: usize = 16_384;
 /// Maximum child ownership entries retained by one assignment.
 pub const MAX_ASSIGNED_CHILDREN: usize = 4_096;
+/// Assignment-bound query filter for the primary resource UID.
+pub const ASSIGNMENT_UID_FILTER: &str = "assignment.resourceUid";
+/// Assignment-bound query filter for an owned child resource UID.
+pub const OWNER_UID_FILTER: &str = "owner.resourceUid";
 
 /// A monotonically increasing, nonzero assignment epoch.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -110,6 +127,116 @@ impl fmt::Debug for AssignmentTarget {
     }
 }
 
+/// Exact identity of one authenticated controller session.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ControllerSessionBinding {
+    session_owner: ResourceRef,
+    provider_ref: ResourceRef,
+    controller_role: ResourceRef,
+    target: AssignmentTarget,
+    provider_generation: ResourceGeneration,
+    controller_generation: ControllerGeneration,
+    session_generation: ReconnectGeneration,
+}
+
+impl ControllerSessionBinding {
+    /// Construct an exact controller-session binding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        session_owner: ResourceRef,
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        target: AssignmentTarget,
+        provider_generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
+        session_generation: ReconnectGeneration,
+    ) -> Result<Self, AssignmentError> {
+        if session_owner.resource_type().as_str() != PROCESS_RESOURCE_TYPE
+            || provider_ref.resource_type().as_str() != "Provider"
+            || controller_role.resource_type().as_str() != PROCESS_RESOURCE_TYPE
+            || provider_generation.get() == 0
+            || controller_generation.get() == 0
+            || session_generation.get() == 0
+            || !assignment_target_reference_matches_kind(&target)
+        {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        Ok(Self {
+            session_owner,
+            provider_ref,
+            controller_role,
+            target,
+            provider_generation,
+            controller_generation,
+            session_generation,
+        })
+    }
+
+    /// Borrow the Process resource that owns the authenticated session.
+    pub const fn session_owner(&self) -> &ResourceRef {
+        &self.session_owner
+    }
+
+    /// Borrow the Provider bound to the session.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Borrow the signed controller role.
+    pub const fn controller_role(&self) -> &ResourceRef {
+        &self.controller_role
+    }
+
+    /// Borrow the exact placement target.
+    pub const fn target(&self) -> &AssignmentTarget {
+        &self.target
+    }
+
+    /// Return the Provider generation bound to the session.
+    pub const fn provider_generation(&self) -> ResourceGeneration {
+        self.provider_generation
+    }
+
+    /// Return the Core controller generation bound to the session.
+    pub const fn controller_generation(&self) -> ControllerGeneration {
+        self.controller_generation
+    }
+
+    /// Return the authenticated reconnect generation.
+    pub const fn session_generation(&self) -> ReconnectGeneration {
+        self.session_generation
+    }
+}
+
+impl fmt::Debug for ControllerSessionBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControllerSessionBinding")
+            .field("session_owner", &"<redacted>")
+            .field("provider_ref", &"<redacted>")
+            .field("controller_role", &"<redacted>")
+            .field("target", &self.target)
+            .field("provider_generation", &self.provider_generation)
+            .field("controller_generation", &self.controller_generation)
+            .field("session_generation", &self.session_generation)
+            .finish()
+    }
+}
+
+fn assignment_target_reference_matches_kind(target: &AssignmentTarget) -> bool {
+    match target {
+        AssignmentTarget::Zone(_) => true,
+        AssignmentTarget::Execution {
+            kind: PlacementTargetKind::Host,
+            reference,
+        } => reference.resource_type().as_str() == "Host",
+        AssignmentTarget::Execution {
+            kind: PlacementTargetKind::Guest,
+            reference,
+        } => reference.resource_type().as_str() == "Guest",
+    }
+}
+
 /// One resource-plane operation a controller lease may perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AssignmentVerb {
@@ -176,6 +303,10 @@ impl AssignmentPhase {
     const fn admits_mutation(self) -> bool {
         matches!(self, Self::Assigned)
     }
+
+    const fn owns_target(self) -> bool {
+        matches!(self, Self::Assigned | Self::Draining)
+    }
 }
 
 /// Closed assignment or lease failure.
@@ -208,6 +339,8 @@ pub enum AssignmentError {
     QueryWidened,
     EpochExhausted,
     RoleContractInvalid,
+    ProviderRefMismatch,
+    ControllerRoleMismatch,
 }
 
 /// Failure while decoding the assignment evidence carried by the existing
@@ -267,6 +400,8 @@ impl AssignmentError {
             Self::QueryWidened => "assignment-query-widened",
             Self::EpochExhausted => "assignment-epoch-exhausted",
             Self::RoleContractInvalid => "assignment-role-contract-invalid",
+            Self::ProviderRefMismatch => "assignment-provider-ref-mismatch",
+            Self::ControllerRoleMismatch => "assignment-controller-role-mismatch",
         }
     }
 }
@@ -284,35 +419,22 @@ impl std::error::Error for AssignmentError {}
 pub struct AssignmentIdentity {
     resource_uid: ResourceUid,
     resource_revision: ZoneRevision,
-    provider_generation: ResourceGeneration,
-    controller_generation: ControllerGeneration,
-    controller_role: ResourceRef,
-    target: AssignmentTarget,
-    session_generation: ReconnectGeneration,
+    session: ControllerSessionBinding,
     epoch: AssignmentEpoch,
 }
 
 impl AssignmentIdentity {
     /// Construct one identity from authoritative committed values.
-    #[allow(clippy::too_many_arguments)]
     fn new(
         resource_uid: ResourceUid,
         resource_revision: ZoneRevision,
-        provider_generation: ResourceGeneration,
-        controller_generation: ControllerGeneration,
-        controller_role: ResourceRef,
-        target: AssignmentTarget,
-        session_generation: ReconnectGeneration,
+        session: ControllerSessionBinding,
         epoch: AssignmentEpoch,
     ) -> Self {
         Self {
             resource_uid,
             resource_revision,
-            provider_generation,
-            controller_generation,
-            controller_role,
-            target,
-            session_generation,
+            session,
             epoch,
         }
     }
@@ -335,9 +457,7 @@ impl ScopedCommitTransport {
         if mutations.is_empty()
             || mutations.len() > 128
             || mutations.iter().any(|mutation| {
-                mutation.assignment() != &assignment
-                    || !mutation.verb().is_mutating()
-                    || mutation.verb() == AssignmentVerb::CommitBatch
+                mutation.assignment() != &assignment || !transport_mutation_is_valid(mutation)
             })
         {
             return Err(AssignmentTransportError::Malformed);
@@ -369,14 +489,7 @@ impl ScopedCommitTransport {
                 .map(encode_mutation)
                 .collect::<Vec<_>>(),
         });
-        let bytes = serde_json::to_vec(&value).map_err(|_| AssignmentTransportError::Malformed)?;
-        let bytes = CanonicalJsonValue::parse(&bytes)
-            .map_err(|_| AssignmentTransportError::Malformed)?
-            .to_canonical_bytes();
-        if bytes.len() > MAX_SCOPED_COMMIT_TRANSPORT_BYTES {
-            return Err(AssignmentTransportError::TooLarge);
-        }
-        Ok(bytes)
+        encode_bounded_json(&value, MAX_SCOPED_COMMIT_TRANSPORT_BYTES)
     }
 
     /// Decode bounded evidence produced by [`Self::encode`].
@@ -412,7 +525,15 @@ impl ScopedCommitTransport {
                 let object = value
                     .as_object()
                     .ok_or(AssignmentTransportError::Malformed)?;
-                require_exact_keys(object, &["target", "verb"])?;
+                let scope = match object.get("scope") {
+                    None => ScopedResourceScope::Primary,
+                    Some(scope) => decode_scoped_resource_scope(scope)?,
+                };
+                if matches!(scope, ScopedResourceScope::Primary) {
+                    require_exact_keys(object, &["target", "verb"])?;
+                } else {
+                    require_exact_keys(object, &["target", "verb", "scope"])?;
+                }
                 let target = ResourceRef::parse(
                     object
                         .get("target")
@@ -430,11 +551,40 @@ impl ScopedCommitTransport {
                     assignment: assignment.clone(),
                     target,
                     verb,
+                    scope,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
         Self::new(assignment, mutations)
     }
+}
+
+fn transport_mutation_is_valid(mutation: &ScopedResourceMutation) -> bool {
+    match mutation.scope() {
+        ScopedResourceScope::Primary => matches!(
+            mutation.verb(),
+            AssignmentVerb::Create
+                | AssignmentVerb::UpdateStatus
+                | AssignmentVerb::UpdateFinalizers
+        ),
+        ScopedResourceScope::OwnerChild(scope) => {
+            scope.owner_uid() == mutation.assignment().resource_uid()
+                && scope.owner_revision() == mutation.assignment().resource_revision()
+                && mutation.target().resource_type().as_str() == PROCESS_RESOURCE_TYPE
+                && matches!(
+                    mutation.verb(),
+                    AssignmentVerb::Create | AssignmentVerb::UpdateSpec | AssignmentVerb::Delete
+                )
+        }
+    }
+}
+
+fn owner_child_process_verbs() -> BTreeSet<AssignmentVerb> {
+    BTreeSet::from([
+        AssignmentVerb::Create,
+        AssignmentVerb::UpdateSpec,
+        AssignmentVerb::Delete,
+    ])
 }
 
 impl fmt::Debug for ScopedCommitTransport {
@@ -464,20 +614,94 @@ fn encode_assignment(identity: &AssignmentIdentity) -> Value {
     json!({
         "resourceUid": identity.resource_uid().as_str(),
         "resourceRevision": identity.resource_revision().get(),
+        "providerRef": identity.session_binding().provider_ref().to_canonical_string(),
         "providerGeneration": identity.provider_generation().get(),
         "controllerGeneration": identity.controller_generation().get(),
         "controllerRole": identity.controller_role().to_canonical_string(),
         "target": target,
+        "sessionOwner": identity.session_owner().to_canonical_string(),
         "sessionGeneration": identity.session_generation().get(),
         "epoch": identity.epoch().get(),
     })
 }
 
 fn encode_mutation(mutation: &ScopedResourceMutation) -> Value {
-    json!({
+    let mut value = json!({
         "target": mutation.target().to_canonical_string(),
         "verb": encode_assignment_verb(mutation.verb()),
     })
+    .as_object()
+    .cloned()
+    .expect("scoped mutation encoding is an object");
+    if let ScopedResourceScope::OwnerChild(scope) = mutation.scope() {
+        value.insert("scope".to_owned(), encode_owner_child_scope(scope));
+    }
+    Value::Object(value)
+}
+
+fn encode_owner_child_scope(scope: &OwnerChildScope) -> Value {
+    json!({
+        "kind": "owner-child",
+        "ownerRef": scope.owner_ref().to_canonical_string(),
+        "ownerUid": scope.owner_uid().as_str(),
+        "ownerRevision": scope.owner_revision().get(),
+        "ownerGeneration": scope.owner_generation().get(),
+    })
+}
+
+fn decode_scoped_resource_scope(
+    value: &Value,
+) -> Result<ScopedResourceScope, AssignmentTransportError> {
+    let object = value
+        .as_object()
+        .ok_or(AssignmentTransportError::Malformed)?;
+    require_exact_keys(
+        object,
+        &[
+            "kind",
+            "ownerRef",
+            "ownerUid",
+            "ownerRevision",
+            "ownerGeneration",
+        ],
+    )?;
+    if object.get("kind").and_then(Value::as_str) != Some("owner-child") {
+        return Err(AssignmentTransportError::Malformed);
+    }
+    let owner_ref = ResourceRef::parse(
+        object
+            .get("ownerRef")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let owner_uid = ResourceUid::parse(
+        object
+            .get("ownerUid")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let owner_revision = ZoneRevision::new(
+        object
+            .get("ownerRevision")
+            .and_then(Value::as_u64)
+            .filter(|revision| *revision != 0)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    );
+    let owner_generation = ResourceGeneration::new(
+        object
+            .get("ownerGeneration")
+            .and_then(Value::as_u64)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    Ok(ScopedResourceScope::OwnerChild(OwnerChildScope {
+        owner_ref,
+        owner_uid,
+        owner_revision,
+        owner_generation,
+    }))
 }
 
 fn encode_assignment_verb(verb: AssignmentVerb) -> &'static str {
@@ -520,19 +744,73 @@ fn decode_assignment(value: &Value) -> Result<AssignmentIdentity, AssignmentTran
         &[
             "resourceUid",
             "resourceRevision",
+            "providerRef",
             "providerGeneration",
             "controllerGeneration",
             "controllerRole",
             "target",
+            "sessionOwner",
             "sessionGeneration",
             "epoch",
         ],
     )?;
+    let provider_ref = ResourceRef::parse(
+        object
+            .get("providerRef")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
     let target = decode_assignment_target(
         object
             .get("target")
             .ok_or(AssignmentTransportError::Malformed)?,
     )?;
+    let provider_generation = ResourceGeneration::new(
+        object
+            .get("providerGeneration")
+            .and_then(Value::as_u64)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let controller_generation = ControllerGeneration::new(
+        object
+            .get("controllerGeneration")
+            .and_then(Value::as_u64)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let controller_role = ResourceRef::parse(
+        object
+            .get("controllerRole")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let session_owner = ResourceRef::parse(
+        object
+            .get("sessionOwner")
+            .and_then(Value::as_str)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let session_generation = ReconnectGeneration::new(
+        object
+            .get("sessionGeneration")
+            .and_then(Value::as_u64)
+            .ok_or(AssignmentTransportError::Malformed)?,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
+    let session = ControllerSessionBinding::new(
+        session_owner,
+        provider_ref,
+        controller_role,
+        target,
+        provider_generation,
+        controller_generation,
+        session_generation,
+    )
+    .map_err(|_| AssignmentTransportError::Malformed)?;
     Ok(AssignmentIdentity::new(
         ResourceUid::parse(
             object
@@ -547,35 +825,7 @@ fn decode_assignment(value: &Value) -> Result<AssignmentIdentity, AssignmentTran
                 .and_then(Value::as_u64)
                 .ok_or(AssignmentTransportError::Malformed)?,
         ),
-        ResourceGeneration::new(
-            object
-                .get("providerGeneration")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
-        ControllerGeneration::new(
-            object
-                .get("controllerGeneration")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
-        ResourceRef::parse(
-            object
-                .get("controllerRole")
-                .and_then(Value::as_str)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
-        target,
-        ReconnectGeneration::new(
-            object
-                .get("sessionGeneration")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
+        session,
         AssignmentEpoch::new(
             object
                 .get("epoch")
@@ -651,6 +901,20 @@ fn require_exact_keys(
     Ok(())
 }
 
+fn encode_bounded_json(
+    value: &Value,
+    max_bytes: usize,
+) -> Result<Vec<u8>, AssignmentTransportError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| AssignmentTransportError::Malformed)?;
+    let bytes = CanonicalJsonValue::parse(&bytes)
+        .map_err(|_| AssignmentTransportError::Malformed)?
+        .to_canonical_bytes();
+    if bytes.len() > max_bytes {
+        return Err(AssignmentTransportError::TooLarge);
+    }
+    Ok(bytes)
+}
+
 impl AssignmentIdentity {
     /// Borrow the assigned resource UID.
     pub const fn resource_uid(&self) -> &ResourceUid {
@@ -664,27 +928,37 @@ impl AssignmentIdentity {
 
     /// Return the Provider generation bound by this identity.
     pub const fn provider_generation(&self) -> ResourceGeneration {
-        self.provider_generation
+        self.session.provider_generation()
     }
 
     /// Return the Core controller generation bound by this identity.
     pub const fn controller_generation(&self) -> ControllerGeneration {
-        self.controller_generation
+        self.session.controller_generation()
     }
 
     /// Borrow the signed controller role.
     pub const fn controller_role(&self) -> &ResourceRef {
-        &self.controller_role
+        self.session.controller_role()
     }
 
     /// Borrow the exact assigned target.
     pub const fn target(&self) -> &AssignmentTarget {
-        &self.target
+        self.session.target()
+    }
+
+    /// Borrow the Process resource that owns the authenticated session.
+    pub const fn session_owner(&self) -> &ResourceRef {
+        self.session.session_owner()
+    }
+
+    /// Borrow the exact controller-session binding.
+    pub const fn session_binding(&self) -> &ControllerSessionBinding {
+        &self.session
     }
 
     /// Return the authenticated ComponentSession generation.
     pub const fn session_generation(&self) -> ReconnectGeneration {
-        self.session_generation
+        self.session.session_generation()
     }
 
     /// Return the assignment epoch.
@@ -699,11 +973,7 @@ impl fmt::Debug for AssignmentIdentity {
             .debug_struct("AssignmentIdentity")
             .field("resource_uid", &"<redacted>")
             .field("resource_revision", &self.resource_revision)
-            .field("provider_generation", &self.provider_generation)
-            .field("controller_generation", &self.controller_generation)
-            .field("controller_role", &"<redacted>")
-            .field("target", &self.target)
-            .field("session_generation", &self.session_generation)
+            .field("session", &self.session)
             .field("epoch", &self.epoch)
             .finish()
     }
@@ -728,7 +998,7 @@ impl ControllerRoleContract {
         manifest: &ProviderManifest,
     ) -> Result<Self, AssignmentError> {
         if provider_ref.resource_type().as_str() != "Provider"
-            || role_ref.resource_type().as_str() != "Process"
+            || role_ref.resource_type().as_str() != PROCESS_RESOURCE_TYPE
             || manifest.validate_installation_contract().is_err()
         {
             return Err(AssignmentError::InvalidRole);
@@ -814,6 +1084,8 @@ pub struct AssignmentRequest<'a> {
     controller_generation: ControllerGeneration,
     session_generation: ReconnectGeneration,
     target_ready: bool,
+    expected_target: Option<AssignmentTarget>,
+    session_owner: ResourceRef,
 }
 
 impl<'a> AssignmentRequest<'a> {
@@ -833,6 +1105,125 @@ impl<'a> AssignmentRequest<'a> {
             controller_generation,
             session_generation,
             target_ready,
+            expected_target: None,
+            session_owner: role.role_ref().clone(),
+        }
+    }
+
+    /// Require the resolved placement to match the authenticated controller
+    /// Process target exactly.
+    pub fn with_expected_target(mut self, target: AssignmentTarget) -> Self {
+        self.expected_target = Some(target);
+        self
+    }
+
+    /// Bind the request to the Process resource that owns the session.
+    pub fn with_session_owner(mut self, session_owner: ResourceRef) -> Self {
+        self.session_owner = session_owner;
+        self
+    }
+
+    /// Return the authenticated session generation requested for admission.
+    pub const fn session_generation(&self) -> ReconnectGeneration {
+        self.session_generation
+    }
+
+    /// Borrow the Process resource that owns the requested session.
+    pub const fn session_owner(&self) -> &ResourceRef {
+        &self.session_owner
+    }
+
+    /// Borrow the explicitly resolved target, when one was supplied.
+    pub const fn expected_target(&self) -> Option<&AssignmentTarget> {
+        self.expected_target.as_ref()
+    }
+
+    /// Build the exact session binding requested by this admission.
+    pub fn session_binding(&self) -> Result<ControllerSessionBinding, AssignmentError> {
+        ControllerSessionBinding::new(
+            self.session_owner.clone(),
+            self.role.provider_ref.clone(),
+            self.role.role_ref.clone(),
+            self.expected_target
+                .clone()
+                .ok_or(AssignmentError::SessionBindingMismatch)?,
+            self.provider_generation,
+            self.controller_generation,
+            self.session_generation,
+        )
+    }
+}
+
+/// The exact owner identity bound to an owner-child admission.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OwnerChildScope {
+    owner_ref: ResourceRef,
+    owner_uid: ResourceUid,
+    owner_revision: ZoneRevision,
+    owner_generation: ResourceGeneration,
+}
+
+impl OwnerChildScope {
+    /// Borrow the exact owner reference.
+    pub const fn owner_ref(&self) -> &ResourceRef {
+        &self.owner_ref
+    }
+
+    /// Borrow the immutable owner UID.
+    pub const fn owner_uid(&self) -> &ResourceUid {
+        &self.owner_uid
+    }
+
+    /// Return the owner revision captured at assignment time.
+    pub const fn owner_revision(&self) -> ZoneRevision {
+        self.owner_revision
+    }
+
+    /// Return the owner generation captured at assignment time.
+    pub const fn owner_generation(&self) -> ResourceGeneration {
+        self.owner_generation
+    }
+}
+
+impl fmt::Debug for OwnerChildScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnerChildScope")
+            .field("owner_ref", &"<redacted>")
+            .field("owner_uid", &"<redacted>")
+            .field("owner_revision", &self.owner_revision)
+            .field("owner_generation", &self.owner_generation)
+            .finish()
+    }
+}
+
+/// The non-widenable scope of an assignment-scoped query or mutation.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ScopedResourceScope {
+    /// The assigned resource itself.
+    Primary,
+    /// A child resource owned by the exact assigned resource identity.
+    OwnerChild(OwnerChildScope),
+}
+
+impl ScopedResourceScope {
+    /// Borrow the owner-child scope when this is a child admission.
+    pub const fn owner_child(&self) -> Option<&OwnerChildScope> {
+        match self {
+            Self::Primary => None,
+            Self::OwnerChild(scope) => Some(scope),
+        }
+    }
+}
+
+impl fmt::Debug for ScopedResourceScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Primary => formatter.write_str("ScopedResourceScope::Primary"),
+            Self::OwnerChild(scope) => formatter
+                .debug_tuple("ScopedResourceScope::OwnerChild")
+                .field(scope)
+                .finish(),
         }
     }
 }
@@ -844,6 +1235,7 @@ pub struct ScopedResourceQuery {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<ScopedResourceFilter>,
+    scope: ScopedResourceScope,
 }
 
 impl ScopedResourceQuery {
@@ -867,20 +1259,32 @@ impl ScopedResourceQuery {
         &self.filters
     }
 
-    /// Consume the query into transport-neutral parts.
-    pub fn into_parts(
+    /// Borrow the exact scope minted by the assignment lease.
+    pub const fn scope(&self) -> &ScopedResourceScope {
+        &self.scope
+    }
+
+    /// Borrow the owner-child scope when this is an owner-child query.
+    pub const fn owner_child_scope(&self) -> Option<&OwnerChildScope> {
+        self.scope.owner_child()
+    }
+
+    /// Consume the query while retaining its exact scope.
+    pub fn into_parts_with_scope(
         self,
     ) -> (
         AssignmentIdentity,
         Vec<ResourceTypeName>,
         Vec<ResourceName>,
         Vec<ScopedResourceFilter>,
+        ScopedResourceScope,
     ) {
         (
             self.assignment,
             self.resource_types,
             self.resource_names,
             self.filters,
+            self.scope,
         )
     }
 }
@@ -923,7 +1327,7 @@ impl ScopedResourceFilter {
                         .bytes()
                         .all(|byte| byte.is_ascii_graphic() || byte == b' ')
             })
-            || field == "assignment.resourceUid"
+            || matches!(field.as_str(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER)
         {
             return Err(AssignmentError::QueryWidened);
         }
@@ -967,6 +1371,7 @@ pub struct ScopedResourceMutation {
     assignment: AssignmentIdentity,
     target: ResourceRef,
     verb: AssignmentVerb,
+    scope: ScopedResourceScope,
 }
 
 impl ScopedResourceMutation {
@@ -984,6 +1389,11 @@ impl ScopedResourceMutation {
     pub const fn verb(&self) -> AssignmentVerb {
         self.verb
     }
+
+    /// Borrow the exact scope minted by the assignment lease.
+    pub const fn scope(&self) -> &ScopedResourceScope {
+        &self.scope
+    }
 }
 
 impl fmt::Debug for ScopedResourceMutation {
@@ -992,6 +1402,1015 @@ impl fmt::Debug for ScopedResourceMutation {
             .debug_struct("ScopedResourceMutation")
             .field("target", &"<redacted>")
             .field("verb", &self.verb)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
+/// The exact query and mutation scope carried by an assignment grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AssignmentScope {
+    /// The assigned primary resource.
+    Primary,
+    /// Process children owned by the assigned resource.
+    OwnerChildProcess,
+}
+
+fn encode_assignment_scope(scope: AssignmentScope) -> &'static str {
+    match scope {
+        AssignmentScope::Primary => "primary",
+        AssignmentScope::OwnerChildProcess => "owner-child-process",
+    }
+}
+
+fn decode_assignment_scope(value: &str) -> Result<AssignmentScope, AssignmentTransportError> {
+    match value {
+        "primary" => Ok(AssignmentScope::Primary),
+        "owner-child-process" => Ok(AssignmentScope::OwnerChildProcess),
+        _ => Err(AssignmentTransportError::Malformed),
+    }
+}
+
+/// Expected identity and exact authority shape for one controller session.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ControllerAssignmentExpectation {
+    session_owner: Option<ResourceRef>,
+    provider_ref: ResourceRef,
+    controller_role: ResourceRef,
+    target: Option<AssignmentTarget>,
+    target_kind: Option<ControllerTargetKind>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+    session_generation: ReconnectGeneration,
+    resource_types: BTreeSet<ResourceTypeName>,
+    primary_verbs: BTreeSet<AssignmentVerb>,
+    owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+    scopes: BTreeSet<AssignmentScope>,
+}
+
+impl ControllerAssignmentExpectation {
+    /// Construct one exact controller-session grant expectation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        target: AssignmentTarget,
+        provider_generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
+        session_generation: ReconnectGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentError> {
+        Self::new_inner(
+            provider_ref,
+            controller_role,
+            Some(target),
+            None,
+            Some(provider_generation),
+            Some(controller_generation),
+            session_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        )
+    }
+
+    /// Construct an expectation that validates the session and role
+    /// generations while leaving exact target selection to Core.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_without_target(
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        provider_generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
+        session_generation: ReconnectGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentError> {
+        Self::new_inner(
+            provider_ref,
+            controller_role,
+            None,
+            None,
+            Some(provider_generation),
+            Some(controller_generation),
+            session_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        )
+    }
+
+    /// Construct an expectation for a controller that learns Provider and
+    /// controller generations from Core's exact grants.
+    pub fn new_for_session(
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        session_generation: ReconnectGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentError> {
+        Self::new_inner(
+            provider_ref,
+            controller_role,
+            None,
+            None,
+            None,
+            None,
+            session_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        )
+    }
+
+    /// Construct an expectation that validates one target kind while Core
+    /// supplies the exact target reference in each grant.
+    pub fn new_for_session_with_target_kind(
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        target_kind: ControllerTargetKind,
+        session_generation: ReconnectGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentError> {
+        Self::new_inner(
+            provider_ref,
+            controller_role,
+            None,
+            Some(target_kind),
+            None,
+            None,
+            session_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        provider_ref: ResourceRef,
+        controller_role: ResourceRef,
+        target: Option<AssignmentTarget>,
+        target_kind: Option<ControllerTargetKind>,
+        provider_generation: Option<ResourceGeneration>,
+        controller_generation: Option<ControllerGeneration>,
+        session_generation: ReconnectGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentError> {
+        if provider_ref.resource_type().as_str() != "Provider"
+            || controller_role.resource_type().as_str() != PROCESS_RESOURCE_TYPE
+            || provider_generation.is_some_and(|generation| generation.get() == 0)
+            || controller_generation.is_some_and(|generation| generation.get() == 0)
+            || session_generation.get() == 0
+            || resource_types.is_empty()
+            || resource_types.len() > MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES
+            || primary_verbs.is_empty()
+            || primary_verbs.len() > MAX_ASSIGNMENT_GRANT_VERBS
+            || owner_child_process_verbs.len() > MAX_ASSIGNMENT_GRANT_VERBS
+            || scopes.is_empty()
+            || scopes.len() > MAX_ASSIGNMENT_GRANT_SCOPES
+            || !scopes.contains(&AssignmentScope::Primary)
+            || (scopes.contains(&AssignmentScope::OwnerChildProcess)
+                != !owner_child_process_verbs.is_empty())
+            || owner_child_process_verbs.iter().any(|verb| {
+                !matches!(
+                    verb,
+                    AssignmentVerb::Create | AssignmentVerb::UpdateSpec | AssignmentVerb::Delete
+                )
+            })
+        {
+            return Err(AssignmentError::RoleContractInvalid);
+        }
+        Ok(Self {
+            session_owner: None,
+            provider_ref,
+            controller_role,
+            target,
+            target_kind,
+            provider_generation,
+            controller_generation,
+            session_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        })
+    }
+
+    /// Bind the expectation to the exact Process session owner.
+    pub fn with_session_owner(
+        mut self,
+        session_owner: ResourceRef,
+    ) -> Result<Self, AssignmentError> {
+        if session_owner.resource_type().as_str() != PROCESS_RESOURCE_TYPE {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        self.session_owner = Some(session_owner);
+        Ok(self)
+    }
+
+    /// Borrow the exact Process session owner.
+    pub const fn session_owner(&self) -> Option<&ResourceRef> {
+        self.session_owner.as_ref()
+    }
+
+    /// Borrow the exact primary-scope verbs.
+    pub const fn primary_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.primary_verbs
+    }
+
+    /// Borrow the exact owner-child-process verbs.
+    pub const fn owner_child_process_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.owner_child_process_verbs
+    }
+}
+
+impl fmt::Debug for ControllerAssignmentExpectation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControllerAssignmentExpectation")
+            .field("resource_type_count", &self.resource_types.len())
+            .field("primary_verb_count", &self.primary_verbs.len())
+            .field(
+                "owner_child_process_verb_count",
+                &self.owner_child_process_verbs.len(),
+            )
+            .field("scope_count", &self.scopes.len())
+            .finish()
+    }
+}
+
+/// A bounded, identity-complete assignment delivered to one controller.
+///
+/// This is transport data, not a Core admission capability. The controller
+/// may retain the value for its current session, but it cannot use it after
+/// the exact controller-session binding is revoked.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ControllerAssignmentGrant {
+    provider_ref: ResourceRef,
+    assignment: AssignmentIdentity,
+    resource_ref: ResourceRef,
+    resource_generation: ResourceGeneration,
+    resource_types: BTreeSet<ResourceTypeName>,
+    primary_verbs: BTreeSet<AssignmentVerb>,
+    owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+    scopes: BTreeSet<AssignmentScope>,
+}
+
+impl ControllerAssignmentGrant {
+    /// Build a grant from one admitted Core ResourceClient lease.
+    pub fn from_lease(lease: &ResourceClientLease) -> Self {
+        let owner_child_process_verbs = lease.owner_child_process_verbs.clone();
+        let scopes = if owner_child_process_verbs.is_empty() {
+            BTreeSet::from([AssignmentScope::Primary])
+        } else {
+            BTreeSet::from([AssignmentScope::Primary, AssignmentScope::OwnerChildProcess])
+        };
+        Self {
+            provider_ref: lease.provider_ref.clone(),
+            assignment: lease.identity.clone(),
+            resource_ref: lease.resource_ref.clone(),
+            resource_generation: lease.resource_generation,
+            resource_types: lease.resource_types.clone(),
+            primary_verbs: lease.primary_verbs().clone(),
+            owner_child_process_verbs,
+            scopes,
+        }
+    }
+
+    /// Construct a decoded grant after validating its bounded shape.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider_ref: ResourceRef,
+        assignment: AssignmentIdentity,
+        resource_ref: ResourceRef,
+        resource_generation: ResourceGeneration,
+        resource_types: BTreeSet<ResourceTypeName>,
+        primary_verbs: BTreeSet<AssignmentVerb>,
+        owner_child_process_verbs: BTreeSet<AssignmentVerb>,
+        scopes: BTreeSet<AssignmentScope>,
+    ) -> Result<Self, AssignmentTransportError> {
+        if provider_ref.resource_type().as_str() != "Provider"
+            || resource_ref.resource_type().as_str() == "Provider"
+            || resource_generation.get() == 0
+            || resource_types.is_empty()
+            || resource_types.len() > MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES
+            || !resource_types.contains(resource_ref.resource_type())
+            || assignment.session_binding().provider_ref() != &provider_ref
+            || primary_verbs.is_empty()
+            || primary_verbs.len() > MAX_ASSIGNMENT_GRANT_VERBS
+            || owner_child_process_verbs.len() > MAX_ASSIGNMENT_GRANT_VERBS
+            || scopes.is_empty()
+            || scopes.len() > MAX_ASSIGNMENT_GRANT_SCOPES
+            || !scopes.contains(&AssignmentScope::Primary)
+            || (scopes.contains(&AssignmentScope::OwnerChildProcess)
+                != !owner_child_process_verbs.is_empty())
+            || owner_child_process_verbs.iter().any(|verb| {
+                !matches!(
+                    verb,
+                    AssignmentVerb::Create | AssignmentVerb::UpdateSpec | AssignmentVerb::Delete
+                )
+            })
+        {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        Ok(Self {
+            provider_ref,
+            assignment,
+            resource_ref,
+            resource_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        })
+    }
+
+    /// Borrow the Provider ResourceRef bound by Core.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Borrow the complete assignment identity.
+    pub const fn assignment(&self) -> &AssignmentIdentity {
+        &self.assignment
+    }
+
+    /// Borrow the Process resource that owns the authenticated session.
+    pub const fn session_owner(&self) -> &ResourceRef {
+        self.assignment.session_owner()
+    }
+
+    /// Borrow the exact controller-session binding.
+    pub const fn session_binding(&self) -> &ControllerSessionBinding {
+        self.assignment.session_binding()
+    }
+
+    /// Borrow the exact assigned ResourceRef.
+    pub const fn resource_ref(&self) -> &ResourceRef {
+        &self.resource_ref
+    }
+
+    /// Return the assigned resource generation.
+    pub const fn resource_generation(&self) -> ResourceGeneration {
+        self.resource_generation
+    }
+
+    /// Borrow the exact ResourceTypes allowed by the grant.
+    pub const fn resource_types(&self) -> &BTreeSet<ResourceTypeName> {
+        &self.resource_types
+    }
+
+    /// Borrow the exact primary-scope verbs allowed by the grant.
+    pub const fn primary_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.primary_verbs
+    }
+
+    /// Borrow the exact owner-child-process verbs allowed by the grant.
+    pub const fn owner_child_process_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.owner_child_process_verbs
+    }
+
+    /// Borrow the exact query and mutation scopes allowed by the grant.
+    pub const fn scopes(&self) -> &BTreeSet<AssignmentScope> {
+        &self.scopes
+    }
+
+    /// Validate this grant against the controller's authenticated session.
+    pub fn validate_for(
+        &self,
+        expected: &ControllerAssignmentExpectation,
+    ) -> Result<(), AssignmentError> {
+        if self.provider_ref != expected.provider_ref {
+            return Err(AssignmentError::ProviderRefMismatch);
+        }
+        if self.assignment.controller_role() != &expected.controller_role {
+            return Err(AssignmentError::ControllerRoleMismatch);
+        }
+        if expected
+            .provider_generation
+            .is_some_and(|generation| self.assignment.provider_generation() != generation)
+        {
+            return Err(AssignmentError::ProviderGenerationMismatch);
+        }
+        if expected
+            .controller_generation
+            .is_some_and(|generation| self.assignment.controller_generation() != generation)
+        {
+            return Err(AssignmentError::ControllerGenerationMismatch);
+        }
+        if self.assignment.session_generation() != expected.session_generation {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if expected
+            .target
+            .as_ref()
+            .is_some_and(|target| self.assignment.target() != target)
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        if expected
+            .target_kind
+            .is_some_and(|kind| self.assignment.target().target_kind() != Some(kind))
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        if expected
+            .session_owner
+            .as_ref()
+            .is_some_and(|owner| self.assignment.session_owner() != owner)
+        {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if self.resource_types != expected.resource_types
+            || self.primary_verbs != expected.primary_verbs
+            || self.owner_child_process_verbs != expected.owner_child_process_verbs
+            || self.scopes != expected.scopes
+        {
+            return Err(AssignmentError::QueryWidened);
+        }
+        Ok(())
+    }
+
+    /// Encode this grant as bounded canonical JSON.
+    pub fn encode(&self) -> Result<Vec<u8>, AssignmentTransportError> {
+        let value = json!({
+            "version": 1,
+            "providerRef": self.provider_ref.to_canonical_string(),
+            "assignment": encode_assignment(&self.assignment),
+            "resourceRef": self.resource_ref.to_canonical_string(),
+            "resourceGeneration": self.resource_generation.get(),
+            "resourceTypes": self.resource_types
+                .iter()
+                .map(|resource_type| resource_type.as_str())
+                .collect::<Vec<_>>(),
+            "primaryVerbs": self.primary_verbs
+                .iter()
+                .map(|verb| encode_assignment_verb(*verb))
+                .collect::<Vec<_>>(),
+            "ownerChildProcessVerbs": self.owner_child_process_verbs
+                .iter()
+                .map(|verb| encode_assignment_verb(*verb))
+                .collect::<Vec<_>>(),
+            "scopes": self.scopes
+                .iter()
+                .map(|scope| encode_assignment_scope(*scope))
+                .collect::<Vec<_>>(),
+        });
+        encode_bounded_json(&value, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES)
+    }
+
+    /// Decode one bounded canonical grant.
+    pub fn decode(bytes: &[u8]) -> Result<Self, AssignmentTransportError> {
+        if bytes.is_empty() || bytes.len() > MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES {
+            return Err(AssignmentTransportError::TooLarge);
+        }
+        CanonicalJsonValue::parse(bytes).map_err(|_| AssignmentTransportError::Malformed)?;
+        let value = serde_json::from_slice::<Value>(bytes)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let object = value
+            .as_object()
+            .ok_or(AssignmentTransportError::Malformed)?;
+        require_exact_keys(
+            object,
+            &[
+                "version",
+                "providerRef",
+                "assignment",
+                "resourceRef",
+                "resourceGeneration",
+                "resourceTypes",
+                "primaryVerbs",
+                "ownerChildProcessVerbs",
+                "scopes",
+            ],
+        )?;
+        if object.get("version").and_then(Value::as_u64) != Some(1) {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        let provider_ref = ResourceRef::parse(
+            object
+                .get("providerRef")
+                .and_then(Value::as_str)
+                .ok_or(AssignmentTransportError::Malformed)?,
+        )
+        .map_err(|_| AssignmentTransportError::Malformed)?;
+        let assignment = decode_assignment(
+            object
+                .get("assignment")
+                .ok_or(AssignmentTransportError::Malformed)?,
+        )?;
+        let resource_ref = ResourceRef::parse(
+            object
+                .get("resourceRef")
+                .and_then(Value::as_str)
+                .ok_or(AssignmentTransportError::Malformed)?,
+        )
+        .map_err(|_| AssignmentTransportError::Malformed)?;
+        let resource_generation = ResourceGeneration::new(
+            object
+                .get("resourceGeneration")
+                .and_then(Value::as_u64)
+                .ok_or(AssignmentTransportError::Malformed)?,
+        )
+        .map_err(|_| AssignmentTransportError::Malformed)?;
+        let resource_types = decode_string_set(
+            object
+                .get("resourceTypes")
+                .and_then(Value::as_array)
+                .ok_or(AssignmentTransportError::Malformed)?,
+            MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES,
+            |value| ResourceTypeName::parse(value).map_err(|_| AssignmentTransportError::Malformed),
+        )?;
+        let primary_verbs = decode_string_set(
+            object
+                .get("primaryVerbs")
+                .and_then(Value::as_array)
+                .ok_or(AssignmentTransportError::Malformed)?,
+            MAX_ASSIGNMENT_GRANT_VERBS,
+            decode_assignment_verb,
+        )?;
+        let owner_child_process_values = object
+            .get("ownerChildProcessVerbs")
+            .and_then(Value::as_array)
+            .ok_or(AssignmentTransportError::Malformed)?;
+        let owner_child_process_verbs = if owner_child_process_values.is_empty() {
+            BTreeSet::new()
+        } else {
+            decode_string_set(
+                owner_child_process_values,
+                MAX_ASSIGNMENT_GRANT_VERBS,
+                decode_assignment_verb,
+            )?
+        };
+        let scopes = decode_string_set(
+            object
+                .get("scopes")
+                .and_then(Value::as_array)
+                .ok_or(AssignmentTransportError::Malformed)?,
+            MAX_ASSIGNMENT_GRANT_SCOPES,
+            decode_assignment_scope,
+        )?;
+        Self::new(
+            provider_ref,
+            assignment,
+            resource_ref,
+            resource_generation,
+            resource_types,
+            primary_verbs,
+            owner_child_process_verbs,
+            scopes,
+        )
+    }
+
+    /// Encode a bounded revocation notice for this assignment identity.
+    pub fn encode_revocation(
+        provider_ref: &ResourceRef,
+        assignment: &AssignmentIdentity,
+    ) -> Result<Vec<u8>, AssignmentTransportError> {
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        let value = json!({
+            "version": 1,
+            "kind": "revoke",
+            "providerRef": provider_ref.to_canonical_string(),
+            "assignment": encode_assignment(assignment),
+        });
+        encode_bounded_json(&value, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES)
+    }
+}
+
+impl fmt::Debug for ControllerAssignmentGrant {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControllerAssignmentGrant")
+            .field("resource_generation", &self.resource_generation)
+            .field("resource_type_count", &self.resource_types.len())
+            .field("primary_verb_count", &self.primary_verbs.len())
+            .field(
+                "owner_child_process_verb_count",
+                &self.owner_child_process_verbs.len(),
+            )
+            .field("scope_count", &self.scopes.len())
+            .finish()
+    }
+}
+
+fn decode_string_set<T>(
+    values: &[Value],
+    limit: usize,
+    decode: impl Fn(&str) -> Result<T, AssignmentTransportError>,
+) -> Result<BTreeSet<T>, AssignmentTransportError>
+where
+    T: Clone + Ord,
+{
+    if values.is_empty() || values.len() > limit {
+        return Err(AssignmentTransportError::Malformed);
+    }
+    let mut decoded = BTreeSet::new();
+    let mut previous = None;
+    for value in values {
+        let value = value.as_str().ok_or(AssignmentTransportError::Malformed)?;
+        let value = decode(value)?;
+        if previous.as_ref().is_some_and(|previous| previous >= &value) || !decoded.insert(value) {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        previous = decoded.last().cloned();
+    }
+    Ok(decoded)
+}
+
+/// Result of accepting one assignment grant delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantDisposition {
+    /// The exact grant was retained for the active session.
+    Installed,
+    /// The exact grant was already retained.
+    Duplicate,
+    /// The exact grant identity was revoked.
+    Revoked,
+}
+
+/// Error from decoding or admitting one remote assignment grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignmentGrantError {
+    /// The bounded transport payload was invalid.
+    Transport(AssignmentTransportError),
+    /// The decoded grant failed the session's exact authority expectation.
+    Assignment(AssignmentError),
+}
+
+impl fmt::Display for AssignmentGrantError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transport(error) => error.fmt(formatter),
+            Self::Assignment(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for AssignmentGrantError {}
+
+#[derive(Clone)]
+struct RevokedAssignmentObservation {
+    identity: AssignmentIdentity,
+    resource_ref: Option<ResourceRef>,
+}
+
+/// Controller-side retention for grants bound to one authenticated session.
+pub struct ControllerAssignmentGrantStore {
+    expectation: ControllerAssignmentExpectation,
+    active: bool,
+    grants: BTreeMap<ResourceUid, ControllerAssignmentGrant>,
+    revoked: BTreeMap<ResourceUid, RevokedAssignmentObservation>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+    session_owner: Option<ResourceRef>,
+    target: Option<AssignmentTarget>,
+    last_epoch: Option<AssignmentEpoch>,
+}
+
+impl ControllerAssignmentGrantStore {
+    /// Construct an empty active store for one exact session generation.
+    pub fn new(expectation: ControllerAssignmentExpectation) -> Result<Self, AssignmentError> {
+        Ok(Self {
+            expectation,
+            active: true,
+            grants: BTreeMap::new(),
+            revoked: BTreeMap::new(),
+            provider_generation: None,
+            controller_generation: None,
+            session_owner: None,
+            target: None,
+            last_epoch: None,
+        })
+    }
+
+    /// Accept one already-decoded grant.
+    pub fn accept(
+        &mut self,
+        grant: ControllerAssignmentGrant,
+    ) -> Result<GrantDisposition, AssignmentError> {
+        if !self.active {
+            return Err(AssignmentError::SessionRevoked);
+        }
+        grant.validate_for(&self.expectation)?;
+        if let Some(revoked) = self.revoked.get(grant.assignment.resource_uid()) {
+            if revoked.identity == grant.assignment {
+                return Err(AssignmentError::StaleAssignment);
+            }
+            if revoked
+                .resource_ref
+                .as_ref()
+                .is_some_and(|resource_ref| resource_ref != grant.resource_ref())
+            {
+                return Err(AssignmentError::AssignmentConflict);
+            }
+        }
+        if let Some(existing) = self.grants.get(grant.assignment.resource_uid()) {
+            return if existing == &grant {
+                Ok(GrantDisposition::Duplicate)
+            } else {
+                Err(AssignmentError::AssignmentConflict)
+            };
+        }
+        if self
+            .provider_generation
+            .is_some_and(|generation| grant.assignment.provider_generation() != generation)
+        {
+            return Err(AssignmentError::ProviderGenerationMismatch);
+        }
+        if self
+            .controller_generation
+            .is_some_and(|generation| grant.assignment.controller_generation() != generation)
+        {
+            return Err(AssignmentError::ControllerGenerationMismatch);
+        }
+        if self
+            .session_owner
+            .as_ref()
+            .is_some_and(|owner| grant.assignment.session_owner() != owner)
+        {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|target| grant.assignment.target() != target)
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        if self
+            .revoked
+            .get(grant.assignment.resource_uid())
+            .is_some_and(|revoked| grant.assignment.epoch() <= revoked.identity.epoch())
+        {
+            return Err(AssignmentError::StaleAssignment);
+        }
+        if self
+            .last_epoch
+            .is_some_and(|epoch| grant.assignment.epoch() <= epoch)
+        {
+            return Err(AssignmentError::StaleAssignment);
+        }
+        if !self.revoked.contains_key(grant.assignment.resource_uid())
+            && self.tracked_len() >= MAX_ASSIGNMENTS
+        {
+            return Err(AssignmentError::AssignmentLimit);
+        }
+        self.provider_generation = Some(grant.assignment.provider_generation());
+        self.controller_generation = Some(grant.assignment.controller_generation());
+        self.session_owner = Some(grant.assignment.session_owner().clone());
+        self.target = Some(grant.assignment.target().clone());
+        self.last_epoch = Some(grant.assignment.epoch());
+        self.grants
+            .insert(grant.assignment.resource_uid().clone(), grant);
+        Ok(GrantDisposition::Installed)
+    }
+
+    /// Revoke one exact assignment while preserving its last observation.
+    pub fn revoke_assignment(
+        &mut self,
+        provider_ref: &ResourceRef,
+        assignment: AssignmentIdentity,
+    ) -> Result<GrantDisposition, AssignmentError> {
+        if !self.active {
+            return Err(AssignmentError::SessionRevoked);
+        }
+        if provider_ref != &self.expectation.provider_ref {
+            return Err(AssignmentError::ProviderRefMismatch);
+        }
+        self.validate_identity(&assignment)?;
+        if self
+            .provider_generation
+            .is_some_and(|generation| assignment.provider_generation() != generation)
+        {
+            return Err(AssignmentError::ProviderGenerationMismatch);
+        }
+        if self
+            .controller_generation
+            .is_some_and(|generation| assignment.controller_generation() != generation)
+        {
+            return Err(AssignmentError::ControllerGenerationMismatch);
+        }
+        if self
+            .session_owner
+            .as_ref()
+            .is_some_and(|owner| assignment.session_owner() != owner)
+        {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|target| assignment.target() != target)
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        if let Some(existing) = self.grants.get(assignment.resource_uid())
+            && existing.assignment != assignment
+        {
+            if self
+                .revoked
+                .get(assignment.resource_uid())
+                .is_some_and(|revoked| revoked.identity == assignment)
+            {
+                return Ok(GrantDisposition::Duplicate);
+            }
+            return Err(AssignmentError::AssignmentConflict);
+        }
+        if let Some(existing) = self.revoked.get(assignment.resource_uid())
+            && existing.identity == assignment
+            && self.grants.get(assignment.resource_uid()).is_none()
+        {
+            return Ok(GrantDisposition::Duplicate);
+        }
+        if self
+            .revoked
+            .get(assignment.resource_uid())
+            .is_some_and(|revoked| assignment.epoch() <= revoked.identity.epoch())
+        {
+            return Err(AssignmentError::StaleAssignment);
+        }
+        let had_revoked_observation = self.revoked.contains_key(assignment.resource_uid());
+        let revoked_resource_ref = self
+            .grants
+            .remove(assignment.resource_uid())
+            .map(|grant| grant.resource_ref().clone())
+            .or_else(|| {
+                self.revoked
+                    .get(assignment.resource_uid())
+                    .and_then(|observation| observation.resource_ref.clone())
+            });
+        if revoked_resource_ref.is_none()
+            && !had_revoked_observation
+            && self.tracked_len() >= MAX_ASSIGNMENTS
+        {
+            return Err(AssignmentError::AssignmentLimit);
+        }
+        self.revoked.insert(
+            assignment.resource_uid().clone(),
+            RevokedAssignmentObservation {
+                identity: assignment,
+                resource_ref: revoked_resource_ref,
+            },
+        );
+        Ok(GrantDisposition::Revoked)
+    }
+
+    fn tracked_len(&self) -> usize {
+        self.grants.len()
+            + self
+                .revoked
+                .keys()
+                .filter(|resource_uid| !self.grants.contains_key(*resource_uid))
+                .count()
+    }
+
+    /// Decode and accept one bounded transport payload.
+    pub fn accept_encoded(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<GrantDisposition, AssignmentGrantError> {
+        if bytes.is_empty() || bytes.len() > MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES {
+            return Err(AssignmentGrantError::Transport(
+                AssignmentTransportError::TooLarge,
+            ));
+        }
+        CanonicalJsonValue::parse(bytes)
+            .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
+        let value = serde_json::from_slice::<Value>(bytes)
+            .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
+        let object = value.as_object().ok_or(AssignmentGrantError::Transport(
+            AssignmentTransportError::Malformed,
+        ))?;
+        if object.get("kind").and_then(Value::as_str) == Some("revoke") {
+            require_exact_keys(object, &["version", "kind", "providerRef", "assignment"])
+                .map_err(AssignmentGrantError::Transport)?;
+            if object.get("version").and_then(Value::as_u64) != Some(1) {
+                return Err(AssignmentGrantError::Transport(
+                    AssignmentTransportError::Malformed,
+                ));
+            }
+            let provider_ref = ResourceRef::parse(
+                object.get("providerRef").and_then(Value::as_str).ok_or(
+                    AssignmentGrantError::Transport(AssignmentTransportError::Malformed),
+                )?,
+            )
+            .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
+            let assignment = decode_assignment(object.get("assignment").ok_or(
+                AssignmentGrantError::Transport(AssignmentTransportError::Malformed),
+            )?)
+            .map_err(AssignmentGrantError::Transport)?;
+            return self
+                .revoke_assignment(&provider_ref, assignment)
+                .map_err(AssignmentGrantError::Assignment);
+        }
+        let grant =
+            ControllerAssignmentGrant::decode(bytes).map_err(AssignmentGrantError::Transport)?;
+        self.accept(grant).map_err(AssignmentGrantError::Assignment)
+    }
+
+    /// Revoke all retained authority while preserving last observations.
+    pub fn revoke(&mut self) {
+        self.active = false;
+    }
+
+    /// Whether the store can still authorize the current session.
+    pub const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Return the number of retained assignments.
+    pub fn len(&self) -> usize {
+        self.grants.len()
+    }
+
+    /// Whether no assignment observations are retained.
+    pub fn is_empty(&self) -> bool {
+        self.grants.is_empty()
+    }
+
+    /// Borrow an assignment only while the session remains active.
+    pub fn get(&self, resource_uid: &ResourceUid) -> Option<&ControllerAssignmentGrant> {
+        if !self.active {
+            return None;
+        }
+        self.grants.get(resource_uid)
+    }
+
+    fn validate_identity(&self, assignment: &AssignmentIdentity) -> Result<(), AssignmentError> {
+        if assignment.controller_role() != &self.expectation.controller_role {
+            return Err(AssignmentError::ControllerRoleMismatch);
+        }
+        if self
+            .expectation
+            .provider_generation
+            .is_some_and(|generation| assignment.provider_generation() != generation)
+        {
+            return Err(AssignmentError::ProviderGenerationMismatch);
+        }
+        if self
+            .expectation
+            .controller_generation
+            .is_some_and(|generation| assignment.controller_generation() != generation)
+        {
+            return Err(AssignmentError::ControllerGenerationMismatch);
+        }
+        if assignment.session_generation() != self.expectation.session_generation {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if self
+            .expectation
+            .session_owner
+            .as_ref()
+            .is_some_and(|owner| assignment.session_owner() != owner)
+        {
+            return Err(AssignmentError::SessionBindingMismatch);
+        }
+        if self
+            .expectation
+            .target
+            .as_ref()
+            .is_some_and(|target| assignment.target() != target)
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        if self
+            .expectation
+            .target_kind
+            .is_some_and(|kind| assignment.target().target_kind() != Some(kind))
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ControllerAssignmentGrantStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControllerAssignmentGrantStore")
+            .field("active", &self.active)
+            .field("grant_count", &self.grants.len())
             .finish()
     }
 }
@@ -999,10 +2418,13 @@ impl fmt::Debug for ScopedResourceMutation {
 /// A non-clonable ResourceClient capability minted for one assignment.
 pub struct ResourceClientLease {
     identity: AssignmentIdentity,
+    provider_ref: ResourceRef,
     resource_ref: ResourceRef,
+    resource_generation: ResourceGeneration,
     resource_types: BTreeSet<ResourceTypeName>,
     state: Arc<AssignmentLeaseState>,
     allowed_verbs: BTreeSet<AssignmentVerb>,
+    owner_child_process_verbs: BTreeSet<AssignmentVerb>,
 }
 
 impl ResourceClientLease {
@@ -1011,9 +2433,35 @@ impl ResourceClientLease {
         &self.identity
     }
 
+    /// Borrow the Provider ResourceRef bound by Core.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Build the bounded transport grant for this assignment.
+    pub fn assignment_grant(&self) -> ControllerAssignmentGrant {
+        ControllerAssignmentGrant::from_lease(self)
+    }
+
+    /// Borrow the exact primary-scope verbs admitted by Core.
+    pub const fn primary_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.allowed_verbs
+    }
+
+    /// Borrow the exact owner-child-process verbs admitted by the lease
+    /// contract.
+    pub const fn owner_child_process_verbs(&self) -> &BTreeSet<AssignmentVerb> {
+        &self.owner_child_process_verbs
+    }
+
     /// Borrow the exact assigned resource target.
     pub const fn resource_ref(&self) -> &ResourceRef {
         &self.resource_ref
+    }
+
+    /// Return the assigned resource generation bound to child admissions.
+    pub const fn resource_generation(&self) -> ResourceGeneration {
+        self.resource_generation
     }
 
     /// Borrow the exact assigned placement target.
@@ -1026,6 +2474,33 @@ impl ResourceClientLease {
         AssignmentPhase::from_code(self.state.phase.load(Ordering::Acquire))
     }
 
+    fn ensure_watch(&self) -> Result<(), AssignmentError> {
+        let phase = self.phase();
+        if phase.admits_watch() {
+            return Ok(());
+        }
+        Err(match phase {
+            AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
+            AssignmentPhase::Stale
+            | AssignmentPhase::Draining
+            | AssignmentPhase::Released
+            | AssignmentPhase::Quarantined => AssignmentError::StaleAssignment,
+            AssignmentPhase::Pending => AssignmentError::AssignmentMissing,
+            AssignmentPhase::Assigned => AssignmentError::StaleAssignment,
+        })
+    }
+
+    fn ensure_mutation(&self) -> Result<(), AssignmentError> {
+        let phase = self.phase();
+        if phase.admits_mutation() {
+            return Ok(());
+        }
+        Err(match phase {
+            AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
+            _ => AssignmentError::StaleAssignment,
+        })
+    }
+
     /// Mint a query whose assignment filter cannot be removed or widened.
     pub fn query(
         &self,
@@ -1033,18 +2508,7 @@ impl ResourceClientLease {
         resource_names: Vec<ResourceName>,
         filters: Vec<ScopedResourceFilter>,
     ) -> Result<ScopedResourceQuery, AssignmentError> {
-        let phase = self.phase();
-        if !phase.admits_watch() {
-            return Err(match phase {
-                AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
-                AssignmentPhase::Stale
-                | AssignmentPhase::Draining
-                | AssignmentPhase::Released
-                | AssignmentPhase::Quarantined => AssignmentError::StaleAssignment,
-                AssignmentPhase::Pending => AssignmentError::AssignmentMissing,
-                AssignmentPhase::Assigned => AssignmentError::StaleAssignment,
-            });
-        }
+        self.ensure_watch()?;
         if resource_types
             .iter()
             .any(|resource_type| !self.resource_types.contains(resource_type))
@@ -1053,13 +2517,13 @@ impl ResourceClientLease {
         }
         if filters
             .iter()
-            .any(|filter| filter.field() == "assignment.resourceUid")
+            .any(|filter| matches!(filter.field(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER))
         {
             return Err(AssignmentError::QueryWidened);
         }
         let mut filters = filters;
         filters.push(ScopedResourceFilter {
-            field: "assignment.resourceUid".to_owned(),
+            field: ASSIGNMENT_UID_FILTER.to_owned(),
             values: vec![self.identity.resource_uid().as_str().to_owned()],
             assignment_bound: true,
         });
@@ -1068,6 +2532,42 @@ impl ResourceClientLease {
             resource_types,
             resource_names,
             filters,
+            scope: ScopedResourceScope::Primary,
+        })
+    }
+
+    /// Mint a query limited to Process children owned by this assignment.
+    pub fn child_query(
+        &self,
+        resource_types: Vec<ResourceTypeName>,
+        resource_names: Vec<ResourceName>,
+        filters: Vec<ScopedResourceFilter>,
+    ) -> Result<ScopedResourceQuery, AssignmentError> {
+        self.ensure_watch()?;
+        if self.owner_child_process_verbs.is_empty()
+            || resource_types.is_empty()
+            || resource_types
+                .iter()
+                .any(|resource_type| resource_type.as_str() != PROCESS_RESOURCE_TYPE)
+            || filters
+                .iter()
+                .any(|filter| matches!(filter.field(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER))
+        {
+            return Err(AssignmentError::QueryWidened);
+        }
+        let owner_scope = self.owner_child_scope();
+        let mut filters = filters;
+        filters.push(ScopedResourceFilter {
+            field: OWNER_UID_FILTER.to_owned(),
+            values: vec![owner_scope.owner_uid().as_str().to_owned()],
+            assignment_bound: true,
+        });
+        Ok(ScopedResourceQuery {
+            assignment: self.identity.clone(),
+            resource_types,
+            resource_names,
+            filters,
+            scope: ScopedResourceScope::OwnerChild(owner_scope),
         })
     }
 
@@ -1077,13 +2577,7 @@ impl ResourceClientLease {
         target: ResourceRef,
         verb: AssignmentVerb,
     ) -> Result<ScopedResourceMutation, AssignmentError> {
-        let phase = self.phase();
-        if !phase.admits_mutation() {
-            return Err(match phase {
-                AssignmentPhase::Revoked => AssignmentError::SessionRevoked,
-                _ => AssignmentError::StaleAssignment,
-            });
-        }
+        self.ensure_mutation()?;
         if verb == AssignmentVerb::CommitBatch || !self.allowed_verbs.contains(&verb) {
             return Err(AssignmentError::VerbNotAllowed);
         }
@@ -1094,7 +2588,44 @@ impl ResourceClientLease {
             assignment: self.identity.clone(),
             target,
             verb,
+            scope: ScopedResourceScope::Primary,
         })
+    }
+
+    /// Admit a mutation against one Process child owned by this lease.
+    ///
+    /// Successful commit receipts must be handed to
+    /// [`ControllerAssignmentRegistry::record_child`] and
+    /// [`ControllerAssignmentRegistry::remove_child`] by the controller
+    /// owner. Minting this capability does not pre-account a child that may
+    /// never commit.
+    pub fn child_mutation(
+        &self,
+        target: ResourceRef,
+        verb: AssignmentVerb,
+    ) -> Result<ScopedResourceMutation, AssignmentError> {
+        self.ensure_mutation()?;
+        if !self.owner_child_process_verbs.contains(&verb) {
+            return Err(AssignmentError::VerbNotAllowed);
+        }
+        if target.resource_type().as_str() != PROCESS_RESOURCE_TYPE {
+            return Err(AssignmentError::QueryWidened);
+        }
+        Ok(ScopedResourceMutation {
+            assignment: self.identity.clone(),
+            target,
+            verb,
+            scope: ScopedResourceScope::OwnerChild(self.owner_child_scope()),
+        })
+    }
+
+    fn owner_child_scope(&self) -> OwnerChildScope {
+        OwnerChildScope {
+            owner_ref: self.resource_ref.clone(),
+            owner_uid: self.identity.resource_uid().clone(),
+            owner_revision: self.identity.resource_revision(),
+            owner_generation: self.resource_generation,
+        }
     }
 
     /// Verify that a placement target remains exactly the admitted target.
@@ -1114,13 +2645,18 @@ impl fmt::Debug for ResourceClientLease {
             .field("resource_ref", &"<redacted>")
             .field("phase", &self.phase())
             .field("resource_type_count", &self.resource_types.len())
-            .field("allowed_verb_count", &self.allowed_verbs.len())
+            .field("primary_verb_count", &self.allowed_verbs.len())
+            .field(
+                "owner_child_process_verb_count",
+                &self.owner_child_process_verbs.len(),
+            )
             .finish()
     }
 }
 
 struct AssignmentRecord {
     identity: AssignmentIdentity,
+    provider_ref: ResourceRef,
     allowed_verbs: BTreeSet<AssignmentVerb>,
     state: Arc<AssignmentLeaseState>,
     children: BTreeSet<ResourceUid>,
@@ -1192,6 +2728,13 @@ impl ControllerAssignmentRegistry {
                 .resolve(request.resource)
                 .map_err(|_| AssignmentError::PlacementTargetInvalid)?,
         );
+        if request
+            .expected_target
+            .as_ref()
+            .is_some_and(|expected| expected != &target)
+        {
+            return Err(AssignmentError::TargetMismatch);
+        }
         if !request.role.supports_target(&target) {
             return Err(AssignmentError::TargetKindUnsupported);
         }
@@ -1209,12 +2752,22 @@ impl ControllerAssignmentRegistry {
         if !request.target_ready {
             return Err(AssignmentError::TargetNotReady);
         }
+        let session = ControllerSessionBinding::new(
+            request.session_owner.clone(),
+            request.role.provider_ref.clone(),
+            request.role.role_ref.clone(),
+            target.clone(),
+            request.provider_generation,
+            request.controller_generation,
+            request.session_generation,
+        )?;
         if let Some(existing) = self.records.get(request.resource.metadata().uid()) {
             if matches!(
                 existing.state.phase(),
-                AssignmentPhase::Released | AssignmentPhase::Quarantined
+                AssignmentPhase::Revoked | AssignmentPhase::Released | AssignmentPhase::Quarantined
             ) {
                 self.records.remove(request.resource.metadata().uid());
+                self.remove_active_target_for_uid(request.resource.metadata().uid());
             } else {
                 return Err(AssignmentError::AssignmentConflict);
             }
@@ -1226,10 +2779,20 @@ impl ControllerAssignmentRegistry {
         if self
             .active_targets
             .get(&target_key)
-            .is_some_and(|uids| !uids.is_empty())
+            .is_some_and(|uids| {
+                uids.iter().any(|uid| {
+                    self.records.get(uid).is_some_and(|record| {
+                        record.state.phase().owns_target()
+                            && (record.provider_ref != *request.role.provider_ref()
+                                || record.identity.controller_role() != request.role.role_ref()
+                                || record.identity.target() != &target
+                                || record.identity.session_binding() != &session)
+                    })
+                })
+            })
             // A per-resource target role intentionally allows multiple
             // resources at one target. The key is therefore only used for
-            // fixed/Zone singleton roles.
+            // conflicting fixed/Zone singleton controller sessions.
             && matches!(
                 request.role.scope(),
                 ControllerInstanceScope::ZoneSingleton
@@ -1247,14 +2810,10 @@ impl ControllerAssignmentRegistry {
         let identity = AssignmentIdentity::new(
             request.resource.metadata().uid().clone(),
             request.resource.metadata().revision(),
-            request.provider_generation,
-            request.controller_generation,
-            request.role.role_ref().clone(),
-            target.clone(),
-            request.session_generation,
+            session,
             epoch,
         );
-        let allowed_verbs = BTreeSet::from([
+        let primary_verbs = BTreeSet::from([
             AssignmentVerb::Get,
             AssignmentVerb::List,
             AssignmentVerb::Watch,
@@ -1268,7 +2827,8 @@ impl ControllerAssignmentRegistry {
             identity.resource_uid().clone(),
             AssignmentRecord {
                 identity: identity.clone(),
-                allowed_verbs: allowed_verbs.clone(),
+                provider_ref: request.role.provider_ref.clone(),
+                allowed_verbs: primary_verbs.clone(),
                 state: Arc::clone(&state),
                 children: BTreeSet::new(),
             },
@@ -1279,13 +2839,16 @@ impl ControllerAssignmentRegistry {
             .insert(identity.resource_uid().clone());
         Ok(ResourceClientLease {
             identity,
+            provider_ref: request.role.provider_ref.clone(),
             resource_ref: ResourceRef::new(
                 resource_type.clone(),
                 request.resource.metadata().name().clone(),
             ),
+            resource_generation: request.resource.metadata().generation(),
             resource_types: request.role.resource_types.clone(),
             state,
-            allowed_verbs,
+            allowed_verbs: primary_verbs,
+            owner_child_process_verbs: owner_child_process_verbs(),
         })
     }
 
@@ -1404,16 +2967,77 @@ impl ControllerAssignmentRegistry {
 
     /// Revoke all assignments bound to a disconnected session generation.
     pub fn revoke_session(&mut self, generation: ReconnectGeneration) {
-        for record in self.records.values_mut() {
-            if record.identity.session_generation() == generation
-                && matches!(
-                    record.state.phase(),
-                    AssignmentPhase::Assigned | AssignmentPhase::Draining
-                )
-            {
-                record.state.set_phase(AssignmentPhase::Revoked);
-                record.state.mark_stale();
-            }
+        let revoked = self
+            .records
+            .values_mut()
+            .filter_map(|record| {
+                if record.identity.session_generation() == generation
+                    && matches!(
+                        record.state.phase(),
+                        AssignmentPhase::Assigned | AssignmentPhase::Draining
+                    )
+                {
+                    record.state.set_phase(AssignmentPhase::Revoked);
+                    record.state.mark_stale();
+                    Some(record.identity.resource_uid().clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for resource_uid in revoked {
+            self.remove_active_target_for_uid(&resource_uid);
+        }
+    }
+
+    /// Revoke assignments for one exact authenticated controller session
+    /// without touching another controller that reused a session generation.
+    pub fn revoke_session_for(&mut self, session: &ControllerSessionBinding) {
+        let revoked = self
+            .records
+            .values_mut()
+            .filter_map(|record| {
+                if record.provider_ref == *session.provider_ref()
+                    && record.identity.session_binding() == session
+                    && matches!(
+                        record.state.phase(),
+                        AssignmentPhase::Assigned | AssignmentPhase::Draining
+                    )
+                {
+                    record.state.set_phase(AssignmentPhase::Revoked);
+                    record.state.mark_stale();
+                    Some(record.identity.resource_uid().clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for resource_uid in revoked {
+            self.remove_active_target_for_uid(&resource_uid);
+        }
+    }
+
+    /// Revoke one exact assignment identity.
+    pub fn revoke_assignment(&mut self, identity: &AssignmentIdentity) {
+        let revoked = self
+            .records
+            .get(identity.resource_uid())
+            .is_some_and(|record| {
+                if record.identity == *identity
+                    && matches!(
+                        record.state.phase(),
+                        AssignmentPhase::Assigned | AssignmentPhase::Draining
+                    )
+                {
+                    record.state.set_phase(AssignmentPhase::Revoked);
+                    record.state.mark_stale();
+                    true
+                } else {
+                    false
+                }
+            });
+        if revoked {
+            self.remove_active_target(identity);
         }
     }
 
@@ -1506,8 +3130,12 @@ impl ControllerAssignmentRegistry {
     }
 
     fn remove_active_target(&mut self, identity: &AssignmentIdentity) {
+        self.remove_active_target_for_uid(identity.resource_uid());
+    }
+
+    fn remove_active_target_for_uid(&mut self, resource_uid: &ResourceUid) {
         self.active_targets.retain(|_, uids| {
-            uids.remove(identity.resource_uid());
+            uids.remove(resource_uid);
             !uids.is_empty()
         });
     }
@@ -1515,6 +3143,8 @@ impl ControllerAssignmentRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use d2b_contracts_provider::v3::{
         ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
         ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
@@ -1525,13 +3155,16 @@ mod tests {
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, PlacementTarget, ResourceEnvelope, ResourceGeneration, ResourceRef,
-        ResourceTypeName, ResourceUid, SchemaFingerprint, SchemaVersion, ZoneRevision,
+        ControllerGeneration, PlacementAnchor, PlacementTarget, ResourceEnvelope,
+        ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint,
+        SchemaVersion, ZoneRevision,
     };
 
     use super::{
-        AssignmentError, AssignmentPhase, AssignmentRequest, AssignmentTarget, AssignmentVerb,
-        ControllerAssignmentRegistry, ControllerRoleContract, ScopedCommitTransport,
+        AssignmentEpoch, AssignmentError, AssignmentPhase, AssignmentRequest, AssignmentTarget,
+        AssignmentVerb, ControllerAssignmentExpectation, ControllerAssignmentGrant,
+        ControllerAssignmentGrantStore, ControllerAssignmentRegistry, ControllerRoleContract,
+        ControllerSessionBinding, GrantDisposition, PROCESS_RESOURCE_TYPE, ScopedCommitTransport,
         ScopedResourceFilter,
     };
 
@@ -1546,7 +3179,7 @@ mod tests {
     }
 
     fn manifest() -> ProviderManifest {
-        let process = ResourceTypeName::parse("Process").unwrap();
+        let process = ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
         let component = ComponentDescriptor::new(
             BoundedToken::parse("process-controller").unwrap(),
             ComponentType::Controller,
@@ -1611,9 +3244,7 @@ mod tests {
         ProviderManifest::new(
             d2b_contracts_resource::v3::ArtifactId::parse("provider-runtime").unwrap(),
             ArtifactDigestSet {
-                package: digest(),
                 executable: digest(),
-                manifest: digest(),
                 config: digest(),
                 schema: digest(),
                 service: digest(),
@@ -1654,7 +3285,7 @@ mod tests {
         };
         let value = serde_json::json!({
             "apiVersion": "resources.d2bus.org/v3",
-            "type": "Process",
+            "type": PROCESS_RESOURCE_TYPE,
             "metadata": {
                 "name": name,
                 "zone": "dev",
@@ -1675,6 +3306,56 @@ mod tests {
                 "providerRef": "Provider/provider-runtime",
                 "executionRef": execution_ref,
                 "argv": ["true"]
+            },
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            }
+        });
+        ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    fn guest(name: &str, uid: &str, execution_ref: &str, revision: u64) -> ResourceEnvelope {
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Guest",
+            "metadata": {
+                "name": name,
+                "zone": "dev",
+                "uid": uid,
+                "generation": 1,
+                "revision": revision,
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "api",
+                "configurationGeneration": null,
+                "controllerGeneration": null,
+                "providerGeneration": null
+            },
+            "spec": {
+                "providerRef": "Provider/provider-runtime",
+                "executionRef": execution_ref
             },
             "status": {
                 "completedAt": null,
@@ -1817,6 +3498,31 @@ mod tests {
     }
 
     #[test]
+    fn scoped_commit_transport_round_trips_owner_child_scope() {
+        let owner = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&owner, &role, 1, 1, 1)).unwrap();
+        let mutation = lease
+            .child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            )
+            .unwrap();
+        let transport =
+            ScopedCommitTransport::new(lease.identity().clone(), vec![mutation]).unwrap();
+        let encoded = transport.encode().unwrap();
+        let decoded = ScopedCommitTransport::decode(&encoded).unwrap();
+        let scope = decoded.mutations()[0].scope().owner_child().unwrap();
+
+        assert_eq!(decoded.assignment(), lease.identity());
+        assert_eq!(scope.owner_ref(), lease.resource_ref());
+        assert_eq!(scope.owner_uid(), owner.metadata().uid());
+        assert_eq!(scope.owner_revision(), owner.metadata().revision());
+        assert_eq!(scope.owner_generation(), owner.metadata().generation());
+    }
+
+    #[test]
     fn same_epoch_rebind_updates_the_active_writer_revision() {
         let resource = process("process", "Guest/dev-vm", 7);
         let role = role();
@@ -1901,6 +3607,21 @@ mod tests {
             Err(AssignmentError::SessionRevoked)
         );
         assert_eq!(
+            lease.child_query(
+                vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(AssignmentError::SessionRevoked)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-child").unwrap(),
+                AssignmentVerb::Create,
+            ),
+            Err(AssignmentError::SessionRevoked)
+        );
+        assert_eq!(
             registry.validate_writer(
                 lease.identity(),
                 resource.metadata().uid(),
@@ -1913,6 +3634,208 @@ mod tests {
     }
 
     #[test]
+    fn disconnected_assignment_can_be_replaced_by_a_new_session() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let old = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
+        registry.revoke_session(ReconnectGeneration::new(1).unwrap());
+
+        let replacement = registry.admit(request(&resource, &role, 2, 2, 2)).unwrap();
+        assert_ne!(old.identity().epoch(), replacement.identity().epoch());
+        assert_eq!(
+            replacement.identity().session_generation(),
+            ReconnectGeneration::new(2).unwrap()
+        );
+    }
+
+    #[test]
+    fn scoped_session_revocation_does_not_touch_another_target() {
+        let first_resource = process("guest-process", "Guest/dev-vm", 7);
+        let second_resource = process("guest-process-second", "Guest/other-vm", 8);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let first = registry
+            .admit(request(&first_resource, &role, 1, 1, 1))
+            .unwrap();
+        let second = registry
+            .admit(request(&second_resource, &role, 1, 1, 1))
+            .unwrap();
+
+        registry.revoke_session_for(first.identity().session_binding());
+
+        assert_eq!(first.phase(), AssignmentPhase::Revoked);
+        assert_eq!(second.phase(), AssignmentPhase::Assigned);
+    }
+
+    #[test]
+    fn exact_session_revocation_does_not_touch_same_generation_owner() {
+        let first_resource = process("guest-process", "Guest/dev-vm", 7);
+        let second_resource = process("guest-process-second", "Guest/dev-vm", 8);
+        let role = role();
+        let first_owner = ResourceRef::parse("Process/controller-first").unwrap();
+        let second_owner = ResourceRef::parse("Process/controller-second").unwrap();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let first = registry
+            .admit(request(&first_resource, &role, 1, 1, 1).with_session_owner(first_owner.clone()))
+            .unwrap();
+        let second = registry
+            .admit(
+                request(&second_resource, &role, 1, 1, 1).with_session_owner(second_owner.clone()),
+            )
+            .unwrap();
+
+        let first_session = ControllerSessionBinding::new(
+            first_owner,
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            first.target().clone(),
+            first.identity().provider_generation(),
+            first.identity().controller_generation(),
+            first.identity().session_generation(),
+        )
+        .unwrap();
+        registry.revoke_session_for(&first_session);
+
+        assert_eq!(first.phase(), AssignmentPhase::Revoked);
+        assert_eq!(second.phase(), AssignmentPhase::Assigned);
+        assert!(
+            registry
+                .validate_scope(second.identity(), AssignmentVerb::Watch)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn partial_delivery_rollback_revokes_an_admitted_unsent_lease() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
+
+        registry.revoke_assignment(lease.identity());
+
+        assert_eq!(lease.phase(), AssignmentPhase::Revoked);
+        assert_eq!(
+            lease.mutation(
+                ResourceRef::parse("Process/process").unwrap(),
+                AssignmentVerb::UpdateStatus,
+            ),
+            Err(AssignmentError::SessionRevoked)
+        );
+        assert_eq!(
+            registry.validate_scope(lease.identity(), AssignmentVerb::Watch),
+            Err(AssignmentError::SessionRevoked)
+        );
+    }
+
+    #[test]
+    fn fixed_target_controller_accepts_multiple_resources_in_one_session() {
+        let process_type = ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
+        let role = ControllerRoleContract {
+            provider_ref: ResourceRef::parse("Provider/provider-runtime").unwrap(),
+            role_ref: ResourceRef::parse("Process/process-controller").unwrap(),
+            scope: ControllerInstanceScope::FixedExecutionTarget,
+            supported_target_kinds: BTreeSet::from([ControllerTargetKind::Host]),
+            resource_types: BTreeSet::from([process_type.clone()]),
+            placements: BTreeMap::from([(process_type, PlacementAnchor::ExecutionRef)]),
+        };
+        let first = process("guest-process", "Host/host-system", 7);
+        let second = process("guest-process-second", "Host/host-system", 8);
+        let mut registry = ControllerAssignmentRegistry::default();
+
+        registry.admit(request(&first, &role, 1, 1, 1)).unwrap();
+        registry.admit(request(&second, &role, 1, 1, 1)).unwrap();
+    }
+
+    #[test]
+    fn exact_revocation_allows_fixed_target_session_replacement_without_touching_sibling() {
+        let guest_type = ResourceTypeName::parse("Guest").unwrap();
+        let role = ControllerRoleContract {
+            provider_ref: ResourceRef::parse("Provider/provider-runtime").unwrap(),
+            role_ref: ResourceRef::parse("Process/process-controller").unwrap(),
+            scope: ControllerInstanceScope::FixedExecutionTarget,
+            supported_target_kinds: BTreeSet::from([ControllerTargetKind::Host]),
+            resource_types: BTreeSet::from([guest_type.clone()]),
+            placements: BTreeMap::from([(guest_type, PlacementAnchor::ExecutionRef)]),
+        };
+        let first_resource = guest(
+            "guest-first",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "Host/host-system",
+            7,
+        );
+        let second_resource = guest(
+            "guest-second",
+            "323e4567-e89b-42d3-a456-426614174002",
+            "Host/host-system",
+            8,
+        );
+        let unrelated_resource = guest(
+            "guest-unrelated",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "Host/other-system",
+            9,
+        );
+        let first_owner = ResourceRef::parse("Process/controller-first").unwrap();
+        let replacement_owner = ResourceRef::parse("Process/controller-replacement").unwrap();
+        let unrelated_owner = ResourceRef::parse("Process/controller-unrelated").unwrap();
+        let mut registry = ControllerAssignmentRegistry::default();
+
+        let first = registry
+            .admit(request(&first_resource, &role, 1, 1, 7).with_session_owner(first_owner.clone()))
+            .unwrap();
+        let second = registry
+            .admit(
+                request(&second_resource, &role, 1, 1, 7).with_session_owner(first_owner.clone()),
+            )
+            .unwrap();
+        let unrelated = registry
+            .admit(request(&unrelated_resource, &role, 1, 1, 7).with_session_owner(unrelated_owner))
+            .unwrap();
+
+        registry.revoke_session_for(first.identity().session_binding());
+
+        assert_eq!(first.phase(), AssignmentPhase::Revoked);
+        assert_eq!(second.phase(), AssignmentPhase::Revoked);
+        assert_eq!(unrelated.phase(), AssignmentPhase::Assigned);
+        assert!(
+            registry
+                .validate_scope(unrelated.identity(), AssignmentVerb::Watch)
+                .is_ok()
+        );
+
+        let replacement_first = registry
+            .admit(
+                request(&first_resource, &role, 2, 2, 7)
+                    .with_session_owner(replacement_owner.clone()),
+            )
+            .unwrap();
+        let replacement_second = registry
+            .admit(request(&second_resource, &role, 2, 2, 7).with_session_owner(replacement_owner))
+            .unwrap();
+
+        assert_eq!(replacement_first.phase(), AssignmentPhase::Assigned);
+        assert_eq!(replacement_second.phase(), AssignmentPhase::Assigned);
+        assert_ne!(
+            replacement_first.identity().epoch(),
+            first.identity().epoch()
+        );
+        assert_ne!(
+            replacement_second.identity().epoch(),
+            second.identity().epoch()
+        );
+        assert_eq!(
+            replacement_first.identity().session_generation(),
+            ReconnectGeneration::new(7).unwrap()
+        );
+        assert_eq!(
+            replacement_second.identity().session_generation(),
+            ReconnectGeneration::new(7).unwrap()
+        );
+    }
+
+    #[test]
     fn guest_lease_cannot_widen_to_host_or_foreign_resource() {
         let resource = process("process", "Guest/dev-vm", 7);
         let role = role();
@@ -1920,7 +3843,7 @@ mod tests {
         let lease = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
         let query = lease
             .query(
-                vec![ResourceTypeName::parse("Process").unwrap()],
+                vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
                 vec![],
                 vec![
                     ScopedResourceFilter::narrow("metadata.name", vec!["process".to_owned()])
@@ -1962,6 +3885,139 @@ mod tests {
                 reference: ResourceRef::parse("Host/host-system").unwrap(),
             }),
             Err(AssignmentError::TargetMismatch)
+        );
+    }
+
+    #[test]
+    fn assigned_lease_mints_an_exact_process_child_scope() {
+        let owner = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&owner, &role, 1, 1, 1)).unwrap();
+        let process_type = ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
+
+        let query = lease
+            .child_query(vec![process_type.clone()], vec![], vec![])
+            .unwrap();
+        assert_eq!(query.resource_types(), &[process_type]);
+        let owner_filter = query
+            .filters()
+            .iter()
+            .find(|filter| filter.field() == "owner.resourceUid")
+            .expect("owner UID filter");
+        assert!(owner_filter.assignment_bound());
+        assert_eq!(
+            owner_filter.values(),
+            &[owner.metadata().uid().as_str().to_owned()]
+        );
+        assert_eq!(
+            query.owner_child_scope().unwrap().owner_ref(),
+            &ResourceRef::new(
+                owner.resource_type().clone(),
+                owner.metadata().name().clone()
+            )
+        );
+
+        let child = lease
+            .child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            )
+            .unwrap();
+        assert_eq!(
+            child.target(),
+            &ResourceRef::parse("Process/process-vmm").unwrap()
+        );
+        let child_scope = child.scope().owner_child().unwrap();
+        assert_eq!(child_scope.owner_uid(), owner.metadata().uid());
+        assert_eq!(child_scope.owner_revision(), owner.metadata().revision());
+        assert_eq!(
+            child_scope.owner_generation(),
+            owner.metadata().generation()
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::UpdateStatus,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Host/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            ),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_query(Vec::new(), Vec::new(), Vec::new()),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_query(
+                vec![ResourceTypeName::parse("Host").unwrap()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(AssignmentError::QueryWidened)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::UpdateFinalizers,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        for field in [super::ASSIGNMENT_UID_FILTER, super::OWNER_UID_FILTER] {
+            let forged = ScopedResourceFilter {
+                field: field.to_owned(),
+                values: vec![owner.metadata().uid().as_str().to_owned()],
+                assignment_bound: false,
+            };
+            assert_eq!(
+                lease.child_query(
+                    vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+                    Vec::new(),
+                    vec![forged],
+                ),
+                Err(AssignmentError::QueryWidened)
+            );
+        }
+        assert_eq!(
+            lease.mutation(
+                ResourceRef::new(
+                    owner.resource_type().clone(),
+                    owner.metadata().name().clone()
+                ),
+                AssignmentVerb::UpdateSpec,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        assert_eq!(
+            lease.mutation(
+                ResourceRef::new(
+                    owner.resource_type().clone(),
+                    owner.metadata().name().clone()
+                ),
+                AssignmentVerb::Delete,
+            ),
+            Err(AssignmentError::VerbNotAllowed)
+        );
+        registry.begin_drain(lease.identity()).unwrap();
+        assert_eq!(
+            lease.child_query(
+                vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(AssignmentError::StaleAssignment)
+        );
+        assert_eq!(
+            lease.child_mutation(
+                ResourceRef::parse("Process/process-vmm").unwrap(),
+                AssignmentVerb::Create,
+            ),
+            Err(AssignmentError::StaleAssignment)
         );
     }
 
@@ -2034,6 +4090,420 @@ mod tests {
                 .admit(request(&invalid, &role, 1, 1, 1))
                 .unwrap_err(),
             AssignmentError::PlacementTargetInvalid
+        );
+        let wrong_target = process("process", "Guest/dev-vm", 7);
+        assert_eq!(
+            registry
+                .admit(request(&wrong_target, &role, 1, 1, 1).with_expected_target(
+                    AssignmentTarget::Execution {
+                        kind: d2b_contracts_resource::v3::PlacementTargetKind::Host,
+                        reference: ResourceRef::parse("Host/other").unwrap(),
+                    },
+                ))
+                .unwrap_err(),
+            AssignmentError::TargetMismatch
+        );
+    }
+
+    #[test]
+    fn assignment_grant_round_trips_exact_identity_and_scope() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 2, 3, 4)).unwrap();
+
+        let grant = ControllerAssignmentGrant::from_lease(&lease);
+        let decoded = ControllerAssignmentGrant::decode(&grant.encode().unwrap()).unwrap();
+
+        assert_eq!(decoded, grant);
+        assert_eq!(decoded.resource_ref(), lease.resource_ref());
+        assert_eq!(decoded.resource_generation(), lease.resource_generation());
+        assert_eq!(decoded.provider_ref(), role.provider_ref());
+        assert_eq!(decoded.assignment().session_owner(), role.role_ref());
+        assert_eq!(decoded.primary_verbs(), lease.primary_verbs());
+        assert!(
+            decoded
+                .scopes()
+                .contains(&super::AssignmentScope::OwnerChildProcess)
+        );
+        assert!(
+            !decoded
+                .primary_verbs()
+                .contains(&AssignmentVerb::UpdateSpec)
+        );
+        assert!(!decoded.primary_verbs().contains(&AssignmentVerb::Delete));
+        assert_eq!(
+            decoded.owner_child_process_verbs(),
+            &BTreeSet::from([
+                AssignmentVerb::Create,
+                AssignmentVerb::UpdateSpec,
+                AssignmentVerb::Delete,
+            ])
+        );
+    }
+
+    #[test]
+    fn assignment_grant_store_is_idempotent_but_rejects_identity_mismatch() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 2, 3, 4)).unwrap();
+        let grant = ControllerAssignmentGrant::from_lease(&lease);
+        let expectation = ControllerAssignmentExpectation::new(
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            lease.target().clone(),
+            lease.identity().provider_generation(),
+            lease.identity().controller_generation(),
+            lease.identity().session_generation(),
+            grant.resource_types().clone(),
+            grant.primary_verbs().clone(),
+            grant.owner_child_process_verbs().clone(),
+            grant.scopes().clone(),
+        )
+        .unwrap();
+        let mut store = ControllerAssignmentGrantStore::new(expectation).unwrap();
+
+        assert_eq!(
+            store.accept(grant.clone()).unwrap(),
+            GrantDisposition::Installed
+        );
+        assert_eq!(store.accept(grant).unwrap(), GrantDisposition::Duplicate);
+
+        let mut stale = ControllerAssignmentGrant::decode(
+            &ControllerAssignmentGrant::from_lease(&lease)
+                .encode()
+                .unwrap(),
+        )
+        .unwrap();
+        stale.assignment.session.session_generation = ReconnectGeneration::new(5).unwrap();
+        assert_eq!(
+            store.accept(stale).unwrap_err(),
+            AssignmentError::SessionBindingMismatch
+        );
+    }
+
+    #[test]
+    fn assignment_grant_store_binds_same_generation_to_exact_session_owner() {
+        let first_resource = process("guest-process", "Guest/dev-vm", 7);
+        let second_resource = process("guest-process-second", "Guest/dev-vm", 8);
+        let role = role();
+        let first_owner = ResourceRef::parse("Process/controller-first").unwrap();
+        let second_owner = ResourceRef::parse("Process/controller-second").unwrap();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let first_lease = registry
+            .admit(request(&first_resource, &role, 2, 3, 1).with_session_owner(first_owner.clone()))
+            .unwrap();
+        let second_lease = registry
+            .admit(request(&second_resource, &role, 2, 3, 1).with_session_owner(second_owner))
+            .unwrap();
+        let first_grant = ControllerAssignmentGrant::from_lease(&first_lease);
+        let second_grant = ControllerAssignmentGrant::from_lease(&second_lease);
+        let expectation = ControllerAssignmentExpectation::new(
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            first_lease.target().clone(),
+            first_lease.identity().provider_generation(),
+            first_lease.identity().controller_generation(),
+            first_lease.identity().session_generation(),
+            first_grant.resource_types().clone(),
+            first_grant.primary_verbs().clone(),
+            first_grant.owner_child_process_verbs().clone(),
+            first_grant.scopes().clone(),
+        )
+        .unwrap()
+        .with_session_owner(first_owner)
+        .unwrap();
+        let mut store = ControllerAssignmentGrantStore::new(expectation).unwrap();
+
+        assert_eq!(
+            store.accept(second_grant).unwrap_err(),
+            AssignmentError::SessionBindingMismatch
+        );
+        assert_eq!(
+            store.accept(first_grant).unwrap(),
+            GrantDisposition::Installed
+        );
+    }
+
+    #[test]
+    fn assignment_grant_store_rejects_wrong_generation_target_epoch_and_widening() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 2, 3, 4)).unwrap();
+        let grant = ControllerAssignmentGrant::from_lease(&lease);
+        let expectation = ControllerAssignmentExpectation::new(
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            lease.target().clone(),
+            lease.identity().provider_generation(),
+            lease.identity().controller_generation(),
+            lease.identity().session_generation(),
+            grant.resource_types().clone(),
+            grant.primary_verbs().clone(),
+            grant.owner_child_process_verbs().clone(),
+            grant.scopes().clone(),
+        )
+        .unwrap();
+
+        let mut wrong_provider_generation =
+            ControllerAssignmentGrantStore::new(expectation.clone()).unwrap();
+        let mut forged = grant.clone();
+        forged.assignment.session.provider_generation = ResourceGeneration::new(9).unwrap();
+        assert_eq!(
+            wrong_provider_generation.accept(forged).unwrap_err(),
+            AssignmentError::ProviderGenerationMismatch
+        );
+
+        let mut wrong_controller_generation =
+            ControllerAssignmentGrantStore::new(expectation.clone()).unwrap();
+        let mut forged = grant.clone();
+        forged.assignment.session.controller_generation = ControllerGeneration::new(9).unwrap();
+        assert_eq!(
+            wrong_controller_generation.accept(forged).unwrap_err(),
+            AssignmentError::ControllerGenerationMismatch
+        );
+
+        let mut wrong_target = ControllerAssignmentGrantStore::new(expectation).unwrap();
+        let mut forged = grant.clone();
+        forged.assignment.session.target = AssignmentTarget::Execution {
+            kind: d2b_contracts_resource::v3::PlacementTargetKind::Host,
+            reference: ResourceRef::parse("Host/other").unwrap(),
+        };
+        assert_eq!(
+            wrong_target.accept(forged).unwrap_err(),
+            AssignmentError::TargetMismatch
+        );
+
+        let mut installed = ControllerAssignmentGrantStore::new(
+            ControllerAssignmentExpectation::new_without_target(
+                role.provider_ref().clone(),
+                role.role_ref().clone(),
+                lease.identity().provider_generation(),
+                lease.identity().controller_generation(),
+                lease.identity().session_generation(),
+                grant.resource_types().clone(),
+                grant.primary_verbs().clone(),
+                grant.owner_child_process_verbs().clone(),
+                grant.scopes().clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        installed.accept(grant.clone()).unwrap();
+        let mut stale = grant.clone();
+        stale.assignment.epoch = AssignmentEpoch::new(99).unwrap();
+        assert_eq!(
+            installed.accept(stale).unwrap_err(),
+            AssignmentError::AssignmentConflict
+        );
+        let mut widened = grant.clone();
+        widened
+            .resource_types
+            .insert(ResourceTypeName::parse("Host").unwrap());
+        assert_eq!(
+            installed.accept(widened).unwrap_err(),
+            AssignmentError::QueryWidened
+        );
+
+        let mut widened_primary = grant.clone();
+        widened_primary
+            .primary_verbs
+            .insert(AssignmentVerb::UpdateSpec);
+        assert_eq!(
+            ControllerAssignmentGrantStore::new(
+                ControllerAssignmentExpectation::new_without_target(
+                    role.provider_ref().clone(),
+                    role.role_ref().clone(),
+                    lease.identity().provider_generation(),
+                    lease.identity().controller_generation(),
+                    lease.identity().session_generation(),
+                    grant.resource_types().clone(),
+                    grant.primary_verbs().clone(),
+                    grant.owner_child_process_verbs().clone(),
+                    grant.scopes().clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+            .accept(widened_primary)
+            .unwrap_err(),
+            AssignmentError::QueryWidened
+        );
+
+        let mut missing_owner_verb = grant.clone();
+        missing_owner_verb
+            .owner_child_process_verbs
+            .remove(&AssignmentVerb::Delete);
+        assert_eq!(
+            ControllerAssignmentGrantStore::new(
+                ControllerAssignmentExpectation::new_without_target(
+                    role.provider_ref().clone(),
+                    role.role_ref().clone(),
+                    lease.identity().provider_generation(),
+                    lease.identity().controller_generation(),
+                    lease.identity().session_generation(),
+                    grant.resource_types().clone(),
+                    grant.primary_verbs().clone(),
+                    grant.owner_child_process_verbs().clone(),
+                    grant.scopes().clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+            .accept(missing_owner_verb)
+            .unwrap_err(),
+            AssignmentError::QueryWidened
+        );
+    }
+
+    #[test]
+    fn assignment_grant_transport_rejects_oversized_and_reordered_payloads() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 2, 3, 4)).unwrap();
+        let grant = ControllerAssignmentGrant::from_lease(&lease);
+        assert_eq!(
+            ControllerAssignmentGrant::decode(&vec![
+                0;
+                super::MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES
+                    + 1
+            ])
+            .unwrap_err(),
+            super::AssignmentTransportError::TooLarge
+        );
+
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&grant.encode().unwrap()).unwrap();
+        value["primaryVerbs"].as_array_mut().unwrap().reverse();
+        assert_eq!(
+            ControllerAssignmentGrant::decode(&serde_json::to_vec(&value).unwrap()).unwrap_err(),
+            super::AssignmentTransportError::Malformed
+        );
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&grant.encode().unwrap()).unwrap();
+        value["ownerChildProcessVerbs"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        let canonical = super::CanonicalJsonValue::parse(&serde_json::to_vec(&value).unwrap())
+            .unwrap()
+            .to_canonical_bytes();
+        assert_eq!(
+            ControllerAssignmentGrant::decode(&canonical).unwrap_err(),
+            super::AssignmentTransportError::Malformed
+        );
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&grant.encode().unwrap()).unwrap();
+        let primary = legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("primaryVerbs")
+            .unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("allowedVerbs".to_owned(), primary);
+        assert_eq!(
+            ControllerAssignmentGrant::decode(
+                &super::CanonicalJsonValue::parse(&serde_json::to_vec(&legacy).unwrap())
+                    .unwrap()
+                    .to_canonical_bytes(),
+            )
+            .unwrap_err(),
+            super::AssignmentTransportError::Malformed
+        );
+
+        let second = process("guest-process-second", "Guest/dev-vm", 8);
+        let second_lease = registry.admit(request(&second, &role, 2, 3, 4)).unwrap();
+        let first_grant = ControllerAssignmentGrant::from_lease(&lease);
+        let second_grant = ControllerAssignmentGrant::from_lease(&second_lease);
+        let expectation = ControllerAssignmentExpectation::new(
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            lease.target().clone(),
+            lease.identity().provider_generation(),
+            lease.identity().controller_generation(),
+            lease.identity().session_generation(),
+            first_grant.resource_types().clone(),
+            first_grant.primary_verbs().clone(),
+            first_grant.owner_child_process_verbs().clone(),
+            first_grant.scopes().clone(),
+        )
+        .unwrap();
+        let mut store = ControllerAssignmentGrantStore::new(expectation).unwrap();
+        store.accept(second_grant).unwrap();
+        assert_eq!(
+            store.accept(first_grant).unwrap_err(),
+            AssignmentError::StaleAssignment
+        );
+    }
+
+    #[test]
+    fn assignment_grant_revocation_preserves_observation_without_authority() {
+        let resource = process("process", "Guest/dev-vm", 7);
+        let replacement_resource = process("process", "Guest/dev-vm", 8);
+        let role = role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry.admit(request(&resource, &role, 2, 3, 4)).unwrap();
+        let grant = ControllerAssignmentGrant::from_lease(&lease);
+        let expectation = ControllerAssignmentExpectation::new_without_target(
+            role.provider_ref().clone(),
+            role.role_ref().clone(),
+            lease.identity().provider_generation(),
+            lease.identity().controller_generation(),
+            lease.identity().session_generation(),
+            grant.resource_types().clone(),
+            grant.primary_verbs().clone(),
+            grant.owner_child_process_verbs().clone(),
+            grant.scopes().clone(),
+        )
+        .unwrap();
+        let mut store = ControllerAssignmentGrantStore::new(expectation).unwrap();
+        store.accept(grant.clone()).unwrap();
+        let revocation =
+            ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), lease.identity())
+                .unwrap();
+
+        assert_eq!(
+            store.accept_encoded(&revocation).unwrap(),
+            GrantDisposition::Revoked
+        );
+        assert!(store.get(lease.identity().resource_uid()).is_none());
+        assert_eq!(
+            store.accept_encoded(&revocation).unwrap(),
+            GrantDisposition::Duplicate
+        );
+        assert_eq!(
+            store.accept(grant.clone()).unwrap_err(),
+            AssignmentError::StaleAssignment
+        );
+        registry.revoke_assignment(lease.identity());
+        let replacement = registry
+            .admit(request(&replacement_resource, &role, 2, 3, 4))
+            .unwrap();
+        let replacement_grant = replacement.assignment_grant();
+        assert_eq!(
+            store.accept(replacement_grant.clone()).unwrap(),
+            GrantDisposition::Installed
+        );
+        assert_eq!(
+            store.accept(replacement_grant).unwrap(),
+            GrantDisposition::Duplicate
+        );
+        assert!(store.get(replacement.identity().resource_uid()).is_some());
+        assert_eq!(
+            store.accept(grant).unwrap_err(),
+            AssignmentError::StaleAssignment
+        );
+        store.revoke();
+        assert!(!store.is_active());
+        assert!(store.get(lease.identity().resource_uid()).is_none());
+        assert_eq!(
+            store.accept_encoded(&revocation).unwrap_err(),
+            super::AssignmentGrantError::Assignment(AssignmentError::SessionRevoked)
         );
     }
 }

@@ -6,9 +6,10 @@ use d2b_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
     bundle_resolver::{
         BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-        intent_id_keys_rotate, intent_id_nft_env, intent_id_nft_host, intent_id_nm_unmanaged_host,
-        intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_socket,
-        intent_id_sysctl, intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
+        intent_id_keys_rotate, intent_id_legacy_runner, intent_id_nft_env, intent_id_nft_host,
+        intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
+        intent_id_socket, intent_id_sysctl, intent_id_trust, intent_id_usbip_bind,
+        intent_id_usbip_firewall,
     },
     closures::{ClosureGeneration, ClosureMetadata},
     error::{BrokerOp, Error, SemverRange, Version},
@@ -285,7 +286,7 @@ fn bundle_op_id_format_strings_are_wire_stable() {
         "usbip-bind:env:work:vm:work-vm:bus:1-1.4"
     );
     assert_eq!(
-        intent_id_runner("work-vm", "ch-runner"),
+        intent_id_legacy_runner("work-vm", "ch-runner"),
         "runner:vm:work-vm:role:ch-runner"
     );
     assert_eq!(
@@ -679,7 +680,7 @@ fn bundle_resolver_uses_real_bus_ids_when_present() {
 fn bundle_resolver_round_trips_runner_intents() {
     let r = build_synthetic_resolver();
     let intent = r
-        .find_runner_intent(&intent_id_runner("work-vm", "ch-runner"))
+        .find_runner_intent(&intent_id_legacy_runner("work-vm", "ch-runner"))
         .expect("runner");
     assert_eq!(intent.vm_name, "work-vm");
     assert_eq!(intent.role_id, "ch-runner");

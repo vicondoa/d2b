@@ -527,9 +527,6 @@ fn guest_static_context_uses_reduced_guest_lock() {
             .join("x86_64-linux/x86_64-unknown-linux-musl/guest-static/production/closure.json"),
     );
     assert_eq!(closure["source_authority"], "packages/Cargo.guest.lock");
-    assert_eq!(
-        closure["roots"],
-        serde_json::json!(["d2bd", "d2b-broker"])
-    );
+    assert_eq!(closure["roots"], serde_json::json!(["d2bd", "d2b-broker"]));
     assert_ne!(closure["lock_sha256"], Value::String(String::new()));
 }

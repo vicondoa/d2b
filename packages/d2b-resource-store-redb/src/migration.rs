@@ -1070,6 +1070,7 @@ fn parse_stage_prepared_marker(bytes: &[u8], identity: &StoreIdentity) -> StageM
     if meta.store_uuid != identity.store_uuid().as_str()
         || meta.zone_name != identity.zone().as_str()
         || meta.zone_uid != identity.zone_uid().as_str()
+        || meta.store_epoch != identity.store_epoch()
         || meta.created_at != identity.created_at()
     {
         return StageMarkerState::Unsafe;
@@ -1511,6 +1512,7 @@ mod tests {
                 policy_revision: 7,
                 resulting_revision: 0,
                 requires_broker: false,
+                defer_broker_evidence: false,
                 mutations: vec![crate::transaction::AuditOutboxMutation {
                     verb: "create".to_owned(),
                     resource_type: "Host".to_owned(),
@@ -1594,6 +1596,7 @@ mod tests {
                 policy_revision: 7,
                 resulting_revision: 0,
                 requires_broker: false,
+                defer_broker_evidence: false,
                 mutations: vec![crate::transaction::AuditOutboxMutation {
                     verb: "create".to_owned(),
                     resource_type: "Host".to_owned(),

@@ -69,8 +69,7 @@ impl ConfigSyncResponse {
     /// Decode the response and reapply all document bounds.
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         if self.identifier != GUEST_CONFIG_IDENTIFIER
-            || self.content_base64.len()
-                > MAX_CONFIG_ENCODED_BYTES
+            || self.content_base64.len() > MAX_CONFIG_ENCODED_BYTES
         {
             return Err(ConfigError::InvalidRequest);
         }
@@ -114,9 +113,7 @@ impl ConfigStageRequest {
     /// Decode and validate the staged document.
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         validate_identifier(&self.identifier)?;
-        if self.content_base64.len()
-            > MAX_CONFIG_ENCODED_BYTES
-        {
+        if self.content_base64.len() > MAX_CONFIG_ENCODED_BYTES {
             return Err(ConfigError::DocumentTooLarge);
         }
         let bytes = STANDARD

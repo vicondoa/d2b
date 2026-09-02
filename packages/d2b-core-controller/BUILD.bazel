@@ -165,6 +165,17 @@ rust_test(
 )
 
 rust_test(
+    name = "owned_children",
+    srcs = ["tests/owned_children.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_core_controller",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "d2b_core_controller_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core_controller",

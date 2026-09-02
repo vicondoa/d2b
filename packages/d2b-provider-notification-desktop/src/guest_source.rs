@@ -1,10 +1,7 @@
 //! Guest-source stream validation.
 
 use crate::{Category, GuestSourceConfig, NotificationRequest, SessionEvidence};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use std::collections::BTreeSet;
 
 /// A Guest source bound to an allowlisted category set.

@@ -1,7 +1,4 @@
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    execution_policy::ExecutionDomain,
-};
+use d2b_contracts_resource::v3::{ResourceRef, execution_policy::ExecutionDomain};
 use d2b_process_conformance::testing::{ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
     AdoptionOutcome, IdentityBinding, ProcessIdentityDigest, ProcessProvider, WaitReapOwner,

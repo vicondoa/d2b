@@ -5,10 +5,7 @@
 //! used for both writing and checking rather than a general-purpose JSON
 //! formatter.
 
-use d2b_contracts_provider::v3::{
-    ProviderContractError,
-    ProviderManifest,
-};
+use d2b_contracts_provider::v3::{ProviderContractError, ProviderManifest};
 use d2b_contracts_resource::v3::canonical_json_bytes;
 use serde_json::Error as JsonError;
 
@@ -80,9 +77,7 @@ pub fn emit_canonical(manifest: &ProviderManifest) -> Vec<u8> {
 
 /// Validate the signed placement, target-artifact, and EffectPort contract
 /// before a manifest enters a package or catalog.
-pub fn validate_for_installation(
-    manifest: &ProviderManifest,
-) -> Result<(), ProviderContractError> {
+pub fn validate_for_installation(manifest: &ProviderManifest) -> Result<(), ProviderContractError> {
     manifest.validate_installation_contract()
 }
 

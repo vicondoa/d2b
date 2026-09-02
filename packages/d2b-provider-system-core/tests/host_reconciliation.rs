@@ -94,11 +94,9 @@ fn a_user_domain_host_must_name_the_exact_user_it_resolves() {
     // reconciler keeps its own check as defence in depth; this case pins
     // where the rule is actually enforced, so a later relaxation of the
     // primitive is visible here rather than silent.
-    use d2b_contracts_resource::v3::{
-    execution_policy::{
+    use d2b_contracts_resource::v3::execution_policy::{
         BudgetSpec, ExecutionPolicy, PrimitiveSpecError,
-    },
-};
+    };
 
     assert_eq!(
         ExecutionPolicy::new(

@@ -11,6 +11,7 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         "ApplyHostGenerationHandoff",
         "ExportBrokerAudit",
         "ValidateBundle",
+        "ConsumeLifecycleLease",
     ] {
         assert!(
             operations.contains(&operation),

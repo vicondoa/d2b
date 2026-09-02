@@ -1,6 +1,7 @@
 # Cloud Hypervisor Provider integration
 
-Hermetic lifecycle tests use injected process and ComponentSession effect ports:
+Hermetic lifecycle tests use injected Resource API and ComponentSession seams;
+the production controller has no direct broker, store, or VMM effect port:
 
 ```text
 bazel test //packages/d2b-provider-runtime-cloud-hypervisor:all

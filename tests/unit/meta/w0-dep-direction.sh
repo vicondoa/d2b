@@ -80,7 +80,7 @@ def check_lints(crate: str, manifest: dict) -> bool:
 
 
 allowed = {
-    "d2b-realm-core": {"d2b-contracts"},
+    "d2b-contracts": set(),
 }
 members: dict[str, tuple[str, dict]] = {}
 workspace_members = set(workspace.get("members", []))

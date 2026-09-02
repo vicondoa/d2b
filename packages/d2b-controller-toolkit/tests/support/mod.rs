@@ -2,15 +2,8 @@ use std::fs::OpenOptions;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
-    canonical_digest,
+    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
+    ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
 };
 use d2b_resource_store::mutation_seal::{MutationSealBody, MutationSealIssuer, mutation_seal_pair};
 use d2b_resource_store::{
@@ -129,6 +122,7 @@ pub async fn commit_host(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                configuration_generation: None,
                 assignment: None,
             },
             None,

@@ -1,10 +1,7 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceName,
-    ResourceTypeName,
-    Timestamp,
+    ResourceBundleGenerationId, ResourceName, ResourceTypeName, Timestamp,
 };
 use d2b_core_controller::{
     cleanup::{

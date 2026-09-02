@@ -22,11 +22,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 /// ComponentSession generation before its service map is registered.
 pub trait ConfigServiceBackend: Send + Sync {
     /// Dispatch one already decoded operation payload.
-    fn dispatch(
-        &self,
-        operation: ConfigOperation,
-        payload: Value,
-    ) -> Result<Value, ConfigError>;
+    fn dispatch(&self, operation: ConfigOperation, payload: Value) -> Result<Value, ConfigError>;
 }
 
 /// Guest-side backend for the single host-declared configuration working copy.
@@ -58,8 +54,11 @@ impl GuestConfigReader {
         let request = ConfigSyncRequest::new(guest_ref.clone())?;
         let path = path.into();
         validate_reader_path(&path)?;
-        let evidence =
-            GuestSessionEvidence::new(request.guest_ref.clone(), boot_identity_digest, reconnect_generation)?;
+        let evidence = GuestSessionEvidence::new(
+            request.guest_ref.clone(),
+            boot_identity_digest,
+            reconnect_generation,
+        )?;
         Ok(Self {
             guest_ref,
             evidence,
@@ -74,11 +73,7 @@ impl GuestConfigReader {
 }
 
 impl ConfigServiceBackend for GuestConfigReader {
-    fn dispatch(
-        &self,
-        operation: ConfigOperation,
-        payload: Value,
-    ) -> Result<Value, ConfigError> {
+    fn dispatch(&self, operation: ConfigOperation, payload: Value) -> Result<Value, ConfigError> {
         if operation != ConfigOperation::ReadGuestConfig {
             return Err(ConfigError::Unauthorized);
         }
@@ -157,8 +152,8 @@ impl ConfigNixosClient {
         Request: Serialize,
         Response: DeserializeOwned,
     {
-        let payload = serde_json::to_vec(request)
-            .map_err(|_| ttrpc::Error::RpcStatus(invalid_status()))?;
+        let payload =
+            serde_json::to_vec(request).map_err(|_| ttrpc::Error::RpcStatus(invalid_status()))?;
         let method = operation
             .as_str()
             .strip_prefix("ConfigNixosService/")
@@ -233,7 +228,10 @@ fn validate_reader_path(path: &Path) -> Result<(), ConfigError> {
         return Err(ConfigError::InvalidRequest);
     }
     for component in path.components() {
-        if matches!(component, Component::CurDir | Component::ParentDir | Component::Prefix(_)) {
+        if matches!(
+            component,
+            Component::CurDir | Component::ParentDir | Component::Prefix(_)
+        ) {
             return Err(ConfigError::InvalidRequest);
         }
     }
@@ -273,13 +271,12 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
     let file_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut directory = open("/", directory_flags, Mode::empty()).map_err(map_open_error)?;
     for parent in parents {
-        directory = openat(&directory, *parent, directory_flags, Mode::empty())
-            .map_err(map_open_error)?;
+        directory =
+            openat(&directory, *parent, directory_flags, Mode::empty()).map_err(map_open_error)?;
     }
     let file = openat(&directory, *leaf, file_flags, Mode::empty()).map_err(map_open_error)?;
     let metadata = fstat(&file).map_err(|_| ConfigError::Unavailable)?;
-    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
-        || metadata.st_nlink != 1
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile || metadata.st_nlink != 1
     {
         return Err(ConfigError::InvalidRequest);
     }

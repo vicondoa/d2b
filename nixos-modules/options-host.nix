@@ -92,25 +92,56 @@ let
   };
 in
 {
+  options.d2b._hostToolPackages = {
+    d2b = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved host d2b CLI package.";
+    };
+
+    d2bd = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved host d2bd package.";
+    };
+
+    d2bBroker = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved shared d2b-broker package.";
+    };
+
+    d2bUnsafeLocalHelper = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved same-uid unsafe-local user helper package.";
+    };
+
+    d2bWaylandProxy = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved immutable d2b Wayland proxy package.";
+    };
+
+  };
+
   options.d2b.host.usb.securityKey = {
     enable = lib.mkEnableOption ''
       Host-side USB security-key proxy.
 
       When enabled, the d2b host broker is authorised to open the
       configured FIDO/CTAP hidraw node(s) and relay CTAP HID traffic
-      to requesting guest VMs over AF_VSOCK. Guest VMs must
-      individually opt in with
-      `d2b.vms.<name>.usb.securityKey.enable = true`.
-
-      Phase 1 note: security-key proxying and YubiKey USBIP
-      passthrough (`d2b.vms.<name>.usbip.yubikey`) are mutually
-      exclusive per VM; a VM cannot simultaneously use both proxy
-      modes for the same physical key. The eval-time assertion in
-      `nixos-modules/assertions.nix` enforces this constraint.
+      to requesting Zone Guest resources over AF_VSOCK. Guest
+      bindings select the frontend through the typed Device and
+      Credential resource contracts.
 
       Disabling this option removes all udev group grants and broker
-      capability flags for hidraw access; it does NOT affect the
-      legacy `d2b.site.yubikey.enable` USBIP path.
+      capability flags for hidraw access.
     '';
 
     devices = lib.mkOption {
@@ -128,7 +159,7 @@ in
       '';
       description = ''
         List of FIDO/CTAP security keys the host broker is allowed to
-        open for VM-side CTAP HID relay. Each entry is a stable selector
+        open for Guest-side CTAP HID relay. Each entry is a stable selector
         (vendorId + productId + optional serial); raw `/dev/hidrawN`
         paths and USB bus IDs are NOT accepted.
 

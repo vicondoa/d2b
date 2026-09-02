@@ -58,10 +58,6 @@ let
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
-    d2b.envs.work = {
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
   };
 
   entryFor = name:
@@ -84,10 +80,45 @@ let
 
   names = [ "provider-audio" "provider-storage" "provider-wayland" ];
 
+  digestProvider = pkgs.runCommand "artifact-provider-digest" { } ''
+    mkdir -p "$out/bin" "$out/share/d2b/provider"
+    printf 'provider\n' > "$out/bin/provider"
+    chmod +x "$out/bin/provider"
+    printf '{"name":"provider-digest"}\n' \
+      > "$out/share/d2b/provider/manifest.json"
+  '';
+  digestSystem = pkgs.runCommand "artifact-system-digest" { } ''
+    mkdir -p "$out/bin" "$out/etc"
+    printf 'boot\n' > "$out/bin/boot"
+    printf 'NAME=d2b-test\n' > "$out/etc/os-release"
+  '';
+
   evaluate = modules: (nixosSystem {
     inherit system;
     modules = [ flake.nixosModules.default base ] ++ modules;
   }).config.d2b._providerCatalog.json;
+
+  digestCatalog = (nixosSystem {
+    inherit system;
+    modules = [
+      flake.nixosModules.default
+      base
+      {
+        d2b.artifacts = {
+          provider-digest = {
+            package = digestProvider;
+            type = "provider";
+            catalog = entryFor "provider-digest";
+          };
+          system-digest = {
+            package = digestSystem;
+            type = "nixos-system";
+            catalog = null;
+          };
+        };
+      }
+    ];
+  }).config.d2b._artifactCatalogV3.catalogData;
 
   # Evaluation A: one module, attribute-set literal, one authoring order.
   catalogA = evaluate [
@@ -151,4 +182,11 @@ else
     negativeControlDiffers = true;
     catalogBytes = builtins.stringLength catalogA;
     artifactIds = names;
+    digestContract = {
+      entries = digestCatalog.entries;
+      providerPath = toString digestProvider;
+      systemPath = toString digestSystem;
+      systemExpected =
+        "sha256:2073c4caf2fffb61dd80ff06ff1e6f45927e492c7b57b29fbc85624b3b09fac2";
+    };
   }

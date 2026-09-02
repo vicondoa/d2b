@@ -95,30 +95,64 @@ let
       package = volumeArtifact;
       type = "provider";
     };
+    d2b.artifacts.volume-virtiofs = {
+      package = volumeArtifact;
+      type = "provider";
+    };
     d2b.zones.local-root.resources = {
       alice.type = "User";
       volume-local = {
         type = "Provider";
         spec = {
           artifactId = "volume-local";
-          config = { };
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
+      volume-virtiofs = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-virtiofs";
+          config.controllerExecutionRef = "Host/host-system";
         };
       };
       host-system = {
         type = "Host";
         spec.providerRef = "Provider/volume-local";
       };
+      tpm = {
+        type = "Device";
+        spec.providerRef = "Provider/device-tpm";
+      };
       state = volumeResource;
     };
   };
 
   validVolume = (mkEval [ volumeBase ]).config;
+  nixClosureVolume = (mkEval [
+    volumeBase
+    {
+      d2b.artifacts.guest-system = {
+        package = pkgs.writeText "d2b-test-guest-system" "guest-system";
+        type = "nixos-system";
+      };
+      d2b.zones.local-root.resources.state.spec.source = {
+        executionRef = "Host/host-system";
+        settings = {
+          kind = "nix-closure";
+          systemArtifactId = "guest-system";
+        };
+      };
+    }
+  ]).config;
   generatedGuestVolume = (mkEval [
     volumeBase
     {
       d2b.zones.local-root.resources.guest = {
         type = "Guest";
-        spec.tpmEnabled = true;
+        spec.deviceAttachments = [{
+          deviceRef = "Device/tpm";
+          exclusive = true;
+        }];
       };
     }
   ]).config;
@@ -144,6 +178,13 @@ let
           socketGroup = null;
         };
       }];
+      d2b.zones.local-root.resources.volume-virtiofs = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-virtiofs";
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
       d2b.zones.local-root.resources.guest = {
         type = "Guest";
         spec = { };
@@ -325,6 +366,23 @@ in
     expected = true;
   };
 
+  "volume-mounts/v3-nix-closure-source-binds-system-artifact" = {
+    expr =
+      let
+        resources =
+          nixClosureVolume.d2b._bundle.zoneResourceBundlesV3.local-root.data.resources;
+        state = builtins.head (lib.filter (resource:
+          resource.type == "Volume" && resource.metadata.name == "state") resources);
+      in {
+        kind = state.spec.source.settings.kind;
+        artifact = state.spec.source.settings.systemArtifactId;
+      };
+    expected = {
+      kind = "nix-closure";
+      artifact = "guest-system";
+    };
+  };
+
   "volume-mounts/v3-valid-resource-reaches-topical-compiler" = {
     expr = validVolume.d2b._resourceCompiler.volumes.byZone.local-root.state.type;
     expected = "Volume";
@@ -418,11 +476,14 @@ in
   "volume-mounts/v3-virtiofs-attachment-emits-vfd-user-and-provider" = {
     expr = {
       vfd = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root."vol-state-vfd".type;
-      provider = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root.volume-virtiofs.spec.artifactId;
+      provider = attachmentVolume.d2b.zones.local-root.resources.volume-virtiofs.spec.artifactId;
+      providerSynthesized = builtins.hasAttr "volume-virtiofs"
+        attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root;
     };
     expected = {
       vfd = "User";
-      provider = "volume-virtiofs-provider";
+      provider = "volume-virtiofs";
+      providerSynthesized = false;
     };
   };
   "volume-mounts/v3-volume-bundle-digest-covers-all-resources" = {

@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use d2b_contracts_resource::v3::resource_schema::framed_canonical_digest;
 use d2b_contracts_resource::v3::{
     CanonicalJsonError, CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceRef,
-    ResourceTypeName, SchemaFingerprint, ZoneId, canonical_json_bytes,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, canonical_json_bytes,
 };
 
 /// Bundle schema version for the resource-plane contract.
@@ -268,6 +268,8 @@ pub struct ZoneBundle {
     schema_version: u32,
     bundle_version: u32,
     zone: ZoneId,
+    #[serde(default)]
+    zone_uid: Option<ResourceUid>,
     content_hash: ResourceBundleGenerationId,
     artifact_catalog_digest: SchemaFingerprint,
     generated_at: String,
@@ -291,6 +293,7 @@ impl ZoneBundle {
             schema_version: ZONE_BUNDLE_SCHEMA_VERSION,
             bundle_version: ZONE_BUNDLE_VERSION,
             zone,
+            zone_uid: None,
             content_hash,
             artifact_catalog_digest,
             generated_at: ZONE_BUNDLE_GENERATED_AT.to_owned(),
@@ -299,12 +302,19 @@ impl ZoneBundle {
         })
     }
 
+    /// Bind the bundle to the immutable Zone self-resource identity.
+    pub fn with_zone_uid(mut self, zone_uid: ResourceUid) -> Self {
+        self.zone_uid = Some(zone_uid);
+        self
+    }
+
     /// Validate an already-encoded envelope and its declared content hash.
     #[allow(clippy::too_many_arguments)]
     fn from_wire(
         schema_version: u32,
         bundle_version: u32,
         zone: ZoneId,
+        zone_uid: Option<ResourceUid>,
         content_hash: ResourceBundleGenerationId,
         artifact_catalog_digest: SchemaFingerprint,
         generated_at: String,
@@ -332,6 +342,7 @@ impl ZoneBundle {
             schema_version,
             bundle_version,
             zone,
+            zone_uid,
             content_hash,
             artifact_catalog_digest,
             generated_at,
@@ -364,6 +375,11 @@ impl ZoneBundle {
     /// Borrow the Zone this bundle configures.
     pub const fn zone(&self) -> &ZoneId {
         &self.zone
+    }
+
+    /// Borrow the immutable Zone self-resource identity, when supplied.
+    pub const fn zone_uid(&self) -> Option<&ResourceUid> {
+        self.zone_uid.as_ref()
     }
 
     /// Borrow the content-derived generation identity.
@@ -426,6 +442,8 @@ impl<'de> Deserialize<'de> for ZoneBundle {
             schema_version: u32,
             bundle_version: u32,
             zone: ZoneId,
+            #[serde(default)]
+            zone_uid: Option<ResourceUid>,
             content_hash: ResourceBundleGenerationId,
             artifact_catalog_digest: SchemaFingerprint,
             generated_at: String,
@@ -438,6 +456,7 @@ impl<'de> Deserialize<'de> for ZoneBundle {
             wire.schema_version,
             wire.bundle_version,
             wire.zone,
+            wire.zone_uid,
             wire.content_hash,
             wire.artifact_catalog_digest,
             wire.generated_at,

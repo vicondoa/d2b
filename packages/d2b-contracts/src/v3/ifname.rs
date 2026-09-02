@@ -12,7 +12,7 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::identity::ResourceName;
+use crate::identity::{ResourceName, ResourceUid};
 
 /// Maximum visible bytes in a Linux interface name.
 pub const MAX_IFNAME_BYTES: usize = 15;
@@ -292,6 +292,61 @@ pub fn derive_ifname(
     IfName::parse(format!("{prefix}{}{suffix}", role.tag()))
 }
 
+/// Derive a Network interface name from immutable Zone and Network identity.
+///
+/// Resource names are deliberately excluded from the kernel locator. The
+/// resulting name is bounded and deterministic, but authorization still
+/// requires the complete Network provenance at the effect boundary.
+pub fn derive_network_ifname(
+    zone_uid: &ResourceUid,
+    network_uid: &ResourceUid,
+    role: NetworkIfRole,
+    attachment_uid: Option<&ResourceUid>,
+) -> Result<IfName, IfNameError> {
+    let identity = format!(
+        "zone:{}:network:{}",
+        zone_uid.as_str(),
+        network_uid.as_str()
+    );
+    derive_ifname(
+        &identity,
+        role,
+        attachment_uid.map(ResourceUid::as_str),
+        None,
+    )
+}
+
+/// Derive a bounded route locator from immutable Network identity.
+pub fn derive_network_route_name(
+    zone_uid: &ResourceUid,
+    network_uid: &ResourceUid,
+    index: usize,
+) -> String {
+    let identity = format!(
+        "zone:{}:network:{}",
+        zone_uid.as_str(),
+        network_uid.as_str()
+    );
+    let mut hash = FNV_OFFSET;
+    hash_bytes(&mut hash, identity.as_bytes());
+    hash_bytes(&mut hash, &[0x1f]);
+    hash_bytes(&mut hash, &index.to_be_bytes());
+    let suffix = base32_crockford(hash, HASH_SUFFIX_LEN).to_ascii_lowercase();
+    format!("d2b-r{suffix}")
+}
+
+/// Derive a stable Zone-local child resource name from Network identity.
+pub fn derive_network_child_name(network_uid: &ResourceUid, kind: &str) -> String {
+    let mut hash = FNV_OFFSET;
+    hash_bytes(&mut hash, b"d2b-network-child/v1");
+    hash_bytes(&mut hash, &[0]);
+    hash_bytes(&mut hash, network_uid.as_str().as_bytes());
+    hash_bytes(&mut hash, &[0]);
+    hash_bytes(&mut hash, kind.as_bytes());
+    let suffix = base32_crockford(hash, HASH_SUFFIX_LEN).to_ascii_lowercase();
+    format!("net-{kind}-{suffix}")
+}
+
 /// Adapt the established host derivation without changing its byte contract.
 ///
 /// The hash input is `network || 0x1f || guest-or-empty || 0x1e || role-tag`.
@@ -421,6 +476,22 @@ mod tests {
         )
         .unwrap();
         assert_ne!(tap, other_guest);
+    }
+
+    #[test]
+    fn network_derivations_bind_zone_and_network_uids() {
+        let zone_a = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let zone_b = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let network = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let bridge_a =
+            derive_network_ifname(&zone_a, &network, NetworkIfRole::LanBridge, None).unwrap();
+        let bridge_b =
+            derive_network_ifname(&zone_b, &network, NetworkIfRole::LanBridge, None).unwrap();
+        assert_ne!(bridge_a, bridge_b);
+        assert_ne!(
+            derive_network_route_name(&zone_a, &network, 0),
+            derive_network_route_name(&zone_b, &network, 0)
+        );
     }
 
     #[test]

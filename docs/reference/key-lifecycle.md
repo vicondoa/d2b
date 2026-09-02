@@ -1,152 +1,47 @@
-# SSH key lifecycle
+# Guest key lifecycle
 
-Reference for d2b-managed SSH identities, guest authorized-key staging,
-and host-key trust state.
+**Diataxis category:** reference.
 
-## Two different key surfaces
+d2b keeps operator identity, Guest host-key trust, and Guest runtime
+credentials separate. Private keys are host state owned by the configured
+identity owner; they are never placed in a public Resource, manifest, schema,
+or CLI response.
 
-d2b manages two related but distinct things:
+## Managed identity
 
-1. **The operator SSH identity** used by `d2b` for guest SSH.
-2. **The guest staging share** under `/var/lib/d2b/vms/<vm>/host-keys/`,
-   which contains only `host.pub` and `user-authorized-keys` for guest boot-time
-   consumption.
+The host may declare additional authorized public keys through
+`d2b.site.userAuthorizedKeys`. The Guest activation Provider combines those
+keys with its managed public key inside the Guest execution context. The
+daemon resolves the target as `Guest/<name>` in the selected Zone.
 
-The private key never appears in the public manifest and is never copied into
-that guest staging share.
+```bash
+d2b activation keys list --zone work
+d2b activation keys show Guest/work-app --zone work
+d2b activation keys rotate Guest/work-app --zone work --apply
+```
 
-## Managed key path resolution
+Rotation is a daemon/broker operation with exact Guest UID, Provider
+generation, and revision fencing. Operator-supplied keys remain owned by the
+consumer and are not silently replaced.
 
-`d2b` resolves the SSH identity path like this:
+## Host-key trust
 
-- if `d2b.vms.<vm>.ssh.keyPath` is set, the CLI uses that path for
-  SSH-driven lifecycle operations;
-- otherwise it derives the path from `d2b.site.keysDir` as
-  `<keysDir>/<vm>_ed25519`.
+Trust operations resolve a Guest Resource and update the host's bounded
+known-hosts state through the broker. They do not accept a raw path or
+identity file from the public request:
 
-The framework-managed key generation in `host-keys.nix` still writes the
-managed key under `d2b.site.keysDir` on every activation. In other words:
+```bash
+d2b activation trust Guest/work-app --zone work --apply
+d2b activation rotate-known-host Guest/work-app --zone work --apply
+```
 
-- `keysDir` is the storage location for the framework-owned keypair;
-- `ssh.keyPath` is an operator override for which identity file the CLI should
-  present over SSH.
+The broker audits key rotation and trust changes with redacted Guest and
+operation identity. Failed, stale, or unauthorized requests leave the old
+trust state unchanged.
 
-That distinction is intentional: consumer-supplied keys are operator-owned and
-must not be rotated or replaced by `d2b activation keys rotate`.
+## Security
 
-### Current read-only CLI note
-
-The rust-native `activation keys list` / `activation keys show` surfaces intentionally return
-`managedKeyPath: null` today. The public manifest does not expose raw
-private-key paths, so the CLI cannot safely reconstruct the resolved path from
-public data alone. Use host configuration as the source of truth.
-
-## Ownership and permissions
-
-Framework-managed keys follow these permissions:
-
-| Path | Owner / mode |
-| --- | --- |
-| `${d2b.site.keysDir}` | `root:d2b` `0710` |
-| `${d2b.site.keysDir}/<vm>_ed25519` | `root:d2b` `0640` |
-| `${d2b.site.keysDir}/<vm>_ed25519.pub` | `root:root` `0644` |
-| `${d2b.site.keysDir}/.lock` | `root:root` `0600` |
-
-The CLI copies the private key to a caller-owned `0600` tempfile before passing
-it to `ssh`, because OpenSSH refuses group-readable identity files directly.
-
-## Rotation flow
-
-`d2b activation keys rotate Guest/<name>` is the managed-key rollover for the framework-owned
-`${keysDir}/<vm>_ed25519` keypair.
-
-1. Resolve the managed key path from `d2b.site.keysDir`.
-2. Verify the old key still reaches the guest over SSH.
-3. Record the old fingerprint.
-4. Move the old private/public pair under `old/<timestamp>/` beside the managed
-   keys directory.
-5. Generate a fresh Ed25519 pair as `.new` staging files.
-6. Push the new public key into the guest's `authorized_keys` using the old key.
-7. Verify the new key works.
-8. Remove the old key from the guest.
-9. Retain only the three newest archived rotations under `old/`.
-10. Re-run `nixos-rebuild switch` so future guest boots refresh the staged
-    `host.pub` share with the new public key.
-
-If you use a per-VM `ssh.keyPath` override, rotate that external key with its
-own owner/tooling. `d2b activation keys rotate` is for the framework-managed key only.
-
-## Trust operations
-
-d2b tracks guest SSH host keys separately from operator private keys.
-
-### `d2b activation trust <name>`
-
-- requires a VM `staticIp`;
-- scans the guest with `ssh-keyscan -t ed25519`;
-- rewrites `/var/lib/d2b/known_hosts.d2b` under a lock;
-- replaces any existing entry for that VM/IP with the newly scanned line.
-
-Use this on first boot or after an intentional host-key reset.
-
-### `d2b activation rotate-known-host <name>`
-
-- removes the recorded entry for the VM from `known_hosts.d2b`;
-- does **not** generate a new host key by itself;
-- is the right pre-step when a guest will come back with a different SSH host
-  key and you want the next `trust` to be explicit.
-
-## Audit logging
-
-When a key-management verb goes through the daemon -> broker path, the broker
-emits a daily JSONL audit record under
-`/var/lib/d2b/audit/broker-<utc-date>.jsonl` for:
-
-- `RunKeysRotate`
-- `RunHostKeyTrust`
-- `RunRotateKnownHost`
-
-Use `d2b audit` / `d2b audit --json` to inspect those records. Only broker-handled requests land in the broker audit log.
-
-## Upgrading from bash d2b
-
-Managed keys, `known_hosts`, and trust-state all carry forward into
-the Rust/daemon path. The control-plane owner changes; the files do
-not.
-
-### What stays in place
-
-- `${d2b.site.keysDir}/<vm>_ed25519` and `.pub`
-- `/var/lib/d2b/known_hosts.d2b`
-- any existing broker audit history under `/var/lib/d2b/audit/`
-
-### Transition steps
-
-1. Rebuild the host so `d2b activation keys *`, `activation trust`, and
-   `activation rotate-known-host` land from the Rust CLI.
-2. Start with read-only checks: `d2b activation keys list` and
-   `d2b activation keys show <name>`.
-3. Use `--dry-run` first on `activation keys rotate`, `activation trust`, or
-   `activation rotate-known-host`.
-4. Existing guest host keys and authorized-keys entries remain valid
-   until you intentionally rotate them.
-
-### Rollback
-
-- The `D2B_LEGACY_BASH_OPT_IN=1` escape hatch was retired in
-  v1.0 (per ADR 0015). Roll back a half-completed rotation by
-  rebuilding to the prior host generation and restoring from your
-  backup of `keysDir` / `known_hosts` before rerunning the verb
-  through `d2bd` → broker `RunKeysRotate`.
-- If a rotation half-completes, restore from your backup of
-  `keysDir` / `known_hosts` before rerunning.
-- Never wipe `/var/lib/d2b/vms/<vm>/swtpm/` as a shortcut; TPM
-  identity loss is separate from SSH trust rotation and forces
-  external re-enrollment.
-
-## See also
-
-- [`components-tpm.md`](./components-tpm.md)
-- [`daemon-api.md`](./daemon-api.md)
-- [`privileges.md`](./privileges.md)
-- [`../how-to/uninstall-d2b.md`](../how-to/uninstall-d2b.md)
+Do not wipe persistent TPM or credential state to repair SSH trust. TPM
+identity is owned by its Provider and a replaced state directory fails closed.
+Keep backups encrypted and access-controlled. Use `d2b audit --json` and
+`d2b guest status` for bounded verification.

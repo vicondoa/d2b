@@ -1,10 +1,8 @@
 //! Co-located managed identity agent service.
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError,
-},
 };
 
 use crate::ManagedIdentityCredentialProvider;

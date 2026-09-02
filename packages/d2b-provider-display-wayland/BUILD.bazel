@@ -2,7 +2,14 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel", "nix/default.nix", "nix/niri-vm-borders.nix", "nix/tests/default.nix"],
+    [
+        "BUILD.bazel",
+        "nix/default.nix",
+        "nix/niri-vm-borders.nix",
+        "nix/projection.nix",
+        "nix/ui-colors.nix",
+        "nix/tests/default.nix",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -19,10 +26,8 @@ rust_library(
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-control:d2b_contracts_control",
-        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
@@ -35,8 +40,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_display_wayland",
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -50,10 +54,8 @@ rust_library(
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-control:d2b_contracts_control",
-        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -127,8 +129,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_display_wayland_test_support",
     deps = [
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

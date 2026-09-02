@@ -34,6 +34,7 @@ pub fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::Usbip => VmStartNodeMode::LongLived(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
+        | ProcessRole::ProviderController
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => VmStartNodeMode::ReadinessOnly,
@@ -90,7 +91,7 @@ pub fn resolve_store_view_intent_for_vm<'a>(
     vm: &str,
 ) -> Result<&'a ResolvedStoreViewIntent, String> {
     resolver
-        .find_store_view_intent(vm)
+        .find_legacy_store_view_intent(vm)
         .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
 }
 

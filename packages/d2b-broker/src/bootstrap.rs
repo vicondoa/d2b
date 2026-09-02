@@ -209,6 +209,9 @@ pub mod wire {
         RootUid {
             uid: u32,
         },
+        HostShutdownUid {
+            uid: u32,
+        },
         #[default]
         NotAuthorized,
     }
@@ -455,6 +458,12 @@ pub mod wire {
         if let Some(uid) = value.strip_prefix("root:") {
             return uid.parse().ok().map(|uid| CallerRole::RootUid { uid });
         }
+        if let Some(uid) = value.strip_prefix("host-shutdown:") {
+            return uid
+                .parse()
+                .ok()
+                .map(|uid| CallerRole::HostShutdownUid { uid });
+        }
         None
     }
 
@@ -471,6 +480,7 @@ impl wire::CallerRole {
             wire::CallerRole::AdminUid { .. } => "d2b-admin",
             wire::CallerRole::LauncherUid { .. } => "d2b-launcher",
             wire::CallerRole::RootUid { .. } => "RootUid",
+            wire::CallerRole::HostShutdownUid { .. } => "d2b-host-shutdown",
             wire::CallerRole::NotAuthorized => "d2b-not-authorized",
         }
     }

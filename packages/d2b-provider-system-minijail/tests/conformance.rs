@@ -142,6 +142,37 @@ fn a_fully_verified_candidate_is_adopted_after_observation() {
 }
 
 #[test]
+fn a_readable_stale_candidate_is_exposed_for_exact_replacement() {
+    let stale: Vec<IdentityBinding> = required()
+        .into_iter()
+        .filter(|binding| *binding != IdentityBinding::Executable)
+        .collect();
+    let provider = provider(
+        ScriptedEffectPort::launching(required(), WaitReapOwner::Local)
+            .with_candidate(stale, WaitReapOwner::Local),
+    );
+    let ticket = fixtures::ticket_builder()
+        .selected_provider(PROVIDER_NAME)
+        .expected_identity(required())
+        .build()
+        .expect("conformant ticket");
+
+    let candidate = match block_on(provider.adopt(&ticket)).expect("adoption reports") {
+        AdoptionOutcome::Stale { candidate } => candidate,
+        other => panic!("expected stale candidate, observed {other:?}"),
+    };
+    block_on(provider.stop_stale(&candidate)).expect("exact stale stop");
+    assert_eq!(
+        provider.port().calls(),
+        vec![
+            PortCall::Observe,
+            PortCall::OpenPidfd,
+            PortCall::Stop(StopClass::Terminate),
+        ]
+    );
+}
+
+#[test]
 fn malformed_readiness_is_rejected_before_effect_dispatch() {
     let provider = provider(ScriptedEffectPort::launching(
         required(),

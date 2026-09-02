@@ -5,10 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use sha2::{Digest, Sha256};
 
 /// Exact, generation-bound identity for one notification Guest source.

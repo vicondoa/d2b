@@ -7,9 +7,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName};
 use d2b_core_controller::controller_assignment::{
     AssignmentTransportError, ScopedCommitTransport, ScopedResourceMutation,
 };
+use d2b_resource_store::StoreFilter;
 use protobuf::Message;
 use ttrpc::proto::{
     MESSAGE_HEADER_LENGTH, MESSAGE_TYPE_REQUEST, MessageHeader, Request as TtrpcRequest,
@@ -44,6 +46,25 @@ impl core::fmt::Display for ScopedCommitFrameError {
 }
 
 impl std::error::Error for ScopedCommitFrameError {}
+
+/// Failure while attaching an admitted List or Watch selector to a ttrpc
+/// frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopedQueryFrameError {
+    InvalidFrame,
+    InvalidRequest,
+}
+
+impl core::fmt::Display for ScopedQueryFrameError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidFrame => "scoped-query-frame-invalid",
+            Self::InvalidRequest => "scoped-query-request-invalid",
+        })
+    }
+}
+
+impl std::error::Error for ScopedQueryFrameError {}
 
 /// Attach bus-admitted assignment evidence to the existing ttrpc CommitBatch
 /// request without creating another transport.
@@ -85,6 +106,86 @@ pub fn attach_scoped_commit_frame(
         .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
     let mut header = header;
     header.length = u32::try_from(body.len()).map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    let mut result = Vec::with_capacity(MESSAGE_HEADER_LENGTH + body.len());
+    result.extend_from_slice(&Vec::from(header));
+    result.extend_from_slice(&body);
+    Ok(result)
+}
+
+/// Attach an admitted List or Watch selector to the existing ttrpc request.
+///
+/// The selector inputs are transport-neutral so the resource API does not
+/// depend on the message bus's query type.
+pub fn attach_scoped_query_frame(
+    frame: &[u8],
+    resource_types: &[ResourceTypeName],
+    resource_names: &[ResourceName],
+    filters: &[StoreFilter],
+    watch: bool,
+) -> Result<Vec<u8>, ScopedQueryFrameError> {
+    let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
+        .get(..MESSAGE_HEADER_LENGTH)
+        .ok_or(ScopedQueryFrameError::InvalidFrame)?
+        .try_into()
+        .map_err(|_| ScopedQueryFrameError::InvalidFrame)?;
+    let header = MessageHeader::from(header_bytes);
+    let body_len =
+        usize::try_from(header.length).map_err(|_| ScopedQueryFrameError::InvalidFrame)?;
+    if header.type_ != MESSAGE_TYPE_REQUEST
+        || frame.len() != MESSAGE_HEADER_LENGTH.saturating_add(body_len)
+    {
+        return Err(ScopedQueryFrameError::InvalidFrame);
+    }
+    let mut rpc = TtrpcRequest::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..])
+        .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+    let expected_method = if watch { "Watch" } else { "List" };
+    if rpc.service != "d2b.resource.v3.ResourceService" || rpc.method != expected_method {
+        return Err(ScopedQueryFrameError::InvalidRequest);
+    }
+    let mut wire_filters = filters
+        .iter()
+        .map(|filter| {
+            let mut wire = wire::ListFilter::new();
+            wire.field = filter.field.clone();
+            wire.values = filter.values.clone();
+            wire
+        })
+        .collect::<Vec<_>>();
+    if !resource_names.is_empty() {
+        let mut names = wire::ListFilter::new();
+        names.field = "metadata.name".to_owned();
+        names.values = resource_names
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        wire_filters.push(names);
+    }
+    let resource_types = resource_types
+        .iter()
+        .map(|resource_type| resource_type.as_str().to_owned())
+        .collect();
+    if watch {
+        let mut request = wire::WatchRequest::parse_from_bytes(&rpc.payload)
+            .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+        request.resource_types = resource_types;
+        request.filters = wire_filters;
+        rpc.payload = request
+            .write_to_bytes()
+            .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+    } else {
+        let mut request = wire::ListRequest::parse_from_bytes(&rpc.payload)
+            .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+        request.resource_types = resource_types;
+        request.filters = wire_filters;
+        rpc.payload = request
+            .write_to_bytes()
+            .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+    }
+    let body = rpc
+        .write_to_bytes()
+        .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
+    let mut header = header;
+    header.length = u32::try_from(body.len()).map_err(|_| ScopedQueryFrameError::InvalidFrame)?;
     let mut result = Vec::with_capacity(MESSAGE_HEADER_LENGTH + body.len());
     result.extend_from_slice(&Vec::from(header));
     result.extend_from_slice(&body);
@@ -369,7 +470,7 @@ mod tests {
         ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
         canonical_digest,
     };
-    use d2b_core_controller::controller_assignment::ScopedCommitTransport;
+    use d2b_core_controller::controller_assignment::{ScopedCommitTransport, ScopedResourceScope};
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
@@ -453,7 +554,7 @@ mod tests {
     #[test]
     fn scoped_commit_frame_preserves_assignment_evidence_on_existing_rpc() {
         let transport = ScopedCommitTransport::decode(
-            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateStatus"},{"target":"Process/work","verb":"UpdateFinalizers"}]}"#,
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateStatus"},{"target":"Process/work","verb":"UpdateFinalizers"}]}"#,
         )
         .unwrap();
         let request = d2b_contracts_resource::resource_proto::CommitBatchRequest::new();
@@ -482,6 +583,109 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decoded, transport);
+        assert!(
+            decoded
+                .mutations()
+                .iter()
+                .all(|mutation| matches!(mutation.scope(), ScopedResourceScope::Primary))
+        );
+    }
+
+    #[test]
+    fn scoped_commit_frame_preserves_owner_child_scope() {
+        let transport = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateSpec","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let scope = transport.mutations()[0].scope().owner_child().unwrap();
+        assert_eq!(
+            scope.owner_ref(),
+            &ResourceRef::parse("Guest/guest").unwrap()
+        );
+        assert_eq!(
+            scope.owner_uid().as_str(),
+            "123e4567-e89b-42d3-a456-426614174000"
+        );
+        assert_eq!(scope.owner_revision(), ZoneRevision::new(7));
+        assert_eq!(
+            scope.owner_generation(),
+            ResourceGeneration::new(1).unwrap()
+        );
+    }
+
+    #[test]
+    fn scoped_query_frame_rewrites_list_and_watch_selectors() {
+        let resource_types = vec![
+            ResourceTypeName::parse(d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE)
+                .unwrap(),
+        ];
+        let owner_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let filters = vec![StoreFilter {
+            field: "owner.resourceUid".to_owned(),
+            values: vec![owner_uid.as_str().to_owned()],
+        }];
+
+        for (method, watch) in [("List", false), ("Watch", true)] {
+            let payload = if watch {
+                let mut request = wire::WatchRequest::new();
+                request.resource_types.push("Host".to_owned());
+                request.filters.push(wire::ListFilter {
+                    field: "metadata.name".to_owned(),
+                    values: vec!["caller-supplied".to_owned()],
+                    ..wire::ListFilter::default()
+                });
+                request.write_to_bytes().unwrap()
+            } else {
+                let mut request = wire::ListRequest::new();
+                request.resource_types.push("Host".to_owned());
+                request.filters.push(wire::ListFilter {
+                    field: "metadata.name".to_owned(),
+                    values: vec!["caller-supplied".to_owned()],
+                    ..wire::ListFilter::default()
+                });
+                request.write_to_bytes().unwrap()
+            };
+            let rpc = TtrpcRequest {
+                service: "d2b.resource.v3.ResourceService".to_owned(),
+                method: method.to_owned(),
+                payload,
+                ..TtrpcRequest::default()
+            };
+            let body = rpc.write_to_bytes().unwrap();
+            let header = MessageHeader::new_request(1, body.len() as u32);
+            let mut frame = Vec::with_capacity(MESSAGE_HEADER_LENGTH + body.len());
+            frame.extend_from_slice(&Vec::from(header));
+            frame.extend_from_slice(&body);
+
+            let rewritten =
+                attach_scoped_query_frame(&frame, &resource_types, &[], &filters, watch).unwrap();
+            let rpc = TtrpcRequest::parse_from_bytes(&rewritten[MESSAGE_HEADER_LENGTH..]).unwrap();
+            if watch {
+                let request = wire::WatchRequest::parse_from_bytes(&rpc.payload).unwrap();
+                assert_eq!(
+                    request.resource_types,
+                    vec![d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()]
+                );
+                assert_eq!(request.filters.len(), 1);
+                assert_eq!(request.filters[0].field, "owner.resourceUid");
+                assert_eq!(
+                    request.filters[0].values,
+                    vec![owner_uid.as_str().to_owned()]
+                );
+            } else {
+                let request = wire::ListRequest::parse_from_bytes(&rpc.payload).unwrap();
+                assert_eq!(
+                    request.resource_types,
+                    vec![d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE.to_owned()]
+                );
+                assert_eq!(request.filters.len(), 1);
+                assert_eq!(request.filters[0].field, "owner.resourceUid");
+                assert_eq!(
+                    request.filters[0].values,
+                    vec![owner_uid.as_str().to_owned()]
+                );
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]

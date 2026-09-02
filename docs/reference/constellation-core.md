@@ -1,11 +1,12 @@
-# Historical constellation core reference
+# Historical constellation core
 
-**Diataxis category:** reference.
+**Diataxis category:** historical reference.
 
-The current schema and DTO reference is [realm core](./realm-core.md),
-backed by `packages/d2b-realm-core` and
-[`schemas/v2/d2b-realm-core.json`](./schemas/v2/d2b-realm-core.json).
+The former constellation/realm-core model is not part of the current shared
+Cargo or Bazel graph. Its identifiers, routing records, and allocator
+contracts remain only in historical ADRs and standalone prototype sources.
 
-This compatibility page remains so historical ADR links to the old
-constellation-core reference do not break. Do not add new current references
-to this page.
+The current product model is Zone and Zone-owned Resources. Use
+[`zone-control-nix.md`](./zone-control-nix.md),
+[`zone-cli-contract.md`](./zone-cli-contract.md), and
+[`../explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md).

@@ -1629,7 +1629,48 @@ pub(crate) fn sanitize_audit_value(value: Value) -> Value {
                                 .as_u64()
                                 .is_some_and(|value| value <= u64::from(u32::MAX))
                     }
-                    "peer_pid" | "pid" | "pidfd" | "handle" => false,
+                    "peer_pid"
+                    | "pid"
+                    | "pidfd"
+                    | "handle"
+                    | "start_time_ticks"
+                    | "expected_start_time_ticks"
+                    | "startTimeTicks"
+                    | "expectedStartTimeTicks"
+                    | "uid"
+                    | "gid"
+                    | "owner_uid"
+                    | "owner_gid"
+                    | "ownerUid"
+                    | "ownerGid"
+                    | "opaque_ref"
+                    | "opaqueRef"
+                    | "cgroup"
+                    | "cgroup_subtree"
+                    | "cgroupSubtree"
+                    | "cgroup_path"
+                    | "cgroupPath"
+                    | "runtime_scope"
+                    | "runtime_allocations"
+                    | "runtimeScope"
+                    | "runtimeAllocations"
+                    | "private_runtime_scope"
+                    | "privateRuntimeScope"
+                    | "runtime_identity"
+                    | "runtimeIdentity"
+                    | "network_tap_context"
+                    | "networkTapContext"
+                    | "provider_identity"
+                    | "template_identity"
+                    | "providerIdentity"
+                    | "templateIdentity"
+                    | "cid"
+                    | "vsock_cid"
+                    | "vsockCid"
+                    | "api_socket_path"
+                    | "apiSocketPath"
+                    | "credential"
+                    | "credentials" => false,
                     _ => true,
                 });
                 for (name, child) in object {
@@ -1683,11 +1724,24 @@ fn is_sensitive_key(key: &str) -> bool {
             | "event_id"
             | "tracing_span_id"
             | "runner_id"
+            | "bundle_runner_intent_ref"
+            | "bundleRunnerIntentRef"
             | "vm"
             | "vm_id"
+            | "vmId"
             | "role_id"
+            | "roleId"
             | "zone"
             | "zone_id"
+            | "zoneId"
+            | "zoneUid"
+            | "resourceRef"
+            | "resourceUid"
+            | "ownerRef"
+            | "providerRef"
+            | "executionRef"
+            | "userRef"
+            | "targetUid"
             | "credential"
             | "secret"
             | "message"
@@ -3257,6 +3311,17 @@ mod tests {
             "pid": 4243,
             "pidfd": 9,
             "handle": "opaque-handle",
+            "start_time_ticks": 99,
+            "expected_start_time_ticks": 100,
+            "owner_uid": 1100,
+            "owner_gid": 1100,
+            "opaque_ref": "cid:42",
+            "cgroup_subtree": "d2b.slice/private/role",
+            "expectedStartTimeTicks": 101,
+            "runtimeAllocations": [{"kind": "vsock-cid", "opaqueRef": "cid:43"}],
+            "vmId": "secret-vm-camel",
+            "roleId": "secret-role-camel",
+            "resourceUid": "123e4567-e89b-42d3-a456-426614174000",
             "path": "/private/host/path",
             "peer_role": "AdminUid(4242)",
             "nested": {
@@ -3269,7 +3334,18 @@ mod tests {
 
         assert_eq!(object.get("caller_uid").and_then(Value::as_u64), Some(4242));
         assert_eq!(object.get("caller_gid").and_then(Value::as_u64), Some(1000));
-        for forbidden in ["peer_pid", "pid", "pidfd", "handle"] {
+        for forbidden in [
+            "peer_pid",
+            "pid",
+            "pidfd",
+            "handle",
+            "start_time_ticks",
+            "expected_start_time_ticks",
+            "owner_uid",
+            "owner_gid",
+            "opaque_ref",
+            "cgroup_subtree",
+        ] {
             assert!(!object.contains_key(forbidden), "{forbidden}: {object:?}");
         }
         assert!(
@@ -3327,6 +3403,10 @@ mod tests {
                 "path": "/private/host/path",
                 "argv": ["attacker-text-canary"],
                 "env": {"TOKEN": "secret-token-canary"},
+                "opaque_ref": "cid:42",
+                "expected_start_time_ticks": 99,
+                "owner_uid": 1100,
+                "cgroup_subtree": "d2b.slice/private/role",
             }),
             "allowed",
             Some("attacker error text"),
@@ -3349,6 +3429,11 @@ mod tests {
             "/private/host/path",
             "attacker-text-canary",
             "secret-token-canary",
+            "cid:42",
+            "cid:43",
+            "d2b.slice/private/role",
+            "secret-vm-camel",
+            "secret-role-camel",
             "secret-vm",
             "/run/private.sock",
         ] {

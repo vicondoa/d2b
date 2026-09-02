@@ -292,9 +292,13 @@ let
     freeformType = null;
     options = {
       kind = lib.mkOption {
-        type = types.enum [ "local-path" "block-image" "tmpfs" ];
+        type = types.enum [ "local-path" "block-image" "tmpfs" "nix-closure" ];
       };
       sourcePolicyId = lib.mkOption {
+        type = types.nullOr (types.strMatching tokenPattern);
+        default = null;
+      };
+      systemArtifactId = lib.mkOption {
         type = types.nullOr (types.strMatching tokenPattern);
         default = null;
       };
@@ -439,6 +443,39 @@ let
         })
         (lib.filterAttrs (_: resource: resource.type == "Guest") zone.resources))
     (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+
+  providerExecutionRef = zoneName: providerName:
+    let
+      resources = cfg.zones.${zoneName}.resources or { };
+      provider = if builtins.hasAttr providerName resources
+        then resources.${providerName}
+        else null;
+      spec = if provider != null
+        && builtins.isAttrs (provider.spec or { })
+        then provider.spec
+        else { };
+      config = if builtins.hasAttr "config" spec
+        && builtins.isAttrs spec.config
+        then spec.config
+        else { };
+      executionRef = config.controllerExecutionRef or null;
+      parts = if builtins.isString executionRef
+        then lib.splitString "/" executionRef
+        else [ ];
+      hostName = if lib.length parts == 2
+        && builtins.elemAt parts 0 == "Host"
+        then builtins.elemAt parts 1
+        else null;
+    in if provider != null
+      && provider.type == "Provider"
+      && hostName != null
+      && builtins.hasAttr hostName resources
+      && (resources.${hostName}).type == "Host"
+      then executionRef
+      else null;
+
+  providerConfigured = zoneName: providerName:
+    providerExecutionRef zoneName providerName != null;
 
   typedResource = type: name: zoneName: spec: ownerRef:
     {
@@ -679,13 +716,20 @@ let
     typedResource "Volume" "store-view-${guestName}" guest.zoneName {
       providerRef = "Provider/volume-local";
       source = {
-        executionRef = "Host/host-system";
-        settings = {
-          kind = "local-path";
-          sourcePolicyId = "state-root";
-          imageFormat = null;
-          preallocate = false;
-        };
+        executionRef =
+          providerExecutionRef guest.zoneName "volume-local";
+        settings =
+          if (guest.spec.systemArtifactId or null) != null
+          then {
+            kind = "nix-closure";
+            systemArtifactId = guest.spec.systemArtifactId;
+          }
+          else {
+            kind = "local-path";
+            sourcePolicyId = "state-root";
+            imageFormat = null;
+            preallocate = false;
+          };
       };
       kind = "durable";
       layout = storeViewLayout guestName;
@@ -708,12 +752,27 @@ let
         settings = defaultAttachmentSettings;
       }];
       quota = null;
-    } "Guest/${guestName}";
+    } null;
 
   tpmEnabled = guest:
-    let spec = guest.spec;
-    in (attrOr spec "tpmEnabled" false)
-      || ((attrOr spec "tpm" { }).enable or false);
+    let
+      spec = guest.spec;
+      deviceAttachments = attrOr spec "deviceAttachments" [ ];
+      resources = cfg.zones.${guest.zoneName}.resources or { };
+      attachedTpm = lib.any
+        (attachment:
+          let
+            ref = attrOr attachment "deviceRef" null;
+            parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+            deviceName = if lib.length parts == 2 then builtins.elemAt parts 1 else null;
+          in
+          deviceName != null
+          && builtins.hasAttr deviceName resources
+          && resources.${deviceName}.type == "Device"
+          && (resources.${deviceName}.spec.providerRef or null)
+            == "Provider/device-tpm")
+        deviceAttachments;
+    in attachedTpm;
 
   tpmVolume = guest:
     let
@@ -749,7 +808,8 @@ let
     typedResource "Volume" "swtpm-${guestName}" guest.zoneName {
       providerRef = "Provider/volume-local";
       source = {
-        executionRef = "Host/host-system";
+        executionRef =
+          providerExecutionRef guest.zoneName "volume-local";
         settings = {
           kind = "local-path";
           sourcePolicyId = "state-root";
@@ -770,8 +830,17 @@ let
     } "Guest/${guestName}";
 
   generatedGuests = lib.concatMap
-    (guest: [ (storeViewVolume guest) ]
-      ++ lib.optional (tpmEnabled guest) (tpmVolume guest))
+    (guest:
+      let
+        localConfigured = providerConfigured guest.zoneName "volume-local";
+        virtiofsConfigured =
+          providerConfigured guest.zoneName "volume-virtiofs";
+      in
+      (if localConfigured && virtiofsConfigured
+       then [ (storeViewVolume guest) ]
+       else [ ])
+      ++ lib.optional (localConfigured && tpmEnabled guest)
+        (tpmVolume guest))
     guestRows;
 
   volumeAttachmentRows = lib.concatMap
@@ -796,7 +865,11 @@ let
         name = userName;
         resource = typedResource "User" userName row.zoneName { } null;
       })
-    (lib.filter (row: (attrOr row.attachment "transport" null) == "virtiofs")
+    (lib.filter
+      (row:
+        providerConfigured row.zoneName "volume-local"
+        && providerConfigured row.zoneName "volume-virtiofs"
+        && (attrOr row.attachment "transport" null) == "virtiofs")
       volumeAttachmentRows);
 
   generatedVfdUsersByKey = lib.foldl'
@@ -808,50 +881,12 @@ let
     generatedVfdUsersRaw;
   generatedVfdUsers = lib.attrValues generatedVfdUsersByKey;
 
-  generatedVirtiofsProvider =
-    lib.unique (map (row: row.zoneName)
-      (lib.filter (row: (attrOr row.attachment "transport" null) == "virtiofs")
-        volumeAttachmentRows ++ lib.concatMap
-          (guest: [{
-            zoneName = guest.zoneName;
-            attachment = { transport = "virtiofs"; };
-          }])
-          guestRows));
-
-  generatedProviderResources = lib.concatMap
-    (zoneName:
-      let
-        authored = cfg.zones.${zoneName}.resources or { };
-        hasLocal = lib.any (row: row.metadata.zone == zoneName) generatedGuests
-          && !(builtins.hasAttr "volume-local" authored);
-        hasVirtiofs = builtins.elem zoneName generatedVirtiofsProvider
-          && !(builtins.hasAttr "volume-virtiofs" authored);
-      in
-      lib.optional hasLocal {
-        zoneName = zoneName;
-        name = "volume-local";
-        resource = typedResource "Provider" "volume-local" zoneName {
-          artifactId = "volume-local-provider";
-          config = { };
-        } null;
-      }
-      ++ lib.optional hasVirtiofs {
-        zoneName = zoneName;
-        name = "volume-virtiofs";
-        resource = typedResource "Provider" "volume-virtiofs" zoneName {
-          artifactId = "volume-virtiofs-provider";
-          config = { };
-        } null;
-      })
-    (lib.sort lib.lessThan (lib.attrNames cfg.zones));
-
   generatedRows = (map (resource: {
       zoneName = resource.metadata.zone;
       name = resource.metadata.name;
       inherit resource;
     }) generatedGuests)
-    ++ generatedVfdUsers
-    ++ generatedProviderResources;
+    ++ generatedVfdUsers;
 
   generatedByZone = lib.foldl'
     (result: row:
@@ -862,6 +897,9 @@ let
       })
     { }
     generatedRows;
+  projectionEnabled = generatedByZone != { };
+  projectedGeneratedByZone =
+    if projectionEnabled then generatedByZone else { };
 
   shorthandRows = lib.mapAttrsToList
     (name: declaration: {
@@ -953,11 +991,28 @@ in
     d2b._resourceCompiler = {
       volumeOptions = volumeOptionTypes;
       volumeGenerated = {
-        byZone = generatedByZone;
-        users = generatedVfdUsers;
-        providers = generatedProviderResources;
+        byZone = projectedGeneratedByZone;
+        users = if projectionEnabled then generatedVfdUsers else [ ];
+        providers = [ ];
       };
       volumeShorthand = shorthandByZone;
+      providerProjectionVolumeLocal = {
+        enabled = projectionEnabled;
+        resourcesByZone = projectedGeneratedByZone;
+        processesByZone = { };
+        guestPatchesByZone = { };
+        privateArtifact = {
+          schemaVersion = 1;
+          providerRef = "Provider/volume-local";
+          resourceNames = lib.concatMap
+            (zoneName:
+              map
+                (resource: "${resource.type}/${resource.metadata.name}")
+                (lib.attrValues
+                  (projectedGeneratedByZone.${zoneName} or { })))
+            (lib.attrNames projectedGeneratedByZone);
+        };
+      };
     };
   };
 }

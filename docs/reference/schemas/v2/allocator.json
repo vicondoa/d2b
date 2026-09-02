@@ -47,6 +47,16 @@
     },
     "schemaVersion": {
       "type": "string"
+    },
+    "zoneTopology": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AllocatorZoneTopology"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -454,6 +464,39 @@
         "metadata-only"
       ]
     },
+    "AllocatorZoneTopology": {
+      "description": "The sealed Zone parent map used by runtime composition.",
+      "type": "object",
+      "required": [
+        "parentMap",
+        "root"
+      ],
+      "properties": {
+        "parentMap": {
+          "description": "Every declared Zone and its direct parent, with `null` for the root.",
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/ZoneId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "root": {
+          "description": "The one Zone with no parent.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ContractId": {
       "description": "Bounded storage/synchronization contract identifier.",
       "type": "string",
@@ -478,6 +521,12 @@
         "provider-agent",
         "provider-specific"
       ]
+    },
+    "ZoneId": {
+      "type": "string",
+      "maxLength": 63,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
     }
   }
 }

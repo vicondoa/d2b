@@ -34,7 +34,7 @@
 //!
 //! Tests can redirect probes via the env knobs `D2B_BROKER_SOCKET`,
 //! `D2B_PUBLIC_SOCKET`, `D2B_DAEMON_STATE_DIR`, and
-//! `D2B_METRICS_URL` (see `Context::from_env`).
+//! `D2B_METRICS_URL` (see `CliContext::from_env`).
 
 use std::io::{Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -52,7 +52,7 @@ use d2b_core::{
     },
 };
 
-use crate::{Context, SeqpacketUnixSocket};
+use crate::context::{CliContext, SeqpacketUnixSocket, system_tool_command};
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -162,7 +162,7 @@ impl DoctorReport {
     }
 }
 
-pub fn run_doctor(context: &Context) -> DoctorReport {
+pub fn run_doctor(context: &CliContext) -> DoctorReport {
     let mut report = DoctorReport::default();
     check_broker_socket(context, &mut report);
     check_daemon_socket(context, &mut report);
@@ -187,7 +187,7 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
 // Socket / endpoint probes
 // ---------------------------------------------------------------
 
-fn check_broker_socket(context: &Context, report: &mut DoctorReport) {
+fn check_broker_socket(context: &CliContext, report: &mut DoctorReport) {
     match SeqpacketUnixSocket::connect(&context.broker_socket) {
         Ok(_) => report.push(
             "broker-ready",
@@ -248,7 +248,7 @@ fn unix_socket_path_is_bound(path: &Path) -> bool {
     })
 }
 
-fn check_daemon_socket(context: &Context, report: &mut DoctorReport) {
+fn check_daemon_socket(context: &CliContext, report: &mut DoctorReport) {
     match SeqpacketUnixSocket::connect(&context.public_socket) {
         Ok(_) => report.push(
             "daemon-ready",
@@ -269,7 +269,7 @@ fn check_daemon_socket(context: &Context, report: &mut DoctorReport) {
     }
 }
 
-fn check_metrics_endpoint(context: &Context, report: &mut DoctorReport) {
+fn check_metrics_endpoint(context: &CliContext, report: &mut DoctorReport) {
     let url = &context.metrics_url;
     if url.trim().is_empty() {
         report.push(
@@ -298,7 +298,7 @@ fn check_metrics_endpoint(context: &Context, report: &mut DoctorReport) {
     }
 }
 
-fn check_signoz_ui_endpoint(context: &Context, report: &mut DoctorReport) {
+fn check_signoz_ui_endpoint(context: &CliContext, report: &mut DoctorReport) {
     let manifest = match ManifestV04::from_path(&context.manifest_path) {
         Ok(manifest) => manifest,
         Err(err) => {
@@ -1669,7 +1669,7 @@ fn check_bridge_ipv6_sysctl(daemon_state_dir: &Path, report: &mut DoctorReport) 
 
 /// Run `sysctl -n <key>` and return trimmed stdout, or an error string.
 fn run_sysctl_n(key: &str) -> Result<String, String> {
-    let out = crate::system_tool_command("sysctl")
+    let out = system_tool_command("sysctl")
         .args(["-n", key])
         .output()
         .map_err(|e| format!("exec sysctl: {e}"))?;
@@ -2403,9 +2403,7 @@ mod tests {
     fn broker_reap_health_fail_on_zombie() {
         // Spawn a child that exits immediately, then check its state
         // before waitpid - it should be in Z state.
-        let mut child = crate::system_tool_command("true")
-            .spawn()
-            .expect("spawn true");
+        let mut child = system_tool_command("true").spawn().expect("spawn true");
         let pid = child.id() as i32;
         // Give the child time to exit without being reaped.
         std::thread::sleep(std::time::Duration::from_millis(50));

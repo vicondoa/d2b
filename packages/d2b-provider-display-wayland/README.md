@@ -38,6 +38,8 @@ Runtime admission and process supervision are daemon-owned. The package owns
 the host `d2b-wayland-proxy` binary and its argv projection; `d2bd` launches
 signed workers through authenticated ComponentSession and ProviderSupervisor
 effect ports.
+The proxy accepts only an explicit canonical target and provider kind; retired
+VM and realm-target compatibility arguments are not translated or accepted.
 
 ## Placement and dependencies
 

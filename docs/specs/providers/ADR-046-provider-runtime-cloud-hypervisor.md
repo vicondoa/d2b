@@ -21,8 +21,9 @@
 `spec.providerRef` is `Provider/runtime-cloud-hypervisor`. For each such Guest
 it:
 
-- asserts an owned VMM `Process` resource and observes Device, Network, and
-  Volume dependency readiness through `ResourceClient` before launching it;
+- asserts the complete owned VMM `Process`, control `Endpoint`, and setup
+  `Volume` child set and observes Device, Network, and Volume dependency
+  readiness through `ResourceClient` before launching it;
 - supervises the Cloud Hypervisor VMM process as a long-lived `Process`;
 - presents the running guest to the Zone resource plane with typed health status
   and conditions;
@@ -51,6 +52,10 @@ packages/d2b-provider-runtime-cloud-hypervisor/
   src/
   tests/
   integration/
+  provider-manifest.json
+  provider-manifest.json.sig
+  publisher-public-key.pem
+  root-config.schema.json
   README.md
 
 The workspace policy gate rejects the crate if any of these four top-level paths
@@ -58,15 +63,19 @@ is absent. A nested `integration/README.md` is recommended but optional and is
 not enforced by the policy gate.
 ```
 
-- `src/`: controller binary, guest-bootstrap actor, VMM process template
-  builder, reconcile/observe/finalize handlers, config schema, internal
-  modules, and colocated unit tests.
+- `src/`: controller binary, guest-bootstrap actor, deterministic child and
+  descriptor planners, reconcile/observe/finalize handlers, config schema,
+  internal modules, and colocated unit tests.
 - `tests/`: hermetic Cargo integration tests - ResourceType conformance,
   fault/retry/restart scenarios, redaction, schema golden vectors, fake-port
   bus tests, and pidfd adoption property tests.
 - `integration/`: heavier container/Host/Guest/cross-process fixtures invoked
   by existing repository test orchestration (`make test-integration`,
   `make test-host-integration`).
+- The signed manifest, detached signature, publisher key, and root
+  configuration schema are package inputs. Nix assembles them with the
+  controller binary through the shared Provider artifact helper; the
+  controller package does not carry a VMM argv or direct-effect adapter.
 - `README.md`: Provider identity/config, ResourceTypes, controllers/services/
   workers/binaries, placement, dependencies/RBAC, security/state/telemetry,
   build/test/integration commands, and standalone-repository consumption.
@@ -268,25 +277,69 @@ At build time the Nix compiler resolves the artifact catalog entry:
 
 ---
 
+### 4.4 Private setup descriptor and child identity boundary
+
+The public `Guest` schema remains unchanged: `spec.systemArtifactId` and the
+signed `spec.provider.settings` extension are the only Guest setup selectors.
+The controller receives a separate private setup descriptor from the trusted
+artifact catalog. The descriptor is schema version `1.0`, canonical JSON, and
+signed with the fixed `ed25519-blake3` algorithm. Its semantic payload binds:
+
+- `Provider/runtime-cloud-hypervisor` and its nonzero Provider generation;
+- the selected `systemArtifactId` and the private `nixos-system` artifact
+  commitment;
+- the fixed direct child roles `vmm`, `ch-api`, `guest-control`, and `system`;
+- the target-local seed schema, schema version, and fingerprint; and
+- the opaque bootstrap handoff class and bounded expiry.
+
+`descriptorDigest` is the domain-separated digest of that semantic payload.
+The structural parser rejects non-canonical JSON, duplicate or unknown fields,
+unsupported signature algorithms, digest mismatches, and values outside the
+closed semantic token sets. A catalog-owned signature verifier then produces a
+verified descriptor; child planning accepts only that verified type. Raw
+paths, locators, credentials, argv, environment values, numeric identities,
+and broker operation names have no descriptor fields or admitted token forms.
+The descriptor and its signature are private catalog inputs and never appear
+in Guest spec, status, audit, metrics, or public debug output.
+
+For Guest `<name>`, the controller derives the Zone-local child references
+`Process/<name>-vmm`, `Endpoint/<name>-ch-api`,
+`Endpoint/<name>-guest-control`, and `Volume/<name>-system`. It submits those
+related creates as one UID-free batch. Every mutation carries the Guest
+`ownerRef`, its Zone, and `CreateAbsent`; Process, Endpoint, and Volume bodies
+refer to other resources by `ResourceRef` only. The store assigns child UIDs
+and the commit response maps every expected reference to its returned UID and
+revision, rejecting missing, extra, duplicate, foreign-owner, wrong-type, or
+cross-Zone rows.
+
+The private host runtime scope is a separate domain-separated digest over the
+immutable Zone UID, Guest UID, fixed role, and relevant generation. It is used
+only for private runtime fencing and never replaces a public name-based
+`ResourceRef` or appears in a Resource payload.
+
 ## 5 Owned bootstrap graph
 
-The controller owns the VMM `Process` child resource. On every reconcile it
-reads the current `Process` snapshot via `owner_index`, diffs the desired spec
-against the observed state, creates the `Process` when all dependencies are
-ready, repairs spec drift with expected-revision writes, and requests deletion
-when the Guest is being finalized.
+The controller owns the VMM `Process`, control `Endpoint`, and setup `Volume`
+child resources. On every reconcile it reads the complete direct-child snapshot
+via `owner_index`, diffs the desired set against the observed state, submits
+missing children as one `CreateAbsent` batch, repairs spec drift with
+expected-revision writes, and requests deletion when the Guest is being
+finalized.
 
 ### 5.1 Bootstrap graph topology
 
 ```
 Guest/<name>
-  └── Process/<name>-vmm    (Provider/system-minijail)
+  |-- Process/<name>-vmm             (Provider/system-minijail)
+  |-- Endpoint/<name>-ch-api
+  |-- Endpoint/<name>-guest-control
+  `-- Volume/<name>-system            (Provider/volume-local)
 ```
 
 The net-VM Guest (auto-declared by `Provider/network-local` for each Network)
-has the same single-Process shape. `ProcessRole::NetVm` in the current baseline
-maps to a `Provider/runtime-cloud-hypervisor` VMM process under a
-controller-created `Guest/<network-name>-net-vm`.
+uses the same controller-owned direct-child contract. `ProcessRole::NetVm` in
+the current baseline maps to a `Provider/runtime-cloud-hypervisor` VMM process
+under a controller-created `Guest/<network-name>-net-vm`.
 
 #### Process: `<name>-vmm`
 
@@ -339,17 +392,21 @@ controller-created `Guest/<network-name>-net-vm`.
 ### 5.2 Pre-start dependency ordering
 
 The controller enforces this ordering by watching resource statuses through
-`ResourceClient` and gating VMM Process creation in the reconcile loop:
+`ResourceClient`. It first commits the complete direct child set in one
+UID-free batch: the VMM Process is created with
+`desiredLifecycle: stopped`, and the control Endpoints and setup Volume are
+created with name-based `ResourceRef` links and `CreateAbsent`. The controller
+then gates only the transition to a running VMM:
 
 1. All `Device` resources in `Guest.spec.deviceAttachments` (including
-   `Device/kvm`) must be `Ready` before the VMM Process is created.
+   `Device/kvm`) must be `Ready` before the VMM Process is changed to running.
 2. All `Network` resources in `Guest.spec.networkAttachments` must be `Ready`
    (fabric and opaque attachment realization ready for Core resolution) before
-   the VMM Process is created.
+   the VMM Process is changed to running.
 3. All virtiofs-exported Volumes referenced by the Guest must be `Ready` per
-   `Provider/volume-virtiofs` before the VMM Process is created.
+   `Provider/volume-virtiofs` before the VMM Process is changed to running.
 
-When all conditions hold in the same reconcile turn, the controller creates the
+When all conditions hold in the same reconcile turn, the controller updates the
 VMM Process immediately - no intermediate EphemeralProcess steps. These
 dependency checks are declared as explicit `dependency` watch selectors in the
 controller descriptor; the reconcile loop receives `dependency-ready` triggers
@@ -556,52 +613,59 @@ After a Guest `spec` durable commit:
 
 - post-commit dispatcher pushes a hint immediately;
 - p95 controller handler start: ≤5 ms;
-- controller reads dependency statuses synchronously;
-- if all Device, Network, and Volume dependencies are already `Ready`: VMM
-  Process creation commit p95 ≤20 ms from hint receipt (immediate async launch);
+- controller commits the complete direct child batch synchronously with the
+  VMM Process stopped;
+- if all Device, Network, and Volume dependencies are already `Ready`: the
+  VMM Process running transition commits p95 ≤20 ms from hint receipt;
 - if any dependency is not yet `Ready`: controller writes `Guest.status` phase
   `Pending`, returns, and will be re-triggered by `dependency-ready` events.
-  When the final dependency becomes Ready the controller creates the VMM Process;
-  p95 ≤20 ms from that trigger receipt.
+  When the final dependency becomes `Ready` the controller transitions the
+  existing VMM Process to running, p95 ≤20 ms from that trigger receipt.
 
 ### 9.3 Reconcile steps
 
 1. Receive trigger (spec-generation-changed, owned-resource-changed,
    dependency-ready, dependency-changed, deletion-requested, retry-due, etc.).
-2. Read fresh Guest spec snapshot plus owner-index VMM Process snapshot.
+2. Read fresh Guest spec snapshot plus the complete owner-index direct-child
+   snapshot.
 3. Call `validateSpec`: check spec.provider.settings bounds, Endpoint resource shape,
    systemArtifactId catalog type, memoryShared+virtiofs invariant,
    controllerExecutionRef validity.
 4. Read dependency snapshots (Device/kvm and all declared Devices, all Networks,
    all virtiofs Volume statuses) through the capability-limited `ResourceClient`.
-5. If any dependency is not Ready: write Guest status `Pending`/conditions;
+5. Diff the complete descriptor-derived direct child set against the observed
+   children. If children are absent, submit one UID-free `CreateAbsent` batch;
+   if a child drifts, repair it with expected-revision writes.
+6. If any dependency is not `Ready`: write Guest status `Pending`/conditions;
    return `pending`. Controller will be re-triggered by `dependency-ready`.
-6. Diff desired VMM Process spec against observed child. If absent, create it;
-   if drifted, repair with expected-revision `update-spec`. Batch with
-   expected-revision preconditions.
-7. Stale conflict on any batch → discard result; toolkit re-reads and the
+7. If all dependencies are `Ready`, transition the existing VMM Process to
+   running with an exact UID/revision fence.
+8. Stale conflict on any batch → discard result; toolkit re-reads and the
    handler retries under policy.
-8. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
+9. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
    conditions, and Cloud Hypervisor `status.provider.details`) atomically via
    `update-status` with expected revision.
-9. Return `converged`, `pending`, `failed-retryable`, or `failed-terminal`.
+10. Return `converged`, `pending`, `failed-retryable`, or `failed-terminal`.
 
 ### 9.4 Adoption after controller restart
 
 The controller restart trigger is `startup-relist`:
 
 1. The controller lists all `runtime-cloud-hypervisor` Guests in the Zone.
-2. For each Guest in `Ready` phase, it attempts to adopt its VMM Process by
-   verifying the existing pidfd (pid/start-time/cgroup/executable/template/
-   generation) within `adoptionWindow`.
-3. If adoption succeeds: the controller reconciles current state without
-   disrupting the running VMM.
-4. If adoption fails (process gone, ambiguous identity): the VMM Process
-   transitions to `Unknown`; the Guest transitions to `Degraded`; the
-   controller requests a restart through a new `desiredLifecycle: running`
-   expected-revision write.
-5. Ambiguous identity sets condition `AdoptionAmbiguous=True` and never issues
-   a broad kill.
+2. For each Guest in `Ready` phase, it reads the Process status and asks the
+   Process Provider for a fresh candidate observation. It opens a new pidfd
+   only after the complete identity tuple (PID, start time, cgroup,
+   executable, template, and generation) exactly matches the durable
+   expectation.
+3. If one candidate matches exactly, the controller adopts it and reconciles
+   current state without disrupting the running VMM.
+4. If the Process is absent, the Process remains the Resource lifecycle
+   authority: the Guest is reported `Degraded` with bounded
+   `vmm-process-exited` evidence and a generation-fenced `desiredLifecycle:
+   running` retry may be requested.
+5. A stale, mismatched, unavailable, or ambiguous candidate is quarantined.
+   The Guest is `Degraded` with `AdoptionAmbiguous=True`; the controller
+   issues no kill, name-only stop, replacement adoption, or broad cleanup.
 
 ### 9.5 Observe interval
 
@@ -711,7 +775,7 @@ dependencySelectors:
     reason: volume-dependency-ready
 ownerChildTriggers:
   - ownerType: Guest
-    childTypes: [Process]
+    childTypes: [Process, Endpoint, Volume]
 reconcileConcurrency: 8
 maxPendingResources: 256
 finalizersOwned:
@@ -1171,12 +1235,12 @@ store handle, no ambient route table.
 | Verb | ResourceType | Purpose |
 | --- | --- | --- |
 | `list` | Guest | Initial relist on startup |
-| `watch` | Guest, Process, Device, Network, Volume | Continuous watch stream |
+| `watch` | Guest, Process, Endpoint, Volume, Device, Network | Continuous watch stream |
 | `get` | All of the above | Fresh snapshot per reconcile |
-| `create` | Process | VMM Process creation when all deps ready |
-| `update-spec` | Process | Drift repair |
+| `create` | Process, Endpoint, Volume | UID-free direct child batch |
+| `update-spec` | Process, Endpoint, Volume | Drift repair and VMM running transition |
 | `update-status` | Guest | Status write |
-| `delete` | Process | Finalizer-safe teardown |
+| `delete` | Process, Endpoint, Volume | Finalizer-safe teardown |
 | `update-finalizers` | Guest | Clear the controller-owned finalizer after finalize completes |
 
 ### 14.2 Named streams
@@ -1261,13 +1325,21 @@ Algorithm on `deletion-requested`:
 
 1. Set Guest status atomically: `status.provider.details.providerPhase: draining`,
    condition `GuestDraining=True`.
-2. Set `desiredLifecycle: stopped` on the VMM Process via expected-revision
-   `update-spec`.
-3. Wait for the owned VMM Process to be deleted (owner-child cascade with its
-   own finalizer).
-4. Verify VMM process exit through the local pidfd.
-5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer.
-6. Return `finalized`.
+2. Reject new admissions and drain already-owned Guest-local Resources over
+   the authenticated session.
+3. Close the session, then set `desiredLifecycle: stopped` on the VMM Process
+   using its exact UID and revision fence. The Process Provider verifies the
+   complete process identity before any stop effect.
+4. Delete direct Endpoints, the VMM Process, and setup Volumes in dependent-
+   first order. Wait for every transitive Export, worker Process, and Endpoint
+   descendant to disappear before proceeding.
+5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer only
+   after the session is closed, the VMM is stopped or absent, every owned
+   descendant is absent, and no host-backed Guest Volume remains.
+6. If the session is dead, the controller treats Guest-local descendants as
+   absent only after the stopped/absent VMM and no-host-backed-Volume proof.
+   Otherwise it retains the finalizer and reports bounded
+   `FinalizationBlocked`/`finalization-blocked` status; it never force-clears.
 
 If any child finalizer is blocked beyond `finalize` deadline (300 s), the
 finalizer returns `blocked` with condition `FinalizationBlocked` and a bounded
@@ -1425,7 +1497,10 @@ rather than applying in place. Non-disruptive spec changes reconcile normally.
 `execute_upgrade` recycles the VMM/runner `Process` and endpoints while
 preserving the Guest UID/spec identity, durable/data Volumes, and TPM identity
 supplied by `Provider/device-tpm`; the dependency-aware planner restarts the
-Guest after the recycle.
+Guest after the recycle. The prior session generation and transient child UIDs
+are invalidated before replacement admission; an interrupted recycle resumes
+from status and exact Resource UID/revision observations rather than adopting
+the pre-recycle Process or Endpoint.
 
 D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
 external effect, finalizer change, or status mutation until Core supplies
@@ -1572,17 +1647,19 @@ directly to the single VMM Process:
 
 1. Guest spec commit → post-commit dispatcher pushes hint immediately.
 2. Controller receives hint: p95 ≤5 ms.
-3. Controller reads all dependency statuses (Device/kvm, all declared Devices,
+3. Controller derives and commits the complete direct child set as one
+   UID-free `CreateAbsent` batch, with `<name>-vmm` initially stopped.
+4. Controller reads all dependency statuses (Device/kvm, all declared Devices,
    Networks, virtiofs Volumes) through `ResourceClient`.
-4. **If all dependencies are Ready**: creates `<name>-vmm` Process; p95 ≤20 ms
-   from hint receipt. This is the immediate async launch path.
-5. **If any dependency is not Ready**: controller writes `Guest.status` phase
+5. **If all dependencies are Ready**: transitions `<name>-vmm` to running;
+   p95 ≤20 ms from hint receipt. This is the immediate async launch path.
+6. **If any dependency is not Ready**: controller writes `Guest.status` phase
    `Pending`, returns `pending`. Watch loop continues; on each
-   `dependency-ready` trigger the controller re-evaluates and creates the
+   `dependency-ready` trigger the controller re-evaluates and transitions the
    Process when the final dependency becomes Ready (p95 ≤20 ms from trigger).
-6. Watch loop dispatches independent Guests concurrently under
+7. Watch loop dispatches independent Guests concurrently under
    `reconcileConcurrency: 8` budget.
-7. VMM Process readiness and guest-control health check (observe handler)
+8. VMM Process readiness and guest-control health check (observe handler)
    complete asynchronously; Guest status is written with expected-revision
    commits.
 
@@ -1639,11 +1716,15 @@ bundle and are never swept by configuration generation cleanup.
 
 ### 22.1 Summary
 
+The current converged package does not expose the historical VMM argv adapter.
+The Guest controller submits only Resource API intents; the Process Provider
+resolves private launch inputs and owns the broker effect.
+
 | Item | Treatment |
 | --- | --- |
 | Current anchor | `packages/d2b-host/src/runtime_provider.rs` (`CloudHypervisorRuntimeProvider`, `CloudHypervisorRuntimeControl`); `packages/d2b-host/src/ch_argv.rs` (`ChArgvInput`, `ChArgvGenerator`); `packages/d2bd/src/provider_shutdown.rs` (`CloudHypervisorShutdown`); `packages/d2b-core/src/processes.rs` (`ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`); `packages/d2b-host-providers/src/lib.rs` (`RuntimeProvider` adapter); `nixos-modules/components/tpm.nix`; `nixos-modules/network.nix`; `nixos-modules/processes-json.nix` (VMM/swtpm/net-VM process node emitters); `nixos-modules/store.nix` |
 | Evidence class | `production-reachable` for all items above; see migration map §2 |
-| Behavior retained | Typed argv generation (pure data, no syscalls); pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
+| Behavior retained | pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
 | Required delta | Controller as async ResourceReconciler; Guest ResourceSpec validation; VMM Process as single owned child resource; direct dependency-readiness gate via ResourceClient (no EphemeralProcess); ComponentSession guest-control health in observe handler; typed provider descriptor; framework-provisioned ProviderStateSet; bus-only resource access; ResourceMutationBatch status writes; explicit Device/kvm in Guest deviceAttachments; required controllerExecutionRef in Provider config |
 | Reuse path | See §22.2 |
 | Replacement/deletion | Current `d2b-<vm>-vm.service` systemd unit, `SpawnRunner{role: CloudHypervisor}` broker op, `RuntimeProvider` trait calls, and `CloudHypervisorRuntimeProvider` adapter remain until runtime-cloud-hypervisor integration passes full test parity |
@@ -1653,7 +1734,7 @@ bundle and are never swept by configuration generation cleanup.
 
 | Current symbol / path | Evidence class | Current callers | Reuse action | v3 destination |
 | --- | --- | --- | --- | --- |
-| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `spec.provider.settings` schema; store paths move to private artifact-catalog resolution; the v3 builder accepts only the declared LaunchTicket child fd slot for tap argv and has no handoff-mode or tap-name input; no `spec.*` exposure |
+| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | historical | `d2b-host/src/runtime_provider.rs` | RETIRED | The converged Guest controller has no VMM argv adapter; the Process Provider owns private launch-input resolution and broker handoff |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeControl` trait | production-reachable | `d2bd`; supervisor test seams | REPLACE | Supervisor ticket passed through `Provider/system-minijail` LaunchTicket; no ambient trait |
 | `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
@@ -1664,7 +1745,7 @@ bundle and are never swept by configuration generation cleanup.
 | `d2b-host/src/virtiofsd_argv.rs` | production-reachable | `d2bd` virtiofsd start | MOVE | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
 | `nixos-modules/processes-json.nix` (CloudHypervisor/Swtpm/NetVm node emitters) | nix-emitted | Bundle artifact consumer | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/` Nix builder per `ADR-046-nix-configuration`; current emitters deleted after integration |
 | `nixos-modules/store.nix` | nix-emitted | Per-VM hardlink farm setup | REPLACE | `Provider/volume-local` owns Volume with `VolumeKind: state` for store farm; the controller watches Volume readiness via ResourceClient before creating the VMM Process - no EphemeralProcess preflight |
-| `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | test-only | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | COPY/ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/tests/vmm_argv_golden_test.rs`; new golden vectors for v3 spec-driven argv; old shell golden tests adapted to `integration/` |
+| `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | historical | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | RETIRED | VMM argv golden coverage belongs to the Process Provider; no controller-side argv fixture remains |
 | `tests/video-sidecar-hardening-eval.sh` | test-only | `make test-policy` | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/integration/video_sidecar_integration_test.rs`; device-gpu Provider must also have a corresponding test |
 | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*` with `vm=` label) | production-reachable | Current Prometheus hand-roll | REPLACE | `d2b_runtime_ch_*` metrics from §18.3; `vm=` label removed from metric labels; VM identity stays in OTEL resource attributes only |
 
@@ -1727,17 +1808,17 @@ per-test advisory threshold.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-002; artifact catalog foundation |
+| Dependency/owner | Historical ADR046-ch-002; artifact catalog foundation |
 | Current source | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv`; `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` |
-| Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
-| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; tap argv accepts only the declared child fd slot inherited from the sealed LaunchTicket, with no runtime-selected handoff mode or host tap name; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
-| Integration | ProviderSupervisor LaunchTicket resolution, including direct inheritance of the precreated connected tap fd |
+| Reuse action | retired |
+| Destination | None. The historical controller-side argv adapter and its golden test were removed during U13 convergence. |
+| Detailed design | Process Provider launch tickets resolve private kernel, initramfs, socket, share, and fd inputs. The Guest controller carries no raw path, locator, argv, or fd and performs no broker effect. |
+| Integration | Provider/system-minijail and the broker-owned SpawnRunner path |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; tap vector accepts only the declared LaunchTicket child fd slot; redaction test (no store path in Debug output) |
-| Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; the old network-handoff mode and tap-name branches have no v3 callers; old golden test files adapted |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Validation | Process Provider ticket and broker launch tests cover the private effect path; Guest controller tests cover Resource API-only behavior and redaction |
+| Removal proof | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` and `tests/vmm_argv_golden_test.rs` are absent; no current caller exports the old adapter |
+| Implementation state | Retired by U13 |
+| Evidence | U13 package convergence removed the duplicate controller-side effect surface and retained the Process Provider as the sole launch owner. |
 
 ### ADR046-ch-004 (Nix resource compiler)
 
@@ -1809,11 +1890,10 @@ workspace policy gate rejects the crate unless all four paths exist:
 ```text
 packages/d2b-provider-runtime-cloud-hypervisor/
   src/
-    lib.rs                       # crate root; re-exports controller, guest_spec, vmm_argv
+    lib.rs                       # crate root; re-exports controller, config, and lifecycle helpers
     controller.rs                # async ResourceReconciler, describe/validate/plan/reconcile/finalize/observe
     bootstrap_graph.rs           # VMM Process spec builder and dependency-readiness check
-    vmm_argv.rs                  # VmmArgvInput, vmm_argv_build (pure; no store paths in output)
-    guest_spec.rs                # GuestProviderSpecSettings, spec.provider.settings schema, validateSpec
+    config.rs                    # Provider and Guest configuration bounds
     health.rs                    # ComponentSession KK health check, GuestReachable condition (observe)
     adoption.rs                  # pidfd adoption, ambiguity detection, quarantine
     shutdown.rs                  # graceful shutdown via guest-control session
@@ -1821,7 +1901,6 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     audit.rs                     # bounded durable audit record types and emit helpers
     state.rs                     # controller status-first operational-state projection helpers (no state Volume)
   tests/
-    vmm_argv_golden_test.rs      # golden argv vectors (headless, q35, gpu, video, macvtap)
     guest_spec_validation_test.rs # validateSpec: Endpoint required, memoryShared, systemArtifactId,
                                  # controllerExecutionRef; rejects cmdlineExtra/seccompOverride
     bootstrap_graph_test.rs      # VMM Process spec construction, dependency ordering,
@@ -1872,8 +1951,7 @@ Each file under `integration/` uses the existing repository test orchestration
   warning; do not fail closed for TCG-only CI);
 - `device_kvm_test.rs` explicitly validates both KVM and TCG paths;
 - the `d2b-controller-toolkit` fake-bus adapters for unit tests;
-- `tests/integration/containers/` for container-level (non-KVM) integration
-  (e.g., `vmm_argv_golden_test` can run without KVM).
+- `tests/integration/containers/` for container-level (non-KVM) integration.
 
 Real Host/Guest fixtures are declared as `runNixOSTest` modules in
 `tests/host-integration/runtime-cloud-hypervisor.nix`. They import the

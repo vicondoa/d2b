@@ -193,8 +193,9 @@ reports a guarded skip.
 
 Nix-unit surfaces are fixed Bazel labels with explicit source closures.
 Each action copies only its declared runfiles into an isolated source root and
-evaluates the surface directly through the shared minimal runner flake. The
-repository flake outputs and ambient `D2B_REPO_ROOT` do not participate.
+evaluates the surface directly with the shared Bazel-provided nixpkgs pin. The
+repository flake outputs, per-test Git input fetching, and ambient
+`D2B_REPO_ROOT` do not participate.
 The shared evaluator fails closed when a surface evaluates zero cases. Do not
 add a test census, successor pin, secondary inventory, or validator.
 
@@ -206,6 +207,14 @@ semaphore and are not part of the Bazel Layer-1 scheduler. A shell script may
 remain under `tests/tools/` or `tests/unit/` when it is the subject of a
 native Bazel test, a fixture materializer, a generator, or a Layer-2 lane; it
 must not schedule sibling Layer-1 work.
+
+For U20 final acceptance, both public integration targets,
+`make test-integration` and `make test-host-integration`, are mandatory and
+may be scheduled alongside the `/etc/nixos` real-host switch, d2b startup, and
+Cloud Hypervisor Guest boot. U19 only keeps their declarations and current
+inputs converged and does not run host acceptance. The host lane uses the
+existing Bazel-built host-tool bundle handoff; Nix realizes the VM check
+around those injected binaries and must not rebuild d2b binaries.
 
 ### Standalone Rust workspaces
 

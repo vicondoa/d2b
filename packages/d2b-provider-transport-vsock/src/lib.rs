@@ -20,7 +20,7 @@ mod topology;
 
 pub use audit::{TransportAuditEvent, TransportAuditOperation, TransportAuditOutcome};
 pub use auth::{
-    SessionKey, GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionProof,
+    GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionKey, SessionProof,
     SessionRejectReason, SessionState,
 };
 pub use bridge::{
@@ -39,8 +39,7 @@ pub use relay::{
     NativeGuestRelay, RelayBinding, RelayEffectError, RelayEffectPort, RelayObservation, RelayPhase,
 };
 pub use relay_argv::{
-    SocatEndpoint, VsockRelayArgvError, VsockRelayArgvInput, exec_arg0,
-    generate_vsock_relay_argv,
+    SocatEndpoint, VsockRelayArgvError, VsockRelayArgvInput, exec_arg0, generate_vsock_relay_argv,
 };
 pub use service::{
     CloseTransportRequest, ObserveTransportRequest, OpenTransportRequest, OpenTransportResponse,

@@ -51,6 +51,13 @@ fn allocator_env_bridge_mode_is_closed_on_decode() {
         "placement": "host-local",
         "hostMutation": false
       }],
+      "zoneTopology": {
+        "root": "root",
+        "parentMap": {
+          "root": null,
+          "child": "root"
+        }
+      },
       "envBridge": [{
         "realmPath": "work",
         "envName": "work",
@@ -68,6 +75,16 @@ fn allocator_env_bridge_mode_is_closed_on_decode() {
     assert_eq!(
         parsed.env_bridge[0].mode,
         Some(AllocatorEnvBridgeMode::InheritEnv)
+    );
+    let topology = parsed.zone_topology.expect("Zone topology");
+    assert_eq!(topology.root.as_str(), "root");
+    assert_eq!(
+        topology
+            .parent_map
+            .get(&d2b_contracts_resource::v3::ZoneId::parse("child").unwrap()),
+        Some(&Some(
+            d2b_contracts_resource::v3::ZoneId::parse("root").unwrap()
+        ))
     );
 
     let bad = json.replace("\"inherit-env\"", "\"surprise\"");

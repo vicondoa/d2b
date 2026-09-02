@@ -17,9 +17,8 @@
 //! here carries a numeric UID or GID, a device node, a store path, a socket
 //! path, or any host path; a Provider is named only by its Zone path and its
 //! `Provider/<name>` reference. No type here carries authority: an
-//! [`InFlightPermit`] is a concurrency slot, and the grants in
-//! [`LocalHopGrants`] are the local RBAC engine's already-reached decisions,
-//! not a transferable capability.
+//! [`InFlightPermit`] is a concurrency slot, and forwarding admissions are
+//! runtime-issued route evidence, not transferable capabilities.
 //!
 //! It also does not name the Provider trait-object catalog. The ADR45
 //! `ProviderInstance` sum type and the `RpcProviderProxy` payload and
@@ -54,8 +53,8 @@ pub use context::{CancellationToken, OwnedOperationContext};
 pub use descriptor::ProviderDescriptor;
 pub use error::{ProviderRuntimeError, RegistryBuildError};
 pub use forwarding::{
-    ForwardTarget, ForwardedCall, LocalHopGrants, ProviderForwardRequest,
-    ZoneRouteFailClosedReason, admit_provider_forward,
+    ForwardTarget, ForwardedCall, ProviderForwardRequest, ZoneRouteFailClosedReason,
+    admit_provider_forward,
 };
 pub use identity::{
     MAX_PROVIDER_CAPABILITIES, MAX_PROVIDER_REGISTRY_ENTRIES, PROVIDER_RESOURCE_TYPE,

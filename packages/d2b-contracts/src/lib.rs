@@ -9,11 +9,16 @@ pub mod audit_wire;
 pub mod auth_wire;
 pub mod capability;
 pub mod configured_argv;
+pub mod constellation_error;
 pub mod contract_id;
+pub mod controller_config;
 pub mod error;
 pub mod foundation_effects;
 pub mod identity;
+pub mod identity_config;
 pub mod ids;
+pub mod launcher;
+pub mod opaque_payload;
 pub mod privileges_w3;
 pub mod provider_effects;
 pub mod realm;
@@ -29,6 +34,8 @@ pub mod usbip_effect_port;
 pub mod workload;
 pub mod workload_identity;
 
+pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
+pub use constellation_error::{ConstellationError, ErrorKind};
 pub use error::{Error, SemverRange, Version};
 pub use foundation_effects::{
     CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,
@@ -38,7 +45,23 @@ pub use identity::{
     IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid,
 };
+pub use identity_config::{
+    KeyFingerprint, RealmIdentityConfigEntry, RealmIdentityConfigError,
+    RealmIdentityConfigInvariants, RealmIdentityConfigJson, RealmIdentityConfigRuntimeState,
+    RealmIdentityConfigSummary, RealmIdentityFingerprint,
+};
+pub use ids::{
+    AllocatorLeaseId, CorrelationId, ExecutionId, HostResourceId, IdempotencyKey, OperationId,
+    PrincipalId, StreamCursor, StreamId,
+};
+pub use opaque_payload::OpaquePayload;
 pub use privileges_w3::W3BrokerOperation;
+pub use token::{ProtocolToken, TokenError};
+pub use workload::{
+    DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture, IsolationPosture,
+    LauncherIcon, LauncherItemKind, LauncherItemSummary, SessionPersistencePosture,
+    WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
+};
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";

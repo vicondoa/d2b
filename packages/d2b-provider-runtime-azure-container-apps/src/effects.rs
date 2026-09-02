@@ -7,9 +7,8 @@ use std::{fmt, future::Future, pin::Pin};
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use d2b_contracts::{
-    CredentialLeaseHandle, OpaqueAzureRef, ResourceRef, ResourceUid,
-};
+pub use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, OpaqueAzureRef};
+pub use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
 pub const MAX_ACA_RESOURCE_ID_LEN: usize = 60;
 pub const MAX_ACA_CANDIDATES: usize = 8;

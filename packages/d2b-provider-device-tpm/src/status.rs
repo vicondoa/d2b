@@ -1,9 +1,6 @@
 //! Redacted Device TPM status projection.
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use serde::Serialize;
 
 use crate::resource_controller::TpmResourcePhase;

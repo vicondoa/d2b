@@ -8,20 +8,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    resource_export::{ResourceExportSpec, ShareQuota, is_qualified_service_type},
-};
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    SchemaFingerprint,
-    execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
+use super::resource_export::{ResourceExportSpec, ShareQuota, is_qualified_service_type};
+use d2b_contracts_provider::v3::provider::{
+    Exportability, ProjectionFactory, ProviderContractError,
 };
 use d2b_contracts_resource::v3::identity::BindingDigest;
-use d2b_contracts_provider::v3::{
-    provider::{Exportability, ProjectionFactory, ProviderContractError},
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
 };
 
 /// The canonical ResourceType name for an import declaration.

@@ -44,11 +44,20 @@ print(hashlib.sha256(encoded).hexdigest())
   '';
 in
 {
-  mkArtifactCatalog = { entriesJson, preimageJson }:
+  mkArtifactCatalog =
+    { entriesJson
+    , preimageJson
+    , guestSetupDescriptorsJson ? "[]"
+    }:
     pkgs.runCommand "d2b-artifact-catalog.json"
       {
-        inherit entriesJson preimageJson;
-        passAsFile = [ "entriesJson" "preimageJson" ];
+        inherit entriesJson preimageJson guestSetupDescriptorsJson;
+        passAsFile = [
+          "entriesJson"
+          "preimageJson"
+          "guestSetupDescriptorsJson"
+        ];
+        nativeBuildInputs = [ pkgs.python3 ];
       }
       ''
         set -euo pipefail
@@ -62,6 +71,8 @@ in
           printf '%s' "$catalogDigest"
           printf '%s' '","entries":'
           cat "$entriesJsonPath"
+          printf '%s' ',"guestSetupDescriptors":'
+          cat "$guestSetupDescriptorsJsonPath"
           printf '%s' ',"schemaVersion":3}'
         } > "$out"
       '';
@@ -72,6 +83,7 @@ in
       resourcesJson,
       providerSchemaDigestsJson,
       zoneJson,
+      zoneUidJson,
       artifactCatalogPreimageJson,
       artifactCatalogPath ? null,
       schemaValidationPath ? null,
@@ -88,6 +100,7 @@ in
           resourcesJson
           providerSchemaDigestsJson
           zoneJson
+          zoneUidJson
           artifactCatalogPreimageJson
           ;
         inherit artifactCatalogPathArg;
@@ -134,6 +147,8 @@ in
           cat "$resourcesJsonPath"
           printf '%s' ',"schemaVersion":3,"zone":'
           printf '%s' "$zoneJson"
+          printf '%s' ',"zoneUid":'
+          printf '%s' "$zoneUidJson"
           printf '%s' '}'
         } > "$out"
       '';

@@ -23,7 +23,6 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 semver = "1"
 # P0: O_NOFOLLOW open + fstat for bundle artifact tamper detection.
 rustix = { workspace = true }

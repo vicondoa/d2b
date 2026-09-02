@@ -8,18 +8,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    SchemaFingerprint,
-    ZoneId,
-    execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug},
-    resource::ResourceEnvelope,
+use d2b_contracts_provider::v3::provider::{
+    Exportability, ProjectionFactory, ProviderContractError,
 };
 use d2b_contracts_resource::v3::identity::BindingDigest;
-use d2b_contracts_provider::v3::{
-    provider::{Exportability, ProjectionFactory, ProviderContractError},
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceRef, ResourceTypeName, SchemaFingerprint, ZoneId,
+    execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug},
+    resource::ResourceEnvelope,
 };
 
 /// The canonical ResourceType name for an export declaration.

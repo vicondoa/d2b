@@ -123,6 +123,8 @@ struct GuestArgs {
     local_private_key: Option<PathBuf>,
     #[arg(long, hide = true)]
     parent_public_key: Option<PathBuf>,
+    #[arg(long, hide = true, default_value = "/etc/d2b/gateway.json")]
+    gateway_config_path: PathBuf,
     #[arg(long, hide = true)]
     validate_only: bool,
     #[arg(long, hide = true)]
@@ -181,6 +183,7 @@ async fn main() {
                 boot_id_path: args.boot_id_path,
                 local_private_key_path: args.local_private_key,
                 parent_public_key_path: args.parent_public_key,
+                gateway_zone_link_config_path: Some(args.gateway_config_path),
                 validate_only: args.validate_only,
                 once: args.once,
             })

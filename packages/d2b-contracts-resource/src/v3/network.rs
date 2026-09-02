@@ -10,14 +10,87 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ConditionState, IfName, ManagedBy, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
-    UpdateState,
+    ConditionState, IfName, ManagedBy, ResourceBundleGenerationId, ResourceGeneration,
+    ResourcePhase, ResourceRef, ResourceUid, UpdateState,
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug,
         require_execution_ref, string_schema,
     },
     user::{OsUsername, UserSpec},
 };
+
+/// Immutable Network identity carried through every host effect.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkProvenance {
+    zone_uid: ResourceUid,
+    network_uid: ResourceUid,
+    network_generation: ResourceGeneration,
+    attachment_generation: ResourceGeneration,
+    bundle_generation: ResourceBundleGenerationId,
+}
+
+impl NetworkProvenance {
+    /// Construct an exact Network effect provenance tuple.
+    pub const fn new(
+        zone_uid: ResourceUid,
+        network_uid: ResourceUid,
+        network_generation: ResourceGeneration,
+        attachment_generation: ResourceGeneration,
+        bundle_generation: ResourceBundleGenerationId,
+    ) -> Self {
+        Self {
+            zone_uid,
+            network_uid,
+            network_generation,
+            attachment_generation,
+            bundle_generation,
+        }
+    }
+
+    /// Borrow the immutable Zone identity.
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    /// Borrow the immutable Network identity.
+    pub const fn network_uid(&self) -> &ResourceUid {
+        &self.network_uid
+    }
+
+    /// Return the Network generation fence.
+    pub const fn network_generation(&self) -> ResourceGeneration {
+        self.network_generation
+    }
+
+    /// Return the aggregate attachment generation fence.
+    pub const fn attachment_generation(&self) -> ResourceGeneration {
+        self.attachment_generation
+    }
+
+    /// Borrow the installed bundle generation fence.
+    pub const fn bundle_generation(&self) -> &ResourceBundleGenerationId {
+        &self.bundle_generation
+    }
+}
+
+impl core::fmt::Debug for NetworkProvenance {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("NetworkProvenance(<redacted>)")
+    }
+}
+
+/// Derive the host ownership marker for one Network projection.
+pub fn derive_network_ownership_marker(provenance: &NetworkProvenance, object: &str) -> String {
+    format!(
+        "network:{object}:zone:{}:network:{}:generation:{}:attachment:{}:bundle:{}",
+        provenance.zone_uid().as_str(),
+        provenance.network_uid().as_str(),
+        provenance.network_generation().get(),
+        provenance.attachment_generation().get(),
+        provenance.bundle_generation().as_str(),
+    )
+}
 
 /// The canonical ResourceType name for this module.
 pub const NETWORK_RESOURCE_TYPE: &str = "Network";
@@ -514,6 +587,21 @@ impl ExternalIpv4Spec {
     pub const fn method(&self) -> Ipv4Method {
         self.method
     }
+
+    /// Borrow the static IPv4 address, when configured.
+    pub const fn address(&self) -> Option<&Ipv4Cidr> {
+        self.address.as_ref()
+    }
+
+    /// Borrow the static IPv4 gateway, when configured.
+    pub const fn gateway(&self) -> Option<&Ipv4Address> {
+        self.gateway.as_ref()
+    }
+
+    /// Borrow the static DNS resolver addresses.
+    pub fn dns(&self) -> &[Ipv4Address] {
+        &self.dns
+    }
 }
 
 impl Default for ExternalIpv4Spec {
@@ -763,9 +851,19 @@ impl ExternalAttachmentSpec {
         self.macvtap_mode
     }
 
+    /// Borrow the requested host parent interface selector.
+    pub const fn parent_interface(&self) -> &IfName {
+        &self.parent_interface
+    }
+
     /// Return the arbitration policy.
     pub const fn sharing_policy(&self) -> SharingPolicy {
         self.sharing_policy
+    }
+
+    /// Borrow the external IPv4 settings.
+    pub const fn ipv4(&self) -> &ExternalIpv4Spec {
+        &self.ipv4
     }
 }
 
@@ -987,6 +1085,36 @@ impl NetworkSpec {
     /// Return the isolation policy.
     pub const fn isolation(&self) -> IsolationSpec {
         self.isolation
+    }
+
+    /// Borrow the host-route policy.
+    pub const fn routing(&self) -> &RoutingSpec {
+        &self.routing
+    }
+
+    /// Borrow the DHCP policy.
+    pub const fn dhcp(&self) -> &DhcpSpec {
+        &self.dhcp
+    }
+
+    /// Borrow the DNS policy.
+    pub const fn dns(&self) -> &DnsSpec {
+        &self.dns
+    }
+
+    /// Borrow the mDNS policy.
+    pub const fn mdns(&self) -> &MdnsSpec {
+        &self.mdns
+    }
+
+    /// Return the configured MTU, when explicitly authored.
+    pub const fn mtu(&self) -> Option<u32> {
+        self.mtu
+    }
+
+    /// Whether TCP MSS clamping is enabled.
+    pub const fn mss_clamp(&self) -> bool {
+        self.mss_clamp
     }
 
     /// Borrow the external attachment.

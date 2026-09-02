@@ -36,9 +36,7 @@ use crate::ops::spawn_runner::{
 use crate::ops::store_sync::generation_id_for_intent;
 use crate::ops::store_view_posture::plant_live_marker_with_matrix_posture;
 use d2b_contracts_broker::broker_wire::{ActivationMode, ActivationPhase};
-use d2b_contracts_resource::v3::{
-    ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES,
-};
+use d2b_contracts_resource::v3::{ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES};
 use d2b_core::bundle_resolver::{HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent};
 use d2b_core::minijail_profile::CgroupPlacement;
 use d2b_host::hardlink_farm;
@@ -1817,9 +1815,7 @@ pub struct SpawnRunnerResult {
     pub swtpm_dir_audit: Option<crate::ops::audit_op::SwtpmDirAudit>,
 }
 
-fn parse_runner_cgroup_subtree(
-    subtree: &str,
-) -> Result<Option<(String, Vec<String>)>, LiveHandlerError> {
+fn parse_runner_cgroup_subtree(subtree: &str) -> Result<Option<Vec<String>>, LiveHandlerError> {
     if subtree.is_empty() {
         return Ok(None);
     }
@@ -1829,40 +1825,24 @@ fn parse_runner_cgroup_subtree(
         .ok_or_else(|| LiveHandlerError::SpawnFailed {
             detail: format!("unsupported cgroup subtree root: {subtree}"),
         })?;
-    let mut segments = normalized.split('/').filter(|segment| !segment.is_empty());
-    let vm = segments
-        .next()
-        .ok_or_else(|| LiveHandlerError::SpawnFailed {
-            detail: format!("missing vm segment in cgroup subtree: {subtree}"),
-        })?;
-    if vm.contains('\0') {
+    let segments = normalized.split('/').collect::<Vec<_>>();
+    if segments.len() < 2
+        || segments.iter().any(|segment| {
+            segment.is_empty() || segment.contains('\0') || matches!(*segment, "." | "..")
+        })
+    {
         return Err(LiveHandlerError::SpawnFailed {
-            detail: format!("invalid NUL byte in cgroup subtree vm segment: {subtree}"),
+            detail: format!("invalid cgroup subtree segments: {subtree}"),
         });
     }
-    let mut role_segments = Vec::new();
-    for segment in segments {
-        if segment.contains('\0') {
-            return Err(LiveHandlerError::SpawnFailed {
-                detail: format!("invalid NUL byte in cgroup subtree segment: {subtree}"),
-            });
-        }
-        role_segments.push(segment.to_owned());
-    }
-    Ok(Some((
-        // v1.1.1: per-VM identifier no longer has a `.scope`
-        // suffix; per-VM-interior + per-role-leaf taxonomy.
-        vm.trim_end_matches(".scope").to_owned(),
-        role_segments,
-    )))
+    Ok(Some(
+        segments.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+    ))
 }
 
-fn cgroup_leaf_path(parent_slice: &Path, vm: &str, role_segments: &[String]) -> PathBuf {
+fn cgroup_leaf_path(parent_slice: &Path, segments: &[String]) -> PathBuf {
     let mut path = parent_slice.to_path_buf();
-    // v1.1.1 per-VM-interior path (no `.scope` suffix); the role
-    // segments build the per-role leaf under it.
-    path.push(vm);
-    for segment in role_segments {
+    for segment in segments {
         path.push(segment);
     }
     path
@@ -1876,17 +1856,17 @@ fn ensure_runner_cgroup_leaf<B: d2b_host::cgroup::CgroupBackend>(
     uid: u32,
     gid: u32,
 ) -> Result<Option<PathBuf>, LiveHandlerError> {
-    use d2b_host::cgroup::create_vm_subtree;
+    use d2b_host::cgroup::create_nested_subtree;
 
-    let Some((vm, role_segments)) = parse_runner_cgroup_subtree(&placement.subtree)? else {
+    let Some(segments) = parse_runner_cgroup_subtree(&placement.subtree)? else {
         return Ok(None);
     };
-    let leaf_path = cgroup_leaf_path(parent_slice, &vm, &role_segments);
+    let leaf_path = cgroup_leaf_path(parent_slice, &segments);
     // Always materialize the cgroup leaf dir tree even when
     // placement.delegated == false. The delegated flag is about
-    // controller delegation (enabling subtree control), not whether the
-    // directory exists. The broker spawn path always needs the leaf to
-    // write the child pid into cgroup.procs.
+    // controller delegation (enabling subtree control), not whether
+    // the directory exists. The broker spawn path always needs the
+    // Zone/Guest role leaf to write the child pid into cgroup.procs.
     let slice = crate::ops::cgroup::create_d2b_slice(
         backend,
         unified_hierarchy_root,
@@ -1897,26 +1877,12 @@ fn ensure_runner_cgroup_leaf<B: d2b_host::cgroup::CgroupBackend>(
     .map_err(|err| LiveHandlerError::SpawnFailed {
         detail: format!("delegate cgroup slice: {err}"),
     })?;
-    let mut cursor = create_vm_subtree(backend, &slice, &vm, uid, gid).map_err(|err| {
+    let segment_refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    create_nested_subtree(backend, &slice, &segment_refs, uid, gid).map_err(|err| {
         LiveHandlerError::SpawnFailed {
-            detail: format!("delegate cgroup subtree for {vm}: {err}"),
+            detail: format!("delegate cgroup subtree for {}: {err}", leaf_path.display()),
         }
     })?;
-    for segment in &role_segments {
-        cursor.push(segment);
-        if !backend.exists(&cursor) {
-            backend
-                .mkdir(&cursor)
-                .map_err(|err| LiveHandlerError::SpawnFailed {
-                    detail: format!("create cgroup leaf {}: {err}", cursor.display()),
-                })?;
-        }
-        backend
-            .fchown(&cursor, uid, gid)
-            .map_err(|err| LiveHandlerError::SpawnFailed {
-                detail: format!("chown cgroup leaf {}: {err}", cursor.display()),
-            })?;
-    }
     Ok(Some(leaf_path))
 }
 
@@ -1998,11 +1964,10 @@ pub(crate) fn policy_ref_device_classes(
         // authenticated Health probe, which speaks ttRPC over the component-session
         // vsock and uses connect(2)/socket ioctls.
         "w1-host-reconcile"
+        | "w1-provider-controller"
         | "w1-store-virtiofs-preflight"
         | "w1-component-session-health"
-        | "w1-activation-nixos-runner" => {
-            Some(&[])
-        }
+        | "w1-activation-nixos-runner" => Some(&[]),
         // swtpm is a software TPM emulator; no hardware device ioctls,
         // but it uses terminal/file ioctls during init → permissive BPF.
         "w1-swtpm" => Some(&[]),
@@ -2663,7 +2628,10 @@ fn live_set_verified_device_acl(
     })
 }
 
-fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+fn refresh_spawn_runner_acls(
+    plan: &SpawnRunnerPlan,
+    broker_state_dir: &Path,
+) -> Result<(), LiveHandlerError> {
     if plan.uid == 0 {
         return Ok(());
     }
@@ -2943,6 +2911,21 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             }
         }
     }
+    if let Some(api_socket) = cloud_hypervisor_api_socket(plan) {
+        let state_dir = api_socket
+            .parent()
+            .ok_or_else(|| LiveHandlerError::SpawnFailed {
+                detail: "cloud-hypervisor api socket has no state-directory parent".to_owned(),
+            })?;
+        grant_runner_state_dir_acls(state_dir, broker_state_dir, plan.uid).map_err(|detail| {
+            LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh cloud-hypervisor state-directory ACL for runner uid {}: {detail}",
+                    plan.uid
+                ),
+            }
+        })?;
+    }
     refresh_obs_vsock_acl(plan)?;
     refresh_component_session_vsock_acl(plan)?;
 
@@ -2956,6 +2939,75 @@ fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
     plan.argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--api-socket").then(|| PathBuf::from(&pair[1])))
+}
+
+fn runner_state_dir_acl_targets(
+    state_dir: &Path,
+    broker_state_dir: &Path,
+    uid: u32,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    if !state_dir.is_absolute() || !broker_state_dir.is_absolute() {
+        return Err("state-directory ACL paths must be absolute".to_owned());
+    }
+    if state_dir
+        .components()
+        .chain(broker_state_dir.components())
+        .any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err("state-directory ACL paths must be normalized".to_owned());
+    }
+    if state_dir.strip_prefix(broker_state_dir).is_err() {
+        return Err("runner state directory is outside the broker state directory".to_owned());
+    }
+
+    let mut chain = Vec::new();
+    let mut directory = state_dir;
+    loop {
+        chain.push(directory.to_path_buf());
+        if directory == broker_state_dir {
+            break;
+        }
+        directory = directory
+            .parent()
+            .ok_or_else(|| "runner state directory has no broker-owned ancestor".to_owned())?;
+    }
+    chain.reverse();
+
+    let last = chain.len().saturating_sub(1);
+    let mut targets = Vec::with_capacity(chain.len());
+    for (index, directory) in chain.into_iter().enumerate() {
+        if index != last {
+            match dir_needs_daemon_traverse(&directory).map_err(|failure| failure.legacy_detail)? {
+                Some(true) => targets.push((directory, format!("u:{uid}:--x"))),
+                Some(false) => {}
+                None => {
+                    return Err(format!(
+                        "runner state directory ancestor is absent: {}",
+                        directory.display()
+                    ));
+                }
+            }
+        } else {
+            targets.push((directory, format!("u:{uid}:rwx")));
+        }
+    }
+    Ok(targets)
+}
+
+fn grant_runner_state_dir_acls(
+    state_dir: &Path,
+    broker_state_dir: &Path,
+    uid: u32,
+) -> Result<(), String> {
+    for (directory, acl) in runner_state_dir_acl_targets(state_dir, broker_state_dir, uid)? {
+        setfacl_fd_safe(&directory, &acl, AclPathKind::Directory)?;
+    }
+    Ok(())
 }
 
 fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
@@ -3268,7 +3320,9 @@ fn refresh_component_session_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), Liv
 pub fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
     mut pre_opened_device_fds: Vec<std::os::fd::OwnedFd>,
+    request_fds: Vec<std::os::fd::OwnedFd>,
     activation_input: Option<&ActivationRunnerInput>,
+    broker_state_dir: &Path,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -3298,7 +3352,7 @@ pub fn live_spawn_runner(
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
-    refresh_spawn_runner_acls(&plan)?;
+    refresh_spawn_runner_acls(&plan, broker_state_dir)?;
 
     // swtpm-dir first-run hardening (issue #64). Gated on the
     // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
@@ -3336,6 +3390,12 @@ pub fn live_spawn_runner(
         })?;
         pre_opened_device_fds.push(render_fd);
     }
+    if !request_fds.is_empty() && !pre_opened_device_fds.is_empty() {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "request inherited fds cannot combine with broker-preopened fds".to_owned(),
+        });
+    }
+    pre_opened_device_fds.extend(request_fds);
     crate::ops::gpu::validate_spawn_plan(&plan, pre_opened_device_fds.len()).map_err(|error| {
         LiveHandlerError::SpawnFailed {
             detail: error.to_string(),
@@ -4697,7 +4757,7 @@ mod tests {
     }
 
     #[test]
-    fn live_apply_nm_unmanaged_adopts_legacy_owned_file() {
+    fn live_apply_nm_unmanaged_refuses_legacy_owned_file() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-legacy");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -4707,18 +4767,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())).unwrap(),
-            Some(NmReloadMethod::Dbus)
-        );
-        assert_eq!(
-            exec.take_log(),
-            vec![ReconcileOp::WriteAtomicFile {
-                path: intent.file_path,
-                mode: intent.mode,
-                contents: intent.contents.into_bytes(),
-            }]
-        );
+        assert!(matches!(
+            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())),
+            Err(LiveHandlerError::NmOwnershipConflict)
+        ));
+        assert!(exec.take_log().is_empty());
     }
 
     #[test]
@@ -4815,6 +4868,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ensure_runner_cgroup_leaf_keeps_same_guest_names_zone_distinct() {
+        let backend = FakeCgroupBackend::new(1000);
+        let root = Path::new("/sys/fs/cgroup");
+        let parent = Path::new(crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE);
+        backend.seed_unified(root);
+        d2b_host::cgroup::CgroupBackend::mkdir(&backend, parent)
+            .expect("seed delegated parent slice");
+
+        let work = CgroupPlacement {
+            subtree: "d2b.slice/work/desktop/cloud-hypervisor".to_owned(),
+            controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+            delegated: false,
+        };
+        let personal = CgroupPlacement {
+            subtree: "d2b.slice/personal/desktop/cloud-hypervisor".to_owned(),
+            controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+            delegated: false,
+        };
+
+        let work_leaf = ensure_runner_cgroup_leaf(&backend, &work, root, parent, 1000, 1000)
+            .expect("create work cgroup")
+            .expect("work leaf");
+        let personal_leaf =
+            ensure_runner_cgroup_leaf(&backend, &personal, root, parent, 1000, 1000)
+                .expect("create personal cgroup")
+                .expect("personal leaf");
+
+        assert_eq!(
+            work_leaf,
+            parent.join("work").join("desktop").join("cloud-hypervisor")
+        );
+        assert_eq!(
+            personal_leaf,
+            parent
+                .join("personal")
+                .join("desktop")
+                .join("cloud-hypervisor")
+        );
+        assert_ne!(work_leaf, personal_leaf);
+        assert!(backend.directory_exists(&work_leaf));
+        assert!(backend.directory_exists(&personal_leaf));
+    }
+
     /// live_spawn_runner preflight failure surfaces SpawnPreflight.
     #[test]
     fn live_spawn_runner_propagates_preflight_error() {
@@ -4835,7 +4932,14 @@ mod tests {
             user_namespace: None,
             umask: None,
         };
-        let err = live_spawn_runner(&plan, Vec::new(), None).unwrap_err();
+        let err = live_spawn_runner(
+            &plan,
+            Vec::new(),
+            Vec::new(),
+            None,
+            Path::new("/var/lib/d2b"),
+        )
+        .unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
     }
 
@@ -5195,6 +5299,56 @@ mod tests {
     }
 
     #[test]
+    fn runner_state_acl_targets_stop_at_owned_root_and_skip_world_x_ancestors() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("runner-state-acl");
+        let owned_root = root.join("d2b");
+        let world_x = owned_root.join("zones");
+        let private_zone = world_x.join("work");
+        let guest_parent = private_zone.join("guests");
+        let state_dir = guest_parent.join("desktop");
+        std::fs::create_dir_all(&state_dir).expect("create state directory");
+        for path in [&owned_root, &private_zone, &guest_parent, &state_dir] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+                .expect("make ancestor private");
+        }
+        std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
+            .expect("make ancestor world traversable");
+
+        let targets = runner_state_dir_acl_targets(&state_dir, &owned_root, 4242)
+            .expect("derive bounded runner ACL targets");
+        assert_eq!(
+            targets,
+            vec![
+                (owned_root.clone(), "u:4242:--x".to_owned()),
+                (private_zone.clone(), "u:4242:--x".to_owned()),
+                (guest_parent.clone(), "u:4242:--x".to_owned()),
+                (state_dir.clone(), "u:4242:rwx".to_owned()),
+            ]
+        );
+        assert!(
+            targets.iter().all(|(path, _)| path != Path::new("/")),
+            "runner ACL planning must never include the filesystem root"
+        );
+        assert!(
+            targets.iter().all(|(path, _)| path != &world_x),
+            "world-traversable ancestors need no named-user ACL"
+        );
+    }
+
+    #[test]
+    fn runner_state_acl_targets_reject_paths_outside_owned_root() {
+        let root = TestDir::new("runner-state-acl-boundary");
+        let owned_root = root.join("d2b");
+        let outside = root.join("other").join("desktop");
+        assert!(
+            runner_state_dir_acl_targets(&outside, &owned_root, 4242).is_err(),
+            "runner ACL planning must fail closed outside the configured state root"
+        );
+    }
+
+    #[test]
     fn current_path_dev_ino_tracks_inode_replacement() {
         // Inode pinning relies on re-stat detecting that a path now
         // resolves to a different inode than the one a prior fd mutated.
@@ -5325,8 +5479,14 @@ mod tests {
             umask: None,
         };
 
-        let outcome =
-            live_spawn_runner(&plan, Vec::new(), None).expect("spawn privileged test child");
+        let outcome = live_spawn_runner(
+            &plan,
+            Vec::new(),
+            Vec::new(),
+            None,
+            Path::new("/var/lib/d2b"),
+        )
+        .expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)
             .expect("wait for test child");
         assert!(matches!(
@@ -5369,7 +5529,8 @@ mod tests {
     #[test]
     fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
         let plan = wayland_proxy_plan(None, None);
-        let err = refresh_spawn_runner_acls(&plan).expect_err("missing XDG_RUNTIME_DIR must fail");
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .expect_err("missing XDG_RUNTIME_DIR must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5390,7 +5551,8 @@ mod tests {
         // Point at a path that does not exist beneath the tempdir.
         let absent = root.join("run").join("user").join("1000");
         let plan = wayland_proxy_plan(Some(absent.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan).expect_err("absent runtime dir must fail");
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .expect_err("absent runtime dir must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5417,7 +5579,8 @@ mod tests {
         let runtime = root.join(&format!("{mismatch_uid}"));
         std::fs::create_dir(&runtime).expect("create runtime dir");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan).expect_err("owner uid mismatch must fail");
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .expect_err("owner uid mismatch must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5445,7 +5608,8 @@ mod tests {
         std::fs::create_dir(&runtime).expect("create runtime dir");
         // Do NOT create the socket. Use a known display name.
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-test-99"));
-        let err = refresh_spawn_runner_acls(&plan).expect_err("absent Wayland socket must fail");
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
+            .expect_err("absent Wayland socket must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5473,7 +5637,7 @@ mod tests {
         let socket_path = runtime.join("wayland-type-test");
         std::fs::write(&socket_path, b"not a socket").expect("write file");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-type-test"));
-        let err = refresh_spawn_runner_acls(&plan)
+        let err = refresh_spawn_runner_acls(&plan, Path::new("/var/lib/d2b"))
             .expect_err("regular file at socket location must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,

@@ -5,10 +5,7 @@ mod host_reconciler;
 #[path = "../src/host_status.rs"]
 mod host_status;
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    host::HostSpec,
-};
+use d2b_contracts_resource::v3::{ResourceRef, host::HostSpec};
 
 #[test]
 fn status_projection_declares_user_only_posture() {

@@ -1,4 +1,9 @@
 use std::{
+    os::{
+        linux::net::SocketAddrExt,
+        unix::net::{UnixListener, UnixStream},
+    },
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -8,9 +13,9 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_bus::{
-    AuthorizationError, BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId,
-    EndpointError, OperationSpec, ResourceCall, RouteGenerations, RouteKey, RouteMember,
-    RouteTarget, ZoneBus, ZoneRegistrar,
+    AuthorizationError, BusAuthorizer, BusConfig, BusError, CommittedControllerProcessSubjectInput,
+    ComponentSessionAdmission, EndpointError, OperationId, OperationSpec, ResourceCall,
+    ResourceQuery, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts_provider::v3::{
     ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
@@ -19,9 +24,11 @@ use d2b_contracts_provider::v3::{
     RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
     UpgradePolicy,
 };
+use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::{
     BindingDigest, EvidenceClass, ReconnectGeneration, ServiceName,
 };
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ExecutionDomain, PlacementAnchor,
     ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, SchemaVersion, ZoneId,
@@ -56,7 +63,7 @@ use d2b_session::{
     TransportPacket, serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
-use protobuf::Message;
+use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::sync::{Notify, mpsc};
 use ttrpc::proto::{MessageHeader, Request as TtrpcRequest};
 
@@ -64,6 +71,8 @@ use crate::router::UnixSubjectRecord;
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
+const CONTROLLER_PEER_CHILD_ENV: &str = "D2B_CONTROLLER_PEER_CHILD";
+static CONTROLLER_PEER_LISTENER_ID: AtomicUsize = AtomicUsize::new(1);
 
 struct TestTransport {
     sender: mpsc::Sender<TransportPacket>,
@@ -216,6 +225,42 @@ fn policy(service: ServicePackage, purpose: EndpointPurpose, generation: u64) ->
     }
 }
 
+#[test]
+fn controller_peer_child() {
+    let Some(name) = std::env::var_os(CONTROLLER_PEER_CHILD_ENV) else {
+        return;
+    };
+    let address =
+        std::os::unix::net::SocketAddr::from_abstract_name(name.to_string_lossy().as_bytes())
+            .unwrap();
+    UnixStream::connect_addr(&address).unwrap();
+}
+
+fn child_verified_peer() -> VerifiedUnixPeer {
+    let name = format!(
+        "d2b-controller-peer-{}-{}",
+        std::process::id(),
+        CONTROLLER_PEER_LISTENER_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let address = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+    let listener = UnixListener::bind_addr(&address).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session_seam_tests::controller_peer_child",
+            "--nocapture",
+        ])
+        .env(CONTROLLER_PEER_CHILD_ENV, &name)
+        .spawn()
+        .unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    stream.set_nonblocking(true).unwrap();
+    let socket = d2b_session_unix::StreamSocket::from_owned(stream.into()).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_stream(&socket).unwrap();
+    assert!(child.wait().unwrap().success());
+    verified_peer
+}
+
 async fn admit(
     registrar: &ZoneRegistrar,
     policy: EndpointPolicy,
@@ -229,7 +274,7 @@ async fn admit(
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar, policy, subject, uid, provider, _allowed, None, true,
+        registrar, policy, subject, uid, provider, _allowed, None, true, None,
     )
     .await
 }
@@ -247,7 +292,7 @@ async fn admit_without_echo(
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar, policy, subject, uid, provider, allowed, None, false,
+        registrar, policy, subject, uid, provider, allowed, None, false, None,
     )
     .await
 }
@@ -274,8 +319,99 @@ async fn admit_with_writer_pause(
         _allowed,
         writer_pause,
         true,
+        None,
     )
     .await
+}
+
+async fn admit_controller(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    provider: &str,
+    uid: &str,
+    process_ref: &str,
+    execution_ref: &str,
+    allowed: impl IntoIterator<Item = SessionVerb>,
+) -> (
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    admit_inner(
+        registrar,
+        policy,
+        provider,
+        uid,
+        provider,
+        allowed,
+        None,
+        true,
+        Some(CommittedControllerProcessSubjectInput {
+            provider_ref: ResourceRef::parse(provider).unwrap(),
+            provider_uid: ResourceUid::parse(uid).unwrap(),
+            process_ref: ResourceRef::parse(process_ref).unwrap(),
+            zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+            execution_ref: ResourceRef::parse(execution_ref).unwrap(),
+            provider_generation: ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            controller_generation: ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
+        }),
+    )
+    .await
+}
+
+async fn admit_with_verified_peer(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    verified_peer: VerifiedUnixPeer,
+) -> AuthenticatedComponentSession<ComponentSessionAdmission> {
+    let descriptor = TransportDescriptor {
+        class: policy.transport_binding.transport,
+        locality: policy.transport_binding.locality,
+        packet_atomic: false,
+        supports_attachments: false,
+    };
+    let (left_sender, left_receiver) = mpsc::channel(16);
+    let (right_sender, right_receiver) = mpsc::channel(16);
+    let left = TestTransport {
+        sender: left_sender,
+        receiver: right_receiver,
+        descriptor,
+        writer_pause: None,
+    };
+    let right = TestTransport {
+        sender: right_sender,
+        receiver: left_receiver,
+        descriptor,
+        writer_pause: None,
+    };
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            left,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            right,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+    );
+    drop(responder.unwrap());
+    registrar
+        .component_session_acceptor(policy, verified_peer)
+        .unwrap()
+        .admit(
+            initiator.unwrap(),
+            TransportEvidence::new(
+                EvidenceClass::UnixPeer,
+                BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
+            ),
+            1,
+        )
+        .await
+        .unwrap()
 }
 
 async fn admit_inner(
@@ -287,6 +423,7 @@ async fn admit_inner(
     _allowed: impl IntoIterator<Item = SessionVerb>,
     writer_pause: Option<Arc<WriterPause>>,
     start_echo: bool,
+    controller_subject: Option<CommittedControllerProcessSubjectInput>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
@@ -346,39 +483,45 @@ async fn admit_inner(
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
-    let subject_config = match subject_ref.resource_type().as_str() {
-        "Provider" => UnixSubjectRecord::provider(
-            subject_ref,
-            subject_uid,
-            ResourceRef::parse("Zone/dev").unwrap(),
-            expected_peer,
-            provider_generation,
-        )
-        .unwrap(),
-        "Guest" => UnixSubjectRecord::guest(
-            subject_ref,
-            subject_uid,
-            ResourceRef::parse("Zone/dev").unwrap(),
-            expected_peer,
-        )
-        .unwrap()
-        .with_provider(provider_ref, provider_generation)
-        .unwrap(),
-        _ => UnixSubjectRecord::host(
-            subject_ref,
-            subject_uid,
-            ResourceRef::parse("Zone/dev").unwrap(),
-            expected_peer,
-        )
-        .unwrap()
-        .with_provider(provider_ref, provider_generation)
-        .unwrap()
-        .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap())
-        .unwrap(),
-    }
-    .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-    registrar.install_test_unix_subject(subject_config).unwrap();
     let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    if let Some(controller_subject) = controller_subject {
+        registrar
+            .install_committed_controller_process_subject(&verified_peer, controller_subject)
+            .unwrap();
+    } else {
+        let subject_config = match subject_ref.resource_type().as_str() {
+            "Provider" => UnixSubjectRecord::provider(
+                subject_ref,
+                subject_uid,
+                ResourceRef::parse("Zone/dev").unwrap(),
+                expected_peer,
+                provider_generation,
+            )
+            .unwrap(),
+            "Guest" => UnixSubjectRecord::guest(
+                subject_ref,
+                subject_uid,
+                ResourceRef::parse("Zone/dev").unwrap(),
+                expected_peer,
+            )
+            .unwrap()
+            .with_provider(provider_ref, provider_generation)
+            .unwrap(),
+            _ => UnixSubjectRecord::host(
+                subject_ref,
+                subject_uid,
+                ResourceRef::parse("Zone/dev").unwrap(),
+                expected_peer,
+            )
+            .unwrap()
+            .with_provider(provider_ref, provider_generation)
+            .unwrap()
+            .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap())
+            .unwrap(),
+        }
+        .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
+        registrar.install_test_unix_subject(subject_config).unwrap();
+    }
     let session = registrar
         .component_session_acceptor(policy, verified_peer)
         .unwrap()
@@ -429,6 +572,8 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         ("Host/alice", "22222222-2222-4222-8222-222222222222"),
         ("Provider/audit", "33333333-3333-4333-8333-333333333333"),
         ("Guest/bob", "44444444-4444-4444-8444-444444444444"),
+        ("Provider/external", "55555555-5555-4555-8555-555555555555"),
+        ("Provider/external", "66666666-6666-4666-8666-666666666666"),
     ]
     .into_iter()
     .map(|(subject, uid)| BoundSubject {
@@ -486,6 +631,424 @@ async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state(
 }
 
 #[tokio::test]
+async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
+    for subject in [
+        (
+            "Provider/system-core",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+        (
+            "Provider/system-minijail",
+            "22222222-2222-4222-8222-222222222222",
+        ),
+    ] {
+        registrar
+            .install_test_unix_subject(
+                UnixSubjectRecord::provider(
+                    ResourceRef::parse(subject.0).unwrap(),
+                    ResourceUid::parse(subject.1).unwrap(),
+                    ResourceRef::parse("Zone/dev").unwrap(),
+                    expected_peer,
+                    ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let error = match registrar.component_session_acceptor(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap(),
+    ) {
+        Ok(_) => panic!("ambiguous peer evidence must not mint a session acceptor"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn committed_controller_subject_installation_binds_an_exact_verified_peer() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+
+    registrar
+        .install_committed_controller_process_subject(
+            &verified_peer,
+            CommittedControllerProcessSubjectInput {
+                provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+                provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+                process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
+                zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+                execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+                provider_generation: ResourceGeneration::new(4).unwrap(),
+                controller_generation: ControllerGeneration::new(5).unwrap(),
+            },
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn committed_controller_subject_carries_authoritative_context() {
+    let (_bus, registrar) = bus();
+    let (session, _remote, echo) = admit_controller(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/external",
+        "55555555-5555-4555-8555-555555555555",
+        "Process/external-controller",
+        "Host/host-system",
+        [SessionVerb::Connect],
+    )
+    .await;
+
+    let binding = session.route_binding();
+    let context = binding.context();
+    assert_eq!(
+        context.subject_ref(),
+        &ResourceRef::parse("Provider/external").unwrap()
+    );
+    assert_eq!(
+        context.subject_uid(),
+        &ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap()
+    );
+    assert_eq!(context.zone_ref(), &ResourceRef::parse("Zone/dev").unwrap());
+    assert_eq!(
+        context.provider_ref(),
+        Some(&ResourceRef::parse("Provider/external").unwrap())
+    );
+    assert_eq!(
+        context.process_ref(),
+        Some(&ResourceRef::parse("Process/external-controller").unwrap())
+    );
+    assert_eq!(
+        context.execution_ref(),
+        Some(&ResourceRef::parse("Host/host-system").unwrap())
+    );
+    assert_eq!(
+        context.provider_generation(),
+        Some(ResourceGeneration::new(PROVIDER_GENERATION).unwrap())
+    );
+    assert_eq!(
+        context.controller_generation(),
+        Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap())
+    );
+    echo.abort();
+}
+
+#[tokio::test]
+async fn exact_controller_subject_records_are_consumed_once() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let first_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let second_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    registrar
+        .install_committed_controller_process_subject(
+            &first_peer,
+            CommittedControllerProcessSubjectInput {
+                provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+                provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+                process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
+                zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+                execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+                provider_generation: ResourceGeneration::new(4).unwrap(),
+                controller_generation: ControllerGeneration::new(5).unwrap(),
+            },
+        )
+        .unwrap();
+    registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            first_peer,
+        )
+        .unwrap();
+    let error = registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            second_peer,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn exact_resource_subject_restart_replaces_before_capacity_check() {
+    let (_bus, registrar) = bus_with_config(BusConfig {
+        max_routes_per_session: 1,
+        max_total_routes: 1,
+        ..BusConfig::default()
+    });
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let first_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let second_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let input = |controller_generation| CommittedControllerProcessSubjectInput {
+        provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+        provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+        process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
+        zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+        execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+        provider_generation: ResourceGeneration::new(4).unwrap(),
+        controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
+    };
+    registrar
+        .install_committed_controller_process_subject(&first_peer, input(5))
+        .unwrap();
+    registrar
+        .install_committed_controller_process_subject(&second_peer, input(6))
+        .unwrap();
+    let acceptor = registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            second_peer,
+        )
+        .unwrap();
+    drop(acceptor);
+    let error = registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            first_peer,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn exact_resource_subject_restart_rejects_old_peer_and_admits_new_peer() {
+    let (_bus, registrar) = bus_with_config(BusConfig {
+        max_routes_per_session: 1,
+        max_total_routes: 1,
+        ..BusConfig::default()
+    });
+    let old_peer = child_verified_peer();
+    let new_peer = child_verified_peer();
+    assert_ne!(old_peer.credentials().pid(), new_peer.credentials().pid());
+    let old_input = CommittedControllerProcessSubjectInput {
+        provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+        provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+        process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
+        zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+        execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+        provider_generation: ResourceGeneration::new(4).unwrap(),
+        controller_generation: ControllerGeneration::new(5).unwrap(),
+    };
+    registrar
+        .install_committed_controller_process_subject(&old_peer, old_input)
+        .unwrap();
+    registrar
+        .install_committed_controller_process_subject(
+            &new_peer,
+            CommittedControllerProcessSubjectInput {
+                provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+                provider_uid: ResourceUid::parse("66666666-6666-4666-8666-666666666666").unwrap(),
+                process_ref: ResourceRef::parse("Process/external-controller").unwrap(),
+                zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+                execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+                provider_generation: ResourceGeneration::new(4).unwrap(),
+                controller_generation: ControllerGeneration::new(6).unwrap(),
+            },
+        )
+        .unwrap();
+    let mut controller_policy = policy(
+        ServicePackage::ResourceV3,
+        EndpointPurpose::ResourceService,
+        1,
+    );
+    controller_policy.transport_binding.transport = TransportClass::UnixStream;
+    controller_policy.attachment_policy = AttachmentPolicy::disabled();
+    let session = admit_with_verified_peer(&registrar, controller_policy.clone(), new_peer).await;
+    let binding = session.route_binding();
+    let context = binding.context();
+    assert_eq!(
+        context.subject_uid(),
+        &ResourceUid::parse("66666666-6666-4666-8666-666666666666").unwrap()
+    );
+    assert_eq!(
+        context.process_ref(),
+        Some(&ResourceRef::parse("Process/external-controller").unwrap())
+    );
+    assert_eq!(
+        context.execution_ref(),
+        Some(&ResourceRef::parse("Host/host-system").unwrap())
+    );
+    assert_eq!(
+        context.provider_generation(),
+        Some(ResourceGeneration::new(4).unwrap())
+    );
+    assert_eq!(
+        context.controller_generation(),
+        Some(ControllerGeneration::new(6).unwrap())
+    );
+    let error = registrar
+        .component_session_acceptor(controller_policy, old_peer)
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn exact_resource_subjects_with_different_processes_remain_distinct() {
+    let (_bus, registrar) = bus_with_config(BusConfig {
+        max_routes_per_session: 1,
+        max_total_routes: 1,
+        ..BusConfig::default()
+    });
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let input = |process_ref| CommittedControllerProcessSubjectInput {
+        provider_ref: ResourceRef::parse("Provider/external").unwrap(),
+        provider_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+        process_ref: ResourceRef::parse(process_ref).unwrap(),
+        zone_ref: ResourceRef::parse("Zone/dev").unwrap(),
+        execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+        provider_generation: ResourceGeneration::new(4).unwrap(),
+        controller_generation: ControllerGeneration::new(5).unwrap(),
+    };
+    registrar
+        .install_committed_controller_process_subject(
+            &verified_peer,
+            input("Process/external-controller-a"),
+        )
+        .unwrap();
+    let error = registrar
+        .install_committed_controller_process_subject(
+            &verified_peer,
+            input("Process/external-controller-b"),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn a_shared_provider_uid_cannot_select_a_resource_controller() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let uid_only_subject = UnixSubjectRecord::provider_for_uid(
+        ResourceRef::parse("Provider/external").unwrap(),
+        ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
+        ResourceRef::parse("Zone/dev").unwrap(),
+        verified_peer.credentials().uid().as_raw(),
+    )
+    .unwrap()
+    .for_service(ServicePackage::ResourceV3);
+    registrar
+        .install_test_unix_subject(uid_only_subject)
+        .unwrap();
+
+    let error = registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            verified_peer,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
+async fn explicitly_installed_system_core_subject_still_registers() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    registrar
+        .install_system_core_subject(&verified_peer)
+        .unwrap();
+    registrar
+        .component_session_acceptor(
+            policy(
+                ServicePackage::ResourceV3,
+                EndpointPurpose::ResourceService,
+                1,
+            ),
+            verified_peer,
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn service_registration_returns_the_only_transport_reader() {
+    let (_bus, mut registrar) = bus();
+    let (candidate, remote, echo) = admit_without_echo(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let (ingress, service_driver) = registrar
+        .register_component_service_session(candidate)
+        .await
+        .unwrap();
+    assert!(ingress.component_session_driver().is_none());
+
+    let frame = ttrpc_frame(1, b"service-request");
+    remote.send_ttrpc(frame.clone()).await.unwrap();
+    assert_eq!(service_driver.receive_ttrpc().await.unwrap(), frame);
+
+    registrar.revoke(ingress).await.unwrap();
+    echo.abort();
+}
+
+#[tokio::test]
 async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
     let (_first_bus, first_registrar) = bus();
     let (_second_bus, mut second_registrar) = bus();
@@ -538,7 +1101,8 @@ fn assignment_fingerprint() -> SchemaFingerprint {
 }
 
 fn assignment_manifest() -> ProviderManifest {
-    let process = d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap();
+    let process =
+        d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap();
     let component = ComponentDescriptor::new(
         d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller")
             .unwrap(),
@@ -608,9 +1172,7 @@ fn assignment_manifest() -> ProviderManifest {
     ProviderManifest::new(
         d2b_contracts_resource::v3::ArtifactId::parse("provider-system-core").unwrap(),
         ArtifactDigestSet {
-            package: assignment_digest(),
             executable: assignment_digest(),
-            manifest: assignment_digest(),
             config: assignment_digest(),
             schema: assignment_digest(),
             service: assignment_digest(),
@@ -668,8 +1230,13 @@ fn scoped_bus() -> (
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
         &catalog,
-        [d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap()],
-        [ResourceVerb::UpdateStatus, ResourceVerb::UpdateFinalizers],
+        [d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+        [
+            ResourceVerb::List,
+            ResourceVerb::Watch,
+            ResourceVerb::UpdateStatus,
+            ResourceVerb::UpdateFinalizers,
+        ],
         [
             SessionVerb::Connect,
             SessionVerb::Invoke,
@@ -731,6 +1298,8 @@ fn scoped_bus() -> (
 struct ScopedStore {
     acceptor: MutationSealAcceptor,
     commits: std::sync::Arc<std::sync::Mutex<Vec<Vec<(ResourceMutationKind, bool)>>>>,
+    lists: std::sync::Arc<std::sync::Mutex<Vec<StoreListRequest>>>,
+    watches: std::sync::Arc<std::sync::Mutex<Vec<StoreWatchRequest>>>,
 }
 
 impl ResourceStoreBackend for ScopedStore {
@@ -738,12 +1307,22 @@ impl ResourceStoreBackend for ScopedStore {
         unreachable!("scoped commit proof does not read through the backend")
     }
 
-    async fn list(&self, _: StoreListRequest) -> Result<StoreListResult, StoreError> {
-        unreachable!("scoped commit proof does not list through the backend")
+    async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
+        self.lists.lock().unwrap().push(request);
+        Ok(StoreListResult {
+            resources: Vec::new(),
+            snapshot_revision: ZoneRevision::new(8),
+            next_cursor: None,
+            truncated: false,
+        })
     }
 
-    async fn watch(&self, _: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
-        unreachable!("scoped commit proof does not watch through the backend")
+    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        self.watches.lock().unwrap().push(request);
+        Ok(StoreWatchReceipt {
+            stream_name: "scoped-watch".to_owned(),
+            snapshot_revision: ZoneRevision::new(8),
+        })
     }
 
     async fn resolve_ref(
@@ -787,7 +1366,7 @@ fn commit_batch_frame(operation_id: &str) -> Vec<u8> {
     let envelope = assignment_resource();
     let identity = d2b_contracts_resource::resource_proto::ResourceIdentity {
         zone: "dev".to_owned(),
-        resource_type: "Process".to_owned(),
+        resource_type: PROCESS_RESOURCE_TYPE.to_owned(),
         name: "work".to_owned(),
         uid: Some(envelope.metadata().uid().as_str().to_owned()),
         generation: Some(envelope.metadata().generation().get()),
@@ -847,6 +1426,237 @@ fn commit_batch_frame(operation_id: &str) -> Vec<u8> {
     frame
 }
 
+fn query_frame(method: &str) -> Vec<u8> {
+    let mut meta = resource_wire::RequestMeta::new();
+    meta.operation_id = format!("query-{method}");
+    meta.idempotency_key = format!("query-{method}-key");
+    meta.correlation_id = format!("query-{method}-correlation");
+    meta.deadline_ms = 10_000;
+    let payload = if method == "Watch" {
+        let mut request = resource_wire::WatchRequest::new();
+        request.meta = MessageField::some(meta);
+        request.resource_types.push("Host".to_owned());
+        request.filters.push(resource_wire::ListFilter {
+            field: "metadata.name".to_owned(),
+            values: vec!["caller-supplied".to_owned()],
+            ..resource_wire::ListFilter::default()
+        });
+        let mut projection = resource_wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+        request.projection = MessageField::some(projection);
+        request.write_to_bytes().unwrap()
+    } else {
+        let mut request = resource_wire::ListRequest::new();
+        request.meta = MessageField::some(meta);
+        request.resource_types.push("Host".to_owned());
+        request.filters.push(resource_wire::ListFilter {
+            field: "metadata.name".to_owned(),
+            values: vec!["caller-supplied".to_owned()],
+            ..resource_wire::ListFilter::default()
+        });
+        let mut projection = resource_wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+        request.projection = MessageField::some(projection);
+        request.write_to_bytes().unwrap()
+    };
+    let rpc = TtrpcRequest {
+        service: "d2b.resource.v3.ResourceService".to_owned(),
+        method: method.to_owned(),
+        payload,
+        ..TtrpcRequest::default()
+    };
+    let body = rpc.write_to_bytes().unwrap();
+    let header = MessageHeader::new_request(1, body.len() as u32);
+    let mut frame = Vec::with_capacity(ttrpc::proto::MESSAGE_HEADER_LENGTH + body.len());
+    frame.extend_from_slice(&Vec::from(header));
+    frame.extend_from_slice(&body);
+    frame
+}
+
+#[tokio::test]
+async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
+    let (_bus, mut registrar, assignments, native, state) = scoped_bus();
+    let resource = assignment_resource();
+    let role = ControllerRoleContract::from_signed_manifest(
+        ResourceRef::parse("Provider/system-core").unwrap(),
+        ResourceRef::parse("Process/process-controller").unwrap(),
+        &assignment_manifest(),
+    )
+    .unwrap();
+    let lease = assignments
+        .lock()
+        .unwrap()
+        .admit(AssignmentRequest::new(
+            &resource,
+            &role,
+            ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+            true,
+        ))
+        .unwrap();
+    let owner_uid = resource.metadata().uid().clone();
+    let query = ResourceQuery::from_scoped(
+        lease
+            .child_query(
+                vec![
+                    d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE)
+                        .unwrap(),
+                ],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        lease.child_query(
+            vec![d2b_contracts_resource::v3::ResourceTypeName::parse("Host").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        ),
+        Err(AssignmentError::QueryWidened)
+    );
+
+    let store_identity = StoreSealIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        ZoneId::parse("dev").unwrap(),
+        ResourceUid::parse("99999999-9999-4999-8999-999999999999").unwrap(),
+    );
+    let acceptor = native.take_store_seal(store_identity).unwrap();
+    let lists = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let store = Arc::new(ScopedStore {
+        acceptor,
+        commits: Arc::new(std::sync::Mutex::new(Vec::new())),
+        lists: Arc::clone(&lists),
+        watches: Arc::clone(&watches),
+    });
+    let service = Arc::new(ResourceService::new(Arc::clone(&store), Arc::clone(&native)).unwrap());
+    let (resource_endpoint, resource_remote, resource_echo) = admit_without_echo(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let endpoint_subject = native
+        .issue_authenticated_subject(resource_endpoint.route_binding().context().clone(), state)
+        .unwrap();
+    let adapter =
+        Arc::new(ResourceBusAdapter::bind_component_session(service, endpoint_subject).unwrap());
+    let service_task = tokio::spawn(serve_ttrpc_services(
+        Arc::new(resource_remote),
+        adapter.ttrpc_services(),
+    ));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let _resource_ingress = registrar
+        .register_component_session(resource_endpoint)
+        .await
+        .unwrap();
+
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    for (method, call) in [
+        ("List", ResourceCall::List(query.clone())),
+        ("Watch", ResourceCall::Watch(query)),
+    ] {
+        let response = caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    &format!("ResourceService/{method}"),
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(
+                    OperationId::parse(&format!("owner-child-{method}")).unwrap(),
+                    10_000,
+                )
+                .unwrap(),
+                call,
+                query_frame(method),
+            )
+            .await
+            .unwrap();
+        let response = ttrpc::proto::Response::parse_from_bytes(
+            &response.as_bytes()[ttrpc::proto::MESSAGE_HEADER_LENGTH..],
+        )
+        .unwrap();
+        assert_eq!(
+            response.status.as_ref().map(|status| status.code()),
+            Some(ttrpc::proto::Code::OK),
+            "ttrpc status: {:?}",
+            response.status
+        );
+        if method == "List" {
+            let response =
+                resource_wire::ListResponse::parse_from_bytes(&response.payload).unwrap();
+            assert!(response.error.is_none());
+            assert_eq!(response.snapshot_revision, 8);
+        } else {
+            let response =
+                resource_wire::WatchResponse::parse_from_bytes(&response.payload).unwrap();
+            assert!(response.error.is_none());
+            assert_eq!(response.snapshot_revision, 8);
+        }
+    }
+
+    let lists = lists.lock().unwrap();
+    assert_eq!(lists.len(), 1);
+    assert_eq!(
+        lists[0].resource_types,
+        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
+    );
+    assert_eq!(lists[0].resource_names, Vec::new());
+    assert_eq!(lists[0].filters.len(), 1);
+    assert_eq!(lists[0].filters[0].field, "owner.resourceUid");
+    assert_eq!(
+        lists[0].filters[0].values,
+        vec![owner_uid.as_str().to_owned()]
+    );
+    drop(lists);
+
+    let watches = watches.lock().unwrap();
+    assert_eq!(watches.len(), 1);
+    assert_eq!(
+        watches[0].resource_types,
+        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
+    );
+    assert_eq!(watches[0].resource_names, Vec::new());
+    assert_eq!(watches[0].filters.len(), 1);
+    assert_eq!(watches[0].filters[0].field, "owner.resourceUid");
+    assert_eq!(
+        watches[0].filters[0].values,
+        vec![owner_uid.as_str().to_owned()]
+    );
+
+    service_task.abort();
+    let _ = service_task.await;
+    resource_echo.abort();
+    caller_echo.abort();
+}
+
 #[tokio::test]
 async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
@@ -900,9 +1710,13 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     );
     let acceptor = native.take_store_seal(store_identity).unwrap();
     let commits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lists = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let watches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let store = std::sync::Arc::new(ScopedStore {
         acceptor,
         commits: std::sync::Arc::clone(&commits),
+        lists: Arc::clone(&lists),
+        watches: Arc::clone(&watches),
     });
     let service = std::sync::Arc::new(
         ResourceService::new(
@@ -1053,7 +1867,10 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(forged, BusError::Endpoint(EndpointError::Rejected)));
+    assert!(matches!(
+        forged,
+        BusError::Endpoint(EndpointError::Rejected)
+    ));
 
     for attempt in 0..8 {
         if commits.lock().unwrap().len() >= 2 {
@@ -1391,6 +2208,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let sequence = async {
         let first_frame = remote.receive_ttrpc().await.unwrap();
         let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
+        assert_eq!(first_internal_id % 2, 1);
         caller.cancel(&first_operation).await.unwrap();
         let second = caller.invoke_resource(
             route.clone(),
@@ -1401,6 +2219,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         let responses = async {
             let second_frame = remote.receive_ttrpc().await.unwrap();
             let second_internal_id = ttrpc_stream_id(&second_frame).unwrap();
+            assert_eq!(second_internal_id % 2, 1);
             assert_ne!(first_internal_id, second_internal_id);
             remote
                 .send_ttrpc(ttrpc_frame(first_internal_id, b"late-first"))

@@ -9,11 +9,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::{
-    volume::{
+use d2b_contracts_resource::v3::volume::{
     AttachmentTransport, BlockImageFormat, CreatePolicy, EntryRestartPolicy, SourceKind,
     VolumeKind, VolumeSpec,
-},
 };
 
 use crate::error::VolumeLocalError;
@@ -91,9 +89,14 @@ impl SourcePolicyCatalog {
 
     /// Validate the opaque policy selected by a Volume.
     pub fn validate(&self, spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
-        if spec.source().settings().kind() == SourceKind::Tmpfs {
+        if matches!(
+            spec.source().settings().kind(),
+            SourceKind::Tmpfs | SourceKind::NixClosure
+        ) {
             // The v3 base contract carries no sourcePolicyId for tmpfs:
             // the kernel mount is created by the selected execution domain.
+            // Nix closures are selected by their artifact ID and resolved by
+            // the StoreSync effect path, not by a host-path policy.
             return Ok(());
         }
         let policy_id = spec
@@ -146,8 +149,7 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
             if quota.max_bytes().is_none() || quota.max_inodes().is_none() {
                 return Err(VolumeLocalError::TmpfsQuotaMissing);
             }
-            if quota.enforcement() != d2b_contracts_resource::v3::volume::QuotaEnforcement::Hard
-            {
+            if quota.enforcement() != d2b_contracts_resource::v3::volume::QuotaEnforcement::Hard {
                 return Err(VolumeLocalError::InvalidSpec);
             }
             if spec
@@ -189,6 +191,21 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
                 .any(|attachment| attachment.transport() != AttachmentTransport::VirtioBlk)
             {
                 return Err(VolumeLocalError::BlockImageTransportMismatch);
+            }
+            Ok(())
+        }
+        SourceKind::NixClosure => {
+            if spec.source().settings().system_artifact_id().is_none()
+                || spec
+                    .attachments()
+                    .iter()
+                    .any(|attachment| attachment.transport() != AttachmentTransport::Virtiofs)
+                || spec.attachments().iter().any(|attachment| {
+                    attachment.access()
+                        != d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly
+                })
+            {
+                return Err(VolumeLocalError::InvalidSpec);
             }
             Ok(())
         }
@@ -356,6 +373,39 @@ mod tests {
             .expect("limits")
             .mount_options();
         assert_eq!(options, ["size=4096", "nr_inodes=32"]);
+    }
+
+    #[test]
+    fn nix_closure_uses_an_artifact_binding_instead_of_a_source_policy() {
+        let value = json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": {
+                    "kind": "nix-closure",
+                    "sourcePolicyId": null,
+                    "systemArtifactId": "guest-system"
+                }
+            },
+            "kind": "state",
+            "layout": [],
+            "views": { "guest-ro": { "path": "", "rights": ["read", "traverse"] } }
+        });
+        let spec: VolumeSpec = serde_json::from_value(value).expect("valid Nix closure");
+        assert_eq!(spec.source().settings().kind(), SourceKind::NixClosure);
+        assert_eq!(
+            spec.source()
+                .settings()
+                .system_artifact_id()
+                .map(|id| id.as_str()),
+            Some("guest-system")
+        );
+        assert!(
+            SourcePolicyCatalog::new([])
+                .unwrap()
+                .validate(&spec)
+                .is_ok()
+        );
+        assert!(validate_source_spec(&spec).is_ok());
     }
 
     #[test]

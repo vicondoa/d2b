@@ -1,6 +1,7 @@
 use crate::runtime::{RuntimeError, ScopeRuntime};
 use crate::systemd::UserScopeManager;
 use d2b_contracts::UNSAFE_LOCAL_HELPER_SOCKET_PATH;
+use d2b_contracts::ids::OperationId;
 use d2b_contracts_control::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
@@ -8,7 +9,6 @@ use d2b_contracts_control::unsafe_local_wire::{
     UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
     unsafe_local_helper_protocol_supported,
 };
-use d2b_realm_core::ids::OperationId;
 use nix::cmsg_space;
 use nix::libc;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
@@ -165,6 +165,15 @@ impl<M: UserScopeManager> HelperClient<M> {
                     )?;
                 }
                 DaemonToUnsafeLocalHelper::Launch(request) => {
+                    if request.validate_bounds().is_err() {
+                        let rejected = rejection(
+                            request.request_id,
+                            request.operation_id,
+                            HelperFailureCode::InvalidRequest,
+                        );
+                        send_frame(&socket, &rejected)?;
+                        continue;
+                    }
                     if active.fetch_add(1, Ordering::AcqRel) >= MAX_HELPER_QUEUE_DEPTH {
                         active.fetch_sub(1, Ordering::AcqRel);
                         let rejected = rejection(
@@ -330,10 +339,14 @@ fn connect_control_socket(path: &Path, expected_daemon_uid: u32) -> Result<Socke
         .map_err(|_| ProtocolError::ConnectFailed)?;
     let peer =
         getsockopt(&socket, PeerCredentials).map_err(|_| ProtocolError::PeerCredentialMismatch)?;
-    if peer.uid() as u32 != expected_daemon_uid || peer.uid() == 0 {
+    if !peer_uid_is_exact(peer.uid() as u32, expected_daemon_uid) {
         return Err(ProtocolError::PeerCredentialMismatch);
     }
     Ok(socket)
+}
+
+fn peer_uid_is_exact(peer_uid: u32, expected_uid: u32) -> bool {
+    peer_uid != 0 && expected_uid != 0 && peer_uid == expected_uid
 }
 
 pub fn configure_socket_buffers(socket: &Socket) -> Result<(), ProtocolError> {
@@ -739,5 +752,13 @@ mod tests {
             ),
             Err(error) => panic!("failed to inspect released fd: {error}"),
         }
+    }
+
+    #[test]
+    fn peer_credential_auth_accepts_only_the_exact_non_root_uid() {
+        assert!(peer_uid_is_exact(1000, 1000));
+        assert!(!peer_uid_is_exact(1001, 1000));
+        assert!(!peer_uid_is_exact(0, 1000));
+        assert!(!peer_uid_is_exact(1000, 0));
     }
 }

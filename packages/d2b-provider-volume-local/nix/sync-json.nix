@@ -3,8 +3,9 @@
 let
   cfg = config.d2b;
   d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  enabledVms = d2bLib.enabledVms gatewayVms;
+  qemuMediaVms = d2bLib.qemuMediaVms gatewayVms;
 
   actor = kind: value: { inherit kind value; };
   lockId = prefix: key: "${prefix}:${builtins.hashString "sha256" key}";
@@ -180,7 +181,7 @@ let
 
   usbipLocks = lib.flatten (lib.mapAttrsToList
     (vm: vmCfg: map (busid: usbipLock vm busid) (vmCfg.usbip.busids or [ ]))
-    (lib.filterAttrs (_: vm: vm.enable && vm.usbip.yubikey) cfg.vms));
+    (lib.filterAttrs (_: vm: vm.enable && vm.usbip.yubikey) gatewayVms));
 
   data = {
     schemaVersion = "v2";

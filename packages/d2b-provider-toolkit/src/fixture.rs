@@ -13,32 +13,17 @@ use std::{
     },
 };
 
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+    ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ConfigurationGeneration, ResourceGeneration, ResourceName, ResourceRef,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, execution_policy::BoundedToken,
+};
 use d2b_contracts_zone_session::v3::{
     ProviderMethod,
     zone_routing::{ZoneLabelId, ZonePath},
-};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    execution_policy::BoundedToken,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
 };
 use d2b_provider::{
     ProviderAgentError, ProviderAgentRequest, ProviderAgentResponse, ProviderAgentService,

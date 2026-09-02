@@ -5,10 +5,7 @@ use d2b_contracts::types::VmId;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessRole, ReadinessPredicate};
 use d2b_provider_device_security_key::{
@@ -145,6 +142,8 @@ struct RelayTarget {
     gid: u32,
 }
 
+/// Resolve the retained legacy security-key frontend. v3 Guest lifecycle
+/// requests never use this connector or its process-DAG locator.
 fn relay_target(
     resolver: &BundleResolver,
     vm_id: &str,

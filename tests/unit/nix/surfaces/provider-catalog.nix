@@ -13,5 +13,7 @@ import ../helpers/surface.nix {
       "provider-catalog/signed-placement-contract-fails-closed-on-target-drift"
       "provider-catalog/null-catalog-has-no-signed-contract"
     ];
+  } {
+    path = ../cases/provider-runtime-contracts.nix;
   }];
 }

@@ -36,6 +36,14 @@ fn expected_error(error: Option<NetworkEffectError>) -> &'static str {
         Some(NetworkEffectError::InvalidState) => "network-controller-invalid-state",
         Some(NetworkEffectError::EastWestHostOptInRequired) => "east-west-host-opt-in-required",
         Some(NetworkEffectError::ExternalNicAuthorityRequired) => "external-nic-authority-required",
+        Some(NetworkEffectError::NetworkAdmissionRequired) => "network-admission-required",
+        Some(NetworkEffectError::NetworkAdmissionMismatch) => "network-admission-mismatch",
+        Some(NetworkEffectError::NetworkAdmissionConflict) => "network-admission-conflict",
+        Some(NetworkEffectError::NetworkInterfaceCollision) => "network-interface-collision",
+        Some(NetworkEffectError::NetworkRouteCollision) => "network-route-collision",
+        Some(NetworkEffectError::HostNetworkObservationFailed) => "host-network-observation-failed",
+        Some(NetworkEffectError::CrossZoneReference) => "network-cross-zone-reference",
+        Some(NetworkEffectError::AttachmentReferenceMismatch) => "network-attachment-mismatch",
     }
 }
 
@@ -73,6 +81,14 @@ fn metric_constructor_projects_only_the_closed_schema_and_values() {
         Some(NetworkEffectError::InvalidState),
         Some(NetworkEffectError::EastWestHostOptInRequired),
         Some(NetworkEffectError::ExternalNicAuthorityRequired),
+        Some(NetworkEffectError::NetworkAdmissionRequired),
+        Some(NetworkEffectError::NetworkAdmissionMismatch),
+        Some(NetworkEffectError::NetworkAdmissionConflict),
+        Some(NetworkEffectError::NetworkInterfaceCollision),
+        Some(NetworkEffectError::NetworkRouteCollision),
+        Some(NetworkEffectError::HostNetworkObservationFailed),
+        Some(NetworkEffectError::CrossZoneReference),
+        Some(NetworkEffectError::AttachmentReferenceMismatch),
     ];
 
     for operation in operations {

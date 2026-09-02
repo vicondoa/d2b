@@ -12,11 +12,9 @@
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 mod broker_tampered {
+    use d2b_broker::runtime::{probe_bundle_load_response, probe_bundle_load_response_with_policy};
     use d2b_contracts_broker::broker_wire::BrokerResponse;
     use d2b_core::bundle_resolver::BundleVerifyPolicy;
-    use d2b_broker::runtime::{
-        probe_bundle_load_response, probe_bundle_load_response_with_policy,
-    };
     use std::fs;
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;

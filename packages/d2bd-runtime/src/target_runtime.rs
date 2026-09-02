@@ -75,7 +75,7 @@ impl DaemonMode {
             Self::Host => ModeSurfaces {
                 local_zone_store: true,
                 public_operator_socket: true,
-                realm_credentials: true,
+                realm_credentials: false,
                 host_controller_authority: true,
                 parent_component_session: false,
             },
@@ -2338,6 +2338,7 @@ mod tests {
         assert!(!DaemonMode::Guest.surfaces().local_zone_store);
         assert!(!DaemonMode::Guest.surfaces().public_operator_socket);
         assert!(!DaemonMode::Guest.surfaces().realm_credentials);
+        assert!(!DaemonMode::Host.surfaces().realm_credentials);
         assert!(DaemonMode::Guest.surfaces().parent_component_session);
     }
 

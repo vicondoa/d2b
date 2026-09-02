@@ -2,9 +2,7 @@
 
 use crate::{TransportError, limits::MAX_FRAME_BYTES};
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    component_session::{Locality, TransportClass},
-};
+use d2b_contracts_zone_session::v3::component_session::{Locality, TransportClass};
 use d2b_session::{
     Cancellation, OwnedTransport, TransportDescriptor, TransportPacket, TransportReader,
     TransportWriter,

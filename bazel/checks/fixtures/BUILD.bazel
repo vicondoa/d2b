@@ -24,6 +24,9 @@ _FIXTURE_SOURCES = [
 nix_fixture(
     name = "fixture_smoke",
     flake = "//:flake.nix",
+    host_tools = [
+        "//packages/d2b-resource-compiler:d2b-resource-compiler",
+    ],
     nix = "@nix//:bin/nix",
     srcs = _FIXTURE_SOURCES,
     tags = [
@@ -47,6 +50,8 @@ test_suite(
         "//packages/d2b:status_contract",
         "//packages/d2b:usb_contract",
         "//packages/d2b:usb_sk_contract",
+        "//packages/d2b-contracts-zone-session:generation_bundle",
+        "//packages/d2b-provider-runtime-qemu-media:fixture_projection",
     ],
 )
 

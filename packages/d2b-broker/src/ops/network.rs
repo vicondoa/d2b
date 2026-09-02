@@ -62,7 +62,7 @@ impl core::fmt::Display for NetworkOpError {
 impl std::error::Error for NetworkOpError {}
 
 /// Identity-free bridge readback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeReadback {
     /// Link exists.
     pub present: bool,
@@ -78,6 +78,8 @@ pub struct BridgeReadback {
     pub ipv6_suppressed: bool,
     /// Number of links currently attached to the bridge.
     pub attached_links: usize,
+    /// Observable d2b ownership marker from the link alias.
+    pub ownership_marker: Option<String>,
 }
 
 /// Injected bridge kernel adapter.
@@ -99,21 +101,25 @@ pub fn create_bridge<B: BridgeBackend>(
     backend: &B,
     intent: &ResolvedBridgeIntent,
 ) -> Result<String, NetworkOpError> {
+    let expected_marker = expected_bridge_marker(intent)?;
     let observed = backend.read_bridge(intent)?;
     if observed.present {
-        if bridge_matches(intent, observed) {
+        if observed.ownership_marker.as_deref() != Some(expected_marker.as_str()) {
+            return Err(NetworkOpError::ForeignOwnership);
+        }
+        if bridge_matches(intent, &observed, &expected_marker) {
             return Ok(bridge_intent_digest(intent));
         }
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
     backend.create_bridge_down(intent)?;
     if backend.configure_bridge(intent).is_err() || backend.set_bridge_up(intent).is_err() {
-        let _ = backend.delete_bridge(intent);
+        delete_created_bridge_if_owned(backend, intent, &expected_marker);
         return Err(NetworkOpError::BridgeBackend);
     }
     let observed = backend.read_bridge(intent)?;
-    if !bridge_matches(intent, observed) {
-        let _ = backend.delete_bridge(intent);
+    if !bridge_matches(intent, &observed, &expected_marker) {
+        delete_created_bridge_if_owned(backend, intent, &expected_marker);
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
     Ok(bridge_intent_digest(intent))
@@ -124,11 +130,15 @@ pub fn delete_bridge<B: BridgeBackend>(
     backend: &B,
     intent: &ResolvedBridgeIntent,
 ) -> Result<String, NetworkOpError> {
+    let expected_marker = expected_bridge_marker(intent)?;
     let observed = backend.read_bridge(intent)?;
     if !observed.present {
         return Ok(bridge_intent_digest(intent));
     }
-    if !bridge_matches(intent, observed) {
+    if observed.ownership_marker.as_deref() != Some(expected_marker.as_str()) {
+        return Err(NetworkOpError::ForeignOwnership);
+    }
+    if !bridge_matches(intent, &observed, &expected_marker) {
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
     if observed.attached_links != 0 {
@@ -138,13 +148,55 @@ pub fn delete_bridge<B: BridgeBackend>(
     Ok(bridge_intent_digest(intent))
 }
 
-fn bridge_matches(intent: &ResolvedBridgeIntent, observed: BridgeReadback) -> bool {
+fn expected_bridge_marker(intent: &ResolvedBridgeIntent) -> Result<String, NetworkOpError> {
+    let provenance = intent
+        .provenance
+        .as_ref()
+        .ok_or(NetworkOpError::ForeignOwnership)?;
+    let variant = intent
+        .intent_id
+        .rsplit(':')
+        .next()
+        .filter(|variant| matches!(*variant, "lan" | "uplink"))
+        .ok_or(NetworkOpError::ForeignOwnership)?;
+    let expected = format!(
+        "d2b managed: {}",
+        d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            &format!("bridge:{variant}"),
+        )
+    );
+    if intent.ownership_marker.as_deref() != Some(expected.as_str()) {
+        return Err(NetworkOpError::ForeignOwnership);
+    }
+    Ok(expected)
+}
+
+fn bridge_matches(
+    intent: &ResolvedBridgeIntent,
+    observed: &BridgeReadback,
+    expected_marker: &str,
+) -> bool {
     observed.present
         && observed.is_bridge
         && observed.mtu == intent.mtu
         && observed.stp_disabled == intent.stp_disabled
         && observed.multicast_snooping_disabled == intent.multicast_snooping_disabled
         && observed.ipv6_suppressed == intent.ipv6_suppressed
+        && observed.ownership_marker.as_deref() == Some(expected_marker)
+}
+
+fn delete_created_bridge_if_owned<B: BridgeBackend>(
+    backend: &B,
+    intent: &ResolvedBridgeIntent,
+    expected_marker: &str,
+) {
+    let Ok(observed) = backend.read_bridge(intent) else {
+        return;
+    };
+    if observed.present && observed.ownership_marker.as_deref() == Some(expected_marker) {
+        let _ = backend.delete_bridge(intent);
+    }
 }
 
 /// Path-free digest over trusted bridge configuration.
@@ -189,6 +241,7 @@ impl BridgeBackend for SystemBridgeBackend {
                     multicast_snooping_disabled: false,
                     ipv6_suppressed: false,
                     attached_links: 0,
+                    ownership_marker: None,
                 });
             }
             return Err(NetworkOpError::BridgeBackend);
@@ -206,6 +259,10 @@ impl BridgeBackend for SystemBridgeBackend {
             .and_then(serde_json::Value::as_str)
             == Some("bridge");
         let root = PathBuf::from("/sys/class/net").join(intent.bridge_ifname.as_str());
+        let ownership_marker = fs::read_to_string(root.join("ifalias"))
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let stp_disabled = read_trimmed(&root.join("bridge/stp_state"))? == "0";
         let multicast_snooping_disabled =
             read_trimmed(&root.join("bridge/multicast_snooping"))? == "0";
@@ -236,6 +293,7 @@ impl BridgeBackend for SystemBridgeBackend {
             multicast_snooping_disabled,
             ipv6_suppressed,
             attached_links,
+            ownership_marker,
         })
     }
 
@@ -258,6 +316,15 @@ impl BridgeBackend for SystemBridgeBackend {
             intent.bridge_ifname.as_str(),
             "mtu",
             &intent.mtu.to_string(),
+        ])?;
+        let marker = expected_bridge_marker(intent)?;
+        run_ip(&[
+            "link",
+            "set",
+            "dev",
+            intent.bridge_ifname.as_str(),
+            "alias",
+            &marker,
         ])?;
         let root = PathBuf::from("/sys/class/net").join(intent.bridge_ifname.as_str());
         write_fixed(&root.join("bridge/stp_state"), "0")?;
@@ -311,10 +378,16 @@ fn write_fixed(path: &Path, value: &str) -> Result<(), NetworkOpError> {
 pub struct PersistentTapRealization {
     /// Opaque attachment identity.
     pub attachment_id: String,
+    /// Immutable Zone identity bound to the attachment.
+    pub zone_uid: String,
+    /// Immutable Network identity bound to the attachment.
+    pub network_uid: String,
     /// Network generation bound at realization.
     pub network_generation: u64,
     /// Attachment generation bound at realization.
     pub attachment_generation: u64,
+    /// Installed bundle generation bound at realization.
+    pub bundle_generation: String,
     /// Trusted kernel interface name, private to the broker record.
     pub ifname: String,
     /// Trusted ownership marker written by the realization owner.
@@ -344,35 +417,30 @@ fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
 }
 
 /// Persist one v3 TAP realization after the kernel link is created.
-///
-/// Legacy host-prep callers omit the v3 identity fields and remain
-/// deliberately stateless. Provider callers supply all fields, which makes
-/// restart adoption and generation-fenced finalization possible.
 pub fn persist_persistent_tap_realization(
     state_dir: &Path,
     request: &CreatePersistentTapRequest,
     tap_ifname: &IfName,
 ) -> Result<(), NetworkOpError> {
-    let fields = (
-        request.attachment_id.as_ref(),
-        request.network_generation,
-        request.attachment_generation,
-    );
-    let (Some(attachment_id), Some(network_generation), Some(attachment_generation)) = fields
-    else {
-        if fields.0.is_none() && fields.1.is_none() && fields.2.is_none() {
-            return Ok(());
-        }
-        return Err(NetworkOpError::RealizationConflict);
-    };
+    validate_persistent_tap_identity(request, tap_ifname)?;
     let root = realization_root(state_dir)?;
-    let row_path = root.join(format!("{}.json", attachment_id.as_str()));
+    let row_path = root.join(format!("{}.json", request.attachment_id.as_str()));
     let realization = PersistentTapRealization {
-        attachment_id: attachment_id.as_str().to_owned(),
-        network_generation: network_generation.get(),
-        attachment_generation: attachment_generation.get(),
+        attachment_id: request.attachment_id.as_str().to_owned(),
+        zone_uid: request.zone_uid.as_str().to_owned(),
+        network_uid: request.network_uid.as_str().to_owned(),
+        network_generation: request.network_generation.get(),
+        attachment_generation: request.attachment_generation.get(),
+        bundle_generation: request.bundle_generation.as_str().to_owned(),
         ifname: tap_ifname.as_str().to_owned(),
-        ownership_marker: format!("d2b managed: attachment:{}", attachment_id.as_str()),
+        ownership_marker: attachment_ownership_marker(
+            request.zone_uid.as_str(),
+            request.network_uid.as_str(),
+            request.attachment_id.as_str(),
+            request.network_generation.get(),
+            request.attachment_generation.get(),
+            request.bundle_generation.as_str(),
+        ),
         deleted: false,
     };
     if let Ok(existing) = fs::OpenOptions::new()
@@ -390,7 +458,7 @@ pub fn persist_persistent_tap_realization(
             return Err(NetworkOpError::RealizationConflict);
         }
     }
-    let temp_path = root.join(format!(".{}.json.tmp", attachment_id.as_str()));
+    let temp_path = root.join(format!(".{}.json.tmp", request.attachment_id.as_str()));
     match fs::symlink_metadata(&temp_path) {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.mode() & 0o022 != 0 => {
             return Err(NetworkOpError::RealizationUnavailable);
@@ -426,6 +494,56 @@ pub fn persist_persistent_tap_realization(
         .map_err(|_| NetworkOpError::RealizationUnavailable)
 }
 
+fn validate_persistent_tap_identity(
+    request: &CreatePersistentTapRequest,
+    tap_ifname: &IfName,
+) -> Result<(), NetworkOpError> {
+    let canonical_role_id =
+        d2b_core::bundle_resolver::canonical_tap_role_id(request.role_id.as_str());
+    let expected_ref = d2b_core::bundle_resolver::intent_id_network_tap(
+        &request.zone_uid,
+        &request.network_uid,
+        &request.attachment_id,
+        request.network_generation,
+        request.attachment_generation,
+        &request.bundle_generation,
+        canonical_role_id,
+        request.vm_id.as_str(),
+    );
+    if request.bundle_tap_intent_ref.as_str() != expected_ref {
+        return Err(NetworkOpError::RealizationConflict);
+    }
+    let is_net_vm = request.vm_id.as_str()
+        == d2b_contracts_resource::v3::derive_network_child_name(&request.network_uid, "vm");
+    let (tap_role, attachment) = if is_net_vm {
+        (d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap, None)
+    } else {
+        match canonical_role_id {
+            "net-vm-lan" => (d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap, None),
+            "uplink" => (
+                d2b_contracts_resource::v3::NetworkIfRole::NetVmUplinkTap,
+                None,
+            ),
+            "ch" | "qemu-media" | "workload-lan" | "network-attachment" | "runner-lan" => (
+                d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+                Some(&request.attachment_id),
+            ),
+            _ => return Err(NetworkOpError::RealizationConflict),
+        }
+    };
+    let expected_ifname = d2b_contracts_resource::v3::derive_network_ifname(
+        &request.zone_uid,
+        &request.network_uid,
+        tap_role,
+        attachment,
+    )
+    .map_err(|_| NetworkOpError::RealizationConflict)?;
+    if tap_ifname != &expected_ifname {
+        return Err(NetworkOpError::RealizationConflict);
+    }
+    Ok(())
+}
+
 /// Remove a v3 realization after the broker confirms TAP deletion.
 pub fn remove_persistent_tap_realization(
     state_dir: &Path,
@@ -445,8 +563,7 @@ pub fn remove_persistent_tap_realization(
     let realization: PersistentTapRealization =
         serde_json::from_reader(row).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     if realization.attachment_id != attachment_id.as_str()
-        || realization.ownership_marker
-            != format!("d2b managed: attachment:{}", attachment_id.as_str())
+        || !realization_marker_matches(&realization)
     {
         return Err(NetworkOpError::ForeignOwnership);
     }
@@ -476,8 +593,7 @@ pub fn mark_persistent_tap_realization_deleted(
     let mut realization: PersistentTapRealization =
         serde_json::from_reader(row).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     if realization.attachment_id != attachment_id.as_str()
-        || realization.ownership_marker
-            != format!("d2b managed: attachment:{}", attachment_id.as_str())
+        || !realization_marker_matches(&realization)
     {
         return Err(NetworkOpError::ForeignOwnership);
     }
@@ -531,6 +647,8 @@ impl core::fmt::Debug for PersistentTapRealization {
 pub trait PersistentTapBackend {
     /// Whether the trusted interface exists.
     fn tap_exists(&self, ifname: &str) -> Result<bool, NetworkOpError>;
+    /// Read the observable ownership marker from the trusted interface.
+    fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError>;
     /// Delete only the trusted persistent TAP.
     fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError>;
 }
@@ -550,17 +668,61 @@ pub fn delete_persistent_tap<B: PersistentTapBackend>(
     if realization.attachment_generation != request.expected_attachment_generation.get() {
         return Err(NetworkOpError::StaleAttachmentGeneration);
     }
-    let expected_marker = format!("d2b managed: attachment:{}", realization.attachment_id);
-    if realization.ownership_marker != expected_marker {
+    let expected_marker = attachment_ownership_marker(
+        &realization.zone_uid,
+        &realization.network_uid,
+        &realization.attachment_id,
+        realization.network_generation,
+        realization.attachment_generation,
+        &realization.bundle_generation,
+    );
+    if realization.ownership_marker != expected_marker
+        || realization.zone_uid != request.expected_zone_uid.as_str()
+        || realization.network_uid != request.expected_network_uid.as_str()
+        || realization.bundle_generation != request.expected_bundle_generation.as_str()
+    {
         return Err(NetworkOpError::ForeignOwnership);
     }
+
     if realization.deleted {
         return Ok(attachment_digest(&realization.attachment_id));
     }
     if backend.tap_exists(&realization.ifname)? {
+        if backend
+            .tap_ownership_marker(&realization.ifname)?
+            .as_deref()
+            != Some(realization.ownership_marker.as_str())
+        {
+            return Err(NetworkOpError::ForeignOwnership);
+        }
         backend.delete_tap(&realization.ifname)?;
     }
     Ok(attachment_digest(&realization.attachment_id))
+}
+
+fn attachment_ownership_marker(
+    zone_uid: &str,
+    network_uid: &str,
+    attachment_id: &str,
+    network_generation: u64,
+    attachment_generation: u64,
+    bundle_generation: &str,
+) -> String {
+    format!(
+        "d2b managed: network:tap:{attachment_id}:zone:{zone_uid}:network:{network_uid}:generation:{network_generation}:attachment:{attachment_generation}:bundle:{bundle_generation}"
+    )
+}
+
+fn realization_marker_matches(realization: &PersistentTapRealization) -> bool {
+    realization.ownership_marker
+        == attachment_ownership_marker(
+            &realization.zone_uid,
+            &realization.network_uid,
+            &realization.attachment_id,
+            realization.network_generation,
+            realization.attachment_generation,
+            &realization.bundle_generation,
+        )
 }
 
 /// Load a realization from a broker-owned, fd-safe state row.
@@ -607,6 +769,15 @@ impl PersistentTapBackend for SystemPersistentTapBackend {
         }
     }
 
+    fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError> {
+        Ok(
+            std::fs::read_to_string(PathBuf::from("/sys/class/net").join(ifname).join("ifalias"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+        )
+    }
+
     fn delete_tap(&self, ifname: &str) -> Result<(), NetworkOpError> {
         let output = ip_command(&["link", "delete", "dev", ifname])?;
         if output.status.success() {
@@ -641,11 +812,11 @@ fn digest_parts(parts: &[&[u8]]) -> String {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::IfName;
-    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
-    use std::cell::Cell;
+    use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
+    use std::cell::{Cell, RefCell};
 
     struct FakeBridge {
-        state: Cell<BridgeReadback>,
+        state: RefCell<BridgeReadback>,
         creates: Cell<usize>,
         deletes: Cell<usize>,
     }
@@ -655,7 +826,7 @@ mod tests {
             &self,
             _intent: &ResolvedBridgeIntent,
         ) -> Result<BridgeReadback, NetworkOpError> {
-            Ok(self.state.get())
+            Ok(self.state.borrow().clone())
         }
 
         fn create_bridge_down(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
@@ -664,7 +835,7 @@ mod tests {
         }
 
         fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
-            self.state.set(BridgeReadback {
+            self.state.replace(BridgeReadback {
                 present: true,
                 is_bridge: true,
                 mtu: intent.mtu,
@@ -672,6 +843,10 @@ mod tests {
                 multicast_snooping_disabled: true,
                 ipv6_suppressed: true,
                 attached_links: 0,
+                ownership_marker: Some(
+                    "d2b managed: network:bridge:lan:zone:223e4567-e89b-42d3-a456-426614174001:network:323e4567-e89b-42d3-a456-426614174002:generation:4:attachment:7:bundle:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_owned(),
+                ),
             });
             Ok(())
         }
@@ -682,7 +857,7 @@ mod tests {
 
         fn delete_bridge(&self, _intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
             self.deletes.set(self.deletes.get() + 1);
-            self.state.set(BridgeReadback {
+            self.state.replace(BridgeReadback {
                 present: false,
                 is_bridge: false,
                 mtu: 0,
@@ -690,20 +865,33 @@ mod tests {
                 multicast_snooping_disabled: false,
                 ipv6_suppressed: false,
                 attached_links: 0,
+                ownership_marker: None,
             });
             Ok(())
         }
     }
 
     fn bridge_intent() -> ResolvedBridgeIntent {
+        let provenance = d2b_contracts_resource::v3::NetworkProvenance::new(
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            bundle_generation(),
+        );
         ResolvedBridgeIntent {
-            intent_id: "bridge-opaque".to_owned(),
+            intent_id: "network-bridge:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002:aaaaaaaaaaaaaaaa:lan".to_owned(),
             scope_label: "scope".to_owned(),
             bridge_ifname: IfName::new("d2b-b12345678").unwrap(),
             mtu: 1500,
             stp_disabled: true,
             multicast_snooping_disabled: true,
             ipv6_suppressed: true,
+            provenance: Some(provenance),
+            ownership_marker: Some(
+                "d2b managed: network:bridge:lan:zone:223e4567-e89b-42d3-a456-426614174001:network:323e4567-e89b-42d3-a456-426614174002:generation:4:attachment:7:bundle:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_owned(),
+            ),
         }
     }
 
@@ -717,17 +905,18 @@ mod tests {
             multicast_snooping_disabled: false,
             ipv6_suppressed: false,
             attached_links: 0,
+            ownership_marker: None,
         };
         let backend = FakeBridge {
-            state: Cell::new(absent),
+            state: RefCell::new(absent),
             creates: Cell::new(0),
             deletes: Cell::new(0),
         };
         create_bridge(&backend, &bridge_intent()).unwrap();
         assert_eq!(backend.creates.get(), 1);
-        let mut attached = backend.state.get();
+        let mut attached = backend.state.borrow().clone();
         attached.attached_links = 1;
-        backend.state.set(attached);
+        backend.state.replace(attached);
         assert_eq!(
             delete_bridge(&backend, &bridge_intent()),
             Err(NetworkOpError::BridgeNotEmpty)
@@ -745,6 +934,10 @@ mod tests {
             Ok(self.present.get())
         }
 
+        fn tap_ownership_marker(&self, _ifname: &str) -> Result<Option<String>, NetworkOpError> {
+            Ok(self.present.get().then(|| realization().ownership_marker))
+        }
+
         fn delete_tap(&self, _ifname: &str) -> Result<(), NetworkOpError> {
             self.deletes.set(self.deletes.get() + 1);
             self.present.set(false);
@@ -755,20 +948,40 @@ mod tests {
     fn request(network: u64, attachment: u64) -> DeletePersistentTapRequest {
         DeletePersistentTapRequest {
             attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .unwrap(),
             expected_network_generation: ResourceGeneration::new(network).unwrap(),
             expected_attachment_generation: ResourceGeneration::new(attachment).unwrap(),
+            expected_bundle_generation: bundle_generation(),
             tracing_span_id: None,
         }
+    }
+
+    fn bundle_generation() -> ResourceBundleGenerationId {
+        ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap()
     }
 
     fn realization() -> PersistentTapRealization {
         PersistentTapRealization {
             attachment_id: "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+            zone_uid: "223e4567-e89b-42d3-a456-426614174001".to_owned(),
+            network_uid: "323e4567-e89b-42d3-a456-426614174002".to_owned(),
             network_generation: 4,
             attachment_generation: 7,
+            bundle_generation: bundle_generation().as_str().to_owned(),
             ifname: "d2b-t12345678".to_owned(),
-            ownership_marker: "d2b managed: attachment:123e4567-e89b-42d3-a456-426614174000"
-                .to_owned(),
+            ownership_marker: attachment_ownership_marker(
+                "223e4567-e89b-42d3-a456-426614174001",
+                "323e4567-e89b-42d3-a456-426614174002",
+                "123e4567-e89b-42d3-a456-426614174000",
+                4,
+                7,
+                bundle_generation().as_str(),
+            ),
             deleted: false,
         }
     }
@@ -836,22 +1049,51 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let create = CreatePersistentTapRequest {
             role_id: d2b_contracts::types::RoleId::new("network-attachment"),
             vm_id: d2b_contracts::types::VmId::new("work-net"),
-            attachment_id: Some(attachment_id.clone()),
-            network_generation: Some(ResourceGeneration::new(4).unwrap()),
-            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            bundle_tap_intent_ref: d2b_contracts::types::BundleOpId::new(
+                d2b_core::bundle_resolver::intent_id_network_tap(
+                    &zone_uid,
+                    &network_uid,
+                    &attachment_id,
+                    ResourceGeneration::new(4).unwrap(),
+                    ResourceGeneration::new(7).unwrap(),
+                    &bundle_generation(),
+                    "network-attachment",
+                    "work-net",
+                ),
+            ),
+            attachment_id: attachment_id.clone(),
+            network_generation: ResourceGeneration::new(4).unwrap(),
+            attachment_generation: ResourceGeneration::new(7).unwrap(),
+            zone_uid,
+            network_uid,
+            bundle_generation: bundle_generation(),
+            admitted_interface_names: Vec::new(),
             tracing_span_id: None,
         };
-        let ifname = IfName::new("d2b-t12345678").unwrap();
+        let ifname = d2b_contracts_resource::v3::derive_network_ifname(
+            &create.zone_uid,
+            &create.network_uid,
+            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+            Some(&create.attachment_id),
+        )
+        .unwrap();
         persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
         let loaded = load_persistent_tap_realization(
             &root,
             &DeletePersistentTapRequest {
                 attachment_id: attachment_id.clone(),
+                expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                    .unwrap(),
+                expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                    .unwrap(),
                 expected_network_generation: ResourceGeneration::new(4).unwrap(),
                 expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+                expected_bundle_generation: bundle_generation(),
                 tracing_span_id: None,
             },
         )
@@ -863,45 +1105,21 @@ mod tests {
                 &root,
                 &DeletePersistentTapRequest {
                     attachment_id,
+                    expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                        .unwrap(),
+                    expected_network_uid: ResourceUid::parse(
+                        "323e4567-e89b-42d3-a456-426614174002"
+                    )
+                    .unwrap(),
                     expected_network_generation: ResourceGeneration::new(4).unwrap(),
                     expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+                    expected_bundle_generation: bundle_generation(),
                     tracing_span_id: None,
                 },
             ),
             Err(NetworkOpError::RealizationUnavailable)
         );
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn v3_realization_rejects_partial_identity_without_writing() {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join("target")
-            .join(format!(
-                "network-realization-partial-{}",
-                std::process::id()
-            ));
-        let _ = fs::remove_dir_all(&root);
-        let create = CreatePersistentTapRequest {
-            role_id: d2b_contracts::types::RoleId::new("network-attachment"),
-            vm_id: d2b_contracts::types::VmId::new("work-net"),
-            attachment_id: Some(
-                ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap(),
-            ),
-            network_generation: None,
-            attachment_generation: None,
-            tracing_span_id: None,
-        };
-        assert_eq!(
-            persist_persistent_tap_realization(
-                &root,
-                &create,
-                &IfName::new("d2b-t12345678").unwrap()
-            ),
-            Err(NetworkOpError::RealizationConflict)
-        );
-        assert!(!root.exists());
     }
 
     #[test]
@@ -913,12 +1131,30 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let create = CreatePersistentTapRequest {
             role_id: d2b_contracts::types::RoleId::new("network-attachment"),
             vm_id: d2b_contracts::types::VmId::new("work-net"),
-            attachment_id: Some(attachment_id.clone()),
-            network_generation: Some(ResourceGeneration::new(4).unwrap()),
-            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            bundle_tap_intent_ref: d2b_contracts::types::BundleOpId::new(
+                d2b_core::bundle_resolver::intent_id_network_tap(
+                    &zone_uid,
+                    &network_uid,
+                    &attachment_id,
+                    ResourceGeneration::new(4).unwrap(),
+                    ResourceGeneration::new(7).unwrap(),
+                    &bundle_generation(),
+                    "network-attachment",
+                    "work-net",
+                ),
+            ),
+            attachment_id: attachment_id.clone(),
+            network_generation: ResourceGeneration::new(4).unwrap(),
+            attachment_generation: ResourceGeneration::new(7).unwrap(),
+            zone_uid,
+            network_uid,
+            bundle_generation: bundle_generation(),
+            admitted_interface_names: Vec::new(),
             tracing_span_id: None,
         };
         let attachments = root.join("network-attachments");
@@ -931,10 +1167,16 @@ mod tests {
             b"stale",
         )
         .unwrap();
-        let ifname = IfName::new("d2b-t12345678").unwrap();
+        let ifname = d2b_contracts_resource::v3::derive_network_ifname(
+            &create.zone_uid,
+            &create.network_uid,
+            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+            Some(&create.attachment_id),
+        )
+        .unwrap();
         persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
         let conflicting = CreatePersistentTapRequest {
-            attachment_generation: Some(ResourceGeneration::new(8).unwrap()),
+            attachment_generation: ResourceGeneration::new(8).unwrap(),
             ..create
         };
         assert_eq!(
@@ -956,21 +1198,49 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("623e4567-e89b-42d3-a456-426614174005").unwrap();
+        let zone_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let network_uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
         let create = CreatePersistentTapRequest {
             role_id: d2b_contracts::types::RoleId::new("network-attachment"),
             vm_id: d2b_contracts::types::VmId::new("work-net"),
-            attachment_id: Some(attachment_id.clone()),
-            network_generation: Some(ResourceGeneration::new(4).unwrap()),
-            attachment_generation: Some(ResourceGeneration::new(7).unwrap()),
+            bundle_tap_intent_ref: d2b_contracts::types::BundleOpId::new(
+                d2b_core::bundle_resolver::intent_id_network_tap(
+                    &zone_uid,
+                    &network_uid,
+                    &attachment_id,
+                    ResourceGeneration::new(4).unwrap(),
+                    ResourceGeneration::new(7).unwrap(),
+                    &bundle_generation(),
+                    "network-attachment",
+                    "work-net",
+                ),
+            ),
+            attachment_id: attachment_id.clone(),
+            network_generation: ResourceGeneration::new(4).unwrap(),
+            attachment_generation: ResourceGeneration::new(7).unwrap(),
+            zone_uid,
+            network_uid,
+            bundle_generation: bundle_generation(),
+            admitted_interface_names: Vec::new(),
             tracing_span_id: None,
         };
-        persist_persistent_tap_realization(&root, &create, &IfName::new("d2b-t12345678").unwrap())
-            .unwrap();
+        let ifname = d2b_contracts_resource::v3::derive_network_ifname(
+            &create.zone_uid,
+            &create.network_uid,
+            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+            Some(&create.attachment_id),
+        )
+        .unwrap();
+        persist_persistent_tap_realization(&root, &create, &ifname).unwrap();
         mark_persistent_tap_realization_deleted(&root, &attachment_id).unwrap();
         let request = DeletePersistentTapRequest {
             attachment_id,
+            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .unwrap(),
             expected_network_generation: ResourceGeneration::new(4).unwrap(),
             expected_attachment_generation: ResourceGeneration::new(7).unwrap(),
+            expected_bundle_generation: bundle_generation(),
             tracing_span_id: None,
         };
         let backend = FakeTap {

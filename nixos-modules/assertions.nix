@@ -19,6 +19,7 @@ let
   u32Max = 4294967295;
   d2bLib = import ./lib.nix { inherit lib; };
   inherit (d2bLib) cidrOverlaps parseCidr subnetIp volumeSerialIssues;
+  gatewayVms = d2bLib.gatewayVms cfg;
 
   pow2 = n:
     lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
@@ -166,7 +167,8 @@ let
       (row:
         row.legacyVmName != null
         && row.runtimeKind == "nixos"
-        && builtins.hasAttr row.legacyVmName (d2bLib.normalNixosVms cfg.vms))
+        && builtins.hasAttr row.legacyVmName
+          (d2bLib.normalNixosVms gatewayVms))
       realmWorkloadRows;
   nixosWorkloadCidPairs =
     map
@@ -1069,7 +1071,7 @@ let
       inherit name;
       cid = config.d2b.manifest.${name}.observability.vsockCid;
     })
-    (d2bLib.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms gatewayVms);
 
   vmVsockCidGroups = lib.groupBy
     (pair: toString pair.cid)
@@ -1109,7 +1111,7 @@ let
       inherit name;
       socket = config.d2b.manifest.${name}.observability.vsockHostSocket;
     })
-    (d2bLib.normalNixosVms cfg.vms);
+    (d2bLib.normalNixosVms gatewayVms);
 
   socketPathTooLong = path: builtins.stringLength path > 107;
 
@@ -1950,7 +1952,7 @@ let
           '';
         }
       ])
-    (d2bLib.normalNixosVms cfg.vms));
+    (d2bLib.normalNixosVms gatewayVms));
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
   # only set guest OS options, never host-owned microvm.* / d2b.*.
@@ -1979,7 +1981,7 @@ let
           edit.
         '';
       })
-    (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) cfg.vms);
+    (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) gatewayVms);
 
   # ---- USB security-key proxy assertions ----------------------------
   #

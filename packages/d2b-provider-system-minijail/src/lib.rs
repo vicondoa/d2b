@@ -34,6 +34,7 @@ pub mod sandbox_compiler;
 pub mod user_ns;
 
 use std::collections::BTreeSet;
+use std::os::fd::OwnedFd;
 
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
@@ -127,6 +128,9 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             ticket.validate_assignment()?;
         }
         if ticket.selected_provider().as_str() != PROVIDER_NAME {
+            return Err(ProcessConformanceError::ProviderMismatch);
+        }
+        if ticket.provider_ref().to_canonical_string() != "Provider/system-minijail" {
             return Err(ProcessConformanceError::ProviderMismatch);
         }
         if !self.profile.supported_domains().contains(&ticket.domain()) {
@@ -230,8 +234,19 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         &self,
         ticket: &LaunchTicket,
     ) -> Result<ProcessStatusReport, ProcessConformanceError> {
+        self.launch_with_inherited_fds(ticket, Vec::new()).await
+    }
+
+    async fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> Result<ProcessStatusReport, ProcessConformanceError> {
         self.validate(ticket)?;
-        let launched = self.port.launch(ticket).await?;
+        let launched = self
+            .port
+            .launch_with_inherited_fds(ticket, inherited_fds)
+            .await?;
         // d2b owns wait and reap for every minijail-launched process.
         if launched.wait_reap_owner != WaitReapOwner::Local {
             return Err(ProcessConformanceError::WaitOwnerMismatch);
@@ -257,6 +272,9 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         let Some(candidate) = self.port.observe(ticket).await? else {
             return Ok(AdoptionOutcome::Absent);
         };
+        if adoption::is_stale_candidate(ticket, &candidate, &self.profile) {
+            return Ok(AdoptionOutcome::Stale { candidate });
+        }
         let identity_ok = candidate.wait_reap_owner == WaitReapOwner::Local
             && candidate
                 .validate(self.profile.required_identity_bindings())
@@ -301,5 +319,18 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             return Err(ProcessConformanceError::IdentityUnverified);
         }
         self.port.stop(identity, class).await
+    }
+
+    async fn stop_stale(
+        &self,
+        candidate: &AdoptionCandidate,
+    ) -> Result<(), ProcessConformanceError> {
+        if candidate.identity.is_zero() {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        self.port.open_pidfd(candidate).await?;
+        self.port
+            .stop(&candidate.identity, StopClass::Terminate)
+            .await
     }
 }

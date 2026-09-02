@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use d2b_contracts_broker::broker_wire::RunnerRole;
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 
 /// One persisted runner slot. Mirrors what the daemon learnt from a
@@ -54,6 +55,24 @@ pub struct RunnerSnapshotRecord {
     /// Exact owning Device UID for Device-backed workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_resource_uid: Option<String>,
+    /// Immutable Zone identity for the lifecycle operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Immutable Guest identity for the lifecycle operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_uid: Option<ResourceUid>,
+    /// Guest resource generation at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_generation: Option<ResourceGeneration>,
+    /// Provider assignment generation at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_assignment_generation: Option<ResourceGeneration>,
+    /// Policy revision at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<u64>,
+    /// Operation identity at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     /// Live process id at snapshot time.
     pub pid: i32,
     /// `/proc/<pid>/stat` field-22 starttime ticks captured by the
@@ -62,6 +81,40 @@ pub struct RunnerSnapshotRecord {
     /// Wall-clock at snapshot write. RFC 3339 string for human
     /// readability; the reconciliation logic itself does not parse it.
     pub snapshotted_at: String,
+}
+
+impl RunnerSnapshotRecord {
+    /// Return whether the record carries the complete U10 lifecycle identity.
+    pub fn has_complete_lifecycle_identity(&self) -> bool {
+        self.zone_uid.is_some()
+            && self.guest_uid.is_some()
+            && self.guest_generation.is_some_and(|value| value.get() > 0)
+            && self
+                .provider_assignment_generation
+                .is_some_and(|value| value.get() > 0)
+            && self.policy_revision.is_some_and(|value| value > 0)
+            && self.operation_id.as_deref().is_some_and(|value| {
+                !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+            })
+    }
+
+    /// Compare the durable lifecycle identity with the current authoritative
+    /// Zone, Guest, assignment, and policy tuple.
+    pub fn matches_lifecycle_identity(
+        &self,
+        zone_uid: &ResourceUid,
+        guest_uid: &ResourceUid,
+        guest_generation: ResourceGeneration,
+        provider_assignment_generation: ResourceGeneration,
+        policy_revision: u64,
+    ) -> bool {
+        self.has_complete_lifecycle_identity()
+            && self.zone_uid.as_ref() == Some(zone_uid)
+            && self.guest_uid.as_ref() == Some(guest_uid)
+            && self.guest_generation == Some(guest_generation)
+            && self.provider_assignment_generation == Some(provider_assignment_generation)
+            && self.policy_revision == Some(policy_revision)
+    }
 }
 
 /// Per-record outcome from [`reconcile`]. The supervisor uses the
@@ -75,6 +128,9 @@ pub enum ReconciliationOutcome {
     /// `(pid, start_time_ticks)` matches the live `/proc/<pid>/stat`.
     /// Supervisor re-opens the pidfd and re-registers the slot.
     Adopt,
+    /// The snapshot lacks the immutable lifecycle identity required to
+    /// authorize any restart action.
+    QuarantineIdentity,
     /// PID still exists, but start-time drifted. The slot is parked
     /// with a `quarantine-pid-drift` audit event; the supervisor does
     /// NOT control the process further.
@@ -205,13 +261,19 @@ pub fn reconcile(
 
     let mut entries = Vec::with_capacity(sorted.len());
     for snap in sorted {
-        let outcome = match proc_reader.proc_starttime(snap.pid) {
-            Ok(Some(observed)) if observed == snap.start_time_ticks => ReconciliationOutcome::Adopt,
-            Ok(Some(observed)) => ReconciliationOutcome::Quarantine {
-                observed_start_time_ticks: observed,
-            },
-            Ok(None) => ReconciliationOutcome::Missing,
-            Err(detail) => ReconciliationOutcome::UnparseableProcStat { detail },
+        let outcome = if !snap.has_complete_lifecycle_identity() {
+            ReconciliationOutcome::QuarantineIdentity
+        } else {
+            match proc_reader.proc_starttime(snap.pid) {
+                Ok(Some(observed)) if observed == snap.start_time_ticks => {
+                    ReconciliationOutcome::Adopt
+                }
+                Ok(Some(observed)) => ReconciliationOutcome::Quarantine {
+                    observed_start_time_ticks: observed,
+                },
+                Ok(None) => ReconciliationOutcome::Missing,
+                Err(detail) => ReconciliationOutcome::UnparseableProcStat { detail },
+            }
         };
         entries.push(ReconciliationEntry {
             vm: snap.vm.clone(),
@@ -295,6 +357,8 @@ pub enum AdoptOutcome {
     /// The fd is held by the caller (typically registered in the
     /// `PidfdTable`).
     Adopted(std::os::fd::OwnedFd),
+    /// Snapshot identity is incomplete or otherwise not authorizable.
+    QuarantineIdentity,
     /// Snapshot classified as `Adopt` but `pidfd_open` failed
     /// (race between the /proc check and pidfd_open - the process
     /// exited in that window). Treated as `Missing` for the
@@ -333,6 +397,7 @@ pub fn reconcile_and_adopt(
     let mut out = Vec::with_capacity(report.entries.len());
     for entry in report.entries {
         let outcome = match entry.outcome {
+            ReconciliationOutcome::QuarantineIdentity => AdoptOutcome::QuarantineIdentity,
             ReconciliationOutcome::Adopt => {
                 let pid = by_key
                     .get(&(entry.vm.clone(), entry.role_id.clone()))
@@ -628,6 +693,18 @@ mod tests {
             role_id: role.to_owned(),
             role: RunnerRole::CloudHypervisor,
             owner_resource_uid: None,
+            zone_uid: Some(
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ),
+            guest_uid: Some(
+                ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+            ),
+            guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
+            provider_assignment_generation: Some(
+                ResourceGeneration::new(1).expect("Provider assignment generation"),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some(format!("{vm}-{role}-operation")),
             pid,
             start_time_ticks: st,
             snapshotted_at: "2026-05-29T03:00:00Z".to_owned(),
@@ -966,6 +1043,73 @@ mod tests {
         });
         let res: Result<RunnerSnapshotRecord, _> = serde_json::from_value(json);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn uidless_runner_snapshot_is_quarantined_without_proc_or_pidfd_access() {
+        let mut uidless = sample("corp-vm", "ch", 4242, 987_654_321);
+        uidless.zone_uid = None;
+        uidless.guest_uid = None;
+        uidless.guest_generation = None;
+        uidless.provider_assignment_generation = None;
+        uidless.policy_revision = None;
+        uidless.operation_id = None;
+        let snaps = vec![uidless];
+        let reader = FakeProcReader::default();
+        let opener = FakeOpener::new();
+
+        let results = reconcile_and_adopt(&snaps, &reader, &opener);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            results[0].outcome,
+            AdoptOutcome::QuarantineIdentity
+        ));
+    }
+
+    #[test]
+    fn runner_snapshot_identity_fences_recreated_guest_assignment_and_policy() {
+        let record = sample("corp-vm", "ch", 4242, 987_654_321);
+        let zone_uid = record.zone_uid.clone().expect("Zone UID");
+        let guest_uid = record.guest_uid.clone().expect("Guest UID");
+        let guest_generation = record.guest_generation.expect("Guest generation");
+        let assignment = record
+            .provider_assignment_generation
+            .expect("assignment generation");
+        assert!(record.matches_lifecycle_identity(
+            &zone_uid,
+            &guest_uid,
+            guest_generation,
+            assignment,
+            1,
+        ));
+        assert!(!record.matches_lifecycle_identity(
+            &zone_uid,
+            &ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("new Guest UID"),
+            guest_generation,
+            assignment,
+            1,
+        ));
+        assert!(!record.matches_lifecycle_identity(
+            &zone_uid,
+            &guest_uid,
+            ResourceGeneration::new(2).expect("new Guest generation"),
+            assignment,
+            1,
+        ));
+        assert!(!record.matches_lifecycle_identity(
+            &zone_uid,
+            &guest_uid,
+            guest_generation,
+            ResourceGeneration::new(2).expect("new assignment generation"),
+            1,
+        ));
+        assert!(!record.matches_lifecycle_identity(
+            &zone_uid,
+            &guest_uid,
+            guest_generation,
+            assignment,
+            2,
+        ));
     }
 
     // ---- reconcile_and_adopt tests ----

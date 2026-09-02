@@ -271,22 +271,50 @@ impl GuestIdentity {
         binding: &d2b_session::AuthenticatedSessionRouteBinding,
     ) -> Result<(), GuestModeError> {
         let generation = binding.reconnect_generation().get();
-        if generation < self.reconnect_generation.get()
+        let policy = self.endpoint_policy_for_generation(generation);
+        let zone_ref = binding.context().zone_ref();
+        let provider_generation = binding
+            .context()
+            .provider_generation()
+            .is_some_and(|value| value.get() == self.provider_generation);
+        let controller_generation = binding
+            .context()
+            .controller_generation()
+            .is_some_and(|value| value.get() == self.controller_generation);
+        if !binding.liveness().is_live()
+            || generation < self.reconnect_generation.get()
             || binding.zone() != &self.zone
             || binding.subject_ref() != &self.guest_ref
             || binding.subject_uid() != &self.guest_uid
             || binding.schema() != &self.schema_fingerprint
-            || binding.service().as_str() != "d2b.resource.v3"
+            || binding.service().as_str() != policy.service.as_str()
             || binding.context().session_purpose() != &self.purpose
             || binding.locality() != Locality::Local
             || binding.evidence_class() != EvidenceClass::EnrolledKk
+            || binding.purpose_class() != policy.purpose_class
+            || binding.initiator_role() != policy.initiator_role
+            || binding.responder_role() != policy.responder_role
+            || binding.endpoint_locality() != policy.transport_binding.locality
+            || binding.transport_class() != policy.transport_binding.transport
+            || zone_ref.resource_type().as_str() != "Zone"
+            || zone_ref.name().as_str() != self.zone.as_str()
+            || binding.context().execution_ref() != Some(&self.guest_ref)
+            || binding.context().evidence_class() != EvidenceClass::EnrolledKk
+            || binding.context().service().as_str() != policy.service.as_str()
+            || binding.context().schema_fingerprint() != &self.schema_fingerprint
+            || binding.context().reconnect_generation() != binding.reconnect_generation()
+            || binding.context().transport_binding() != binding.transport_binding()
+            || !provider_generation
+            || !controller_generation
         {
             return Err(GuestModeError::SessionBindingMismatch);
         }
         let expected =
             BindingDigest::parse(format!("sha256:{}", hex_digest(self.channel_binding())))
                 .map_err(|_| GuestModeError::SessionBindingMismatch)?;
-        if binding.context().transport_binding().binding_digest() != &expected {
+        if binding.transport_binding().binding_digest() != &expected
+            || binding.context().transport_binding().binding_digest() != &expected
+        {
             return Err(GuestModeError::SessionBindingMismatch);
         }
         Ok(())
@@ -620,8 +648,8 @@ impl GuestRuntime {
         let acceptor = SessionAcceptor::from_verified_adapter(
             acceptor_policy,
             identity.zone.clone(),
-            move |_evidence, binding, _expected_zone, now_tick| {
-                authenticate_guest_subject(&expected, binding, now_tick)
+            move |_evidence, binding, expected_zone, now_tick| {
+                authenticate_guest_subject(&expected, binding, now_tick, expected_zone)
             },
             move |subject, request, previous, now_tick| {
                 authorize_guest_request(&authorize_identity, subject, request, previous, now_tick)
@@ -695,13 +723,26 @@ fn authenticate_guest_subject(
     identity: &GuestIdentity,
     binding: &SessionAuthenticationBinding,
     now_tick: u64,
+    expected_zone: &ZoneId,
 ) -> d2b_session::Result<(
     AuthenticatedSubjectContext,
     d2b_contracts_zone_session::v3::component_session::AuthorizationLease,
 )> {
-    if binding.purpose() != identity.purpose()
+    let policy = identity.endpoint_policy_for_generation(binding.reconnect_generation().get());
+    let expected_service = ServiceName::parse(policy.service.as_str()).map_err(|_| {
+        d2b_session::SessionError::new(d2b_session::contract::SessionErrorCode::PolicyDenied)
+    })?;
+    if expected_zone != &identity.zone
+        || binding.evidence_class() != EvidenceClass::EnrolledKk
+        || binding.purpose() != identity.purpose()
+        || binding.purpose_class() != policy.purpose_class
+        || binding.initiator_role() != policy.initiator_role
+        || binding.responder_role() != policy.responder_role
+        || binding.endpoint_locality() != policy.transport_binding.locality
+        || binding.service() != &expected_service
         || binding.schema_fingerprint() != identity.schema_fingerprint()
         || binding.reconnect_generation().get() < identity.reconnect_generation.get()
+        || binding.transport_class() != policy.transport_binding.transport
         || binding.transport_binding().locality() != Locality::Local
         || binding.transport_binding().binding_digest()
             != &BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
@@ -772,8 +813,32 @@ fn authorize_guest_request(
     now_tick: u64,
 ) -> d2b_session::Result<d2b_contracts_zone_session::v3::component_session::AuthorizationLease> {
     use d2b_resource_api::authz::SessionVerb;
+    let expected_service =
+        ServiceName::parse(GUEST_COMPONENT_SESSION_SERVICE.as_str()).map_err(|_| {
+            d2b_session::SessionError::new(d2b_session::contract::SessionErrorCode::PolicyDenied)
+        })?;
+    let subject_zone = subject.zone_ref();
+    let subject_generations_match = subject
+        .provider_generation()
+        .is_some_and(|value| value.get() == identity.provider_generation)
+        && subject
+            .controller_generation()
+            .is_some_and(|value| value.get() == identity.controller_generation);
+    let target_is_allowed = request.target().is_none_or(|target| {
+        target.resource_type().as_str() != "Guest" || target == &identity.guest_ref
+    });
     if subject.subject_ref() != &identity.guest_ref
+        || subject.subject_uid() != &identity.guest_uid
+        || subject_zone.resource_type().as_str() != "Zone"
+        || subject_zone.name().as_str() != identity.zone.as_str()
+        || subject.execution_ref() != Some(&identity.guest_ref)
+        || subject.session_purpose() != &identity.purpose
+        || subject.service() != &expected_service
+        || subject.evidence_class() != EvidenceClass::EnrolledKk
+        || !subject_generations_match
         || request.target_zone() != &identity.zone
+        || request.service() != &expected_service
+        || !target_is_allowed
         || !matches!(
             request.verb(),
             SessionVerb::Invoke

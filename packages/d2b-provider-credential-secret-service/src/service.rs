@@ -2,12 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
     CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
     CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
-},
 };
 
 use crate::{

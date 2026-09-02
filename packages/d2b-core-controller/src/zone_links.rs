@@ -30,10 +30,31 @@
 //! the session state purely from the durable [`ZoneLinkRecord`]. Replaying an
 //! already-committed event after restart is a no-op that plans no effect.
 
-use d2b_contracts_resource::v3::ResourceUid;
-use d2b_contracts_zone_session::v3::zone_routing::{
-    ZoneLinkControllerGeneration, ZoneRouteFailClosedReason, ZoneSigningKeyFingerprint,
+use std::{
+    collections::BTreeSet,
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue, ResourceUid, ZoneRevision, identity::ReconnectGeneration,
+};
+use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
+use d2b_contracts_zone_session::v3::zone_routing::{
+    MAX_ZONE_ROUTE_ENTRIES, ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest,
+    ZoneRouteCapability, ZoneRouteFailClosedReason, ZoneSigningKeyFingerprint, ZoneTreeEdge,
+};
+use serde::{Deserialize, Serialize};
+
+static NEXT_ZONE_LINK_HANDLER_OWNER: AtomicU64 = AtomicU64::new(1);
+
+fn next_zone_link_handler_owner() -> u64 {
+    loop {
+        let owner = NEXT_ZONE_LINK_HANDLER_OWNER.fetch_add(1, Ordering::Relaxed);
+        if owner != 0 {
+            return owner;
+        }
+    }
+}
 
 /// Default absolute lifetime of one allocator-issued bootstrap PSK.
 pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
@@ -58,6 +79,19 @@ pub const MAX_PENDING_LOCAL_INTENTS: u32 = 1024;
 
 /// Admission ceiling for `spec.limits.maxActiveStreams`.
 pub const MAX_ACTIVE_STREAMS: u32 = 128;
+
+/// Maximum committed route-admission operation IDs retained for one immutable
+/// ZoneLink identity and controller generation.
+///
+/// IDs are never evicted: reaching this ceiling refuses new admissions until
+/// the ZoneLink identity or controller generation is replaced.
+pub const MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS: usize = MAX_ZONE_ROUTE_ENTRIES;
+
+/// Maximum canonical bytes in the durable route-admission dedup envelope.
+pub const MAX_ROUTE_ADMISSION_DEDUP_BYTES: usize = 2 * 1024 * 1024;
+
+/// Version of the durable route-admission operation-id envelope.
+pub const ZONE_LINK_ROUTE_ADMISSION_DEDUP_VERSION: u32 = 1;
 
 /// Closed metric label key set for every ZoneLink aggregate metric.
 ///
@@ -160,6 +194,28 @@ pub enum ZoneLinkError {
     StaleCommitProof,
     /// The supplied limits or protocol constants are out of their frozen range.
     InvalidLimits,
+    /// A bootstrap PSK belongs to another controller generation.
+    BootstrapPskGenerationMismatch,
+    /// The durable route-admission binding is absent or invalid.
+    RouteAdmissionBindingInvalid,
+    /// The route cursor owner has not been durably adopted after restart.
+    RouteAdmissionCursorUnavailable,
+    /// The requested route operation does not match the committed policy.
+    RouteAdmissionVerbMismatch,
+    /// The operation identity was already durably committed for this link.
+    RouteAdmissionConflict,
+    /// A route admission was requested after durable revocation.
+    RouteAdmissionRevoked,
+    /// The durable route-admission operation-id set is full.
+    RouteAdmissionOperationCapacity,
+    /// The durable route-admission operation-id envelope is malformed.
+    RouteAdmissionDedupInvalid,
+    /// The durable route-admission operation-id envelope version is unknown.
+    RouteAdmissionDedupVersionMismatch,
+    /// Durable route-admission state belongs to another ZoneLink identity.
+    RouteAdmissionDedupIdentityMismatch,
+    /// Recovery attempted to replace an already populated committed set.
+    RouteAdmissionDedupConflict,
 }
 
 impl ZoneLinkError {
@@ -181,6 +237,17 @@ impl ZoneLinkError {
             Self::ReconcileInFlight => "reconcile-in-flight",
             Self::StaleCommitProof => "stale-commit-proof",
             Self::InvalidLimits => "invalid-limits",
+            Self::BootstrapPskGenerationMismatch => "bootstrap-psk-generation-mismatch",
+            Self::RouteAdmissionBindingInvalid => "route-admission-binding-invalid",
+            Self::RouteAdmissionCursorUnavailable => "route-admission-cursor-unavailable",
+            Self::RouteAdmissionVerbMismatch => "route-admission-verb-mismatch",
+            Self::RouteAdmissionConflict => "route-admission-conflict",
+            Self::RouteAdmissionRevoked => "route-admission-revoked",
+            Self::RouteAdmissionOperationCapacity => "route-admission-operation-capacity",
+            Self::RouteAdmissionDedupInvalid => "route-admission-dedup-invalid",
+            Self::RouteAdmissionDedupVersionMismatch => "route-admission-dedup-version-mismatch",
+            Self::RouteAdmissionDedupIdentityMismatch => "route-admission-dedup-identity-mismatch",
+            Self::RouteAdmissionDedupConflict => "route-admission-dedup-conflict",
         }
     }
 }
@@ -439,6 +506,236 @@ impl ZoneLinkCursor {
     }
 }
 
+/// Durable identity and policy for one child-to-parent ZoneLink route.
+///
+/// This is trusted state derived from the committed ZoneLink resource,
+/// topology, authenticated controller/session generations, and policy index.
+/// A route request never carries any of these fields.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ZoneLinkRouteBinding {
+    zone_link_uid: ResourceUid,
+    edge: ZoneTreeEdge,
+    controller_generation: ZoneLinkControllerGeneration,
+    reconnect_generation: ReconnectGeneration,
+    source_zone_uid: ResourceUid,
+    target_zone_uid: ResourceUid,
+    policy_revision: ZoneRevision,
+    required_capability: ZoneRouteCapability,
+    verb: OperationClass,
+}
+
+impl ZoneLinkRouteBinding {
+    /// Bind a route to the exact committed ZoneLink and session policy.
+    ///
+    /// The values must come from the trusted Zone authority. The public
+    /// operation request contains only an operation id and verb.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        zone_link_uid: ResourceUid,
+        edge: ZoneTreeEdge,
+        controller_generation: ZoneLinkControllerGeneration,
+        reconnect_generation: ReconnectGeneration,
+        source_zone_uid: ResourceUid,
+        target_zone_uid: ResourceUid,
+        policy_revision: ZoneRevision,
+        required_capability: ZoneRouteCapability,
+        verb: OperationClass,
+    ) -> Result<Self, ZoneLinkError> {
+        if source_zone_uid == target_zone_uid
+            || policy_revision.get() == 0
+            || verb == OperationClass::Attach
+        {
+            return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+        }
+        Ok(Self {
+            zone_link_uid,
+            edge,
+            controller_generation,
+            reconnect_generation,
+            source_zone_uid,
+            target_zone_uid,
+            policy_revision,
+            required_capability,
+            verb,
+        })
+    }
+
+    /// Borrow the ZoneLink resource UID.
+    pub const fn zone_link_uid(&self) -> &ResourceUid {
+        &self.zone_link_uid
+    }
+
+    /// Borrow the exact parent/child edge.
+    pub const fn edge(&self) -> &ZoneTreeEdge {
+        &self.edge
+    }
+
+    /// Borrow the controller generation.
+    pub const fn controller_generation(&self) -> &ZoneLinkControllerGeneration {
+        &self.controller_generation
+    }
+
+    /// Return the authenticated reconnect generation.
+    pub const fn reconnect_generation(&self) -> ReconnectGeneration {
+        self.reconnect_generation
+    }
+
+    /// Borrow the source Zone UID.
+    pub const fn source_zone_uid(&self) -> &ResourceUid {
+        &self.source_zone_uid
+    }
+
+    /// Borrow the target Zone UID.
+    pub const fn target_zone_uid(&self) -> &ResourceUid {
+        &self.target_zone_uid
+    }
+
+    /// Return the committed policy revision.
+    pub const fn policy_revision(&self) -> ZoneRevision {
+        self.policy_revision
+    }
+
+    /// Borrow the required route capability.
+    pub const fn required_capability(&self) -> &ZoneRouteCapability {
+        &self.required_capability
+    }
+
+    /// Return the committed route operation class.
+    pub const fn verb(&self) -> OperationClass {
+        self.verb
+    }
+}
+
+impl core::fmt::Debug for ZoneLinkRouteBinding {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZoneLinkRouteBinding")
+            .field("edge", &self.edge)
+            .field("verb", &self.verb)
+            .field("policy_revision", &self.policy_revision)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Post-commit route-admission input for the existing sealed issuer.
+///
+/// This value can only be produced from a committed ZoneLink pass. It carries
+/// no clock or expiry claim; the downstream runtime-owned issuer supplies
+/// daemon time and its bounded lifetime. Consuming it yields only the
+/// untrusted operation request accepted by that issuer.
+pub(crate) struct ZoneLinkRouteAdmissionContext {
+    sequence: u64,
+    binding: ZoneLinkRouteBinding,
+    request: ZoneLinkRouteAdmissionRequest,
+}
+
+impl ZoneLinkRouteAdmissionContext {
+    fn new(
+        sequence: u64,
+        binding: ZoneLinkRouteBinding,
+        request: ZoneLinkRouteAdmissionRequest,
+    ) -> Self {
+        Self {
+            sequence,
+            binding,
+            request,
+        }
+    }
+
+    /// Borrow the committed ZoneLink UID.
+    #[cfg(test)]
+    pub(crate) const fn zone_link_uid(&self) -> &ResourceUid {
+        self.binding.zone_link_uid()
+    }
+
+    /// Borrow the committed route edge.
+    #[cfg(test)]
+    pub(crate) const fn edge(&self) -> &ZoneTreeEdge {
+        self.binding.edge()
+    }
+
+    /// Borrow the committed controller generation.
+    #[cfg(test)]
+    pub(crate) const fn controller_generation(&self) -> &ZoneLinkControllerGeneration {
+        self.binding.controller_generation()
+    }
+
+    /// Return the committed reconnect generation.
+    #[cfg(test)]
+    pub(crate) const fn reconnect_generation(&self) -> ReconnectGeneration {
+        self.binding.reconnect_generation()
+    }
+
+    /// Borrow the committed source Zone UID.
+    #[cfg(test)]
+    pub(crate) const fn source_zone_uid(&self) -> &ResourceUid {
+        self.binding.source_zone_uid()
+    }
+
+    /// Borrow the committed target Zone UID.
+    #[cfg(test)]
+    pub(crate) const fn target_zone_uid(&self) -> &ResourceUid {
+        self.binding.target_zone_uid()
+    }
+
+    /// Return the committed policy revision.
+    #[cfg(test)]
+    pub(crate) const fn policy_revision(&self) -> ZoneRevision {
+        self.binding.policy_revision()
+    }
+
+    /// Borrow the committed required capability.
+    #[cfg(test)]
+    pub(crate) const fn required_capability(&self) -> &ZoneRouteCapability {
+        self.binding.required_capability()
+    }
+
+    /// Borrow the requested operation identity.
+    #[cfg(test)]
+    pub(crate) const fn operation_id(&self) -> &OperationId {
+        self.request.operation_id()
+    }
+
+    /// Return the requested operation class.
+    #[cfg(test)]
+    pub(crate) const fn verb(&self) -> OperationClass {
+        self.request.verb()
+    }
+
+    /// Consume the post-commit context into the sealed issuer's request.
+    pub(crate) fn into_request(self) -> ZoneLinkRouteAdmissionRequest {
+        self.request
+    }
+}
+
+impl core::fmt::Debug for ZoneLinkRouteAdmissionContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZoneLinkRouteAdmissionContext")
+            .field("sequence", &self.sequence)
+            .field("binding", &self.binding)
+            .field("request", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Versioned durable envelope for committed route-admission operation IDs.
+///
+/// The identity fields make old forensic rows fail closed when a same-named
+/// resource is recreated with a different ZoneLink UID or controller
+/// generation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ZoneLinkRouteAdmissionDedupWire {
+    version: u32,
+    zone_link_uid: ResourceUid,
+    edge: ZoneTreeEdge,
+    controller_generation: ZoneLinkControllerGeneration,
+    source_zone_uid: ResourceUid,
+    target_zone_uid: ResourceUid,
+    operation_ids: Vec<OperationId>,
+}
+
 /// The durable child-local ZoneLink record.
 ///
 /// This is the only state a restart may rely on. [`ZoneLinkHandler::restore`]
@@ -447,6 +744,8 @@ impl ZoneLinkCursor {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZoneLinkRecord {
     generation: ZoneLinkControllerGeneration,
+    route_binding: Option<ZoneLinkRouteBinding>,
+    committed_route_operations: BTreeSet<OperationId>,
     enrollment: Option<SealedEnrollment>,
     enrollment_invalidated: bool,
     consumed_psk_issuance: Option<u64>,
@@ -466,6 +765,8 @@ impl ZoneLinkRecord {
     pub const fn unenrolled(generation: ZoneLinkControllerGeneration) -> Self {
         Self {
             generation,
+            route_binding: None,
+            committed_route_operations: BTreeSet::new(),
             enrollment: None,
             enrollment_invalidated: false,
             consumed_psk_issuance: None,
@@ -495,6 +796,124 @@ impl ZoneLinkRecord {
     /// Borrow the link identity generation.
     pub const fn generation(&self) -> &ZoneLinkControllerGeneration {
         &self.generation
+    }
+
+    /// Bind this durable record to one exact route authority.
+    ///
+    /// The controller generation is also the ZoneLink identity generation, so
+    /// a route binding from another controller generation is refused.
+    pub fn with_route_binding(
+        mut self,
+        binding: ZoneLinkRouteBinding,
+    ) -> Result<Self, ZoneLinkError> {
+        if self.route_binding.is_some() || binding.controller_generation() != &self.generation {
+            return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+        }
+        self.route_binding = Some(binding);
+        Ok(self)
+    }
+
+    /// Borrow the durable route identity and policy, when configured.
+    pub const fn route_binding(&self) -> Option<&ZoneLinkRouteBinding> {
+        self.route_binding.as_ref()
+    }
+
+    /// Borrow every operation ID durably committed for this ZoneLink identity.
+    ///
+    /// The set is non-lossy for the lifetime of the immutable ZoneLink
+    /// identity and controller generation. New admissions fail closed when the
+    /// bounded set reaches [`MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS`].
+    pub const fn committed_route_operations(&self) -> &BTreeSet<OperationId> {
+        &self.committed_route_operations
+    }
+
+    /// Encode the committed route-operation set for durable storage.
+    ///
+    /// The envelope is canonical, versioned, identity-bound, and bounded.
+    /// There is no expiry or eviction because an OperationId remains
+    /// non-reusable for the active ZoneLink identity and generation.
+    pub fn encode_route_admission_dedup(&self) -> Result<Vec<u8>, ZoneLinkError> {
+        let binding = self
+            .route_binding
+            .as_ref()
+            .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?;
+        if self.committed_route_operations.len() > MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS {
+            return Err(ZoneLinkError::RouteAdmissionOperationCapacity);
+        }
+        let wire = ZoneLinkRouteAdmissionDedupWire {
+            version: ZONE_LINK_ROUTE_ADMISSION_DEDUP_VERSION,
+            zone_link_uid: binding.zone_link_uid().clone(),
+            edge: binding.edge().clone(),
+            controller_generation: binding.controller_generation().clone(),
+            source_zone_uid: binding.source_zone_uid().clone(),
+            target_zone_uid: binding.target_zone_uid().clone(),
+            operation_ids: self.committed_route_operations.iter().cloned().collect(),
+        };
+        let bytes =
+            serde_json::to_vec(&wire).map_err(|_| ZoneLinkError::RouteAdmissionDedupInvalid)?;
+        let canonical = CanonicalJsonValue::parse(&bytes)
+            .map_err(|_| ZoneLinkError::RouteAdmissionDedupInvalid)?
+            .to_canonical_bytes();
+        if canonical.len() > MAX_ROUTE_ADMISSION_DEDUP_BYTES {
+            return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
+        }
+        Ok(canonical)
+    }
+
+    /// Restore committed route-operation IDs from a versioned durable envelope.
+    ///
+    /// Identity mismatch and unknown versions are quarantine conditions. The
+    /// receiver is consumed so a failed recovery cannot partially mutate a
+    /// live record.
+    pub fn with_route_admission_dedup(mut self, encoded: &[u8]) -> Result<Self, ZoneLinkError> {
+        if encoded.is_empty() || encoded.len() > MAX_ROUTE_ADMISSION_DEDUP_BYTES {
+            return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
+        }
+        let canonical = CanonicalJsonValue::parse(encoded)
+            .map_err(|_| ZoneLinkError::RouteAdmissionDedupInvalid)?
+            .to_canonical_bytes();
+        if canonical != encoded {
+            return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
+        }
+        let wire: ZoneLinkRouteAdmissionDedupWire = serde_json::from_slice(encoded)
+            .map_err(|_| ZoneLinkError::RouteAdmissionDedupInvalid)?;
+        if wire.version != ZONE_LINK_ROUTE_ADMISSION_DEDUP_VERSION {
+            return Err(ZoneLinkError::RouteAdmissionDedupVersionMismatch);
+        }
+        if wire.operation_ids.len() > MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS {
+            return Err(ZoneLinkError::RouteAdmissionOperationCapacity);
+        }
+        let binding = self
+            .route_binding
+            .as_ref()
+            .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?;
+        if &wire.zone_link_uid != binding.zone_link_uid()
+            || &wire.edge != binding.edge()
+            || &wire.controller_generation != binding.controller_generation()
+            || &wire.source_zone_uid != binding.source_zone_uid()
+            || &wire.target_zone_uid != binding.target_zone_uid()
+        {
+            return Err(ZoneLinkError::RouteAdmissionDedupIdentityMismatch);
+        }
+        let mut operations = BTreeSet::new();
+        let mut previous = None;
+        for operation_id in wire.operation_ids {
+            if previous
+                .as_ref()
+                .is_some_and(|previous| previous >= &operation_id)
+                || !operations.insert(operation_id.clone())
+            {
+                return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
+            }
+            previous = Some(operation_id);
+        }
+        if !self.committed_route_operations.is_empty()
+            && self.committed_route_operations != operations
+        {
+            return Err(ZoneLinkError::RouteAdmissionDedupConflict);
+        }
+        self.committed_route_operations = operations;
+        Ok(self)
     }
 
     /// Borrow the sealed enrollment record, if one is committed and valid.
@@ -565,6 +984,11 @@ impl core::fmt::Debug for ZoneLinkRecord {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ZoneLinkRecord")
             .field("has_generation", &true)
+            .field("has_route_binding", &self.route_binding.is_some())
+            .field(
+                "committed_route_operation_count",
+                &self.committed_route_operations.len(),
+            )
             .field("has_enrollment", &self.enrollment.is_some())
             .field("enrollment_invalidated", &self.enrollment_invalidated)
             .field("link_epoch", &self.link_epoch)
@@ -689,6 +1113,32 @@ pub enum ZoneLinkEvent {
     },
     /// Durably revoke the sealed enrollment and tear down the active session.
     Revoke,
+    /// Admit one operation through the current ready ZoneLink route.
+    ///
+    /// The request contains only the operation identity and verb. All route,
+    /// session, policy, and time claims come from trusted durable state or the
+    /// downstream sealed issuer.
+    AdmitRoute {
+        /// The untrusted operation intent.
+        request: ZoneLinkRouteAdmissionRequest,
+    },
+    /// Publish a newer committed route policy snapshot.
+    ///
+    /// This event represents an authority/store observation, not caller
+    /// claims supplied to route admission.
+    RoutePolicyCommitted {
+        /// The new required capability.
+        required_capability: ZoneRouteCapability,
+        /// The operation class allowed by the new policy.
+        verb: OperationClass,
+        /// The strictly newer committed policy revision.
+        policy_revision: ZoneRevision,
+    },
+    /// Fence the current route on a newly authenticated session generation.
+    SessionGenerationAdvanced {
+        /// The nonzero authenticated reconnect generation.
+        reconnect_generation: ReconnectGeneration,
+    },
 }
 
 /// One effect a committed pass releases.
@@ -720,11 +1170,14 @@ pub enum ZoneLinkEffect {
 /// `Copy` so a plan cannot be committed twice.
 #[derive(Debug)]
 pub struct ZoneLinkPass {
+    owner_token: u64,
     sequence: u64,
     next_record: ZoneLinkRecord,
     next_state: ZoneLinkSessionState,
     next_phase: ZoneLinkPhase,
+    next_cursor_adopted: bool,
     effects: Vec<ZoneLinkEffect>,
+    route_admission: Option<ZoneLinkRouteAdmissionContext>,
     observed_failure: Option<ZoneLinkError>,
 }
 
@@ -758,7 +1211,9 @@ impl ZoneLinkPass {
 /// once and only after the durable record mutation.
 #[derive(Debug)]
 pub struct ZoneLinkCommitProof {
+    owner_token: u64,
     sequence: u64,
+    route_admission: Option<ZoneLinkRouteAdmissionContext>,
 }
 
 /// The child-local ZoneLink handler.
@@ -768,9 +1223,11 @@ pub struct ZoneLinkHandler {
     record: ZoneLinkRecord,
     state: ZoneLinkSessionState,
     phase: ZoneLinkPhase,
+    owner_token: u64,
     sequence: u64,
     pass_open: bool,
-    pending_effects: Option<(u64, Vec<ZoneLinkEffect>)>,
+    cursor_adopted: bool,
+    pending_effects: Option<(u64, u64, Vec<ZoneLinkEffect>)>,
 }
 
 impl ZoneLinkHandler {
@@ -802,8 +1259,10 @@ impl ZoneLinkHandler {
             record,
             state,
             phase,
+            owner_token: next_zone_link_handler_owner(),
             sequence: 0,
             pass_open: false,
+            cursor_adopted: false,
             pending_effects: None,
         }
     }
@@ -874,13 +1333,17 @@ impl ZoneLinkHandler {
     /// Discard an open pass without mutating durable state or releasing an
     /// effect.
     pub fn abort(&mut self, pass: ZoneLinkPass) {
-        debug_assert_eq!(pass.sequence, self.sequence + 1);
-        self.pass_open = false;
+        if pass.owner_token == self.owner_token && pass.sequence == self.sequence + 1 {
+            self.pass_open = false;
+        }
     }
 
     /// Apply the planned durable mutation and issue its commit proof.
     pub fn commit(&mut self, pass: ZoneLinkPass) -> Result<ZoneLinkCommitProof, ZoneLinkError> {
-        if !self.pass_open || pass.sequence != self.sequence + 1 {
+        if !self.pass_open
+            || pass.owner_token != self.owner_token
+            || pass.sequence != self.sequence + 1
+        {
             return Err(ZoneLinkError::StaleCommitProof);
         }
         self.sequence = pass.sequence;
@@ -888,9 +1351,12 @@ impl ZoneLinkHandler {
         self.record = pass.next_record;
         self.state = pass.next_state;
         self.phase = pass.next_phase;
-        self.pending_effects = Some((pass.sequence, pass.effects));
+        self.cursor_adopted = pass.next_cursor_adopted;
+        self.pending_effects = Some((self.owner_token, pass.sequence, pass.effects));
         Ok(ZoneLinkCommitProof {
+            owner_token: self.owner_token,
             sequence: pass.sequence,
+            route_admission: pass.route_admission,
         })
     }
 
@@ -900,13 +1366,81 @@ impl ZoneLinkHandler {
         proof: ZoneLinkCommitProof,
     ) -> Result<Vec<ZoneLinkEffect>, ZoneLinkError> {
         match self.pending_effects.take() {
-            Some((sequence, effects)) if sequence == proof.sequence => Ok(effects),
-            Some((sequence, effects)) => {
-                self.pending_effects = Some((sequence, effects));
+            Some((owner_token, sequence, effects))
+                if owner_token == self.owner_token
+                    && owner_token == proof.owner_token
+                    && sequence == proof.sequence =>
+            {
+                Ok(effects)
+            }
+            Some((owner_token, sequence, effects)) => {
+                self.pending_effects = Some((owner_token, sequence, effects));
                 Err(ZoneLinkError::StaleCommitProof)
             }
             None => Err(ZoneLinkError::StaleCommitProof),
         }
+    }
+
+    /// Mark the durable cursor owner as adopted after restart.
+    pub(crate) fn mark_cursor_adopted(&mut self) {
+        self.cursor_adopted = true;
+    }
+
+    /// Clear cursor ownership when the authenticated session is fenced.
+    pub(crate) fn clear_cursor_adoption(&mut self) {
+        self.cursor_adopted = false;
+    }
+
+    /// Consume a committed route proof and invoke the existing sealed issuer.
+    ///
+    /// The issuer callback receives only the operation request extracted from
+    /// a context created from the committed record. It cannot supply identity,
+    /// policy, connectivity, or time claims. The callback's implementation is
+    /// expected to delegate directly to the runtime-owned sealed route issuer.
+    pub fn issue_route_admission<T>(
+        &mut self,
+        mut proof: ZoneLinkCommitProof,
+        issuer: impl FnOnce(ZoneLinkRouteAdmissionRequest) -> Result<T, ZoneLinkError>,
+    ) -> Result<T, ZoneLinkError> {
+        self.validate_commit_proof(&proof)?;
+        if !self.cursor_adopted {
+            return Err(ZoneLinkError::RouteAdmissionCursorUnavailable);
+        }
+        let route_admission = proof
+            .route_admission
+            .take()
+            .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?;
+        let effects = self.release_effects(proof)?;
+        if !effects.is_empty() {
+            return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+        }
+        issuer(route_admission.into_request())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn route_admission_context<'a>(
+        &self,
+        proof: &'a ZoneLinkCommitProof,
+    ) -> Result<&'a ZoneLinkRouteAdmissionContext, ZoneLinkError> {
+        self.validate_commit_proof(proof)?;
+        proof
+            .route_admission
+            .as_ref()
+            .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)
+    }
+
+    fn validate_commit_proof(&self, proof: &ZoneLinkCommitProof) -> Result<(), ZoneLinkError> {
+        if proof.owner_token != self.owner_token
+            || self
+                .pending_effects
+                .as_ref()
+                .is_none_or(|(owner_token, sequence, _)| {
+                    *owner_token != self.owner_token || *sequence != proof.sequence
+                })
+        {
+            return Err(ZoneLinkError::StaleCommitProof);
+        }
+        Ok(())
     }
 
     fn plan(&self, event: ZoneLinkEvent) -> Result<ZoneLinkPass, ZoneLinkError> {
@@ -914,7 +1448,9 @@ impl ZoneLinkHandler {
         let mut record = self.record.clone();
         let mut state = self.state;
         let mut phase = self.phase;
+        let mut cursor_adopted = self.cursor_adopted;
         let mut effects = Vec::new();
+        let mut route_admission = None;
         let mut observed_failure = None;
 
         match event {
@@ -935,6 +1471,9 @@ impl ZoneLinkHandler {
                     // An `EnrollmentCommitted` link never downgrades to
                     // IKpsk2 or an unauthenticated pattern.
                     return Err(ZoneLinkError::InvalidTransition);
+                }
+                if psk.generation() != &record.generation {
+                    return Err(ZoneLinkError::BootstrapPskGenerationMismatch);
                 }
                 if record.consumed_psk_issuance == Some(psk.issuance) {
                     return Err(ZoneLinkError::BootstrapPskConsumed);
@@ -975,11 +1514,14 @@ impl ZoneLinkHandler {
                 {
                     // Restart-safe replay of an already-committed seal.
                     return Ok(ZoneLinkPass {
+                        owner_token: self.owner_token,
                         sequence,
                         next_record: record,
                         next_state: state,
                         next_phase: phase,
+                        next_cursor_adopted: cursor_adopted,
                         effects,
+                        route_admission,
                         observed_failure,
                     });
                 }
@@ -1042,6 +1584,7 @@ impl ZoneLinkHandler {
                 record.advertised_routes = 0;
                 state = ZoneLinkSessionState::EnrollmentCommitted;
                 phase = ZoneLinkPhase::Degraded;
+                cursor_adopted = false;
                 observed_failure = Some(ZoneLinkError::Disconnected);
             }
             ZoneLinkEvent::SessionLifetimeExpired => {
@@ -1056,6 +1599,7 @@ impl ZoneLinkHandler {
                 record.reconnect_attempts = 0;
                 state = ZoneLinkSessionState::EnrollmentCommitted;
                 phase = ZoneLinkPhase::Degraded;
+                cursor_adopted = false;
                 effects.push(ZoneLinkEffect::TearDownSession);
             }
             ZoneLinkEvent::AdvertiseRoutes { route_count } => {
@@ -1072,6 +1616,7 @@ impl ZoneLinkHandler {
             } => {
                 self.require_ready(state, &record)?;
                 record.cursor = record.cursor.advance(sent, acked, received, applied);
+                cursor_adopted = false;
                 effects.push(ZoneLinkEffect::ResyncRouteCursor);
             }
             ZoneLinkEvent::ReplayIntents => {
@@ -1082,11 +1627,14 @@ impl ZoneLinkHandler {
             ZoneLinkEvent::SetDisabled { disabled } => {
                 if record.disabled == disabled {
                     return Ok(ZoneLinkPass {
+                        owner_token: self.owner_token,
                         sequence,
                         next_record: record,
                         next_state: state,
                         next_phase: phase,
+                        next_cursor_adopted: cursor_adopted,
                         effects,
+                        route_admission,
                         observed_failure,
                     });
                 }
@@ -1107,6 +1655,7 @@ impl ZoneLinkHandler {
                         ZoneLinkSessionState::Unenrolled
                     };
                     phase = ZoneLinkPhase::Pending;
+                    cursor_adopted = false;
                 }
             }
             ZoneLinkEvent::Revoke => {
@@ -1127,16 +1676,101 @@ impl ZoneLinkHandler {
                 record.pending_local_intents = 0;
                 state = ZoneLinkSessionState::Unenrolled;
                 phase = ZoneLinkPhase::Unknown;
+                cursor_adopted = false;
                 observed_failure = Some(ZoneLinkError::Revoked);
+            }
+            ZoneLinkEvent::AdmitRoute { request } => {
+                if record.disabled {
+                    return Err(ZoneLinkError::Disabled);
+                }
+                if record.enrollment_invalidated {
+                    return Err(ZoneLinkError::RouteAdmissionRevoked);
+                }
+                self.require_ready(state, &record)?;
+                if !cursor_adopted {
+                    return Err(ZoneLinkError::RouteAdmissionCursorUnavailable);
+                }
+                let Some(binding) = record.route_binding.clone() else {
+                    return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+                };
+                if binding.verb() != request.verb() {
+                    return Err(ZoneLinkError::RouteAdmissionVerbMismatch);
+                }
+                if record
+                    .committed_route_operations
+                    .contains(request.operation_id())
+                {
+                    return Err(ZoneLinkError::RouteAdmissionConflict);
+                }
+                if record.committed_route_operations.len()
+                    >= MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS
+                {
+                    return Err(ZoneLinkError::RouteAdmissionOperationCapacity);
+                }
+                record
+                    .committed_route_operations
+                    .insert(request.operation_id().clone());
+                route_admission = Some(ZoneLinkRouteAdmissionContext::new(
+                    sequence, binding, request,
+                ));
+            }
+            ZoneLinkEvent::RoutePolicyCommitted {
+                required_capability,
+                verb,
+                policy_revision,
+            } => {
+                let Some(mut binding) = record.route_binding.clone() else {
+                    return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+                };
+                if verb == OperationClass::Attach || policy_revision <= binding.policy_revision() {
+                    return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+                }
+                binding.required_capability = required_capability;
+                binding.verb = verb;
+                binding.policy_revision = policy_revision;
+                record.route_binding = Some(binding);
+            }
+            ZoneLinkEvent::SessionGenerationAdvanced {
+                reconnect_generation,
+            } => {
+                let Some(mut binding) = record.route_binding.clone() else {
+                    return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+                };
+                if reconnect_generation <= binding.reconnect_generation() {
+                    return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
+                }
+                let was_connected = record.connected;
+                binding.reconnect_generation = reconnect_generation;
+                record.route_binding = Some(binding);
+                record.connected = false;
+                record.advertised_routes = 0;
+                record.reconnect_attempts = 0;
+                state = if record.enrollment.is_some() && !record.enrollment_invalidated {
+                    ZoneLinkSessionState::EnrollmentCommitted
+                } else {
+                    ZoneLinkSessionState::Unenrolled
+                };
+                phase = if state == ZoneLinkSessionState::EnrollmentCommitted {
+                    ZoneLinkPhase::Degraded
+                } else {
+                    ZoneLinkPhase::Pending
+                };
+                cursor_adopted = false;
+                if was_connected {
+                    effects.push(ZoneLinkEffect::TearDownSession);
+                }
             }
         }
 
         Ok(ZoneLinkPass {
+            owner_token: self.owner_token,
             sequence,
             next_record: record,
             next_state: state,
             next_phase: phase,
+            next_cursor_adopted: cursor_adopted,
             effects,
+            route_admission,
             observed_failure,
         })
     }
@@ -1150,6 +1784,9 @@ impl ZoneLinkHandler {
             return Err(ZoneLinkError::Disabled);
         }
         if !state.permits_resource_traffic() {
+            return Err(ZoneLinkError::ResourceTrafficBeforeReady);
+        }
+        if !record.connected || !record.child_authorized {
             return Err(ZoneLinkError::ResourceTrafficBeforeReady);
         }
         Ok(())
@@ -1205,6 +1842,7 @@ impl ZoneLinkMetricSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
 
     fn generation() -> ZoneLinkControllerGeneration {
         ZoneLinkControllerGeneration::parse("link-generation-1").unwrap()
@@ -1237,8 +1875,12 @@ mod tests {
         )
     }
 
+    fn psk_for(controller_generation: ZoneLinkControllerGeneration, issuance: u64) -> BootstrapPsk {
+        BootstrapPsk::issue(controller_generation, issuance, 300_000)
+    }
+
     fn psk(issuance: u64) -> BootstrapPsk {
-        BootstrapPsk::issue(generation(), issuance, 300_000)
+        psk_for(generation(), issuance)
     }
 
     /// Plan, commit, and release one event, asserting each stage succeeded.
@@ -1248,11 +1890,14 @@ mod tests {
         handler.release_effects(proof).expect("proof is fresh")
     }
 
-    fn drive_to_ready(handler: &mut ZoneLinkHandler) {
+    fn drive_to_ready_with_generation(
+        handler: &mut ZoneLinkHandler,
+        controller_generation: ZoneLinkControllerGeneration,
+    ) {
         apply(
             handler,
             ZoneLinkEvent::BootstrapAdmit {
-                psk: psk(1),
+                psk: psk_for(controller_generation, 1),
                 now_ms: 0,
             },
         );
@@ -1268,6 +1913,503 @@ mod tests {
             ZoneLinkEvent::EnrolledSessionEstablished {
                 peer_key_fingerprint: fingerprint("fp-child-static-1"),
             },
+        );
+    }
+
+    fn drive_to_ready(handler: &mut ZoneLinkHandler) {
+        drive_to_ready_with_generation(handler, generation());
+    }
+
+    fn route_binding_with_generation(
+        controller_generation: ZoneLinkControllerGeneration,
+    ) -> ZoneLinkRouteBinding {
+        route_binding_with_identity(
+            controller_generation,
+            "123e4567-e89b-42d3-a456-426614174010",
+        )
+    }
+
+    fn route_binding_with_identity(
+        controller_generation: ZoneLinkControllerGeneration,
+        zone_link_uid: &str,
+    ) -> ZoneLinkRouteBinding {
+        ZoneLinkRouteBinding::new(
+            ResourceUid::parse(zone_link_uid).unwrap(),
+            ZoneTreeEdge::new(
+                ZonePath::new(vec![ZoneLabelId::parse("parent").unwrap()]).unwrap(),
+                ZonePath::new(vec![
+                    ZoneLabelId::parse("child").unwrap(),
+                    ZoneLabelId::parse("parent").unwrap(),
+                ])
+                .unwrap(),
+            )
+            .unwrap(),
+            controller_generation,
+            ReconnectGeneration::new(7).unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174011").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174012").unwrap(),
+            ZoneRevision::new(9),
+            ZoneRouteCapability::parse("resource-read").unwrap(),
+            OperationClass::Invoke,
+        )
+        .unwrap()
+    }
+
+    fn route_binding() -> ZoneLinkRouteBinding {
+        route_binding_with_generation(generation())
+    }
+
+    fn route_handler() -> ZoneLinkHandler {
+        let record = ZoneLinkRecord::unenrolled(generation())
+            .with_route_binding(route_binding())
+            .unwrap();
+        ZoneLinkHandler::restore(
+            ZoneLinkLimits::default(),
+            ZoneLinkKeyPolicy::default(),
+            record,
+        )
+    }
+
+    #[test]
+    fn durable_route_binding_and_bootstrap_psk_generation_are_exact() {
+        let other_generation = ZoneLinkControllerGeneration::parse("link-generation-2").unwrap();
+        assert_eq!(
+            ZoneLinkRecord::unenrolled(generation())
+                .with_route_binding(route_binding_with_generation(other_generation.clone())),
+            Err(ZoneLinkError::RouteAdmissionBindingInvalid)
+        );
+
+        let mut handler = handler();
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::BootstrapAdmit {
+                    psk: BootstrapPsk::issue(other_generation, 1, 300_000),
+                    now_ms: 0,
+                },
+            ),
+            ZoneLinkError::BootstrapPskGenerationMismatch
+        );
+        let rendered = format!("{:?}", route_binding());
+        assert!(!rendered.contains("123e4567"));
+    }
+
+    fn route_request(marker: u8) -> ZoneLinkRouteAdmissionRequest {
+        ZoneLinkRouteAdmissionRequest::new(
+            OperationId::new(vec![marker; 16]).unwrap(),
+            OperationClass::Invoke,
+        )
+        .unwrap()
+    }
+
+    fn route_request_id(value: u128) -> ZoneLinkRouteAdmissionRequest {
+        ZoneLinkRouteAdmissionRequest::new(
+            OperationId::new(value.to_be_bytes().to_vec()).unwrap(),
+            OperationClass::Invoke,
+        )
+        .unwrap()
+    }
+
+    fn issue_route(
+        handler: &mut ZoneLinkHandler,
+        request: ZoneLinkRouteAdmissionRequest,
+    ) -> Result<(), ZoneLinkError> {
+        let pass = handler.begin(ZoneLinkEvent::AdmitRoute { request })?;
+        let proof = handler.commit(pass)?;
+        handler.issue_route_admission(proof, |_| Ok(()))
+    }
+
+    #[test]
+    fn committed_route_operation_ids_are_non_lossy_across_intervening_commits() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+
+        issue_route(&mut handler, route_request(10)).unwrap();
+        issue_route(&mut handler, route_request(11)).unwrap();
+        assert_eq!(
+            issue_route(&mut handler, route_request(10)),
+            Err(ZoneLinkError::RouteAdmissionConflict)
+        );
+        assert_eq!(handler.record().committed_route_operations().len(), 2);
+    }
+
+    #[test]
+    fn committed_route_operation_history_refuses_without_eviction_at_capacity() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        for value in 0..MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS as u128 {
+            issue_route(&mut handler, route_request_id(value)).unwrap();
+        }
+        assert_eq!(
+            handler.record().committed_route_operations().len(),
+            MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS
+        );
+        assert_eq!(
+            issue_route(&mut handler, route_request_id(0)),
+            Err(ZoneLinkError::RouteAdmissionConflict)
+        );
+        assert_eq!(
+            issue_route(
+                &mut handler,
+                route_request_id(MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS as u128),
+            ),
+            Err(ZoneLinkError::RouteAdmissionOperationCapacity)
+        );
+        assert_eq!(
+            handler.record().committed_route_operations().len(),
+            MAX_COMMITTED_ROUTE_ADMISSION_OPERATIONS
+        );
+    }
+
+    #[test]
+    fn multiple_committed_route_ids_survive_versioned_restart_recovery() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        issue_route(&mut handler, route_request(12)).unwrap();
+        issue_route(&mut handler, route_request(13)).unwrap();
+
+        let encoded = handler
+            .record()
+            .encode_route_admission_dedup()
+            .expect("dedup state encodes");
+        let empty_encoded = ZoneLinkRecord::unenrolled(generation())
+            .with_route_binding(route_binding())
+            .unwrap()
+            .encode_route_admission_dedup()
+            .expect("empty dedup state encodes");
+        let restored_record = ZoneLinkRecord::unenrolled(generation())
+            .with_route_binding(route_binding())
+            .unwrap()
+            .with_route_admission_dedup(&encoded)
+            .expect("dedup state recovers");
+        assert_eq!(
+            restored_record
+                .clone()
+                .with_route_admission_dedup(&empty_encoded),
+            Err(ZoneLinkError::RouteAdmissionDedupConflict)
+        );
+        let mut restarted = ZoneLinkHandler::restore(
+            ZoneLinkLimits::default(),
+            ZoneLinkKeyPolicy::default(),
+            restored_record,
+        );
+        drive_to_ready(&mut restarted);
+        restarted.mark_cursor_adopted();
+        assert_eq!(
+            issue_route(&mut restarted, route_request(12)),
+            Err(ZoneLinkError::RouteAdmissionConflict)
+        );
+        assert_eq!(
+            issue_route(&mut restarted, route_request(13)),
+            Err(ZoneLinkError::RouteAdmissionConflict)
+        );
+
+        let mut unsupported = encoded;
+        let version = b"\"version\":1";
+        let replacement = b"\"version\":2";
+        let offset = unsupported
+            .windows(version.len())
+            .position(|window| window == version)
+            .expect("version field is encoded");
+        unsupported[offset..offset + version.len()].copy_from_slice(replacement);
+        assert_eq!(
+            ZoneLinkRecord::unenrolled(generation())
+                .with_route_binding(route_binding())
+                .unwrap()
+                .with_route_admission_dedup(&unsupported),
+            Err(ZoneLinkError::RouteAdmissionDedupVersionMismatch)
+        );
+    }
+
+    #[test]
+    fn aborted_route_ids_are_reusable_but_recreated_identity_is_isolated() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let aborted_request = route_request(14);
+        let aborted = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: aborted_request.clone(),
+            })
+            .unwrap();
+        handler.abort(aborted);
+        assert!(issue_route(&mut handler, aborted_request).is_ok());
+
+        let old_encoded = handler
+            .record()
+            .encode_route_admission_dedup()
+            .expect("old dedup state encodes");
+        let new_generation = ZoneLinkControllerGeneration::parse("link-generation-2").unwrap();
+        let new_binding = route_binding_with_identity(
+            new_generation.clone(),
+            "123e4567-e89b-42d3-a456-426614174020",
+        );
+        let new_record = ZoneLinkRecord::unenrolled(new_generation.clone())
+            .with_route_binding(new_binding)
+            .unwrap();
+        assert_eq!(
+            new_record
+                .with_route_admission_dedup(&old_encoded)
+                .expect_err("stale forensic state must not cross identities"),
+            ZoneLinkError::RouteAdmissionDedupIdentityMismatch
+        );
+
+        let mut recreated = ZoneLinkHandler::restore(
+            ZoneLinkLimits::default(),
+            ZoneLinkKeyPolicy::default(),
+            ZoneLinkRecord::unenrolled(new_generation.clone())
+                .with_route_binding(route_binding_with_identity(
+                    new_generation.clone(),
+                    "123e4567-e89b-42d3-a456-426614174020",
+                ))
+                .unwrap(),
+        );
+        drive_to_ready_with_generation(&mut recreated, new_generation);
+        recreated.mark_cursor_adopted();
+        assert!(issue_route(&mut recreated, route_request(14)).is_ok());
+    }
+
+    #[test]
+    fn route_admission_requires_ready_and_adopted_cursor() {
+        let mut handler = route_handler();
+        let request = route_request(1);
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::AdmitRoute {
+                    request: request.clone(),
+                }
+            ),
+            ZoneLinkError::ResourceTrafficBeforeReady
+        );
+
+        drive_to_ready(&mut handler);
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::AdmitRoute {
+                    request: request.clone(),
+                }
+            ),
+            ZoneLinkError::RouteAdmissionCursorUnavailable
+        );
+
+        handler.mark_cursor_adopted();
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute { request })
+            .expect("ready route opens");
+        assert!(pass.planned_effects().is_empty());
+        handler.abort(pass);
+        assert!(handler.record().committed_route_operations().is_empty());
+
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: route_request(9),
+            })
+            .unwrap();
+        let proof = handler.commit(pass).unwrap();
+        handler.clear_cursor_adoption();
+        assert_eq!(
+            handler.issue_route_admission(proof, |_| Ok(())),
+            Err(ZoneLinkError::RouteAdmissionCursorUnavailable)
+        );
+    }
+
+    #[test]
+    fn route_admission_uses_only_committed_identity_and_daemon_issuer() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let request = route_request(2);
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: request.clone(),
+            })
+            .expect("route request opens");
+        let proof = handler.commit(pass).expect("durable route commit");
+        assert!(
+            handler
+                .record()
+                .committed_route_operations()
+                .contains(request.operation_id())
+        );
+
+        {
+            let context = handler
+                .route_admission_context(&proof)
+                .expect("commit proof is current");
+            assert_eq!(
+                context.zone_link_uid().as_str(),
+                "123e4567-e89b-42d3-a456-426614174010"
+            );
+            assert_eq!(context.edge().parent().to_storage_string(), "parent");
+            assert_eq!(context.edge().child().to_storage_string(), "parent/child");
+            assert_eq!(context.controller_generation(), &generation());
+            assert_eq!(context.reconnect_generation().get(), 7);
+            assert_eq!(
+                context.source_zone_uid().as_str(),
+                "123e4567-e89b-42d3-a456-426614174011"
+            );
+            assert_eq!(
+                context.target_zone_uid().as_str(),
+                "123e4567-e89b-42d3-a456-426614174012"
+            );
+            assert_eq!(context.policy_revision(), ZoneRevision::new(9));
+            assert_eq!(context.required_capability().as_str(), "resource-read");
+            assert_eq!(context.operation_id(), request.operation_id());
+            assert_eq!(context.verb(), OperationClass::Invoke);
+        }
+
+        let issued = handler
+            .issue_route_admission(proof, Ok)
+            .expect("sealed issuer receives a post-commit request");
+        assert_eq!(issued.operation_id(), request.operation_id());
+        assert_eq!(issued.verb(), OperationClass::Invoke);
+    }
+
+    #[test]
+    fn aborted_or_stale_route_passes_cannot_issue_admission() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let aborted = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: route_request(3),
+            })
+            .unwrap();
+        handler.abort(aborted);
+
+        let request = route_request(4);
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: request.clone(),
+            })
+            .unwrap();
+        let proof = handler.commit(pass).unwrap();
+        let next = handler
+            .begin(ZoneLinkEvent::RoutePolicyCommitted {
+                required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                verb: OperationClass::Invoke,
+                policy_revision: ZoneRevision::new(10),
+            })
+            .unwrap();
+        let fresh = handler.commit(next).unwrap();
+        assert_eq!(
+            handler.issue_route_admission(proof, |_| Ok(())),
+            Err(ZoneLinkError::StaleCommitProof)
+        );
+        handler.release_effects(fresh).unwrap();
+        assert_eq!(
+            refused(&mut handler, ZoneLinkEvent::AdmitRoute { request }),
+            ZoneLinkError::RouteAdmissionConflict
+        );
+    }
+
+    #[test]
+    fn stale_reconnect_generation_cannot_reuse_a_route_proof() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let request = route_request(8);
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: request.clone(),
+            })
+            .unwrap();
+        let proof = handler.commit(pass).unwrap();
+        let generation = ReconnectGeneration::new(8).unwrap();
+        let reconnect = handler
+            .begin(ZoneLinkEvent::SessionGenerationAdvanced {
+                reconnect_generation: generation,
+            })
+            .unwrap();
+        let reconnect_proof = handler.commit(reconnect).unwrap();
+        assert_eq!(
+            handler.issue_route_admission(proof, |_| Ok(())),
+            Err(ZoneLinkError::StaleCommitProof)
+        );
+        assert_eq!(
+            handler
+                .record()
+                .route_binding()
+                .unwrap()
+                .reconnect_generation(),
+            generation
+        );
+        assert!(
+            handler
+                .record()
+                .committed_route_operations()
+                .contains(request.operation_id())
+        );
+        assert_eq!(
+            handler.release_effects(reconnect_proof).unwrap(),
+            vec![ZoneLinkEffect::TearDownSession]
+        );
+    }
+
+    #[test]
+    fn route_admission_rejects_substitution_revocation_and_restart_ambiguity() {
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let wrong_verb = ZoneLinkRouteAdmissionRequest::new(
+            OperationId::new(vec![5; 16]).unwrap(),
+            OperationClass::Relay,
+        )
+        .unwrap();
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::AdmitRoute {
+                    request: wrong_verb,
+                }
+            ),
+            ZoneLinkError::RouteAdmissionVerbMismatch
+        );
+
+        let request = route_request(6);
+        let pass = handler
+            .begin(ZoneLinkEvent::AdmitRoute {
+                request: request.clone(),
+            })
+            .unwrap();
+        let proof = handler.commit(pass).unwrap();
+        let record = handler.record().clone();
+        let mut restarted = ZoneLinkHandler::restore(
+            ZoneLinkLimits::default(),
+            ZoneLinkKeyPolicy::default(),
+            record,
+        );
+        apply(&mut restarted, ZoneLinkEvent::BeginEnrolledHandshake);
+        apply(
+            &mut restarted,
+            ZoneLinkEvent::EnrolledSessionEstablished {
+                peer_key_fingerprint: fingerprint("fp-child-static-1"),
+            },
+        );
+        restarted.mark_cursor_adopted();
+        assert_eq!(
+            restarted.issue_route_admission(proof, |_| Ok(())),
+            Err(ZoneLinkError::StaleCommitProof)
+        );
+        assert_eq!(
+            refused(&mut restarted, ZoneLinkEvent::AdmitRoute { request }),
+            ZoneLinkError::RouteAdmissionConflict
+        );
+
+        apply(&mut handler, ZoneLinkEvent::Revoke);
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::AdmitRoute {
+                    request: route_request(7),
+                }
+            ),
+            ZoneLinkError::RouteAdmissionRevoked
         );
     }
 
@@ -2048,6 +3190,17 @@ mod tests {
             ZoneLinkError::ReconcileInFlight,
             ZoneLinkError::StaleCommitProof,
             ZoneLinkError::InvalidLimits,
+            ZoneLinkError::BootstrapPskGenerationMismatch,
+            ZoneLinkError::RouteAdmissionBindingInvalid,
+            ZoneLinkError::RouteAdmissionCursorUnavailable,
+            ZoneLinkError::RouteAdmissionVerbMismatch,
+            ZoneLinkError::RouteAdmissionConflict,
+            ZoneLinkError::RouteAdmissionRevoked,
+            ZoneLinkError::RouteAdmissionOperationCapacity,
+            ZoneLinkError::RouteAdmissionDedupInvalid,
+            ZoneLinkError::RouteAdmissionDedupVersionMismatch,
+            ZoneLinkError::RouteAdmissionDedupIdentityMismatch,
+            ZoneLinkError::RouteAdmissionDedupConflict,
         ] {
             let label = error.label();
             assert!(!label.is_empty() && label.len() <= 64);

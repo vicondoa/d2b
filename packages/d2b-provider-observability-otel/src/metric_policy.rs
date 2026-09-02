@@ -6,14 +6,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use d2b_contracts_provider::v3::telemetry_policy::label;
-pub use d2b_contracts_provider::v3::{
-    telemetry_policy::{
+pub use d2b_contracts_provider::v3::telemetry_policy::{
     FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, IdentityCanaries, LabelDescriptor,
     METRIC_LABEL_POLICY, MetricDescriptor, MetricPolicyError, OTEL_RESOURCE_ATTRIBUTES,
     allowed_values, canonical_descriptor,
     validate_data_point_without_label_key_validation as validate_data_point, validate_descriptor,
     validate_label_key,
-},
 };
 
 /// Maximum bytes in one OTEL resource attribute value.

@@ -10,6 +10,10 @@ bazel_dep(name = "protobuf", version = "34.0.bcr.1")
 archive_override(
     module_name = "rules_rs",
     integrity = "sha256-KE4xcf3WAoxT+UjzUNtEUDEuYcnk/2VBd3ytms8f5gE=",
+    # Keep this workspace self-contained while replacing rules_rs' retired
+    # x86_64 zlib mirror URL without changing its upstream package hash.
+    patches = ["//:rules_rs-x86_64-zlib-url.patch"],
+    patch_strip = 1,
     strip_prefix = "rules_rs-0.0.105",
     urls = ["https://github.com/hermeticbuild/rules_rs/releases/download/v0.0.105/rules_rs-v0.0.105.tar.gz"],
 )

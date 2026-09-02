@@ -6,27 +6,20 @@ mod audit;
 mod telemetry;
 
 use d2b_contracts_provider::v3::credential::CREDENTIAL_SERVICE_NAME;
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
     CredentialServiceErrorCode, CredentialStatus,
-},
 };
-use d2b_contracts_provider::v3::{
-    credential_controller::{
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialAuditOutcome, CredentialAuditRecord, CredentialControllerDecision,
     CredentialControllerError, CredentialControllerHandlers, CredentialControllerHealth,
     CredentialObservabilityError, CredentialObserveInput, CredentialReconcileInput,
     CredentialRevocationInput, CredentialSingleFlight, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome, observe_credential,
     reconcile_credential, revoke_credential,
-},
 };
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    Locality,
-};
+use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, Locality};
 
 use crate::{
     CREDENTIAL_SESSION_PURPOSE, EntraClientState, EntraPlacement, EntraResourceHealth,

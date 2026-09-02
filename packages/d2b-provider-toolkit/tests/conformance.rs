@@ -10,18 +10,14 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_provider::v3::{
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
-        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
-        ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest,
-        ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix,
-        TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-    },
+use d2b_contracts_provider::v3::provider::{
+    ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+    ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+    ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest, ResourceApiBinding,
+    RevocationState, SignatureState, StandardCapabilityMatrix, TargetRuntimeArtifacts,
+    TrustEvidence, UpgradeDisposition, UpgradePolicy,
 };
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ArtifactId,
     identity::{ResourceTypeName, SchemaFingerprint},
@@ -38,7 +34,7 @@ use d2b_provider_toolkit::{
 use sha2::{Digest, Sha256};
 
 const MANIFEST_DIGEST_VECTOR: &str =
-    "sha256:2eecca84f4898bb0890c3fd4b80fc1394f5d28bd305c6b7e5c06bccec3086474";
+    "sha256:9990d27a7e6aa2b2a946ac8966c3470a6d664641f3de3a55ed5a3d6a59696697";
 const MANIFEST_DIGEST: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000001";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -277,9 +273,7 @@ fn test_manifest() -> ProviderManifest {
     ProviderManifest::new(
         ArtifactId::parse("provider-volume-local").expect("valid artifact"),
         ArtifactDigestSet {
-            package: digest.clone(),
             executable: digest.clone(),
-            manifest: digest.clone(),
             config: digest.clone(),
             schema: digest.clone(),
             service: digest.clone(),
@@ -315,18 +309,10 @@ fn test_manifest() -> ProviderManifest {
     )
     .expect("valid manifest")
     .with_target_runtime_artifacts([
-        TargetRuntimeArtifacts::new(
-            ControllerTargetKind::Host,
-            digest.clone(),
-            digest.clone(),
-        )
-        .expect("valid host runtime artifacts"),
-        TargetRuntimeArtifacts::new(
-            ControllerTargetKind::Guest,
-            digest.clone(),
-            digest.clone(),
-        )
-        .expect("valid guest runtime artifacts"),
+        TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest.clone(), digest.clone())
+            .expect("valid host runtime artifacts"),
+        TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest.clone(), digest.clone())
+            .expect("valid guest runtime artifacts"),
     ])
     .expect("valid shared runtime artifacts")
 }

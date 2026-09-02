@@ -398,11 +398,7 @@ mod tests {
             "d2b.clipboard.picker-coord.v3",
         ),
         (ServicePackage::NotificationV3, 13, "d2b.notification.v3"),
-        (
-            ServicePackage::ConfigNixosV3,
-            14,
-            "d2b.config-nixos.v3",
-        ),
+        (ServicePackage::ConfigNixosV3, 14, "d2b.config-nixos.v3"),
     ];
 
     #[test]

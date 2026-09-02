@@ -1,16 +1,16 @@
 //! Azure Relay transport authentication and credential helpers
-//! for the realm gateway (ADR 0032).
+//! for the Gateway Guest (ADR 0032).
 //!
 //! This crate is the d2b-native home for the **credential model +
 //! connect contract** that the gateway's relay transport and the in-sandbox
 //! sender are built on.
 //!
 //! ## Three-plane mapping
-//! - The **gateway** (host side) holds the relay **Listen** credential and
-//!   opens the listener control channel. Listen auth is a gateway-side SAS
-//!   minted from the `gateway-listen` rule key, or (later) the gateway's own
-//!   Entra **Listener** role.
-//! - The **container** (sandbox sender) authenticates with either an **Entra
+//! - The **Gateway Guest** holds the relay **Listen** credential and opens the
+//!   listener control channel. Listen auth is a Guest-local SAS minted from
+//!   the `gateway-listen` rule key, or (later) the Guest's own Entra
+//!   **Listener** role.
+//! - The **child Guest** (sender) authenticates with either an **Entra
 //!   bearer token from its managed identity** or a **gateway-minted,
 //!   short-lived Send SAS bearer**. The ACA display path uses the latter because
 //!   ACA Relay Entra substreams closed during Waypipe forwarding; the long-lived
@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use zeroize::Zeroize;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -53,7 +54,7 @@ impl RelayRole {
 
 /// A hybrid-connection endpoint: the relay namespace FQDN + the entity
 /// (hybrid connection) name. Non-secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RelayEndpoint {
     /// Namespace FQDN, e.g. `relns-xxxx.servicebus.windows.net`.
     pub namespace: String,
@@ -61,12 +62,23 @@ pub struct RelayEndpoint {
     pub entity: String,
 }
 
+impl fmt::Debug for RelayEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayEndpoint")
+            .field("namespace", &"<redacted>")
+            .field("entity", &"<redacted>")
+            .finish()
+    }
+}
+
 /// How an endpoint authenticates to the relay. Both variants wrap secret
 /// material and therefore redact their `Debug`.
 #[derive(Clone)]
 pub enum RelayCredential {
     /// A Shared Access Signature: an authorization-rule name + its key. Used
-    /// gateway-side (the Listen rule), and transitionally for non-MI senders.
+    /// Gateway Guest-side (the Listen rule), and transitionally for non-MI
+    /// senders.
     Sas {
         /// The authorization-rule (key) name, e.g. `gateway-listen`.
         key_name: String,
@@ -99,6 +111,18 @@ impl fmt::Debug for RelayCredential {
     }
 }
 
+impl Drop for RelayCredential {
+    fn drop(&mut self) {
+        match self {
+            Self::Sas { key_name, key } => {
+                key_name.zeroize();
+                key.zeroize();
+            }
+            Self::SasToken(token) | Self::EntraBearer(token) => token.zeroize(),
+        }
+    }
+}
+
 /// The bytes a [`RelayCredential`] resolves to for a WebSocket connect: a SAS
 /// goes in the `sb-hc-token` query parameter; an Entra token goes in the
 /// `ServiceBusAuthorization` header. Exactly one is set. Redacted `Debug`.
@@ -106,9 +130,27 @@ impl fmt::Debug for RelayCredential {
 pub struct RelayConnect {
     /// The `wss://…` URL (already URL-encoded; never contains the bearer).
     pub url: String,
-    /// The `ServiceBusAuthorization` header value (`Bearer <jwt>`), when the
-    /// credential is an Entra token.
+    /// The `ServiceBusAuthorization` header value when the credential is an
+    /// Entra token.
     pub auth_header: Option<String>,
+}
+
+impl RelayConnect {
+    /// Consume the connect request at the Guest socket boundary.
+    pub fn into_parts(mut self) -> (String, Option<String>) {
+        let url = std::mem::take(&mut self.url);
+        let auth_header = self.auth_header.take();
+        (url, auth_header)
+    }
+}
+
+impl Drop for RelayConnect {
+    fn drop(&mut self) {
+        self.url.zeroize();
+        if let Some(header) = &mut self.auth_header {
+            header.zeroize();
+        }
+    }
 }
 
 impl fmt::Debug for RelayConnect {
@@ -134,8 +176,8 @@ pub const MAX_SAS_TTL_SECS: u64 = 15 * 60;
 pub const DEFAULT_SAS_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
 
 /// Mint a Service Bus SAS token conferring the rule's rights on the entity,
-/// expiring `ttl_secs` from now. This is the gateway-side minting the POC's
-/// relay bridge proved; it is reproduced here byte-for-byte.
+/// expiring `ttl_secs` from now. This is the Gateway Guest-side minting the
+/// POC's relay bridge proved; it is reproduced here byte-for-byte.
 ///
 /// The returned string is secret (it is a bearer); callers must treat it as
 /// such (it is never logged by this crate).
@@ -145,12 +187,18 @@ pub fn mint_sas(
     key: &str,
     ttl_secs: u64,
 ) -> Result<String, RelayError> {
+    if ttl_secs == 0 {
+        return Err(RelayError::InvalidTtl);
+    }
     if ttl_secs > MAX_SAS_TTL_SECS {
         return Err(RelayError::TtlTooLong {
             requested: ttl_secs,
             max: MAX_SAS_TTL_SECS,
         });
     }
+    validate_endpoint(endpoint)?;
+    validate_credential_text(key_name)?;
+    validate_credential_text(key)?;
 
     let resource = format!("http://{}/{}", endpoint.namespace, endpoint.entity);
     let resource_enc = urlencoding::encode(&resource).to_lowercase();
@@ -172,7 +220,7 @@ pub fn mint_sas(
 /// Build the relay WebSocket connect contract for `role` using `credential`.
 /// SAS authentication mints a token into the `sb-hc-token` query parameter;
 /// Entra authentication leaves the URL token-free and returns the
-/// `ServiceBusAuthorization: Bearer <jwt>` header. A pre-minted SAS bearer is
+/// `ServiceBusAuthorization` header. A pre-minted SAS bearer is
 /// also accepted for the ACA path; it is already scoped/expiring, so this
 /// function only URL-encodes it into `sb-hc-token`.
 pub fn build_connect(
@@ -181,6 +229,8 @@ pub fn build_connect(
     credential: &RelayCredential,
     ttl_secs: u64,
 ) -> Result<RelayConnect, RelayError> {
+    validate_endpoint(endpoint)?;
+    validate_credential(credential)?;
     // The sender does NOT supply its own `sb-hc-id`. Azure Relay generates the
     // rendezvous correlation id (a GUID) and embeds it in the accept message's
     // address; a caller-supplied non-GUID id yields an unserviceable rendezvous
@@ -223,6 +273,12 @@ pub enum RelayError {
     Clock,
     /// The SAS key was not valid HMAC key material.
     Key,
+    /// A credential or endpoint contained invalid or empty data.
+    InvalidCredential,
+    /// A SAS lifetime was zero.
+    InvalidTtl,
+    /// The endpoint contained invalid data.
+    InvalidEndpoint,
     /// The requested SAS TTL exceeded the short-lived bearer bound.
     TtlTooLong {
         /// Requested lifetime in seconds.
@@ -237,6 +293,9 @@ impl fmt::Display for RelayError {
         match self {
             RelayError::Clock => write!(f, "system clock is before the unix epoch"),
             RelayError::Key => write!(f, "relay SAS key is invalid"),
+            RelayError::InvalidCredential => write!(f, "relay credential is invalid"),
+            RelayError::InvalidTtl => write!(f, "relay SAS TTL must be nonzero"),
+            RelayError::InvalidEndpoint => write!(f, "relay endpoint is invalid"),
             RelayError::TtlTooLong { requested, max } => write!(
                 f,
                 "relay SAS TTL {requested}s exceeds maximum short-lived bound {max}s"
@@ -246,3 +305,107 @@ impl fmt::Display for RelayError {
 }
 
 impl std::error::Error for RelayError {}
+
+fn validate_endpoint(endpoint: &RelayEndpoint) -> Result<(), RelayError> {
+    if endpoint.namespace.is_empty()
+        || endpoint.entity.is_empty()
+        || endpoint.namespace.len() > 255
+        || endpoint.entity.len() > 255
+        || endpoint
+            .namespace
+            .bytes()
+            .chain(endpoint.entity.bytes())
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || endpoint.namespace.contains('/')
+        || endpoint.namespace.contains('?')
+        || endpoint.entity.contains('/')
+        || endpoint.entity.contains('?')
+    {
+        return Err(RelayError::InvalidEndpoint);
+    }
+    Ok(())
+}
+
+fn validate_credential_text(value: &str) -> Result<(), RelayError> {
+    if value.is_empty()
+        || value.len() > 16 * 1024
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(RelayError::InvalidCredential);
+    }
+    Ok(())
+}
+
+fn validate_credential(credential: &RelayCredential) -> Result<(), RelayError> {
+    match credential {
+        RelayCredential::Sas { key_name, key } => {
+            validate_credential_text(key_name)?;
+            validate_credential_text(key)
+        }
+        RelayCredential::SasToken(token) | RelayCredential::EntraBearer(token) => {
+            validate_credential_text(token)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint() -> RelayEndpoint {
+        RelayEndpoint {
+            namespace: "relns-test.servicebus.windows.net".to_owned(),
+            entity: "hc-test".to_owned(),
+        }
+    }
+
+    #[test]
+    fn auth_debug_and_errors_redact_canary_material() {
+        let credential = RelayCredential::EntraBearer("bearer-secret-canary".to_owned());
+        assert!(!format!("{credential:?}").contains("bearer-secret-canary"));
+        let error = build_connect(
+            &endpoint(),
+            RelayRole::Sender,
+            &RelayCredential::Sas {
+                key_name: "name".to_owned(),
+                key: "token-secret-canary".to_owned(),
+            },
+            MAX_SAS_TTL_SECS + 1,
+        )
+        .unwrap_err();
+        assert!(!format!("{error:?}").contains("token-secret-canary"));
+        assert!(!format!("{error}").contains("token-secret-canary"));
+    }
+
+    #[test]
+    fn auth_rejects_empty_and_zero_lifetime_inputs() {
+        assert_eq!(
+            mint_sas(&endpoint(), "", "key", 1).unwrap_err(),
+            RelayError::InvalidCredential
+        );
+        assert_eq!(
+            mint_sas(&endpoint(), "name", "key", 0).unwrap_err(),
+            RelayError::InvalidTtl
+        );
+        assert_eq!(
+            build_connect(
+                &endpoint(),
+                RelayRole::Sender,
+                &RelayCredential::EntraBearer(String::new()),
+                1,
+            )
+            .unwrap_err(),
+            RelayError::InvalidCredential
+        );
+    }
+
+    #[test]
+    fn connect_debug_redacts_url_and_header_material() {
+        let credential = RelayCredential::EntraBearer("bearer-secret-canary".to_owned());
+        let connect = build_connect(&endpoint(), RelayRole::Sender, &credential, 1).unwrap();
+        let debug = format!("{connect:?}");
+        assert!(!debug.contains("bearer-secret-canary"));
+        assert!(!debug.contains("Bearer"));
+        assert!(debug.contains("<redacted>"));
+    }
+}

@@ -8,8 +8,8 @@ pub mod audit;
 pub mod config;
 pub mod controller;
 pub mod descriptor;
-pub mod qmp;
 pub mod qemu_argv;
+pub mod qmp;
 pub mod state;
 pub mod telemetry;
 pub mod types;
@@ -32,12 +32,10 @@ pub use controller::{
     validate_process_spec,
 };
 pub use descriptor::{DescriptorError, ProviderDescriptor, QemuMediaProviderDescriptor};
+pub use qemu_argv::{QemuMediaArgvError, QemuMediaArgvInput, exec_arg0, generate_qemu_media_argv};
 pub use qmp::{
     QmpCommand, QmpError, QmpGreeting, QmpHealth, QmpReply, QmpSession, QmpTransport, QmpVmStatus,
     ScriptedQmpTransport,
-};
-pub use qemu_argv::{
-    QemuMediaArgvError, QemuMediaArgvInput, exec_arg0, generate_qemu_media_argv,
 };
 pub use state::{GuestObservation, RuntimeState, StateError};
 pub use telemetry::{

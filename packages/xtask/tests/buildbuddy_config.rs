@@ -434,8 +434,9 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         "Nix shells must export the pinned shellcheck binary through the shared contract"
     );
     assert!(
-        read_text("bazel/checks/meta/BUILD.bazel")
-            .contains("env_inherit = [\"D2B_REPO_ROOT\", \"D2B_SHELLCHECK_BIN\", \"PATH\", \"ROOT\"]"),
+        read_text("bazel/checks/meta/BUILD.bazel").contains(
+            "env_inherit = [\"D2B_REPO_ROOT\", \"D2B_SHELLCHECK_BIN\", \"PATH\", \"ROOT\"]"
+        ),
         "the direct tier0 test must inherit the declared shellcheck binary"
     );
 }
@@ -971,7 +972,10 @@ fn concurrent_facades_isolate_warning_evidence() {
         }
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(warning_ready.exists(), "warning facade did not reach barrier");
+    assert!(
+        warning_ready.exists(),
+        "warning facade did not reach barrier"
+    );
 
     let clean = Command::new("bash")
         .arg(repo_root().join("tests/tools/bazel-check"))
@@ -1260,9 +1264,7 @@ fn uppercase_bazel_warning_allows_typed_remote_retry() {
 
     assert!(output.status.success());
     assert!(local_retry.exists());
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("bazel-check: local fallback passed")
-    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("bazel-check: local fallback passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 
@@ -2068,9 +2070,7 @@ fn bazel_facade_owns_public_make_composition() {
     assert!(
         make_target_blocks(&makefile)
             .get("perf")
-            .is_some_and(|block| {
-                block.contains("//bazel/checks:test-performance-budgets")
-            }),
+            .is_some_and(|block| { block.contains("//bazel/checks:test-performance-budgets") }),
         "perf must invoke the public performance suite directly"
     );
 }
@@ -2349,10 +2349,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
             .env("GIT_COMMON_DIR", scratch.join("foreign-common.git"))
             .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join(profile))
             .env("D2B_CAPTURE_ARGS", capture)
-            .env(
-                "PATH",
-                &test_path,
-            );
+            .env("PATH", &test_path);
         if trusted {
             command
                 .env("D2B_BAZEL_TRUSTED", "1")

@@ -15,7 +15,7 @@
 > **Current-state note (U10).** The baseline migration rows below predate the
 > clean-break removal of the standalone Guest daemon and guest-control
 > modules. Current Nix emits `d2bd guest`, the Guest-profile broker,
-> ComponentSession enrollment, and signed Provider Process inputs; deleted
+> ComponentSession enrollment, and signed Provider setup descriptors; deleted
 > baseline rows remain historical evidence only.
 
 ## Source, reuse, and evidence policy
@@ -499,6 +499,39 @@ each built artifact:
       "closureDigest": "sha256:445566...",
       "closureSize":   876543210
     }
+  ],
+  "guestSetupDescriptors": [
+    {
+      "zone": "dev",
+      "guest": "dev-vm",
+      "guestRef": "Guest/dev-vm",
+      "providerArtifactId": "runtime-ch",
+      "providerContractDigest": "sha256:<64 lowercase hex>",
+      "providerSchemaDigest": "sha256:<64 lowercase hex>",
+      "descriptor": {
+        "schemaVersion": "1.0",
+        "descriptorDigest": "sha256:<64 lowercase hex>",
+        "providerRef": "Provider/runtime-cloud-hypervisor",
+        "providerGeneration": 1,
+        "systemArtifactId": "dev-vm-system",
+        "systemArtifactCommitment": "sha256:<64 lowercase hex>",
+        "childRoles": ["vmm", "ch-api", "guest-control", "system"],
+        "seed": {
+          "schema": "guest-resource-seed",
+          "schemaVersion": "1.0",
+          "fingerprint": "sha256:<64 lowercase hex>"
+        },
+        "bootstrapHandoff": {
+          "class": "opaque-bootstrap",
+          "expiryMs": 86400000
+        },
+        "signature": {
+          "algorithm": "ed25519-blake3",
+          "keyFingerprint": "sha256:<64 lowercase hex>",
+          "signature": "<opaque catalog signature>"
+        }
+      }
+    }
   ]
 }
 ```
@@ -516,6 +549,17 @@ staging; recomputing the self-digest alone can never detect tampering, so the
 Nix-store-immutable bundle anchor is the authority. The catalog is
 content-addressed: same derivation inputs produce byte-identical output.
 
+`guestSetupDescriptors` is a private, sorted semantic view keyed by Zone and
+Guest. Each descriptor binds the selected `systemArtifactId` commitment to the
+Cloud Hypervisor Provider contract and its fixed child-role/guest-seed schema.
+It contains no store path, socket locator, credential, argv, environment,
+numeric identity, or broker operation. The descriptor digest covers its
+canonical unsigned semantic payload with the `d2b-digest/v1` framing; the
+catalog-owned signature envelope is verified before the Guest controller can
+plan children. Descriptors are
+private catalog inputs, not ResourceSpecs, and are never copied into the
+public Zone bundle.
+
 ### Validation
 
 | Rule | Layer |
@@ -527,6 +571,9 @@ content-addressed: same derivation inputs produce byte-identical output.
 | `type` of the artifact matches the expected type for the spec field | Build |
 | Provider `artifactId` has `type = "provider"`; trust root validated | Build |
 | `systemArtifactId` / `source.systemArtifactId` has `type = "nixos-system"` | Build |
+| Cloud Hypervisor setup descriptor schema, Provider contract, and system-artifact commitment match | Eval |
+| Cloud Hypervisor descriptor digest covers only the canonical semantic payload | Eval |
+| Cloud Hypervisor descriptor has no raw path, locator, credential, argv, UID, or broker field | Eval |
 | Store paths absent from all public ResourceSpecs, status fields, audit records, and OTEL telemetry | Build/Runtime |
 
 ## Provider package catalog
@@ -1178,14 +1225,15 @@ The compiler:
 1. Resolves `systemArtifactId = "dev-vm-system"` from `d2b.artifacts`; validates
    `type = "nixos-system"`.
 2. Computes `pkgs.closureInfo { rootPaths = [artifacts.dev-vm-system.package]; }`.
-3. Emits a `Volume/<guest-name>-nix-store` resource with
-   `source.kind = "nix-closure"` and `source.systemArtifactId = "dev-vm-system"`.
-4. Emits a virtiofs attachment from that Volume to the Guest with
-   `mountPath: /nix/store`.
-5. Records closure digest, closure size, and private store path in the artifact
+3. Records closure digest, closure size, and private store path in the artifact
    catalog entry for `"dev-vm-system"`. The store path is a private field in
    `artifact-catalog.json`; it is never emitted in public ResourceSpecs, status
    fields, audit records, or OTEL telemetry.
+4. Emits a private Cloud Hypervisor setup descriptor bound to
+   `"dev-vm-system"` and the selected Provider contract. The Guest controller
+   later creates the `Process`, `Endpoint`, and setup `Volume` children through
+   the authenticated Resource API; Nix does not emit those child rows or a
+   `processesByZone` projection for this Provider.
 
 The per-VM hardlink farm path is derived by `Provider/volume-virtiofs` at
 runtime from the artifact catalog entry and the Zone's `stateDir`; it never

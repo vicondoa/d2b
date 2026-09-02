@@ -21,12 +21,8 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
-};
 use d2b_contracts_resource::v3::identity::SessionPurpose;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 
 pub const PREFACE_LEN: usize = 16;
 pub const PREFACE_MAGIC: [u8; 8] = *b"D2BCS3\r\n";
@@ -924,6 +920,49 @@ impl EndpointPolicyIdentity {
             return Err(BinaryError::NonCanonical);
         }
         Ok(identity)
+    }
+}
+
+impl EndpointPolicy {
+    /// Validate the exact endpoint profile allowed for ZoneLink traffic.
+    ///
+    /// ZoneLink traffic is an enrolled, attachment-free `Noise_KK` session.
+    /// The two active carriage profiles are a remote Provider stream between
+    /// Zone controllers and a Guest-local vsock session terminating at a
+    /// GuestAgent. The authenticated session carries these same fields in its
+    /// transcript-bound policy; this method only validates the profile and
+    /// returns no authority-bearing value.
+    pub fn validate_zone_link(&self) -> Result<(), ContractError> {
+        EndpointPolicyIdentity::from(self).validate()?;
+        if self.reconnect_generation == 0
+            || self.purpose != EndpointPurpose::ZoneLink
+            || self.purpose_class != PurposeClass::Enrolled
+            || self.initiator_role != EndpointRole::ZoneController
+            || self.service != ServicePackage::ResourceV3
+            || self.noise_profile != NoiseProfile::Kk25519ChaChaPolySha256
+            || self.transport_binding.identity_evidence
+                != IdentityEvidenceRequirement::EnrolledStaticKeys
+            || self.attachment_policy != AttachmentPolicy::disabled()
+            || !matches!(
+                (
+                    self.responder_role,
+                    self.transport_binding.transport,
+                    self.transport_binding.locality,
+                ),
+                (
+                    EndpointRole::ZoneController,
+                    TransportClass::ProviderStream,
+                    Locality::Remote,
+                ) | (
+                    EndpointRole::GuestAgent,
+                    TransportClass::NativeVsock,
+                    Locality::GuestLocal,
+                )
+            )
+        {
+            return Err(ContractError::InvalidBinding);
+        }
+        Ok(())
     }
 }
 
@@ -1992,6 +2031,102 @@ mod bounded_identifier_tests {
             assert!(!rendered.contains(&raw_binding), "{rendered}");
         }
         assert!(rendered.contains("<redacted>"), "{rendered}");
+    }
+}
+
+#[cfg(test)]
+mod zone_link_profile_tests {
+    use super::*;
+
+    fn enrolled_policy() -> EndpointPolicy {
+        EndpointPolicy {
+            purpose: EndpointPurpose::ZoneLink,
+            purpose_class: PurposeClass::Enrolled,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::ZoneController,
+            service: ServicePackage::ResourceV3,
+            schema_fingerprint: [0x11; 32],
+            noise_profile: NoiseProfile::Kk25519ChaChaPolySha256,
+            limits: LimitProfile::local_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::ProviderStream,
+                locality: Locality::Remote,
+                channel_binding: [0x22; 32],
+                identity_evidence: IdentityEvidenceRequirement::EnrolledStaticKeys,
+            },
+            reconnect_generation: 7,
+            attachment_policy: AttachmentPolicy::disabled(),
+        }
+    }
+
+    fn guest_policy() -> EndpointPolicy {
+        EndpointPolicy {
+            purpose: EndpointPurpose::ZoneLink,
+            purpose_class: PurposeClass::Enrolled,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::GuestAgent,
+            service: ServicePackage::ResourceV3,
+            schema_fingerprint: [0x11; 32],
+            noise_profile: NoiseProfile::Kk25519ChaChaPolySha256,
+            limits: LimitProfile::remote_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::NativeVsock,
+                locality: Locality::GuestLocal,
+                channel_binding: [0x22; 32],
+                identity_evidence: IdentityEvidenceRequirement::EnrolledStaticKeys,
+            },
+            reconnect_generation: 7,
+            attachment_policy: AttachmentPolicy::disabled(),
+        }
+    }
+
+    #[test]
+    fn only_the_enrolled_zone_link_profiles_validate() {
+        assert!(enrolled_policy().validate_zone_link().is_ok());
+        assert!(guest_policy().validate_zone_link().is_ok());
+
+        for mutate in [
+            |policy: &mut EndpointPolicy| policy.purpose = EndpointPurpose::ResourceService,
+            |policy: &mut EndpointPolicy| policy.purpose_class = PurposeClass::Local,
+            |policy: &mut EndpointPolicy| policy.initiator_role = EndpointRole::Provider,
+            |policy: &mut EndpointPolicy| policy.responder_role = EndpointRole::Provider,
+            |policy: &mut EndpointPolicy| policy.service = ServicePackage::ControllerV3,
+            |policy: &mut EndpointPolicy| {
+                policy.noise_profile = NoiseProfile::Nn25519ChaChaPolySha256
+            },
+            |policy: &mut EndpointPolicy| {
+                policy.transport_binding.transport = TransportClass::NativeVsock
+            },
+            |policy: &mut EndpointPolicy| policy.transport_binding.locality = Locality::GuestLocal,
+            |policy: &mut EndpointPolicy| {
+                policy.transport_binding.identity_evidence =
+                    IdentityEvidenceRequirement::DirectionalUnix
+            },
+            |policy: &mut EndpointPolicy| {
+                policy.attachment_policy = AttachmentPolicy {
+                    kind: AttachmentPolicyKind::PacketAtomic,
+                    max_per_packet: 1,
+                    max_per_request: 1,
+                    max_per_operation: 1,
+                    max_per_session: 1,
+                    credentials_allowed: false,
+                }
+            },
+        ] {
+            let mut policy = enrolled_policy();
+            mutate(&mut policy);
+            assert!(policy.validate_zone_link().is_err());
+        }
+    }
+
+    #[test]
+    fn a_zero_reconnect_generation_cannot_bind_a_zone_link_session() {
+        let mut policy = enrolled_policy();
+        policy.reconnect_generation = 0;
+        assert_eq!(
+            policy.validate_zone_link(),
+            Err(ContractError::InvalidBinding)
+        );
     }
 }
 

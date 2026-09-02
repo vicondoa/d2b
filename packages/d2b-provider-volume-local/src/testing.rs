@@ -140,6 +140,7 @@ impl VolumeSourceEffectPort for &ScriptedPort {
     async fn resolve_root(
         &self,
         _source_policy_id: Option<&BoundedToken>,
+        _system_artifact_id: Option<&BoundedToken>,
         _kind: SourceKind,
     ) -> Result<VolumeRootHandle, VolumeLocalError> {
         self.record(PortCall::ResolveRoot);

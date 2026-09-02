@@ -6,22 +6,11 @@
 //! stream, file descriptor, path, backing handle, or remote reference.
 
 use d2b_contracts_provider::v3::{
-    BindingTargetType,
-    Exportability,
-    ProjectionFactory,
-    ProviderContractError,
-    SEMANTIC_PROJECTION_PROTOCOL_VERSION,
-    SemanticProjectionProtocolVersion,
+    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
+    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
 };
-use d2b_contracts_zone_session::v3::{
-    ResourceExportSpec,
-    ResourceImportSpec,
-};
-use d2b_contracts_resource::v3::{
-    ResourceEnvelope,
-    ResourceRef,
-    ResourceTypeName,
-};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ResourceTypeName};
+use d2b_contracts_zone_session::v3::{ResourceExportSpec, ResourceImportSpec};
 
 /// Why a Provider-side share admission was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,18 +258,12 @@ pub const fn service_type(factory: &ProjectionFactory) -> &ResourceTypeName {
 #[cfg(test)]
 mod tests {
     use d2b_contracts_provider::v3::BindingTargetType;
+    use d2b_contracts_resource::v3::{
+        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
+    };
     use d2b_contracts_zone_session::v3::{
-    ConsumerZonePolicy,
-    ExportArbitration,
-    ResourceExportSpec,
-    ResourceImportSpec,
-};
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceTypeName,
-    SchemaFingerprint,
-    execution_policy::BoundedToken,
-};
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
+    };
 
     use super::*;
 

@@ -1,19 +1,14 @@
 { root
 , specPath
+, nixpkgsPath
 }:
 
 let
   spec = builtins.fromJSON (builtins.readFile specPath);
-  lock = builtins.fromJSON (builtins.readFile (root + "/flake.lock"));
-  nixpkgsInput = lock.nodes.root.inputs.nixpkgs;
-  nixpkgsNode =
-    if builtins.isString nixpkgsInput
-    then nixpkgsInput
-    else builtins.elemAt nixpkgsInput ((builtins.length nixpkgsInput) - 1);
-  nixpkgs = builtins.fetchTree lock.nodes.${nixpkgsNode}.locked;
-  inputs = { inherit nixpkgs; };
   system = spec.system;
-  pkgs = import nixpkgs.outPath { inherit system; };
+  pkgs = import nixpkgsPath { inherit system; };
+  nixpkgs = { outPath = pkgs.path; };
+  inputs = { inherit nixpkgs; };
   modules = map
     (path: root + "/${path}")
     spec.modules;

@@ -192,9 +192,10 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         "backpressure" => (EXIT_EXEC_CAPACITY, ExecFailureSource::ComponentSession),
         "component-session-unavailable-old-generation"
         | "component-session-capability-unavailable"
-        | "component-session-exec-detached-unavailable" => {
-            (EXIT_EXEC_OLD_GENERATION, ExecFailureSource::ComponentSession)
-        }
+        | "component-session-exec-detached-unavailable" => (
+            EXIT_EXEC_OLD_GENERATION,
+            ExecFailureSource::ComponentSession,
+        ),
         "exec-session-capacity" | "exec-session-rate-limited" => {
             (EXIT_EXEC_CAPACITY, ExecFailureSource::ComponentSession)
         }
@@ -2072,17 +2073,33 @@ mod tests {
                 EXIT_EXEC_OLD_GENERATION,
                 ComponentSession,
             ),
-            ("exec-session-capacity", EXIT_EXEC_CAPACITY, ComponentSession),
+            (
+                "exec-session-capacity",
+                EXIT_EXEC_CAPACITY,
+                ComponentSession,
+            ),
             (
                 "exec-session-rate-limited",
                 EXIT_EXEC_CAPACITY,
                 ComponentSession,
             ),
-            ("component-session-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
+            (
+                "component-session-protocol-error",
+                EXIT_EXEC_PROTOCOL,
+                Protocol,
+            ),
             ("component-session-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
-            ("component-session-auth-failed", EXIT_EXEC_AUTH, ComponentSession),
+            (
+                "component-session-auth-failed",
+                EXIT_EXEC_AUTH,
+                ComponentSession,
+            ),
             ("authz-not-admin", EXIT_EXEC_AUTH, ComponentSession),
-            ("component-session-exec-internal", EXIT_EXEC_INTERNAL, Internal),
+            (
+                "component-session-exec-internal",
+                EXIT_EXEC_INTERNAL,
+                Internal,
+            ),
             ("totally-unknown-slug", EXIT_EXEC_INTERNAL, Internal),
         ];
         for (slug, code, source) in cases {

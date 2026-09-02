@@ -140,9 +140,7 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
          --d2bd-uid \"$UID\" \
          --d2bd-gid \"$GID\" \
          --audit-dir \"$AUDIT_DIR\" \
-         --bundle-path /nonexistent/bundle.json \
-         --realm-controllers-path /nonexistent/realm-controllers.json \
-         --realm-identity-path /nonexistent/realm-identity.json"
+         --bundle-path /nonexistent/bundle.json"
     );
 
     let scrubber = scrub_shell_environment_path();

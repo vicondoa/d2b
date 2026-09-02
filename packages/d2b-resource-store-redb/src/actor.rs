@@ -36,8 +36,9 @@ use crate::transaction::{
     API_SCHEMAS, AuditOutboxRecord, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord,
     StoreMeta, VerifiedWrite, apply_group_with_hook, audit_outbox_for_operation,
     audit_outbox_pending, authority_operations, authority_prepare, authority_update, backpressure,
-    current_meta, decode, mark_audit_outbox_complete, pending_audit_outboxes, resource_key,
-    stored_resource, timeout,
+    current_meta, decode, mark_audit_outbox_complete, pending_audit_outboxes,
+    pending_deferred_activation_operation_ids, resource_key, stored_resource, timeout,
+    validate_deferred_broker_evidence_marker,
 };
 use d2b_resource_store::mutation_seal::OpenedMutation;
 
@@ -190,7 +191,11 @@ fn recover_pending_audit_outboxes(
     }
     for outbox in pending_audit_outboxes(database)? {
         let key = outbox_join_key(&outbox)?;
-        verify_broker_evidence(&outbox, &key, broker_evidence)?;
+        if verify_broker_evidence(&outbox, &key, broker_evidence)?
+            == BrokerEvidenceVerification::Deferred
+        {
+            continue;
+        }
         append_audit_outbox(database, audit, &outbox, &key)?;
         mark_audit_outbox_complete(database, &outbox.operation_id)?;
     }
@@ -208,13 +213,20 @@ fn outbox_join_key(outbox: &AuditOutboxRecord) -> Result<ZoneOperationKey, Store
     Ok(ZoneOperationKey::new(zone, operation))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrokerEvidenceVerification {
+    Ready,
+    Deferred,
+}
+
 fn verify_broker_evidence(
     outbox: &AuditOutboxRecord,
     key: &ZoneOperationKey,
     broker_evidence: &BrokerEvidenceIndex,
-) -> Result<(), StoreError> {
+) -> Result<BrokerEvidenceVerification, StoreError> {
+    let deferred_marker = validate_deferred_broker_evidence_marker(outbox)?;
     if !outbox.requires_broker {
-        return Ok(());
+        return Ok(BrokerEvidenceVerification::Ready);
     }
     let effect_durable = outbox
         .mutations
@@ -229,9 +241,17 @@ fn verify_broker_evidence(
         },
         effect_durable,
     };
-    let broker = broker_evidence
-        .get(key)?
-        .ok_or_else(|| crate::transaction::durability_failure("audit-broker-evidence-missing"))?;
+    let Some(broker) = broker_evidence.get(key)? else {
+        if effect_durable && deferred_marker {
+            return Ok(BrokerEvidenceVerification::Deferred);
+        }
+        if effect_durable {
+            return Err(crate::transaction::durability_failure(
+                "audit-broker-evidence-missing",
+            ));
+        }
+        return Ok(BrokerEvidenceVerification::Ready);
+    };
     if !matches!(
         d2b_audit::reconcile_durability(Some(&broker), Some(&resource)),
         Reconciliation::Success | Reconciliation::Failure
@@ -240,7 +260,7 @@ fn verify_broker_evidence(
             "audit-domain-integrity-failure",
         ));
     }
-    Ok(())
+    Ok(BrokerEvidenceVerification::Ready)
 }
 
 fn append_audit_outbox(
@@ -567,6 +587,71 @@ impl WriterHandle {
             .map_err(|_| crate::transaction::integrity("authority-response-closed"))?
     }
 
+    pub(crate) async fn ingest_broker_evidence(
+        &self,
+        operation_id: String,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::IngestBrokerEvidence {
+                operation_id,
+                evidence,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("broker-evidence-response-closed"))?
+    }
+
+    pub(crate) async fn audit_outbox_pending(
+        &self,
+        operation_id: String,
+    ) -> Result<bool, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::AuditOutboxPending {
+                operation_id,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("audit-outbox-response-closed"))?
+    }
+
+    pub(crate) async fn pending_deferred_activation_operation_ids(
+        &self,
+        zone: ZoneId,
+    ) -> Result<Vec<String>, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::PendingDeferredActivationOperationIds { zone, response })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("audit-outbox-response-closed"))?
+    }
+
     pub(crate) async fn replay(
         &self,
         after_revision: u64,
@@ -766,6 +851,19 @@ enum WriterCommand {
         operation_id: String,
         state: String,
         response: oneshot::Sender<Result<(), StoreError>>,
+    },
+    IngestBrokerEvidence {
+        operation_id: String,
+        evidence: DurabilityEvidence,
+        response: oneshot::Sender<Result<(), StoreError>>,
+    },
+    AuditOutboxPending {
+        operation_id: String,
+        response: oneshot::Sender<Result<bool, StoreError>>,
+    },
+    PendingDeferredActivationOperationIds {
+        zone: ZoneId,
+        response: oneshot::Sender<Result<Vec<String>, StoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<Result<(), StoreError>>,
@@ -1084,6 +1182,54 @@ impl WriterActor {
                     }
                     let _ = response.send(result);
                 }
+                WriterCommand::IngestBrokerEvidence {
+                    operation_id,
+                    evidence,
+                    response,
+                } => {
+                    let result = self.broker_evidence.insert(evidence).and_then(|_| {
+                        let Some(outbox) =
+                            audit_outbox_for_operation(&self.database, &operation_id)?
+                        else {
+                            return Ok(());
+                        };
+                        let key = outbox_join_key(&outbox)?;
+                        if verify_broker_evidence(&outbox, &key, &self.broker_evidence)?
+                            == BrokerEvidenceVerification::Deferred
+                        {
+                            return Ok(());
+                        }
+                        append_audit_outbox(&self.database, self.audit.as_ref(), &outbox, &key)?;
+                        mark_audit_outbox_complete(&self.database, &operation_id)
+                    });
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::AuditOutboxPending {
+                    operation_id,
+                    response,
+                } => {
+                    let result = audit_outbox_pending(&self.database, &operation_id);
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::PendingDeferredActivationOperationIds { zone, response } => {
+                    let result = pending_deferred_activation_operation_ids(&self.database, &zone);
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
+                }
                 WriterCommand::Shutdown { response } => {
                     let result = if self.quarantined.load(Ordering::Acquire) {
                         Err(crate::transaction::quarantined())
@@ -1330,7 +1476,11 @@ impl WriterActor {
                     audit_outbox_for_operation(&self.database, &intent.operation_id)?
                 {
                     let key = outbox_join_key(&outbox)?;
-                    verify_broker_evidence(&outbox, &key, &self.broker_evidence)?;
+                    if verify_broker_evidence(&outbox, &key, &self.broker_evidence)?
+                        == BrokerEvidenceVerification::Deferred
+                    {
+                        continue;
+                    }
                     append_audit_outbox(&self.database, self.audit.as_ref(), &outbox, &key)?;
                     mark_audit_outbox_complete(&self.database, &intent.operation_id)?;
                     continue;
@@ -1500,6 +1650,15 @@ impl WriterActor {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
                 WriterCommand::AuthorityUpdate { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::IngestBrokerEvidence { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::AuditOutboxPending { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::PendingDeferredActivationOperationIds { response, .. } => {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
                 WriterCommand::Shutdown { response } => {
@@ -2139,7 +2298,13 @@ fn read_list(
         }
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let mut resource = stored_resource(&request.zone, &resource_ref, &record)?;
-        if !filters_match(&request.filters, resource_type, name, &resource.uid) {
+        if !filters_match(
+            &request.filters,
+            resource_type,
+            name,
+            &resource.uid,
+            record.owner_uid.as_deref(),
+        ) {
             continue;
         }
         project_resource(&mut resource, request.projection)?;
@@ -2271,11 +2436,16 @@ fn filters_match(
     resource_type: &str,
     name: &str,
     uid: &ResourceUid,
+    owner_uid: Option<&str>,
 ) -> bool {
     filters.iter().all(|filter| match filter.field.as_str() {
         "metadata.name" => filter.values.iter().any(|value| value == name),
         "type" => filter.values.iter().any(|value| value == resource_type),
         "assignment.resourceUid" => filter.values.iter().any(|value| value == uid.as_str()),
+        "owner.resourceUid" => filter
+            .values
+            .iter()
+            .any(|value| owner_uid == Some(value.as_str())),
         _ => false,
     })
 }
@@ -2422,6 +2592,7 @@ mod tests {
             "Process",
             "worker",
             &uid,
+            None,
         ));
         assert!(!filters_match(
             &[StoreFilter {
@@ -2431,6 +2602,27 @@ mod tests {
             "Process",
             "worker",
             &uid,
+            None,
+        ));
+    }
+
+    #[test]
+    fn owner_filter_matches_only_the_exact_owner_uid() {
+        let child_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let owner_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let filter = [StoreFilter {
+            field: "owner.resourceUid".to_owned(),
+            values: vec![owner_uid.as_str().to_owned()],
+        }];
+        assert!(filters_match(
+            &filter,
+            "Process",
+            "worker",
+            &child_uid,
+            Some(owner_uid.as_str()),
+        ));
+        assert!(!filters_match(
+            &filter, "Process", "worker", &child_uid, None,
         ));
     }
 

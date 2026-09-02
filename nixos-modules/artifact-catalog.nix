@@ -38,6 +38,22 @@ let
       })
     ids;
 
+  guestSetupDescriptors =
+    let
+      compiler = cfg._resourceCompiler or { };
+      projection = compiler.providerProjectionRuntimeCloudHypervisor or { };
+      privateArtifact = projection.privateArtifact or { };
+    in privateArtifact.guestSetupDescriptors or [ ];
+  guestClosures = lib.mapAttrsToList
+    (_: artifact:
+      builtins.fromJSON
+        (builtins.unsafeDiscardStringContext (builtins.readFile artifact.path)))
+    (cfg._guestClosureArtifacts or { });
+  descriptorForbiddenRows =
+    let
+      resourceBundle = import ./resources-bundle.nix { inherit lib; };
+    in lib.concatMap resourceBundle.forbiddenRows guestSetupDescriptors;
+
   # Keep the legacy internal projection available to the zone-resources
   # emitter while the installed document uses the v3 artifact rows above.
   # The compatibility view intentionally contains no new authority; it is
@@ -66,24 +82,38 @@ let
   compatibilityData = {
     schemaVersion = 3;
     entries = compatibilityEntries;
+    inherit guestSetupDescriptors;
+    inherit guestClosures;
   };
 
   catalogPath = pkgs.runCommand "d2b-artifact-catalog.json"
     {
       buildRowsJson = builtins.toJSON buildRows;
-      nativeBuildInputs = [ pkgs.python3 ];
-      passAsFile = [ "buildRowsJson" ];
+      guestSetupDescriptorsJson = builtins.toJSON guestSetupDescriptors;
+      guestClosuresJson = builtins.toJSON guestClosures;
+      nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
+      passAsFile = [
+        "buildRowsJson"
+        "guestSetupDescriptorsJson"
+        "guestClosuresJson"
+      ];
     } ''
       set -euo pipefail
-      python3 - "$buildRowsJsonPath" "$out" <<'PY'
+      python3 - "$buildRowsJsonPath" "$guestSetupDescriptorsJsonPath" \
+        "$guestClosuresJsonPath" "$out" <<'PY'
       import hashlib
       import json
       import pathlib
+      import subprocess
       import sys
 
-      rows_path, output_path = sys.argv[1:]
+      rows_path, descriptors_path, closures_path, output_path = sys.argv[1:]
       with open(rows_path, encoding="utf-8") as handle:
           rows = json.load(handle)
+      with open(descriptors_path, encoding="utf-8") as handle:
+          guest_setup_descriptors = json.load(handle)
+      with open(closures_path, encoding="utf-8") as handle:
+          guest_closures = json.load(handle)
 
       def digest_path(path):
           digest = hashlib.sha256()
@@ -127,6 +157,25 @@ let
               if child.is_file()
           )
 
+      def nar_digest(path):
+          result = subprocess.run(
+              [
+                  "nix",
+                  "--extra-experimental-features",
+                  "nix-command",
+                  "hash",
+                  "path",
+                  "--type",
+                  "sha256",
+                  "--base16",
+                  path,
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          return "sha256:" + result.stdout.strip()
+
       def framed_digest(domain, payload):
           frame = {
               "domain": domain,
@@ -153,11 +202,23 @@ let
               "artifactId": row["artifactId"],
               "closureDigest": digest_path(row["closureRegistration"]),
               "closureSize": closure_size,
-              "packageDigest": digest_path(row["storePath"]),
+              # Provider packages use the ADR 0050 NAR digest. Legacy
+              # system-artifact activation retains its established
+              # path-and-content digest until that contract is migrated.
+              "packageDigest": (
+                  nar_digest(row["storePath"])
+                  if row["type"] == "provider"
+                  else digest_path(row["storePath"])
+              ),
               "storePath": row["storePath"],
               "type": row["type"],
           })
-      preimage = {"entries": entries, "schemaVersion": 3}
+      preimage = {
+          "entries": entries,
+          "guestClosures": guest_closures,
+          "guestSetupDescriptors": guest_setup_descriptors,
+          "schemaVersion": 3,
+      }
       encoded = json.dumps(
           preimage,
           ensure_ascii=False,
@@ -199,8 +260,24 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = descriptorForbiddenRows == [ ];
+        message = "runtime-cloud-hypervisor Guest setup descriptors must remain semantic-only.";
+      }
+    ];
     d2b._artifactCatalogV3 = {
-      inherit ids artifactRows preimage preimageJson catalogDigest catalogData catalogJson;
+      inherit
+        ids
+        artifactRows
+        preimage
+        preimageJson
+        catalogDigest
+        catalogData
+        catalogJson
+        guestClosures
+        guestSetupDescriptors
+        ;
       path = catalogPath;
       publicEntries = map (entry: builtins.removeAttrs entry [ "storePath" ]) artifactRows;
     };

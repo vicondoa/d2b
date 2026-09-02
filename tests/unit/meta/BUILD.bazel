@@ -23,7 +23,6 @@ sh_test(
         "//:Cargo.toml",
         "//:packages/Cargo.guest.lock",
         "//packages/d2b-contracts:Cargo.toml",
-        "//packages/d2b-realm-core:Cargo.toml",
     ],
     env_inherit = ["PATH", "ROOT"],
     tags = [

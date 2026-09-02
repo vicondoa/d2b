@@ -6,11 +6,7 @@ use std::sync::{
 };
 
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    ConfigurationGeneration, ResourceGeneration, ResourceUid, ZoneId, ZoneRevision,
 };
 
 use crate::{ControllerIdentity, ResourceKey, TriggerSet};
@@ -592,10 +588,7 @@ impl std::error::Error for ContextError {}
 mod tests {
     use super::*;
     use crate::TriggerReason;
-    use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceRef,
-};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
 
     fn key(zone: &str, name: &str, uid: &str) -> ResourceKey {
         ResourceKey::new(

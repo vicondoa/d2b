@@ -8,17 +8,8 @@ use d2b_bus::{
     StreamLimits, StreamName, router::production_rss::ProductionWatchHarness,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
+    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceName,
+    ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision, canonical_digest,
 };
 use d2b_controller_toolkit::{
     OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason, TriggerSet,
@@ -218,6 +209,7 @@ fn mutation(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                configuration_generation: None,
                 assignment: None,
             },
             None,

@@ -5,6 +5,7 @@ exports_files(
     [
         "BUILD.bazel",
         "nix/default.nix",
+        "nix/projection.nix",
         "nix/tests/default.nix",
     ],
     visibility = ["//visibility:public"],

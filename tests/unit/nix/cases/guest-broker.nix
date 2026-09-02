@@ -10,7 +10,22 @@ let
     mkdir -p "$out/bin"
     touch "$out/bin/d2b-broker"
   '';
+  overrideBroker = pkgs.runCommand "d2b-broker-guest-broker-override-test" { } ''
+    mkdir -p "$out/bin"
+    touch "$out/bin/d2b-broker"
+  '';
   d2bHostTools = { inherit broker; };
+  hostToolOverrideKeys = [
+    "d2b"
+    "d2bd"
+    "broker"
+    "activationHelper"
+    "hostActivationHelper"
+    "unsafeLocalHelper"
+    "resourceCompiler"
+    "waylandProxy"
+  ];
+  d2bHostToolOverrides = lib.genAttrs hostToolOverrideKeys (_: overrideBroker);
 
   optionSinks = { lib, ... }: {
     options.d2b = lib.mkOption {
@@ -80,6 +95,20 @@ let
       };
     }).config;
 
+  evalWithOverrides = module:
+    (mkGuestEval {
+      modules = [
+        optionSinks
+        (common false)
+        module
+      ];
+      specialArgs = {
+        inherit d2bHostTools d2bHostToolOverrides;
+        name = "guest-test";
+        d2bUsePrebuiltHostTools = false;
+      };
+    }).config;
+
   host = eval false (import (flakeRoot + "/nixos-modules/host-broker.nix") {
     inputs = { };
   });
@@ -88,6 +117,8 @@ let
     inputs = { };
   });
   prebuiltGuest = eval true (import (flakeRoot + "/nixos-modules/guest-broker.nix"));
+  overriddenGuest =
+    evalWithOverrides (import (flakeRoot + "/nixos-modules/guest-broker.nix"));
 
   brokerFrom = packages:
     lib.findFirst (package: package.outPath == broker.outPath) null packages;
@@ -147,5 +178,20 @@ in
   "guest-broker/service-kill-mode-process" = {
     expr = guestService.KillMode;
     expected = "process";
+  };
+  "guest-broker/host-tool-override-selects-guest-broker" = {
+    expr =
+      let
+        packages = overriddenGuest.environment.systemPackages;
+        selected = lib.findFirst
+          (package: package.outPath == overrideBroker.outPath)
+          null
+          packages;
+        service = overriddenGuest.systemd.services.d2b-broker-guest.serviceConfig;
+      in
+      selected != null
+      && selected.outPath != broker.outPath
+      && lib.hasPrefix "${overrideBroker.outPath}/bin/d2b-broker guest " service.ExecStart;
+    expected = true;
   };
 }

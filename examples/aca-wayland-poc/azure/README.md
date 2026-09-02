@@ -1,5 +1,9 @@
 # d2b ACA + Wayland POC - Azure deployment (Bicep)
 
+> Historical prototype only. This deployment is not U19 or U20 acceptance
+> evidence. ACA testing is deferred until after the U20 local host switch and
+> Cloud Hypervisor Guest boot.
+
 Infrastructure-as-code for the ADR 0032 vertical of
 [ADR 0032](../../../docs/adr/0032-d2b-v2-constellation-control-plane.md):
 a real Azure Container Apps **sandbox** that runs a Wayland-native app, plus

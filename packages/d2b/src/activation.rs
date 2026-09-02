@@ -1,5 +1,7 @@
 //! Activation-NixOS Provider command namespace.
 
+use std::path::{Path, PathBuf};
+
 use clap::{Args, Subcommand};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -10,8 +12,9 @@ use crate::{
 };
 use d2b_provider_config_nixos::{
     ConfigApproveRequest, ConfigApproveResponse, ConfigDiffRequest, ConfigDiffResponse,
-    ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse, ConfigStatusRequest,
-    ConfigStatusResponse, ConfigSyncResponse, GuestConfigDocument, GUEST_CONFIG_IDENTIFIER,
+    ConfigRejectRequest, ConfigRejectResponse, ConfigStageRequest, ConfigStageResponse,
+    ConfigStatusRequest, ConfigStatusResponse, ConfigSyncResponse, GUEST_CONFIG_IDENTIFIER,
+    GuestConfigDocument,
 };
 
 #[derive(Debug, Args, Clone)]
@@ -121,6 +124,217 @@ pub(crate) struct ActivationConfigApproveArgs {
     pub(crate) guest_ref: String,
     #[arg(long = "to")]
     pub(crate) destination: std::path::PathBuf,
+}
+
+/// Base directory for Guest config staging. User-local by default and
+/// overridden per-thread by tests so no process-global environment mutation is
+/// required.
+pub(crate) fn config_staging_base() -> PathBuf {
+    #[cfg(test)]
+    if let Some(base) = TEST_STAGING_BASE.with(|base| base.borrow().clone()) {
+        return base;
+    }
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from(".d2b-state"));
+    base.join("d2b/config-staging")
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_STAGING_BASE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_staging_base(base: Option<PathBuf>) {
+    TEST_STAGING_BASE.with(|value| *value.borrow_mut() = base);
+}
+
+pub(crate) fn config_staging_path_in(base: &Path, guest: &str) -> PathBuf {
+    base.join(format!("{guest}.guest.nix"))
+}
+
+pub(crate) fn config_staging_path(guest: &str) -> PathBuf {
+    config_staging_path_in(&config_staging_base(), guest)
+}
+
+pub(crate) fn config_validate_guest_name(guest: &str) -> Result<(), CliFailure> {
+    let valid = !guest.is_empty()
+        && guest
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase())
+        && guest.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(CliFailure::new(
+            1,
+            format!("config: invalid vm name '{guest}' (expected ^[a-z][a-z0-9-]*$)"),
+        ))
+    }
+}
+
+pub(crate) fn config_validate_staging_bytes(bytes: &[u8]) -> Result<(), CliFailure> {
+    if bytes.is_empty() {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is empty; re-run `d2b config sync`".to_owned(),
+        ));
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is not valid UTF-8".to_owned(),
+        ));
+    }
+    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is blank".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailure> {
+    config_approve_core_with_digest(staging, target, None)
+}
+
+pub(crate) fn config_approve_core_with_digest(
+    staging: &Path,
+    target: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<usize, CliFailure> {
+    if !staging.exists() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config approve: nothing staged at {} (run `d2b config sync` first)",
+                staging.display()
+            ),
+        ));
+    }
+    let bytes = std::fs::read(staging)
+        .map_err(|error| CliFailure::new(1, format!("config approve: read staging: {error}")))?;
+    config_validate_staging_bytes(&bytes)?;
+    if let Some(expected_sha256) = expected_sha256
+        && crate::sha256_hex(&bytes) != expected_sha256
+    {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged content changed after service approval; re-run `d2b config sync`"
+                .to_owned(),
+        ));
+    }
+    let parent = target.parent().filter(|path| !path.as_os_str().is_empty());
+    if let Some(parent) = parent
+        && !parent.exists()
+    {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config approve: target dir {} does not exist",
+                parent.display()
+            ),
+        ));
+    }
+    config_atomic_write(target, &bytes)?;
+    let _ = std::fs::remove_file(staging);
+    Ok(bytes.len())
+}
+
+pub(crate) fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
+    if staging.exists() {
+        std::fs::remove_file(staging)
+            .map_err(|error| CliFailure::new(1, format!("config reject: {error}")))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub(crate) fn warn_pending_staged_config(guest: &str) {
+    if config_staging_path(guest).exists() {
+        eprintln!(
+            "note: vm '{guest}' has a pending un-approved guest config edit \
+             (`d2b config diff {guest} --against <live>` to review, \
+             `d2b config approve {guest} --to <live>` to land, or \
+             `d2b config reject {guest}` to discard)"
+        );
+    }
+}
+
+pub(crate) fn warn_all_pending_staged_configs() {
+    let base = config_staging_base();
+    let mut pending = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && let Some(guest) = name.strip_suffix(".guest.nix")
+            {
+                pending.push(guest.to_owned());
+            }
+        }
+    }
+    pending.sort();
+    if !pending.is_empty() {
+        eprintln!(
+            "note: pending un-approved guest config edit(s) for: {} \
+             (`d2b config status --all`)",
+            pending.join(", ")
+        );
+    }
+}
+
+pub(crate) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
+    use std::io::Write as _;
+
+    let parent = target.parent().filter(|path| !path.as_os_str().is_empty());
+    let base = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("d2b-config");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp_name = format!(".{base}.d2b-tmp.{}.{nanos}", std::process::id());
+    let tmp = match parent {
+        Some(parent) => parent.join(tmp_name),
+        None => PathBuf::from(tmp_name),
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|error| {
+            CliFailure::new(1, format!("config: create temp {}: {error}", tmp.display()))
+        })?;
+    let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(CliFailure::new(1, format!("config: write temp: {error}")));
+    }
+    std::fs::rename(&tmp, target).map_err(|error| {
+        let _ = std::fs::remove_file(&tmp);
+        CliFailure::new(
+            1,
+            format!("config: publish to {}: {error}", target.display()),
+        )
+    })?;
+    if let Some(parent) = parent
+        && let Ok(directory) = std::fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+    Ok(())
 }
 
 pub(crate) fn run(
@@ -292,18 +506,20 @@ fn config(
         ActivationConfigCommand::Sync(args) => {
             let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
             let vm = guest_ref.name().as_str();
-            crate::legacy::config_validate_vm_name(vm)?;
-            let staging = crate::legacy::config_staging_path(vm);
+            config_validate_guest_name(vm)?;
+            let staging = config_staging_path(vm);
             if args.dry_run {
-                return context.emit(
-                    &json!({
-                        "command": "config sync",
-                        "mode": "dry-run",
-                        "resourceRef": guest_ref.to_canonical_string(),
-                        "identifier": GUEST_CONFIG_IDENTIFIER,
-                    }),
-                    mode,
-                ).map(|_| 0);
+                return context
+                    .emit(
+                        &json!({
+                            "command": "config sync",
+                            "mode": "dry-run",
+                            "resourceRef": guest_ref.to_canonical_string(),
+                            "identifier": GUEST_CONFIG_IDENTIFIER,
+                        }),
+                        mode,
+                    )
+                    .map(|_| 0);
             }
             let value = context.invoke_service(
                 d2b_resource_client::ZoneServiceKind::ConfigNixos,
@@ -318,15 +534,20 @@ fn config(
             )?;
             let response: ConfigSyncResponse =
                 serde_json::from_value(strip_config_response_envelope(value)).map_err(|_| {
+                    context.failure(
+                        "config-document-encoding-failed",
+                        "Zone returned an invalid config-nixos response",
+                        mode,
+                        1,
+                    )
+                })?;
+            let document = response.document().map_err(|error| {
                 context.failure(
-                    "config-document-encoding-failed",
-                    "Zone returned an invalid config-nixos response",
+                    error.code(),
+                    "config-nixos returned an invalid document",
                     mode,
                     1,
                 )
-            })?;
-            let document = response.document().map_err(|error| {
-                context.failure(error.code(), "config-nixos returned an invalid document", mode, 1)
             })?;
             if let Some(parent) = staging.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| {
@@ -338,7 +559,7 @@ fn config(
                     )
                 })?;
             }
-            crate::legacy::config_atomic_write(&staging, document.bytes())?;
+            config_atomic_write(&staging, document.bytes())?;
             invoke_config_stage(context, guest_ref.clone(), &document, deadline, mode)?;
             context.emit(
                 &json!({
@@ -356,8 +577,8 @@ fn config(
         }
         ActivationConfigCommand::Diff(args) => {
             let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
-            crate::legacy::config_validate_vm_name(guest_ref.name().as_str())?;
-            let staging = crate::legacy::config_staging_path(guest_ref.name().as_str());
+            config_validate_guest_name(guest_ref.name().as_str())?;
+            let staging = config_staging_path(guest_ref.name().as_str());
             if !staging.exists() {
                 return Err(context.failure(
                     "config-stage-missing",
@@ -369,13 +590,8 @@ fn config(
             let staged_document = read_staged_document(context, &staging, mode)?;
             invoke_config_stage(context, guest_ref.clone(), &staged_document, deadline, mode)?;
             let against_digest = config_view_identifier(&args.against, context, mode)?;
-            let service_diff = invoke_config_diff(
-                context,
-                guest_ref.clone(),
-                against_digest,
-                deadline,
-                mode,
-            )?;
+            let service_diff =
+                invoke_config_diff(context, guest_ref.clone(), against_digest, deadline, mode)?;
             let output = std::process::Command::new("diff")
                 .arg("-u")
                 .arg(&args.against)
@@ -391,12 +607,7 @@ fn config(
                 })?;
             let code = output.status.code().unwrap_or(-1);
             if code > 1 {
-                return Err(context.failure(
-                    "config-diff-failed",
-                    "config diff failed",
-                    mode,
-                    1,
-                ));
+                return Err(context.failure("config-diff-failed", "config diff failed", mode, 1));
             }
             let differs = code == 1;
             if service_diff.differs != differs {
@@ -431,8 +642,8 @@ fn config(
         }
         ActivationConfigCommand::Approve(args) => {
             let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
-            crate::legacy::config_validate_vm_name(guest_ref.name().as_str())?;
-            let staging = crate::legacy::config_staging_path(guest_ref.name().as_str());
+            config_validate_guest_name(guest_ref.name().as_str())?;
+            let staging = config_staging_path(guest_ref.name().as_str());
             let staged_document = read_staged_document(context, &staging, mode)?;
             invoke_config_stage(context, guest_ref.clone(), &staged_document, deadline, mode)?;
             let opaque_destination = config_destination_identifier(&args.destination);
@@ -451,7 +662,7 @@ fn config(
                     1,
                 ));
             }
-            let bytes = crate::legacy::config_approve_core_with_digest(
+            let bytes = config_approve_core_with_digest(
                 &staging,
                 &args.destination,
                 Some(&service_approval.sha256),
@@ -477,8 +688,8 @@ fn config(
         }
         ActivationConfigCommand::Reject(args) => {
             let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
-            crate::legacy::config_validate_vm_name(guest_ref.name().as_str())?;
-            let staging = crate::legacy::config_staging_path(guest_ref.name().as_str());
+            config_validate_guest_name(guest_ref.name().as_str())?;
+            let staging = config_staging_path(guest_ref.name().as_str());
             let staged_document = if staging.exists() {
                 Some(read_staged_document(context, &staging, mode)?)
             } else {
@@ -487,7 +698,7 @@ fn config(
             if let Some(document) = staged_document.as_ref() {
                 invoke_config_stage(context, guest_ref.clone(), document, deadline, mode)?;
             }
-            let removed = crate::legacy::config_reject_core(&staging)?;
+            let removed = config_reject_core(&staging)?;
             let service_rejection =
                 invoke_config_reject(context, guest_ref.clone(), deadline, mode)?;
             context.emit(
@@ -502,8 +713,8 @@ fn config(
         }
         ActivationConfigCommand::Status(args) => {
             let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
-            crate::legacy::config_validate_vm_name(guest_ref.name().as_str())?;
-            let staging = crate::legacy::config_staging_path(guest_ref.name().as_str());
+            config_validate_guest_name(guest_ref.name().as_str())?;
+            let staging = config_staging_path(guest_ref.name().as_str());
             if staging.exists() {
                 let staged_document = read_staged_document(context, &staging, mode)?;
                 invoke_config_stage(context, guest_ref.clone(), &staged_document, deadline, mode)?;
@@ -766,4 +977,88 @@ fn parse_guest_ref(
         ));
     }
     Ok(resource_ref)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new(label: &str) -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos();
+            let path = std::env::current_dir()
+                .expect("current directory")
+                .join(".scratch")
+                .join(format!(
+                    "activation-config-{label}-{}-{nonce}",
+                    std::process::id()
+                ));
+            std::fs::create_dir_all(&path).expect("create scratch directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn guest_config_names_are_bounded_before_path_construction() {
+        assert!(config_validate_guest_name("workstation-1").is_ok());
+        assert!(config_validate_guest_name("").is_err());
+        assert!(config_validate_guest_name("../outside").is_err());
+        assert!(config_validate_guest_name("Guest/workstation").is_err());
+    }
+
+    #[test]
+    fn config_approve_publishes_exact_bytes_and_consumes_staging() {
+        let scratch = ScratchDir::new("approve");
+        let staging = scratch.path().join("work.guest.nix");
+        let target = scratch.path().join("published.guest.nix");
+        let bytes = b"{ services.nginx.enable = true; }\n";
+        std::fs::write(&staging, bytes).expect("write staging");
+
+        let written =
+            config_approve_core_with_digest(&staging, &target, Some(&crate::sha256_hex(bytes)))
+                .expect("approve staging");
+
+        assert_eq!(written, bytes.len());
+        assert_eq!(std::fs::read(&target).expect("read target"), bytes);
+        assert!(!staging.exists());
+        assert_eq!(
+            std::fs::read_dir(scratch.path())
+                .expect("read scratch")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn config_approve_digest_mismatch_keeps_staging_and_target() {
+        let scratch = ScratchDir::new("digest-mismatch");
+        let staging = scratch.path().join("work.guest.nix");
+        let target = scratch.path().join("published.guest.nix");
+        let original = b"original\n";
+        let staged = b"staged\n";
+        std::fs::write(&staging, staged).expect("write staging");
+        std::fs::write(&target, original).expect("write target");
+
+        let error = config_approve_core_with_digest(&staging, &target, Some("sha256:wrong"))
+            .expect_err("changed staging must be rejected");
+
+        assert!(error.message.contains("content changed"));
+        assert_eq!(std::fs::read(&staging).expect("read staging"), staged);
+        assert_eq!(std::fs::read(&target).expect("read target"), original);
+    }
 }

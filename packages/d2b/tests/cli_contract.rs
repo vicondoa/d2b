@@ -173,6 +173,22 @@ fn v3_mutations_fail_closed_with_the_zone_envelope() {
 }
 
 #[test]
+fn explicit_zone_uses_the_root_listener_and_keeps_the_zone_target() {
+    let missing_public = Path::new("zone-only-clean-break-child-public.sock");
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["--zone", "child", "list", "Guest", "--json"])
+        .env("D2B_PUBLIC_SOCKET", &missing_public)
+        .output()
+        .expect("spawn d2b --zone child list Guest --json");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stderr.is_empty());
+    let envelope: Value = serde_json::from_slice(&out.stdout).expect("v3 JSON envelope");
+    assert_eq!(envelope["zoneRef"], "Zone/child");
+    assert_eq!(envelope["errorClass"], "zone-unavailable");
+    assert!(!envelope.to_string().contains("child-public.sock"));
+}
+
+#[test]
 fn retired_cli_namespaces_are_rejected_without_legacy_routing() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let missing_public = tmp.path().join("public.sock");

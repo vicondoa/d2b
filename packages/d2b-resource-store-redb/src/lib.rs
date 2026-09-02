@@ -30,8 +30,8 @@ use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
     canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
-use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::MutationSealBody;
+use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
 use d2b_resource_store::{
     PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
     StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
@@ -131,12 +131,19 @@ impl BrokerEvidenceIndex {
             .entries
             .write()
             .map_err(|_| transaction::durability_failure("broker-evidence-index-poisoned"))?;
-        if let Some(existing) = entries.get(&evidence.key)
-            && existing != &evidence
-        {
-            return Err(transaction::durability_failure(
-                "audit-broker-evidence-conflict",
-            ));
+        if let Some(existing) = entries.get(&evidence.key) {
+            if existing == &evidence {
+                return Ok(());
+            }
+            if !(existing.outcome == d2b_audit::DurabilityOutcome::Failure
+                && !existing.effect_durable
+                && evidence.outcome == d2b_audit::DurabilityOutcome::Success
+                && evidence.effect_durable)
+            {
+                return Err(transaction::durability_failure(
+                    "audit-broker-evidence-conflict",
+                ));
+            }
         }
         entries.insert(evidence.key.clone(), evidence);
         Ok(())
@@ -347,13 +354,20 @@ pub struct StoreIdentity {
     store_uuid: ResourceUid,
     zone: ZoneId,
     zone_uid: ResourceUid,
+    store_epoch: u64,
     created_at: String,
     revisions: PolicySnapshot,
 }
 
 /// Mutable revision metadata rehydrated from one opened Zone store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreRuntimeMetadata {
+    /// Store UID read from the durable metadata row.
+    pub store_uid: ResourceUid,
+    /// Zone self-resource UID read from the durable metadata row.
+    pub zone_uid: ResourceUid,
+    /// Store identity epoch read from the durable metadata row.
+    pub store_epoch: u64,
     pub current_revision: ZoneRevision,
     pub compaction_floor: ZoneRevision,
     pub policy_snapshot: PolicySnapshot,
@@ -417,6 +431,7 @@ impl StoreIdentity {
             store_uuid,
             zone,
             zone_uid,
+            store_epoch: 1,
             created_at: created_at.as_str().to_owned(),
             revisions,
         }
@@ -428,6 +443,22 @@ impl StoreIdentity {
 
     pub const fn zone_uid(&self) -> &ResourceUid {
         &self.zone_uid
+    }
+
+    /// Borrow the immutable physical store UID.
+    pub const fn store_uid(&self) -> &ResourceUid {
+        &self.store_uuid
+    }
+
+    /// Return the immutable store identity epoch.
+    pub const fn store_epoch(&self) -> u64 {
+        self.store_epoch
+    }
+
+    /// Bind the identity to a nonzero store epoch.
+    pub fn with_store_epoch(mut self, store_epoch: u64) -> Self {
+        self.store_epoch = store_epoch;
+        self
     }
 
     pub(crate) const fn store_uuid(&self) -> &ResourceUid {
@@ -451,6 +482,7 @@ impl StoreIdentity {
 
     pub fn seal_identity(&self) -> StoreSealIdentity {
         StoreSealIdentity::new(self.slot, self.zone.clone(), self.store_uuid.clone())
+            .with_store_epoch(self.store_epoch)
     }
 }
 
@@ -818,9 +850,51 @@ impl RedbResourceStore {
         Arc::clone(&self.broker_evidence)
     }
 
-    /// Ingest one terminal broker result before clearing a matching outbox.
-    pub fn ingest_broker_evidence(&self, evidence: DurabilityEvidence) -> Result<(), StoreError> {
-        self.broker_evidence.insert(evidence)
+    /// Ingest one terminal broker result and drain matching audit outboxes.
+    pub async fn ingest_broker_evidence(
+        &self,
+        operation_id: &str,
+        evidence: DurabilityEvidence,
+    ) -> Result<(), StoreError> {
+        let expected_key = ZoneOperationKey::derive(self.identity.zone.as_str(), operation_id)
+            .map_err(|_| transaction::durability_failure("audit-operation-key-invalid"))?;
+        if evidence.key != expected_key {
+            return Err(transaction::durability_failure(
+                "audit-broker-evidence-key-mismatch",
+            ));
+        }
+        self.writer
+            .ingest_broker_evidence(operation_id.to_owned(), evidence)
+            .await
+    }
+
+    /// Return whether one operation still has a pending audit outbox.
+    pub async fn audit_outbox_pending(&self, operation_id: &str) -> Result<bool, StoreError> {
+        self.writer
+            .audit_outbox_pending(operation_id.to_owned())
+            .await
+    }
+
+    /// Return every pending trusted-deferred activation outbox in Zone order.
+    pub async fn pending_deferred_activation_operation_ids(
+        &self,
+    ) -> Result<Vec<String>, StoreError> {
+        self.writer
+            .pending_deferred_activation_operation_ids(self.identity.zone.clone())
+            .await
+    }
+
+    /// Refuse publication while any trusted-deferred activation outbox remains.
+    pub async fn require_no_pending_deferred_activation_outboxes(&self) -> Result<(), StoreError> {
+        if self
+            .pending_deferred_activation_operation_ids()
+            .await?
+            .is_empty()
+        {
+            Ok(())
+        } else {
+            Err(transaction::integrity("audit-deferred-evidence-pending"))
+        }
     }
 
     /// Whether the existing store lacked a clean-shutdown marker when opened.
@@ -832,6 +906,11 @@ impl RedbResourceStore {
     pub async fn runtime_metadata(&self) -> Result<StoreRuntimeMetadata, StoreError> {
         let meta = self.reads.meta().await?;
         Ok(StoreRuntimeMetadata {
+            store_uid: ResourceUid::parse(meta.store_uuid.clone())
+                .map_err(|_| transaction::integrity("store-meta-store-uid-invalid"))?,
+            zone_uid: ResourceUid::parse(meta.zone_uid.clone())
+                .map_err(|_| transaction::integrity("store-meta-zone-uid-invalid"))?,
+            store_epoch: meta.store_epoch,
             current_revision: ZoneRevision::new(meta.current_revision),
             compaction_floor: ZoneRevision::new(meta.compaction_floor),
             policy_snapshot: policy_snapshot_from_meta(&meta)?,
@@ -1244,6 +1323,9 @@ fn validate_acceptor(
     identity: &StoreIdentity,
     acceptor: &MutationSealAcceptor,
 ) -> Result<(), StoreError> {
+    if identity.store_epoch == 0 {
+        return Err(transaction::integrity("store-epoch-invalid").with_store_slot(identity.slot()));
+    }
     if let Err(mismatch) = acceptor.diagnose(&identity.seal_identity()) {
         return Err(transaction::integrity(mismatch.reason_code()).with_store_slot(identity.slot()));
     }
@@ -1301,10 +1383,11 @@ pub(crate) fn validate_provisioning_marker(
 
 fn provisioning_marker_bytes(identity: &StoreIdentity) -> String {
     format!(
-        "d2b-redb-store/v1\n{}\n{}\n{}\n{}\n",
+        "d2b-redb-store/v2\n{}\n{}\n{}\n{}\n{}\n",
         identity.store_uuid.as_str(),
         identity.zone.as_str(),
         identity.zone_uid.as_str(),
+        identity.store_epoch,
         identity.created_at
     )
 }

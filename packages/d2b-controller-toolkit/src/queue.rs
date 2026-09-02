@@ -446,11 +446,7 @@ mod tests {
         thread,
     };
 
-    use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 
     use super::*;
 

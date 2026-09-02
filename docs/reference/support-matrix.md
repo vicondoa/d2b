@@ -1,137 +1,49 @@
-# Reference: d2b support matrix
+# Support matrix
 
-> Diataxis: reference. Per-platform-tier support matrix. Assembled
-> from fragments under `docs/reference/support-matrix.d/*.md`; the
-> scope-owned fragments
-> are the source of truth for their respective tier columns.
+**Diataxis category:** reference.
 
-## Tier model
+The current supported product is the local Zone resource plane on a NixOS
+host. Host acceptance covers the operator's `/etc/nixos` configuration, d2bd
+startup, and Cloud Hypervisor Guest boot.
 
-d2b targets a small, explicitly reviewed set of host platforms. Tiers
-are graded by where in the wave plan they entered the supported set
-and what level of pre-merge verification each one carries:
-
-| Tier | Meaning |
+| Surface | Current status |
 | --- | --- |
-| **Tier 0** | NixOS x86_64 with the upstream d2b NixOS module - the legacy compatibility tier for hosts where the NixOS module path already owns host-shared reconciliation and d2b resolves no daemon-owned bundle. The per-VM `supervisor` option was removed in v1.1 (per ADR 0015); every enabled VM is now daemon-supervised. `d2b host prepare --apply` is refused (`tier-0-legacy-uses-nixos-module`, exit 78) on such a host because there is nothing for the broker to reconcile. KVM-backed L2 sign-off required. |
-| **Tier 1** | Ubuntu 24.04 LTS x86_64, kernel ≥ 6.6 (`6.8.0-45-generic` shipped). `host check` and `host prepare --dry-run` are wired live in v1.0 (per ADR 0015); `host prepare --apply` is **not yet wired** - the daemon-side typed-intent dispatch and bundle resolver are pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will dispatch through the broker reconcile ops (ApplyNftables / ApplyRoute / ApplySysctl / UpdateHostsFile / ApplyNmUnmanaged), with broker failures surfacing a typed `broker-error` envelope (exit 78). KVM-backed L2 sign-off required against the pinned cloud image in `tests/golden/l3-matrix/w3-ubuntu.txt`. |
-| **Tier 1-later** | Fedora Server 40+. Best-effort pin exists (`tests/golden/l3-matrix/w3-fedora.txt`) and the L3 sign-off matrix gates against it, but the v1.0 SLA only applies to Tier 0/1. `--apply` carries the same pending disposition as Tier 1 (not yet wired; returns `daemon-down`, exit 1, today). |
-| **Tier 2** | Arch Linux current, and any other Linux distro on x86_64 with cgroup v2 unified hierarchy. Manifest evaluation works; `host prepare --dry-run` reports `host-check-warning` whenever the broker cannot positively confirm a host-prepare prerequisite. `--apply` carries the same pending disposition as Tier 1 (not yet wired; returns `daemon-down`, exit 1, today); when wired it will route through the same broker reconcile ops, with failures surfacing as typed `broker-error` envelopes. Arch carries a best-effort pin (`tests/golden/l3-matrix/w3-arch.txt`); other distros are community-maintained. Operators are expected to read the audit log and the per-distro troubleshooting anchor in `docs/how-to/host-prepare.md`. |
+| NixOS x86_64 host | Primary target; U20 owns the `/etc/nixos` switch and d2b startup check. |
+| Cloud Hypervisor Guest | Current local runtime; U20 owns the KVM Guest boot check. |
+| QEMU media Provider | Optional local contract; no U20 host acceptance claim. |
+| Device, audio, display, shell, storage, and network Providers | Zone-scoped Layer-1 contracts with owner-local tests. |
+| Azure Container Apps sandbox | Deferred; test only after U20. |
+| Other distributions or hosts | Not part of the current acceptance target. |
 
-Anything not in the Tier 0/1/1-later/2 set is **rejected**; see ADR
-0008 ("Supported platforms and rejected targets") for the explicit
-rejected list and the rationale.
+## Clean break
 
-## Canonical platform support table (v0.4.0 baseline)
+This release line is a clean break from v1/v2 configuration and lifecycle.
+There is no supported state conversion, host-path adoption, data-retention
+promise, or rollback-preservation requirement for older deployments.
 
-Per-row kernel / cgroup / nftables / NetworkManager / Cloud Hypervisor
-/ minijail / glibc minima. The "Status" column states the v1.0 SLA
-posture; "Tier" matches the tier model above.
+## Evidence
 
-| Platform | Tier | Status | Kernel | cgroup | nftables | NetworkManager | Cloud Hypervisor | minijail | glibc |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| NixOS unstable x86_64 (legacy compatibility tier; NixOS module owns reconciliation) | 0 | must-not-regress | >= 6.6 | v2 unified | >= 1.0.0 | n/a (systemd-networkd) | >= 40 | nix-built v17+ | nix-shipped |
-| Ubuntu 24.04 LTS x86_64 | 1 alpha | first non-NixOS target | >= 6.6 (6.8 shipped) | v2 unified | >= 1.0.9 | >= 1.46 | >= 40 | nix-built v17+ | >= 2.39 |
-| Fedora 40+ x86_64 | 1 later | after Ubuntu green | >= 6.8.5 | v2 unified | >= 1.0.9 | >= 1.46 | >= 40 | nix-built v17+ | >= 2.39 |
-| Arch rolling x86_64 | 2 | best-effort | >= 6.10 | v2 unified | >= 1.1.0 | >= 1.48 | >= 40 | nix-built v17+ | rolling |
+Layer-1 evidence uses the public Bazel/Make gates:
 
-The `nix-built v17+` minijail row applies on every tier because
-`packages/d2b-host` packages minijail from source as part of the
-trusted bundle; the host's distro-shipped minijail is never used.
+```bash
+make test-unit
+make test-nix-unit
+make test-fixture-contracts
+make test-rust-supply-chain
+make test-policy
+make test-drift
+make test-flake
+make check
+```
 
-## Cross-references
+These gates do not substitute for U20's real-host switch, daemon startup, or
+Cloud Hypervisor boot. U20 must also run both public integration lanes:
+`make test-host-integration` and `make test-integration`. They may run
+alongside the real-host testing, but neither lane is U19 evidence. An
+unavailable host prerequisite blocks that acceptance lane rather than becoming
+a pass. `make test-host-integration` must use the existing Bazel-built
+`D2B_HOST_TOOL_BUNDLE` handoff; Nix must not rebuild the injected d2b binaries.
 
-- [ADR 0008 - Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md)
-- [ADR 0011 - cgroup v2 delegation and pidfd handoff](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-- [ADR 0012 - IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-- [ADR 0013 - firewall coexistence policy matrix + `inet d2b` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
-- [ADR 0014 - `kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
-- [`docs/reference/compatibility.md`](compatibility.md) - full Tier
-  0/1/1-later/2 status table including per-tier behavior of the new
-  host verbs.
-
----
-
-## Section: kernel modules + devices
-
-# Tier modules + devices
-
-Reference fragment listing kernel-module + device-node requirements
-per support tier. The integrator assembles this into
-[`docs/reference/support-matrix.md`](./support-matrix.md).
-
-## Tier 0 - legacy compatibility (NixOS module owns reconciliation)
-
-| Module     | Min kernel | Disposition |
-| ---------- | ---------- | ----------- |
-| `kvm_intel` / `kvm_amd` | 6.6 | NixOS module declares; loaded at activation. |
-| `tun`      | 6.6        | NixOS module declares; loaded at activation. |
-| `vhost_net`| 6.6        | NixOS module declares; loaded at activation. |
-| `fuse`     | 6.6        | NixOS module declares; loaded at activation. |
-
-`d2b host prepare --apply` is refused on Tier 0 with
-`tier-0-legacy-uses-nixos-module` (exit 78). The NixOS module owns the
-module + device-node activation contract.
-
-## Tier 1 alpha - Ubuntu 24.04 LTS
-
-| Module     | Min kernel | Disposition |
-| ---------- | ---------- | ----------- |
-| `kvm_intel` / `kvm_amd` | 6.6 (6.8.0-45-generic ships) | Loadable; `ModprobeIfAllowed` may run. |
-| `tun`      | 6.6        | Loadable. |
-| `vhost_net`| 6.6        | Loadable. |
-| `fuse`     | 6.6        | Loadable. |
-
-Glibc 2.39, cgroup v2 unified, NetworkManager 1.46, nftables 1.0.9,
-Cloud Hypervisor v40+, Nix-built minijail v17 (see
-the owner-local policy checks). That version policy is
-fixture-lane coverage and is advisory until `test-fixture-contracts` is
-enabled.
-
-| Device class    | Required path        | Required mode | Required group |
-| --------------- | -------------------- | ------------- | -------------- |
-| `kvm`           | `/dev/kvm`           | `0660`        | `kvm`          |
-| `net-tun`       | `/dev/net/tun`       | `0660`        | `kvm`          |
-| `vhost-net`     | `/dev/vhost-net`     | `0660`        | `kvm`          |
-| `fuse`          | `/dev/fuse`          | `0660`        | `fuse`         |
-
-## Tier 1 later - Fedora Server 40+
-
-| Module     | Min kernel | Disposition |
-| ---------- | ---------- | ----------- |
-| `kvm_intel` / `kvm_amd` | 6.8.5 | Loadable; may need explicit `vhost_net` modprobe on first boot. |
-| `tun`      | 6.8.5      | Loadable. |
-| `vhost_net`| 6.8.5      | Loadable. |
-| `fuse`     | 6.8.5      | Loadable. |
-
-nftables 1.0.9, NetworkManager 1.46.
-
-Device classes match Tier 1 alpha; group names follow Fedora defaults
-(`kvm`, `fuse`).
-
-## Tier 2 - Arch Linux
-
-| Module     | Min kernel | Disposition |
-| ---------- | ---------- | ----------- |
-| `kvm_intel` / `kvm_amd` | 6.10 | Loadable. |
-| `tun`      | 6.10       | Loadable. |
-| `vhost_net`| 6.10       | Loadable. |
-| `fuse`     | 6.10       | Loadable. |
-
-nftables 1.1.0, NetworkManager 1.48.
-
-Best-effort tier: the framework runs but the matrix is community-
-maintained.
-
-## `kernel.modules_disabled=1` posture
-
-Every tier refuses to start required-module VMs when
-`/proc/sys/kernel/modules_disabled` reads `1` unless every required
-module is detected as built-in or already loaded. The probe surfaces
-`host-modules-locked` with a per-tier remediation hint pointing at
-`/etc/sysctl.d/`.
-
-## Optional accelerator + USBIP + TPM + VFIO
-
-These rows are optional on every tier. Absence surfaces as
-`optional-absent`, not `host-modules-locked`.
+See [the compatibility policy](./compatibility.md),
+[the daemon lifecycle](../explanation/daemon-lifecycle.md), and
+[the critical subsystem guidance](../contributing/critical-subsystems.md).

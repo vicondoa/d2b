@@ -3,19 +3,13 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ProviderSpecExtension,
-    ResourceRef,
-    ResourceSpec,
-    SchemaVersion,
+    CanonicalJsonObject, ProviderSpecExtension, ResourceRef, ResourceSpec, SchemaVersion,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub use d2b_contracts_resource::v3::GuestSpec;
-pub use d2b_contracts_resource::v3::{
-    execution_policy::{DeviceAttachment, NetworkAttachment},
-};
+pub use d2b_contracts_resource::v3::execution_policy::{DeviceAttachment, NetworkAttachment};
 
 /// Maximum removable media attachments on one Guest.
 pub const MAX_REMOVABLE_VOLUMES: usize = 4;

@@ -26,9 +26,9 @@
       nixosConfigurations.desktop = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
-          # The framework. Brings in `d2b.site.*`, `d2b.envs.*`,
-          # `d2b.vms.*`, host-side sidecar services, the per-VM
-          # `/nix/store` hardlink farm, the `d2b` CLI, etc.
+          # The framework. Brings in Zone resources, host admission,
+          # per-Guest store views, the daemon/broker control plane,
+          # and the Rust `d2b` CLI.
           d2b.nixosModules.default
 
           # Your host config - the file you edit next.

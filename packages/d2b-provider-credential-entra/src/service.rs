@@ -1,12 +1,10 @@
 //! Credential service dispatch for the identity-Guest client.
 
-use d2b_contracts_provider::v3::{
-    credential::{
+use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseState, CredentialMetadata,
     CredentialMethod, CredentialOutcomeCode, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliveryResponse,
     MetadataResponse,
-},
 };
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::identity::Locality;

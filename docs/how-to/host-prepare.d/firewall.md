@@ -1,3 +1,5 @@
+> **Historical fragment.** This page preserves the pre-convergence host-preparation notes. Use [`../host-prepare.md`](../host-prepare.md) and the current broker/Zone contracts for new work.
+
 # Host firewall coexistence
 
 This fragment is included in `docs/how-to/host-prepare.md`.

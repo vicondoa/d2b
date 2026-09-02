@@ -87,11 +87,11 @@ pub struct PerEnvUsbipdSpec {
 
 impl PerEnvUsbipdSpec {
     /// `intent_id` the broker resolves against the trusted bundle.
-    /// Matches `intent_id_runner(vm_id, role_id)` so a single
+    /// Matches `intent_id_legacy_runner(vm_id, role_id)` so a single
     /// processes-json DAG row per (env, role) keeps wiring trivial when
     /// the Nix bundle catches up.
     pub fn intent_id(&self) -> String {
-        d2b_core::bundle_resolver::intent_id_runner(&self.vm_id, self.role.role_id())
+        d2b_core::bundle_resolver::intent_id_legacy_runner(&self.vm_id, self.role.role_id())
     }
 }
 

@@ -188,7 +188,9 @@ mod tests {
 
     impl Scratch {
         fn new() -> Self {
-            let root = std::env::temp_dir();
+            let relative_root = PathBuf::from(".scratch").join("uss");
+            fs::create_dir_all(&relative_root).unwrap();
+            let root = PathBuf::from("/proc/self/cwd").join(relative_root);
             let pid = std::process::id();
             for _ in 0..32 {
                 let mut random = [0u8; 4];

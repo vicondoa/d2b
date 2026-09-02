@@ -1,11 +1,9 @@
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
     EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
     IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, NoiseProfile,
     PurposeClass, RequestId, ServicePackage, TransportBinding, TransportClass,
-},
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
@@ -33,6 +31,7 @@ use std::{
     any::Any,
     collections::VecDeque,
     fs,
+    os::fd::AsRawFd,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -278,6 +277,167 @@ async fn inherited_passcred_is_verified_but_never_repaired() {
         SeqpacketSocket::from_parent_prearmed(left),
         Err(UnixSessionError::PasscredNotPrearmed)
     ));
+}
+
+#[test]
+fn invalid_inherited_fd_is_not_taken_on_validation_failure() {
+    let file = fs::File::open("/dev/null").unwrap();
+    let raw_fd = file.as_raw_fd();
+    assert!(SeqpacketSocket::from_inherited_fd(raw_fd).is_err());
+    assert!(fcntl_getfd(&file).is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn controller_bootstrap_handoff_accepts_exact_marker_fd_and_credentials() {
+    let _serial = serialize_fd_test().await;
+    let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+    let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+    let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+    let (resource_daemon_fd, _resource_controller_fd) = prearmed_seqpacket_pair().unwrap();
+    let policy = d2b_session_unix::controller_bootstrap_attachment_policy();
+    let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let outbound = OutboundPacket::with_current_credentials(
+        d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+        vec![Arc::new(resource_daemon_fd)],
+        LimitProfile::local_default(),
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap();
+    let mut queue = VecDeque::from([outbound]);
+    let sent = sender.send_burst(&mut queue, capacity, 2).await.unwrap();
+    assert_eq!(sent.sent.len(), 1);
+    let mut packets = receiver
+        .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 2)
+        .await
+        .unwrap()
+        .packets;
+    assert_eq!(packets.len(), 1);
+    let packet = packets.pop().unwrap();
+    assert_eq!(
+        packet.payload(),
+        d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER
+    );
+    let (resource_fd, credentials) = packet.into_single_file_and_credentials().unwrap();
+    assert_eq!(credentials, sender.acceptor_peer_credentials().unwrap());
+    assert!(SeqpacketSocket::from_parent_prearmed(resource_fd).is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn controller_bootstrap_handoff_rejects_missing_extra_and_malformed_packets() {
+    let _serial = serialize_fd_test().await;
+    let policy = d2b_session_unix::controller_bootstrap_attachment_policy();
+    let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+
+    let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+    let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+    let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+    let (resource_a, _resource_a_peer) = prearmed_seqpacket_pair().unwrap();
+    let (resource_b, _resource_b_peer) = prearmed_seqpacket_pair().unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let mut queue = VecDeque::from([
+        OutboundPacket::with_current_credentials(
+            d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+            vec![Arc::new(resource_a)],
+            LimitProfile::local_default(),
+            capacity,
+            &sender_scopes,
+        )
+        .unwrap(),
+        OutboundPacket::with_current_credentials(
+            d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+            vec![Arc::new(resource_b)],
+            LimitProfile::local_default(),
+            capacity,
+            &sender_scopes,
+        )
+        .unwrap(),
+    ]);
+    let sent = sender.send_burst(&mut queue, capacity, 2).await.unwrap();
+    assert_eq!(sent.sent.len(), 2);
+    let burst = receiver
+        .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 2)
+        .await
+        .unwrap();
+    assert_eq!(burst.packets.len(), 2);
+    assert!(
+        matches!(
+            burst
+                .packets
+                .into_iter()
+                .nth(1)
+                .unwrap()
+                .into_single_file_and_credentials(),
+            Err(UnixSessionError::ControlMismatch)
+        ),
+        "the second bootstrap packet is rejected because it is not first-on-socket"
+    );
+
+    let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+    let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+    let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let missing_fd = OutboundPacket::with_current_credentials(
+        d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
+        Vec::new(),
+        LimitProfile::local_default(),
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap();
+    let mut queue = VecDeque::from([missing_fd]);
+    let sent = sender.send_burst(&mut queue, capacity, 2).await.unwrap();
+    assert_eq!(sent.sent.len(), 1);
+    let missing = receiver
+        .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 2)
+        .await
+        .unwrap()
+        .packets
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        missing.into_single_file_and_credentials(),
+        Err(UnixSessionError::ControlMismatch)
+    ));
+
+    let (sender_fd, receiver_fd) = prearmed_seqpacket_pair().unwrap();
+    let sender = SeqpacketSocket::from_parent_prearmed(sender_fd).unwrap();
+    let receiver = SeqpacketSocket::from_parent_prearmed(receiver_fd).unwrap();
+    let (resource_fd, _resource_peer) = prearmed_seqpacket_pair().unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let malformed_marker = OutboundPacket::with_current_credentials(
+        b"not-the-controller-marker".to_vec(),
+        vec![Arc::new(resource_fd)],
+        LimitProfile::local_default(),
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap();
+    let mut queue = VecDeque::from([malformed_marker]);
+    let sent = sender.send_burst(&mut queue, capacity, 2).await.unwrap();
+    assert_eq!(sent.sent.len(), 1);
+    let malformed = receiver
+        .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 2)
+        .await
+        .unwrap()
+        .packets
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_ne!(
+        malformed.payload(),
+        d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER
+    );
+    assert!(
+        malformed.into_single_file_and_credentials().is_ok(),
+        "control layout is valid; the daemon must reject the marker separately"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -10,10 +10,7 @@ use crate::{
     picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult},
     policy::Policy,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_toolkit::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding,
     unix::{AcceptedAttachment, CreditBundle, VerifiedPacket},
@@ -93,7 +90,8 @@ impl AuthenticatedClipboardSession {
         let mut session = Self::from_authenticated_route(route.clone())?;
         if guest_ref.resource_type().as_str() != "Guest"
             || route.subject_ref().resource_type().as_str() != "Provider"
-            || route.evidence_class() != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
+            || route.evidence_class()
+                != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
             || route.locality() != d2b_contracts_resource::v3::identity::Locality::Local
             || route.reconnect_generation().get() == 0
         {
@@ -111,7 +109,8 @@ impl AuthenticatedClipboardSession {
             .provider_ref()
             .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
             || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
+            || route.evidence_class()
+                != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
             || route.locality() != d2b_contracts_resource::v3::identity::Locality::Local
             || route.subject_ref().resource_type().as_str() != "User"
             || route.reconnect_generation().get() == 0
@@ -135,7 +134,8 @@ impl AuthenticatedClipboardSession {
             .provider_ref()
             .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
             || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
+            || route.evidence_class()
+                != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
             || route.locality() != d2b_contracts_resource::v3::identity::Locality::Local
             || route.subject_ref().resource_type().as_str() != "Guest"
             || user_ref.resource_type().as_str() != "User"

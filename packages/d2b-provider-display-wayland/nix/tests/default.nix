@@ -10,6 +10,12 @@ let
       type = lib.types.attrsOf lib.types.anything;
       default = { };
     };
+    options.d2b._resourceCompiler = lib.mkOption {
+      type = lib.types.attrs;
+      default = { };
+      internal = true;
+      visible = false;
+    };
   };
   resources = {
     host = { type = "Host"; };
@@ -42,6 +48,39 @@ let
         }; }
     ];
   };
+  projected = lib.evalModules {
+    modules = [
+      base
+      (import ../projection.nix)
+      {
+        config.d2b.zones.dev.resources = {
+          display-wayland = { type = "Provider"; spec = { }; };
+          host = { type = "Host"; spec = { }; };
+          guest = { type = "Guest"; spec = { }; };
+          session = {
+            type = "display-wayland.d2bus.org.WaylandSession";
+            spec = {
+              guestRef = "Guest/guest";
+              hostRef = "Host/host";
+              userRef = "User/alice";
+            };
+          };
+        };
+      }
+    ];
+  };
+  invalidProjection = lib.evalModules {
+    modules = [
+      base
+      (import ../projection.nix)
+      {
+        config.d2b.zones.dev.resources.display-wayland = {
+          type = "Provider";
+          spec.config.unsupported = true;
+        };
+      }
+    ];
+  };
   allTrue = value: lib.all (assertion: assertion.assertion) value.config.assertions;
   anyFalse = value: lib.any (assertion: !assertion.assertion) value.config.assertions;
 in
@@ -58,6 +97,24 @@ in
     };
     "provider-display-wayland/rejects-untrusted-session" = {
       expr = anyFalse invalid;
+      expected = true;
+    };
+    "provider-display-wayland/session-process-and-endpoint" = {
+      expr = {
+        processes = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionDisplayWayland.processesByZone.dev);
+        resources = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionDisplayWayland.resourcesByZone.dev);
+      };
+      expected = {
+        processes = [ "wayland-frontend-session" "wayland-proxy-session" ];
+        resources = [ "wayland-session" ];
+      };
+    };
+    "provider-display-wayland/rejects-unknown-provider-field" = {
+      expr = lib.any
+        (record: !record.assertion)
+        invalidProjection.config.assertions;
       expected = true;
     };
   };

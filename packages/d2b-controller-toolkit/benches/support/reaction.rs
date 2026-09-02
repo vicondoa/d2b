@@ -13,16 +13,8 @@ use d2b_bus::{
     StreamLimits, StreamName, router::production_rss::ProductionWatchHarness,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
+    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
+    ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision, canonical_digest,
 };
 use d2b_resource_api::watch::{WatchPumpError, WatchService};
 use d2b_resource_store::mutation_seal::{MutationSealBody, MutationSealIssuer, mutation_seal_pair};
@@ -119,6 +111,7 @@ impl ProductionStore {
                     remove_finalizers: Vec::new(),
                     wait_for_reconcile: false,
                     reconcile_deadline_ms: None,
+                    configuration_generation: None,
                     assignment: None,
                 },
                 None,
@@ -161,6 +154,7 @@ impl ProductionStore {
                     remove_finalizers: Vec::new(),
                     wait_for_reconcile: false,
                     reconcile_deadline_ms: None,
+                    configuration_generation: None,
                     assignment: None,
                 },
                 Some(resource.uid.clone()),

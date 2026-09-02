@@ -63,6 +63,7 @@ pub enum SourceKind {
     LocalPath,
     BlockImage,
     Tmpfs,
+    NixClosure,
 }
 
 /// On-disk format managed for a `block-image` source.
@@ -83,6 +84,8 @@ pub enum BlockImageFormat {
 pub struct SourceSettings {
     kind: SourceKind,
     source_policy_id: Option<BoundedToken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_artifact_id: Option<BoundedToken>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_format: Option<BlockImageFormat>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -106,6 +109,17 @@ impl SourceSettings {
         image_format: Option<BlockImageFormat>,
         preallocate: bool,
     ) -> Result<Self, PrimitiveSpecError> {
+        Self::new_with_artifact(kind, source_policy_id, None, image_format, preallocate)
+    }
+
+    /// Construct source settings with an artifact-bound Nix closure.
+    pub fn new_with_artifact(
+        kind: SourceKind,
+        source_policy_id: Option<BoundedToken>,
+        system_artifact_id: Option<BoundedToken>,
+        image_format: Option<BlockImageFormat>,
+        preallocate: bool,
+    ) -> Result<Self, PrimitiveSpecError> {
         let required = matches!(kind, SourceKind::LocalPath | SourceKind::BlockImage);
         match (required, source_policy_id.is_some()) {
             (true, false) => Err(PrimitiveSpecError::MissingRequiredField),
@@ -113,9 +127,16 @@ impl SourceSettings {
             _ if kind != SourceKind::BlockImage && (image_format.is_some() || preallocate) => {
                 Err(PrimitiveSpecError::ConflictingFields)
             }
+            _ if kind == SourceKind::NixClosure && system_artifact_id.is_none() => {
+                Err(PrimitiveSpecError::MissingRequiredField)
+            }
+            _ if kind != SourceKind::NixClosure && system_artifact_id.is_some() => {
+                Err(PrimitiveSpecError::ConflictingFields)
+            }
             _ => Ok(Self {
                 kind,
                 source_policy_id,
+                system_artifact_id,
                 image_format,
                 preallocate,
             }),
@@ -130,6 +151,11 @@ impl SourceSettings {
     /// Borrow the opaque allowlist policy ID.
     pub const fn source_policy_id(&self) -> Option<&BoundedToken> {
         self.source_policy_id.as_ref()
+    }
+
+    /// Borrow the selected NixOS system artifact ID.
+    pub const fn system_artifact_id(&self) -> Option<&BoundedToken> {
+        self.system_artifact_id.as_ref()
     }
 
     /// Return the selected block-image format, defaulting to raw.
@@ -157,14 +183,17 @@ impl<'de> Deserialize<'de> for SourceSettings {
             #[serde(default)]
             source_policy_id: Option<BoundedToken>,
             #[serde(default)]
+            system_artifact_id: Option<BoundedToken>,
+            #[serde(default)]
             image_format: Option<BlockImageFormat>,
             #[serde(default)]
             preallocate: bool,
         }
         let wire = Wire::deserialize(deserializer)?;
-        Self::new_with_image(
+        Self::new_with_artifact(
             wire.kind,
             wire.source_policy_id,
+            wire.system_artifact_id,
             wire.image_format,
             wire.preallocate,
         )
@@ -1178,7 +1207,7 @@ impl VolumeSpec {
             let source_kind = source.settings().kind();
             let transport_matches_source = match source_kind {
                 SourceKind::BlockImage => attachment.transport == AttachmentTransport::VirtioBlk,
-                SourceKind::LocalPath | SourceKind::Tmpfs => {
+                SourceKind::LocalPath | SourceKind::Tmpfs | SourceKind::NixClosure => {
                     attachment.transport == AttachmentTransport::Virtiofs
                 }
             };
@@ -1485,6 +1514,54 @@ mod tests {
         assert_eq!(canonical_json_bytes(&spec).unwrap(), MINIMAL_VOLUME_SPEC);
         let parsed: VolumeSpec = serde_json::from_slice(MINIMAL_VOLUME_SPEC).unwrap();
         assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn nix_closure_source_is_bound_to_a_system_artifact() {
+        let artifact = BoundedToken::parse("guest-system").unwrap();
+        let settings = SourceSettings::new_with_artifact(
+            SourceKind::NixClosure,
+            None,
+            Some(artifact.clone()),
+            None,
+            false,
+        )
+        .unwrap();
+        let source =
+            VolumeSource::new(ResourceRef::parse("Host/host-system").unwrap(), settings).unwrap();
+        assert_eq!(source.settings().system_artifact_id(), Some(&artifact));
+        let encoded = serde_json::to_value(&source).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "executionRef": "Host/host-system",
+                "settings": {
+                    "kind": "nix-closure",
+                    "sourcePolicyId": null,
+                    "systemArtifactId": "guest-system"
+                }
+            })
+        );
+        let parsed: VolumeSource = serde_json::from_value(encoded).unwrap();
+        assert_eq!(parsed, source);
+    }
+
+    #[test]
+    fn nix_closure_source_rejects_missing_or_conflicting_binding() {
+        assert!(
+            SourceSettings::new_with_artifact(SourceKind::NixClosure, None, None, None, false,)
+                .is_err()
+        );
+        assert!(
+            SourceSettings::new_with_artifact(
+                SourceKind::NixClosure,
+                Some(BoundedToken::parse("state-root").unwrap()),
+                Some(BoundedToken::parse("guest-system").unwrap()),
+                None,
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
-use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
+use d2b_contracts::controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
+use d2b_contracts::identity_config::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::typed_error::TypedError;

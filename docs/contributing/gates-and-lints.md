@@ -156,6 +156,12 @@ test failures fail closed.
 The committed fixed workflow exposes one stable required `check` result. A
 guarded performance skip is advisory and is not validation evidence.
 
+For the final U20 acceptance lane, both public integration targets,
+`make test-host-integration` and `make test-integration`, are mandatory and
+may run alongside the `/etc/nixos` real-host switch/startup/Cloud Hypervisor
+Guest boot sequence. U19 leaves their declarations and current inputs
+converged but does not run host acceptance.
+
 The fixture-contract lane remains enforcing and local-only. It materializes
 `D2B_FIXTURES` through the existing Bazel fixture target and fails when
 `D2B_ENABLE_FIXTURE_BUILD=1` is absent. Nix actions remain local and remote
@@ -177,8 +183,9 @@ named Nix surface declares its expression and exact module/helper/fixture
 closure directly in `bazel/checks/nix/BUILD.bazel`; the graph has no corpus
 discovery, case-presence pins, secondary evidence, test census, or provider
 qualification gate. Surface actions copy that closure into an isolated source
-root and evaluate the expression through a minimal runner flake, not the
-repository flake outputs or ambient `D2B_REPO_ROOT`.
+root and evaluate the expression with the shared Bazel-provided nixpkgs pin,
+not the repository flake outputs, per-test Git input fetching, or ambient
+`D2B_REPO_ROOT`.
 
 ### Realized Nix checks and runtime budget
 
@@ -196,12 +203,15 @@ make test-integration
 make test-host-integration
 ```
 
-`make test-host-integration` builds the fixed set of nine host tools with
-local Bazel, stages them as one bundle, and injects that bundle into the
-selected NixOS `vmChecks`. After every selected check succeeds, the lane
+`make test-host-integration` builds the fixed host-tool set with local Bazel,
+stages them as one `D2B_HOST_TOOL_BUNDLE`, and injects that bundle into the
+selected NixOS `vmChecks`. Nix realizes the VM check around those binaries; it
+must not rebuild d2b binaries through Nix. After every selected check succeeds, the lane
 uploads the built dependency closures to the configured Attic cache in one
 operation. It excludes the `vmCheck` result paths so a capability `SKIP` or
 `BLOCKED` result cannot be substituted as a passing test on another host.
+The handoff implementation is in the `test-host-integration` Make recipe and
+[`nix/test-support/bazel-host-tools.nix`](../../nix/test-support/bazel-host-tools.nix).
 
 Attic is optional for this lane. When the Attic client or its configuration is
 unavailable, the lane reports an explicit skip and continues with the Bazel

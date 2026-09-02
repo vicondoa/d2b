@@ -1,7 +1,4 @@
-use d2b_contracts_resource::v3::{
-    SchemaVersion,
-    Timestamp,
-};
+use d2b_contracts_resource::v3::{SchemaVersion, Timestamp};
 use d2b_provider_volume_local::audit::{SnapshotTrigger, VolumeAuditKind};
 use d2b_provider_volume_local::snapshot::{
     SnapshotCatalog, SnapshotError, SnapshotId, SnapshotPhase, SnapshotPolicy, SnapshotStatus,

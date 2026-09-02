@@ -11,8 +11,8 @@ pub struct PlatformGate {
     pub kernel_major: u16,
     /// Kernel minor.
     pub kernel_minor: u16,
-    /// Whether the delegated leaf has a writable cgroup.kill.
-    pub cgroup_kill_writable: bool,
+    /// Whether the runtime cgroup exposes cgroup.kill.
+    pub cgroup_kill_available: bool,
 }
 
 impl PlatformGate {
@@ -20,12 +20,12 @@ impl PlatformGate {
     pub const fn from_observed(
         kernel_major: u16,
         kernel_minor: u16,
-        cgroup_kill_writable: bool,
+        cgroup_kill_available: bool,
     ) -> Self {
         Self {
             kernel_major,
             kernel_minor,
-            cgroup_kill_writable,
+            cgroup_kill_available,
         }
     }
 
@@ -33,16 +33,16 @@ impl PlatformGate {
     pub const fn new_for_test(
         kernel_major: u16,
         kernel_minor: u16,
-        cgroup_kill_writable: bool,
+        cgroup_kill_available: bool,
     ) -> Self {
-        Self::from_observed(kernel_major, kernel_minor, cgroup_kill_writable)
+        Self::from_observed(kernel_major, kernel_minor, cgroup_kill_available)
     }
 
     /// Check Linux 5.14 and cgroup.kill.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         if self.kernel_major < 5
             || (self.kernel_major == 5 && self.kernel_minor < 14)
-            || !self.cgroup_kill_writable
+            || !self.cgroup_kill_available
         {
             Err(ProcessConformanceError::PlatformGateRejected)
         } else {

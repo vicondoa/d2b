@@ -9,25 +9,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-};
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    EvidenceClass,
-    Locality,
-    ServiceName,
-    SessionBinding,
+    AuthenticatedSubjectContext, EvidenceClass, Locality, ServiceName, SessionBinding,
+};
+use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_RESOURCE_TYPES,
+    ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
 };
 use d2b_core_controller::controller_assignment::{
-    AssignmentIdentity, AssignmentVerb, ScopedCommitTransport, ScopedResourceFilter,
-    ScopedResourceMutation, ScopedResourceQuery,
+    ASSIGNMENT_UID_FILTER, AssignmentIdentity, AssignmentVerb, OWNER_UID_FILTER,
+    ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
+    ScopedResourceScope,
 };
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
@@ -74,9 +67,12 @@ pub mod production_rss;
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
+const FIRST_CORRELATION_ID: u32 = RESERVED_CORRELATION_MAX + 1;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
-    u32::MAX as u64 - RESERVED_CORRELATION_MAX as u64;
+    (u32::MAX as u64 - FIRST_CORRELATION_ID as u64) / 2 + 1;
 const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
+const SYSTEM_CORE_PROVIDER_REF: &str = "Provider/system-core";
+const SYSTEM_CORE_PROVIDER_UID: &str = "11111111-1111-4111-8111-111111111111";
 
 /// Monotonic clock used for operation deadlines.
 pub trait BusClock: Send + Sync + 'static {
@@ -223,6 +219,7 @@ pub struct ResourceQuery {
     resource_names: Vec<ResourceName>,
     filters: Vec<ResourceFilter>,
     assignment: Option<AssignmentIdentity>,
+    scope: Option<ScopedResourceScope>,
 }
 
 impl ResourceQuery {
@@ -244,17 +241,20 @@ impl ResourceQuery {
             resource_names,
             filters,
             assignment: None,
+            scope: None,
         })
     }
 
     /// Consume a controller-minted query without allowing its assignment
     /// filter to be dropped or widened.
     pub fn from_scoped(query: ScopedResourceQuery) -> Result<Self, BusError> {
-        let (assignment, resource_types, resource_names, scoped_filters) = query.into_parts();
+        let (assignment, resource_types, resource_names, scoped_filters, scope) =
+            query.into_parts_with_scope();
         if resource_types.is_empty()
-            || resource_types.len() > 64
-            || resource_names.len() > 64
-            || scoped_filters.len() > 64
+            || resource_types.len() > MAX_LIST_RESOURCE_TYPES
+            || resource_names.len() > MAX_FILTER_VALUES
+            || scoped_filters.len() > MAX_LIST_FILTERS
+            || scoped_filters.len() + usize::from(!resource_names.is_empty()) > MAX_LIST_FILTERS
         {
             return Err(BusError::InvalidResourceCall);
         }
@@ -262,18 +262,15 @@ impl ResourceQuery {
             .into_iter()
             .map(resource_filter_from_scoped)
             .collect::<Result<Vec<_>, _>>()?;
-        if !filters
-            .iter()
-            .any(|filter| filter.field == "assignment.resourceUid")
-        {
-            return Err(BusError::InvalidResourceCall);
-        }
-        Ok(Self {
+        let query = Self {
             resource_types,
             resource_names,
             filters,
             assignment: Some(assignment),
-        })
+            scope: Some(scope),
+        };
+        query.validate_scoped()?;
+        Ok(query)
     }
 
     /// Borrow the ResourceType selector in its exact received order.
@@ -294,6 +291,50 @@ impl ResourceQuery {
     /// Borrow the assignment evidence, when this query is controller-scoped.
     pub const fn assignment(&self) -> Option<&AssignmentIdentity> {
         self.assignment.as_ref()
+    }
+
+    /// Borrow the controller-minted query scope, when present.
+    pub const fn scope(&self) -> Option<&ScopedResourceScope> {
+        self.scope.as_ref()
+    }
+
+    fn validate_scoped(&self) -> Result<(), BusError> {
+        let (Some(assignment), Some(scope)) = (&self.assignment, &self.scope) else {
+            return if self.assignment.is_none() && self.scope.is_none() {
+                Ok(())
+            } else {
+                Err(BusError::InvalidResourceCall)
+            };
+        };
+        let (bound_field, bound_value) = match scope {
+            ScopedResourceScope::Primary => {
+                (ASSIGNMENT_UID_FILTER, assignment.resource_uid().as_str())
+            }
+            ScopedResourceScope::OwnerChild(owner) => {
+                if owner.owner_uid() != assignment.resource_uid()
+                    || self.resource_types.is_empty()
+                    || self
+                        .resource_types
+                        .iter()
+                        .any(|resource_type| resource_type.as_str() != PROCESS_RESOURCE_TYPE)
+                {
+                    return Err(BusError::InvalidResourceCall);
+                }
+                (OWNER_UID_FILTER, owner.owner_uid().as_str())
+            }
+        };
+        let bound_filters = self
+            .filters
+            .iter()
+            .filter(|filter| filter.field == bound_field)
+            .collect::<Vec<_>>();
+        if bound_filters.len() != 1
+            || bound_filters[0].values.len() != 1
+            || bound_filters[0].values[0] != bound_value
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        Ok(())
     }
 }
 
@@ -330,6 +371,30 @@ pub enum ResourceCall {
 }
 
 impl ResourceCall {
+    /// Validate the closed Resource call admitted for Guest-local seeding.
+    ///
+    /// Guest bootstrap may submit one plain `CommitBatch` containing only
+    /// descriptor-approved Create targets. Scoped controller batches and all
+    /// other Resource verbs are refused before dispatch.
+    pub fn validate_guest_local_seed(
+        &self,
+        approved_resource_types: &BTreeSet<ResourceTypeName>,
+    ) -> Result<(), BusError> {
+        let ResourceCall::CommitBatch(mutations) = self else {
+            return Err(BusError::InvalidResourceCall);
+        };
+        if mutations.is_empty()
+            || mutations.len() > 128
+            || mutations.iter().any(|(target, verb)| {
+                *verb != ResourceVerb::Create
+                    || !approved_resource_types.contains(target.resource_type())
+            })
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        Ok(())
+    }
+
     pub(crate) fn authorization_request(
         &self,
         zone: ZoneId,
@@ -339,8 +404,14 @@ impl ResourceCall {
                 ApiMethod::Get,
                 vec![exact_target(target, ResourceVerb::Get, None)],
             ),
-            Self::List(query) => (ApiMethod::List, query_targets(query, ResourceVerb::List)),
-            Self::Watch(query) => (ApiMethod::Watch, query_targets(query, ResourceVerb::Watch)),
+            Self::List(query) => {
+                query.validate_scoped()?;
+                (ApiMethod::List, query_targets(query, ResourceVerb::List))
+            }
+            Self::Watch(query) => {
+                query.validate_scoped()?;
+                (ApiMethod::Watch, query_targets(query, ResourceVerb::Watch))
+            }
             Self::Create(target) => (
                 ApiMethod::Create,
                 vec![exact_target(target, ResourceVerb::Create, None)],
@@ -409,14 +480,7 @@ impl ResourceCall {
                 assignment,
                 mutations,
             } => {
-                if mutations.is_empty()
-                    || mutations.len() > 128
-                    || mutations.iter().any(|mutation| {
-                        mutation.assignment() != assignment
-                            || !mutation.verb().is_mutating()
-                            || mutation.verb() == AssignmentVerb::CommitBatch
-                    })
-                {
+                if ScopedCommitTransport::new(assignment.clone(), mutations.clone()).is_err() {
                     return Err(BusError::InvalidResourceCall);
                 }
                 (
@@ -626,7 +690,8 @@ fn resource_filter_from_scoped(filter: ScopedResourceFilter) -> Result<ResourceF
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
         || filter.values().is_empty()
         || filter.values().len() > 64
-        || (filter.field() == "assignment.resourceUid" && !filter.assignment_bound())
+        || (matches!(filter.field(), ASSIGNMENT_UID_FILTER | OWNER_UID_FILTER)
+            && !filter.assignment_bound())
     {
         return Err(BusError::InvalidResourceCall);
     }
@@ -1161,6 +1226,22 @@ impl ZoneBus {
         )
     }
 
+    /// Construct a bus and the Zone-runtime-only committed subject issuer.
+    pub fn with_interaction_subject_issuer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+    ) -> Result<(Self, ZoneRegistrar, CommittedInteractionSubjectIssuer), BusError> {
+        Self::with_clock_observer_and_metrics_and_interaction_subject_issuer(
+            zone,
+            authorizer,
+            config,
+            Arc::new(SystemClock::new()),
+            Arc::new(NoopBusObserver),
+            Arc::new(NoopBusTelemetry),
+        )
+    }
+
     /// Construct a bus with an injected monotonic clock.
     pub fn with_clock(
         zone: ZoneId,
@@ -1178,14 +1259,16 @@ impl ZoneBus {
         clock: Arc<dyn BusClock>,
         observer: Arc<dyn BusObserver>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_observer_and_metrics(
+        let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
             zone,
             authorizer,
             config,
             clock,
             observer,
             Arc::new(NoopBusTelemetry),
-        )
+            false,
+        )?;
+        Ok((bus, registrar))
     }
 
     /// Construct a bus with an observer and the bounded telemetry handoff.
@@ -1197,6 +1280,45 @@ impl ZoneBus {
         observer: Arc<dyn BusObserver>,
         metrics: Arc<dyn BusTelemetry>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
+        let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
+            zone, authorizer, config, clock, observer, metrics, false,
+        )?;
+        Ok((bus, registrar))
+    }
+
+    /// Construct a bus with the opt-in committed subject issuer for the
+    /// Zone-runtime composition path.
+    pub fn with_clock_observer_and_metrics_and_interaction_subject_issuer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+    ) -> Result<(Self, ZoneRegistrar, CommittedInteractionSubjectIssuer), BusError> {
+        let (bus, registrar, issuer) = Self::with_clock_observer_and_metrics_internal(
+            zone, authorizer, config, clock, observer, metrics, true,
+        )?;
+        let issuer = issuer.ok_or(BusError::InvalidConfig)?;
+        Ok((bus, registrar, issuer))
+    }
+
+    fn with_clock_observer_and_metrics_internal(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+        issue_interaction_subject_issuer: bool,
+    ) -> Result<
+        (
+            Self,
+            ZoneRegistrar,
+            Option<CommittedInteractionSubjectIssuer>,
+        ),
+        BusError,
+    > {
         if config.max_payload_bytes == 0
             || config.max_routes_per_session == 0
             || config.max_total_routes == 0
@@ -1206,6 +1328,16 @@ impl ZoneBus {
         {
             return Err(BusError::InvalidConfig);
         }
+        let interaction_subject_authority = if issue_interaction_subject_issuer {
+            Some(Arc::new(InteractionSubjectAuthority {
+                zone: zone.clone(),
+                controller_generation: authorizer
+                    .controller_generation()
+                    .ok_or(BusError::InvalidConfig)?,
+            }))
+        } else {
+            None
+        };
         let operations =
             OperationTable::new(config.max_operations, config.max_operations_per_session)?;
         let streams = StreamBridge::with_observer_and_metrics(
@@ -1213,7 +1345,6 @@ impl ZoneBus {
             Arc::clone(&observer),
             Arc::clone(&metrics),
         )?;
-        let resolver_zone = zone.clone();
         let core = Arc::new(BusCore {
             registry: Mutex::new(Registry::new(
                 zone.clone(),
@@ -1246,11 +1377,15 @@ impl ZoneBus {
                 component_admission: ComponentSessionRegistrar {
                     identity: Arc::new(ComponentSessionAdmissionIdentity),
                 },
-                unix_subjects: AuthoritativeUnixSubjectResolver::deny_all(
-                    resolver_zone,
-                    config.max_total_routes,
-                ),
+                unix_subjects: AuthoritativeUnixSubjectResolver::deny_all(config.max_total_routes),
+                interaction_subjects: interaction_subject_authority.as_ref().map(|authority| {
+                    InteractionSubjectRegistrar {
+                        authority: Arc::clone(authority),
+                    }
+                }),
             },
+            interaction_subject_authority
+                .map(|authority| CommittedInteractionSubjectIssuer { authority }),
         ))
     }
 
@@ -1295,6 +1430,7 @@ pub(crate) struct UnixSubjectRecord {
     service: Option<ServicePackage>,
     provider_ref: Option<ResourceRef>,
     provider_generation: Option<ResourceGeneration>,
+    process_ref: Option<ResourceRef>,
     controller_generation: Option<ControllerGeneration>,
     execution_ref: Option<ResourceRef>,
 }
@@ -1382,6 +1518,7 @@ impl UnixSubjectRecord {
             service: None,
             provider_ref: None,
             provider_generation: None,
+            process_ref: None,
             controller_generation: None,
             execution_ref: None,
         })
@@ -1410,12 +1547,13 @@ impl UnixSubjectRecord {
             service: None,
             provider_ref: None,
             provider_generation: None,
+            process_ref: None,
             controller_generation: None,
             execution_ref: None,
         })
     }
 
-    fn provider_for_uid(
+    pub(crate) fn provider_for_uid(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
         zone_ref: ResourceRef,
@@ -1438,6 +1576,7 @@ impl UnixSubjectRecord {
             service: None,
             provider_ref: None,
             provider_generation: None,
+            process_ref: None,
             controller_generation: None,
             execution_ref: None,
         })
@@ -1458,12 +1597,25 @@ impl UnixSubjectRecord {
         Ok(self)
     }
 
+    pub(crate) fn with_process_ref(
+        mut self,
+        process_ref: ResourceRef,
+    ) -> d2b_session::Result<Self> {
+        if process_ref.resource_type().as_str() != PROCESS_RESOURCE_TYPE {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        self.process_ref = Some(process_ref);
+        Ok(self)
+    }
+
     pub(crate) fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
         self.controller_generation = Some(generation);
         self
     }
 
-    fn for_service(mut self, service: ServicePackage) -> Self {
+    pub(crate) fn for_service(mut self, service: ServicePackage) -> Self {
         self.service = Some(service);
         self
     }
@@ -1495,25 +1647,32 @@ impl UnixSubjectRecord {
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
-        let peer_matches = self
-            .expected_peer
-            .is_some_and(|expected| peer.credentials() == expected)
-            || self
-                .expected_peer_uid
-                .is_some_and(|expected| peer.credentials().uid().as_raw() == expected);
+        let peer_matches = if binding.service().as_str() == "d2b.resource.v3" {
+            self.expected_peer
+                .is_some_and(|expected| peer.credentials() == expected)
+        } else {
+            self.expected_peer
+                .is_some_and(|expected| peer.credentials() == expected)
+                || self
+                    .expected_peer_uid
+                    .is_some_and(|expected| peer.credentials().uid().as_raw() == expected)
+        };
         if !peer_matches
             || evidence.class() != EvidenceClass::UnixPeer
             || binding.evidence_class() != EvidenceClass::UnixPeer
             || binding.transport_binding().locality() != Locality::Local
             || self.subject_ref.resource_type().as_str() != expected_type
             || self.zone_ref.name().as_str() != expected_zone.as_str()
+            || self.process_ref.as_ref().is_some_and(|process_ref| {
+                process_ref.resource_type().as_str() != PROCESS_RESOURCE_TYPE
+            })
             || evidence.binding_digest() != binding.transport_binding().binding_digest()
         {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
         }
-        let provider_ref = if self.subject_ref.to_canonical_string() == "Provider/system-core" {
+        let provider_ref = if self.subject_ref.to_canonical_string() == SYSTEM_CORE_PROVIDER_REF {
             match binding.service().as_str() {
                 "d2b.display.v3" => ResourceRef::parse("Provider/display-wayland").ok(),
                 "d2b.clipboard.v3"
@@ -1559,6 +1718,9 @@ impl UnixSubjectRecord {
                 .with_provider_ref(provider_ref)
                 .with_provider_generation(provider_generation);
         }
+        if let Some(process_ref) = self.process_ref {
+            context = context.with_process_ref(process_ref);
+        }
         if let Some(controller_generation) = self.controller_generation {
             context = context.with_controller_generation(controller_generation);
         }
@@ -1575,17 +1737,13 @@ impl core::fmt::Debug for UnixSubjectRecord {
 struct AuthoritativeUnixSubjectResolver {
     subjects: Mutex<Vec<UnixSubjectRecord>>,
     max_subjects: usize,
-    #[cfg(not(test))]
-    zone: ZoneId,
 }
 
 impl AuthoritativeUnixSubjectResolver {
-    fn deny_all(_zone: ZoneId, _max_subjects: usize) -> Self {
+    fn deny_all(_max_subjects: usize) -> Self {
         Self {
             subjects: Mutex::new(Vec::new()),
             max_subjects: _max_subjects,
-            #[cfg(not(test))]
-            zone: _zone,
         }
     }
 
@@ -1594,49 +1752,43 @@ impl AuthoritativeUnixSubjectResolver {
         peer: PeerCredentials,
         service: &ServicePackage,
     ) -> d2b_session::Result<UnixSubjectRecord> {
-        #[cfg(not(test))]
-        if *service == ServicePackage::ResourceV3 {
-            return UnixSubjectRecord::new(
-                UnixSubjectKind::Provider,
-                ResourceRef::parse("Provider/system-core").expect("fixed Provider ref"),
-                ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-                    .expect("fixed Provider uid"),
-                ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
-                    .expect("fixed Zone ref"),
-                peer,
-            );
-        }
-        let subjects = self
+        let mut subjects = self
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let index = subjects
+        let matches = subjects
             .iter()
-            .position(|subject| {
-                let peer_matches = subject
-                    .expected_peer
-                    .is_some_and(|expected| expected == peer)
-                    || subject
-                        .expected_peer_uid
-                        .is_some_and(|expected| peer.uid().as_raw() == expected);
+            .enumerate()
+            .filter(|(_, subject)| {
+                let peer_matches = if *service == ServicePackage::ResourceV3 {
+                    subject
+                        .expected_peer
+                        .is_some_and(|expected| expected == peer)
+                } else {
+                    subject
+                        .expected_peer
+                        .is_some_and(|expected| expected == peer)
+                        || subject
+                            .expected_peer_uid
+                            .is_some_and(|expected| peer.uid().as_raw() == expected)
+                };
                 peer_matches
                     && subject
                         .service
                         .as_ref()
                         .is_none_or(|expected| expected == service)
             })
-            .ok_or_else(|| {
-                d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                )
-            })?;
-        #[cfg(test)]
-        {
-            let mut subjects = subjects;
-            Ok(subjects.swap_remove(index))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+            ));
         }
-        #[cfg(not(test))]
-        {
+        let index = matches[0];
+        if subjects[index].expected_peer.is_some() {
+            Ok(subjects.swap_remove(index))
+        } else {
             Ok(subjects[index].clone())
         }
     }
@@ -1651,6 +1803,15 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if subject.is_exact_resource_v3() {
+            if let Some(index) = subjects
+                .iter()
+                .position(|existing| existing.has_same_exact_resource_v3_key(&subject))
+            {
+                subjects[index] = subject;
+                return Ok(());
+            }
+        }
         if subjects.len() >= self.max_subjects {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
@@ -1658,6 +1819,46 @@ impl AuthoritativeUnixSubjectResolver {
         }
         subjects.push(subject);
         Ok(())
+    }
+
+    fn install_many(
+        &self,
+        new_subjects: Vec<UnixSubjectRecord>,
+        zone: &ZoneId,
+    ) -> d2b_session::Result<()> {
+        if new_subjects
+            .iter()
+            .any(|subject| subject.zone_ref.name().as_str() != zone.as_str())
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+            ));
+        }
+        let mut subjects = self
+            .subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if subjects.len().saturating_add(new_subjects.len()) > self.max_subjects {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+            ));
+        }
+        subjects.extend(new_subjects);
+        Ok(())
+    }
+}
+
+impl UnixSubjectRecord {
+    fn is_exact_resource_v3(&self) -> bool {
+        self.expected_peer.is_some() && self.service == Some(ServicePackage::ResourceV3)
+    }
+
+    fn has_same_exact_resource_v3_key(&self, other: &Self) -> bool {
+        self.is_exact_resource_v3()
+            && other.is_exact_resource_v3()
+            && self.subject_ref == other.subject_ref
+            && self.process_ref == other.process_ref
+            && self.service == other.service
     }
 }
 
@@ -1667,23 +1868,205 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     }
 }
 
-/// Trusted committed state used to install daemon-owned interaction and
-/// Process/Shell attach subjects.
-pub struct CommittedInteractionSubjectInput {
-    /// The Guest identity committed by the display WaylandSession.
-    pub display_subject_ref: ResourceRef,
-    /// The UID committed for the display WaylandSession Guest.
-    pub display_subject_uid: ResourceUid,
+struct InteractionSubjectAuthority {
+    zone: ZoneId,
+    controller_generation: ControllerGeneration,
+}
+
+struct InteractionSubjectRegistrar {
+    authority: Arc<InteractionSubjectAuthority>,
+}
+
+struct CommittedInteractionSubjectInstallBody {
+    zone: ZoneId,
+    display_subject_ref: ResourceRef,
+    display_subject_uid: ResourceUid,
+    expected_peer_uid: u32,
+    execution_ref: ResourceRef,
+    display_generation: ResourceGeneration,
+    clipboard_generation: Option<ResourceGeneration>,
+    notification_generation: Option<ResourceGeneration>,
+    clipboard_provider_uid: Option<ResourceUid>,
+    notification_provider_uid: Option<ResourceUid>,
+}
+
+/// Opaque issuer for one Zone's committed interaction subject projection.
+///
+/// The issuer is returned only by the opt-in Zone-runtime bus constructor.
+/// It is consumed when the Zone runtime seals its private committed identity.
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn clone(value: CommittedInteractionSubjectIssuer) {
+///     let _ = value.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<CommittedInteractionSubjectIssuer>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn format(value: &CommittedInteractionSubjectIssuer) {
+///     let _ = format!("{value:?}");
+/// }
+/// ```
+pub struct CommittedInteractionSubjectIssuer {
+    authority: Arc<InteractionSubjectAuthority>,
+}
+
+/// Opaque, single-use committed interaction subject installation capability.
+///
+/// The capability cannot be constructed, inspected, cloned, defaulted,
+/// serialized, or formatted by downstream crates:
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// let _ = CommittedInteractionSubjectInstall {};
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn inspect(value: &CommittedInteractionSubjectInstall) {
+///     let _ = &value.body;
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn clone(value: CommittedInteractionSubjectInstall) {
+///     let _ = value.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<CommittedInteractionSubjectInstall>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn serialize(value: &CommittedInteractionSubjectInstall) {
+///     let _ = serde_json::to_string(value);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn format(value: &CommittedInteractionSubjectInstall) {
+///     let _ = format!("{value:?}");
+///     let _ = format!("{value}");
+/// }
+/// ```
+pub struct CommittedInteractionSubjectInstall {
+    authority: Arc<InteractionSubjectAuthority>,
+    body: CommittedInteractionSubjectInstallBody,
+}
+
+impl CommittedInteractionSubjectIssuer {
+    /// Seal one verified Zone-runtime projection for this registrar instance.
+    ///
+    /// The controller generation is captured from the bus authorizer when the
+    /// issuer is created and is deliberately absent from this API.
+    pub fn seal(
+        self,
+        zone: ZoneId,
+        display_subject_ref: ResourceRef,
+        display_subject_uid: ResourceUid,
+        expected_peer_uid: u32,
+        execution_ref: ResourceRef,
+        display_generation: ResourceGeneration,
+        clipboard_generation: Option<ResourceGeneration>,
+        notification_generation: Option<ResourceGeneration>,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_uid: Option<ResourceUid>,
+    ) -> d2b_session::Result<CommittedInteractionSubjectInstall> {
+        if self.authority.zone != zone {
+            return Err(subject_configuration_mismatch());
+        }
+        Ok(CommittedInteractionSubjectInstall {
+            authority: self.authority,
+            body: CommittedInteractionSubjectInstallBody {
+                zone,
+                display_subject_ref,
+                display_subject_uid,
+                expected_peer_uid,
+                execution_ref,
+                display_generation,
+                clipboard_generation,
+                notification_generation,
+                clipboard_provider_uid,
+                notification_provider_uid,
+            },
+        })
+    }
+}
+
+impl CommittedInteractionSubjectInstall {
+    fn open(
+        self,
+        registrar: &InteractionSubjectRegistrar,
+        expected_zone: &ZoneId,
+    ) -> d2b_session::Result<CommittedInteractionSubjectInstallBody> {
+        if !Arc::ptr_eq(&self.authority, &registrar.authority)
+            || &self.body.zone != expected_zone
+            || &registrar.authority.zone != expected_zone
+        {
+            return Err(subject_configuration_mismatch());
+        }
+        Ok(self.body)
+    }
+}
+
+const _: fn() = || {
+    trait CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u32> for T {}
+    impl<T: core::fmt::Debug> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u64> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u128> for T {}
+    let _ = <CommittedInteractionSubjectIssuer as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<
+        _,
+    >>::some_item;
+    let _ = <CommittedInteractionSubjectInstall as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<
+        _,
+    >>::some_item;
+};
+
+fn subject_configuration_mismatch() -> d2b_session::SessionError {
+    d2b_session::SessionError::new(
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+    )
+}
+
+/// Trusted committed state used to install an external Provider controller
+/// Process subject for the ResourceV3 service.
+pub struct CommittedControllerProcessSubjectInput {
+    /// The Provider resource identity committed for the controller.
+    pub provider_ref: ResourceRef,
+    pub provider_uid: ResourceUid,
+    /// The controller Process resource committed for this Provider.
+    pub process_ref: ResourceRef,
     pub zone_ref: ResourceRef,
-    pub expected_peer_uid: u32,
+    /// The Host or Guest where the controller executes.
     pub execution_ref: ResourceRef,
-    pub display_generation: ResourceGeneration,
-    pub clipboard_generation: Option<ResourceGeneration>,
-    pub notification_generation: Option<ResourceGeneration>,
-    /// The committed Provider UID used for clipboard service routes.
-    pub clipboard_provider_uid: Option<ResourceUid>,
-    /// The committed Provider UID used for notification service routes.
-    pub notification_provider_uid: Option<ResourceUid>,
+    pub provider_generation: ResourceGeneration,
     pub controller_generation: ControllerGeneration,
 }
 
@@ -1692,6 +2075,7 @@ pub struct ZoneRegistrar {
     core: Arc<BusCore>,
     component_admission: ComponentSessionRegistrar,
     unix_subjects: AuthoritativeUnixSubjectResolver,
+    interaction_subjects: Option<InteractionSubjectRegistrar>,
 }
 
 struct ComponentSessionAdmissionIdentity;
@@ -1830,6 +2214,54 @@ impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessi
 }
 
 impl ZoneRegistrar {
+    /// Install the fixed system-core Provider subject for one verified peer.
+    pub fn install_system_core_subject(
+        &self,
+        verified_peer: &VerifiedUnixPeer,
+    ) -> d2b_session::Result<()> {
+        let subject = UnixSubjectRecord::new(
+            UnixSubjectKind::Provider,
+            ResourceRef::parse(SYSTEM_CORE_PROVIDER_REF).expect("fixed Provider ref"),
+            ResourceUid::parse(SYSTEM_CORE_PROVIDER_UID).expect("fixed Provider uid"),
+            ResourceRef::parse(&format!("Zone/{}", self.core.zone.as_str()))
+                .expect("fixed Zone ref"),
+            verified_peer.credentials(),
+        )?
+        .for_service(ServicePackage::ResourceV3);
+        self.unix_subjects.install(subject, &self.core.zone)
+    }
+
+    /// Install a committed external Provider controller Process subject for
+    /// one exact verified peer.
+    pub fn install_committed_controller_process_subject(
+        &self,
+        verified_peer: &VerifiedUnixPeer,
+        committed: CommittedControllerProcessSubjectInput,
+    ) -> d2b_session::Result<()> {
+        let CommittedControllerProcessSubjectInput {
+            provider_ref,
+            provider_uid,
+            process_ref,
+            zone_ref,
+            execution_ref,
+            provider_generation,
+            controller_generation,
+        } = committed;
+        let subject = UnixSubjectRecord::new(
+            UnixSubjectKind::Provider,
+            provider_ref.clone(),
+            provider_uid,
+            zone_ref,
+            verified_peer.credentials(),
+        )?
+        .with_provider(provider_ref, provider_generation)?
+        .with_process_ref(process_ref)?
+        .with_controller_generation(controller_generation)
+        .with_execution_ref(execution_ref)?
+        .for_service(ServicePackage::ResourceV3);
+        self.unix_subjects.install(subject, &self.core.zone)
+    }
+
     #[cfg(test)]
     pub(crate) fn install_test_unix_subject(
         &self,
@@ -1927,7 +2359,7 @@ struct ComponentEndpoint {
     session: AsyncMutex<AuthenticatedComponentSession<()>>,
     ttrpc: AuthenticatedTtrpcHandle,
     responses: Arc<ComponentResponses>,
-    _response_task: ComponentResponseTask,
+    _response_task: Option<ComponentResponseTask>,
     clock: Arc<dyn BusClock>,
     locality: d2b_contracts_resource::v3::identity::Locality,
     generation: u64,
@@ -2162,11 +2594,11 @@ impl CorrelationIds {
                 key
             }
         };
-        let input = RESERVED_CORRELATION_MAX + 1 + self.issued as u32;
+        let input = FIRST_CORRELATION_ID + (self.issued as u32) * 2;
         self.issued += 1;
         let mut candidate = permute_correlation(input, key);
         loop {
-            if candidate > RESERVED_CORRELATION_MAX {
+            if candidate > RESERVED_CORRELATION_MAX && candidate % 2 == 1 {
                 return Ok(candidate);
             }
             candidate = permute_correlation(candidate, key);
@@ -2364,25 +2796,26 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         target: Option<&ResourceRef>,
         now_tick: u64,
     ) -> Result<(), EndpointError> {
-        let request = if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
-            SessionAuthorizationRequest::relay(
-                route.service().clone(),
-                route.member().as_str(),
-                route.zone().clone(),
-                target.cloned(),
-                verb,
-                route.zone().clone(),
-            )
-        } else {
-            SessionAuthorizationRequest::new(
-                verb,
-                route.service().clone(),
-                route.member().as_str(),
-                route.zone().clone(),
-                target.cloned(),
-            )
-        }
-        .map_err(|_| EndpointError::Rejected)?;
+        let request =
+            if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
+                SessionAuthorizationRequest::relay(
+                    route.service().clone(),
+                    route.member().as_str(),
+                    route.zone().clone(),
+                    target.cloned(),
+                    verb,
+                    route.zone().clone(),
+                )
+            } else {
+                SessionAuthorizationRequest::new(
+                    verb,
+                    route.service().clone(),
+                    route.member().as_str(),
+                    route.zone().clone(),
+                    target.cloned(),
+                )
+            }
+            .map_err(|_| EndpointError::Rejected)?;
         self.session
             .lock()
             .await
@@ -2425,6 +2858,28 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
+        if let Some((query, watch)) = match request.resource_call() {
+            Some(ResourceCall::List(query)) if query.scope().is_some() => Some((query, false)),
+            Some(ResourceCall::Watch(query)) if query.scope().is_some() => Some((query, true)),
+            _ => None,
+        } {
+            let filters = query
+                .filters
+                .iter()
+                .map(|filter| d2b_resource_store::StoreFilter {
+                    field: filter.field.clone(),
+                    values: filter.values.clone(),
+                })
+                .collect::<Vec<_>>();
+            outbound_frame = d2b_resource_api::attach_scoped_query_frame(
+                &outbound_frame,
+                query.resource_types(),
+                query.resource_names(),
+                &filters,
+                watch,
+            )
+            .map_err(|_| EndpointError::Rejected)?;
+        }
         if let Some(ResourceCall::ScopedCommitBatch {
             assignment,
             mutations,
@@ -2435,10 +2890,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             outbound_frame =
                 d2b_resource_api::attach_scoped_commit_frame(&outbound_frame, &transport)
                     .map_err(|_| EndpointError::Rejected)?;
-        } else if matches!(
-            request.resource_call(),
-            Some(ResourceCall::CommitBatch(_))
-        ) {
+        } else if matches!(request.resource_call(), Some(ResourceCall::CommitBatch(_))) {
             d2b_resource_api::reject_scoped_commit_frame(&outbound_frame)
                 .map_err(|_| EndpointError::Rejected)?;
         }
@@ -2596,19 +3048,20 @@ impl ZoneRegistrar {
         )
     }
 
-    /// Install the daemon-owned interaction and Process/Shell subject
-    /// projection from the committed resource snapshot. The Unix peer UID
-    /// authenticates the transport only; the Guest/Host refs, resource
-    /// generations, and controller generation are all supplied by trusted
-    /// committed state.
+    /// Install a sealed daemon-owned interaction and Process/Shell subject
+    /// projection from the Zone runtime.
     pub fn install_committed_interaction_subject(
         &self,
-        committed: CommittedInteractionSubjectInput,
+        committed: CommittedInteractionSubjectInstall,
     ) -> d2b_session::Result<()> {
-        let CommittedInteractionSubjectInput {
+        let interaction_subjects = self
+            .interaction_subjects
+            .as_ref()
+            .ok_or_else(subject_configuration_mismatch)?;
+        let CommittedInteractionSubjectInstallBody {
+            zone,
             display_subject_ref,
             display_subject_uid,
-            zone_ref,
             expected_peer_uid,
             execution_ref,
             display_generation,
@@ -2616,8 +3069,10 @@ impl ZoneRegistrar {
             notification_generation,
             clipboard_provider_uid,
             notification_provider_uid,
-            controller_generation,
-        } = committed;
+        } = committed.open(interaction_subjects, &self.core.zone)?;
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+            .map_err(|_| subject_configuration_mismatch())?;
+        let controller_generation = interaction_subjects.authority.controller_generation;
         let services = [(
             ServicePackage::DisplayV3,
             ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
@@ -2739,9 +3194,7 @@ impl ZoneRegistrar {
                 .for_service(ServicePackage::NotificationV3),
             );
         }
-        for subject in subjects {
-            self.unix_subjects.install(subject, &self.core.zone)?;
-        }
+        self.unix_subjects.install_many(subjects, &self.core.zone)?;
         Ok(())
     }
 
@@ -2750,6 +3203,34 @@ impl ZoneRegistrar {
     pub async fn register_component_session(
         &mut self,
         session: AuthenticatedComponentSession<ComponentSessionAdmission>,
+    ) -> Result<BusIngress, BusError> {
+        self.register_component_session_inner(session, true).await
+    }
+
+    /// Consume an authenticated candidate for a daemon-owned generated
+    /// service. The registrar records the session and its exact identity, but
+    /// returns the only transport reader to the service owner.
+    pub async fn register_component_service_session(
+        &mut self,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
+    ) -> Result<(BusIngress, d2b_session::SessionDriverHandle), BusError> {
+        let mut ingress = self
+            .register_component_session_inner(session, false)
+            .await?;
+        // The generated service owns the sole transport reader; the ingress
+        // retains only the registrar cleanup authority.
+        let driver = ingress
+            .attachments
+            .take()
+            .map(|handle| handle.component_session_driver())
+            .ok_or(BusError::SessionMismatch)?;
+        Ok((ingress, driver))
+    }
+
+    async fn register_component_session_inner(
+        &mut self,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
+        dispatch_inbound: bool,
     ) -> Result<BusIngress, BusError> {
         let (session, ttrpc) = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
@@ -2767,11 +3248,15 @@ impl ZoneRegistrar {
             );
             return Err(error.into());
         }
-        let routes = routes_for_admitted_session(&binding)?;
+        let routes = if dispatch_inbound {
+            routes_for_admitted_session(&binding)?
+        } else {
+            Vec::new()
+        };
         let cancellation = session.cancellation_handle();
         let (responses, incoming) =
             ComponentResponses::new(binding.reconnect_generation().get(), ttrpc.clone());
-        let response_task = responses.spawn();
+        let response_task = dispatch_inbound.then(|| responses.spawn());
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
             ttrpc: ttrpc.clone(),
@@ -2832,7 +3317,7 @@ impl ZoneRegistrar {
             session: AsyncMutex::new(session),
             ttrpc: ttrpc.clone(),
             responses,
-            _response_task: response_task,
+            _response_task: Some(response_task),
             clock: Arc::clone(&self.core.clock),
             locality: binding.locality(),
             generation: binding.reconnect_generation().get(),
@@ -3835,32 +4320,14 @@ mod tests {
 
     use crate::metrics::BusRouteOutcome;
     use async_trait::async_trait;
+    use d2b_contracts_resource::v3::identity::{
+        AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
+        ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
+        CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+        RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceGeneration, ResourceRef, ResourceTypeName,
+        ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, canonical_digest,
     };
     use d2b_controller_toolkit::{
         OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason,
@@ -4350,6 +4817,7 @@ use d2b_contracts_resource::v3::identity::{
         for _ in 0..4 {
             let correlation = correlations.allocate().unwrap();
             assert!(correlation > RESERVED_CORRELATION_MAX);
+            assert_eq!(correlation % 2, 1);
             assert!(allocated.insert(correlation));
         }
         assert!(matches!(
@@ -4603,6 +5071,96 @@ use d2b_contracts_resource::v3::identity::{
         }
     }
 
+    fn subject_issuer_bus() -> (ZoneBus, ZoneRegistrar, CommittedInteractionSubjectIssuer) {
+        ZoneBus::with_interaction_subject_issuer(
+            ZoneId::parse("dev").unwrap(),
+            BusAuthorizer::new(
+                NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap(),
+                state(1),
+            )
+            .unwrap(),
+            BusConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn subject_install(
+        issuer: CommittedInteractionSubjectIssuer,
+    ) -> CommittedInteractionSubjectInstall {
+        issuer
+            .seal(
+                ZoneId::parse("dev").unwrap(),
+                ResourceRef::parse("Guest/guest").unwrap(),
+                ResourceUid::parse(CALLER_UID).unwrap(),
+                42,
+                ResourceRef::parse("Host/host-system").unwrap(),
+                ResourceGeneration::new(2).unwrap(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn committed_subject_install_is_instance_bound_and_default_deny() {
+        let (_bus_a, registrar_a, issuer_a) = subject_issuer_bus();
+        let (_bus_b, registrar_b, issuer_b) = subject_issuer_bus();
+
+        assert_eq!(
+            registrar_a
+                .interaction_subjects
+                .as_ref()
+                .expect("opt-in subject registrar")
+                .authority
+                .controller_generation
+                .get(),
+            3
+        );
+        assert!(
+            registrar_b
+                .install_committed_interaction_subject(subject_install(issuer_a))
+                .is_err(),
+            "an install token must be rejected by another registrar"
+        );
+        assert!(
+            registrar_b
+                .unix_subjects
+                .subjects
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "cross-registrar rejection must precede subject mutation"
+        );
+
+        let (_default_bus, default_registrar) = ZoneBus::new(
+            ZoneId::parse("dev").unwrap(),
+            BusAuthorizer::new(
+                NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap(),
+                state(1),
+            )
+            .unwrap(),
+            BusConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            default_registrar
+                .install_committed_interaction_subject(subject_install(issuer_b))
+                .is_err(),
+            "default constructors must not expose committed subject installation"
+        );
+        assert!(
+            default_registrar
+                .unix_subjects
+                .subjects
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "default-deny rejection must precede subject mutation"
+        );
+    }
+
     fn operation(id: &str) -> OperationSpec {
         OperationSpec::new(OperationId::parse(id).unwrap(), 100).unwrap()
     }
@@ -4691,6 +5249,7 @@ use d2b_contracts_resource::v3::identity::{
                     remove_finalizers: Vec::new(),
                     wait_for_reconcile: false,
                     reconcile_deadline_ms: None,
+                    configuration_generation: None,
                     assignment: None,
                 },
                 None,
@@ -5283,6 +5842,62 @@ use d2b_contracts_resource::v3::identity::{
             Err(BusError::Authorization(AuthorizationError::Native(
                 d2b_resource_api::authz::AuthorizationDenial::RelayTargetGrantMissing
             )))
+        );
+    }
+
+    #[test]
+    fn scoped_owner_child_queries_reject_non_process_and_mismatched_scope() {
+        let first = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"123e4567-e89b-42d3-a456-426614174000","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let second = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"223e4567-e89b-42d3-a456-426614174001","resourceRevision":7,"providerRef":"Provider/provider-runtime","providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionOwner":"Process/process-controller","sessionGeneration":1,"epoch":10},"mutations":[{"target":"Process/work","verb":"Create","scope":{"kind":"owner-child","ownerRef":"Guest/guest","ownerUid":"223e4567-e89b-42d3-a456-426614174001","ownerRevision":7,"ownerGeneration":1}}]}"#,
+        )
+        .unwrap();
+        let owner_uid = first.assignment().resource_uid().clone();
+        let owner_scope = first.mutations()[0].scope().clone();
+        let owner_filter =
+            ResourceFilter::new(OWNER_UID_FILTER, vec![owner_uid.as_str().to_owned()]).unwrap();
+        let zone = ZoneId::parse("dev").unwrap();
+
+        let non_process = ResourceQuery {
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![owner_filter.clone()],
+            assignment: Some(first.assignment().clone()),
+            scope: Some(owner_scope.clone()),
+        };
+        assert_eq!(
+            ResourceCall::List(non_process).authorization_request(zone.clone()),
+            Err(BusError::InvalidResourceCall)
+        );
+
+        let mismatched_scope = ResourceQuery {
+            resource_types: vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+            resource_names: Vec::new(),
+            filters: vec![owner_filter],
+            assignment: Some(second.assignment().clone()),
+            scope: Some(owner_scope),
+        };
+        assert_eq!(
+            ResourceCall::Watch(mismatched_scope).authorization_request(zone),
+            Err(BusError::InvalidResourceCall)
+        );
+    }
+
+    #[test]
+    fn unscoped_process_queries_remain_available_to_native_rbac() {
+        let query = ResourceQuery::new(
+            vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            ResourceCall::List(query)
+                .authorization_request(ZoneId::parse("dev").unwrap())
+                .is_ok()
         );
     }
 
@@ -6707,5 +7322,26 @@ use d2b_contracts_resource::v3::identity::{
         assert_eq!(clock.now_tick(), 7);
         clock.advance_to(9);
         assert_eq!(clock.now_tick(), 9);
+    }
+
+    #[test]
+    fn guest_local_seed_call_allows_only_approved_creates() {
+        let approved = BTreeSet::from([ResourceTypeName::parse("Process").expect("Process type")]);
+        let valid = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Process/agent").expect("Process ref"),
+            ResourceVerb::Create,
+        )]);
+        assert!(valid.validate_guest_local_seed(&approved).is_ok());
+
+        let update = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Process/agent").expect("Process ref"),
+            ResourceVerb::UpdateSpec,
+        )]);
+        assert!(update.validate_guest_local_seed(&approved).is_err());
+        let foreign = ResourceCall::CommitBatch(vec![(
+            ResourceRef::parse("Zone/work").expect("Zone ref"),
+            ResourceVerb::Create,
+        )]);
+        assert!(foreign.validate_guest_local_seed(&approved).is_err());
     }
 }

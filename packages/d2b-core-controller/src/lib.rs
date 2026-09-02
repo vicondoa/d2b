@@ -47,16 +47,24 @@ pub use binding_children::{
     materialize_child_create_payload, observed_child_from_resource, semantic_child_digest,
 };
 pub use controller_assignment::{
-    AssignmentEpoch, AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest,
-    AssignmentTarget, AssignmentTransportError, AssignmentVerb, ControllerAssignmentRegistry,
-    ControllerRoleContract, MAX_SCOPED_COMMIT_TRANSPORT_BYTES, ResourceClientLease,
-    ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
+    AssignmentEpoch, AssignmentError, AssignmentGrantError, AssignmentIdentity, AssignmentPhase,
+    AssignmentRequest, AssignmentScope, AssignmentTarget, AssignmentTransportError, AssignmentVerb,
+    CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID,
+    ControllerAssignmentExpectation, ControllerAssignmentGrant, ControllerAssignmentGrantStore,
+    ControllerAssignmentRegistry, ControllerRoleContract, ControllerSessionBinding,
+    GrantDisposition, MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES, MAX_ASSIGNMENT_GRANT_SCOPES,
+    MAX_ASSIGNMENT_GRANT_VERBS, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES,
+    MAX_SCOPED_COMMIT_TRANSPORT_BYTES, OwnerChildScope, ResourceClientLease, ScopedCommitTransport,
+    ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery, ScopedResourceScope,
 };
 pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
     CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,
 };
-pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
+pub use dependencies::{
+    DependencyError, DependencyEvent, DependencyIndex, DependencyTeardownPlan, DependencyTrigger,
+    UpgradeOrder,
+};
 pub use export_import::{
     AdmittedExport, AdmittedImport, ExportImportError, ProjectionServiceIdentity,
     admit_binding_target, admit_export, admit_factory_pair, admit_import, projection_identity,
@@ -72,8 +80,10 @@ pub use hints::{
     SuppressionDecision, WatchPlan, WatchPlanError, WatchRegistry, WatchSelector,
 };
 pub use owner_reconcile::{
-    DesiredChild, ObservedChild, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits,
-    OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
+    DesiredChild, MAX_OWNER_CHILD_BATCH, MAX_OWNER_CHILD_DEPENDENCIES, ObservedChild,
+    OwnedChildIntent, OwnedChildKind, OwnerBatchRecovery, OwnerBatchResult, OwnerChildBatch,
+    OwnerChildIdentity, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits, OwnerMutation,
+    OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger, TeardownPlan,
 };
 pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,

@@ -6,10 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts_resource::v3::identity::{
-    Locality,
-    ServiceName,
-};
+use d2b_contracts_resource::v3::identity::{Locality, ServiceName};
 use d2b_telemetry::{
     BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError, Signal,
     emitter::encode_frame, meter_registry::label, validate_data_point, validate_descriptor,

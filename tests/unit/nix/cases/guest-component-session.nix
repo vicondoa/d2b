@@ -10,6 +10,10 @@ let
     mkdir -p "$out/bin"
     touch "$out/bin/d2bd"
   '';
+  overrideD2bd = pkgs.runCommand "d2bd-guest-component-session-override-test" { } ''
+    mkdir -p "$out/bin"
+    touch "$out/bin/d2bd"
+  '';
   broker = pkgs.runCommand "d2b-broker-guest-component-session-test" { } ''
     mkdir -p "$out/bin"
     touch "$out/bin/d2b-broker"
@@ -60,6 +64,17 @@ let
     inherit d2bd broker;
     d2b-guest-shell-runner-static = shellRunner;
   };
+  hostToolOverrideKeys = [
+    "d2b"
+    "d2bd"
+    "broker"
+    "activationHelper"
+    "hostActivationHelper"
+    "unsafeLocalHelper"
+    "resourceCompiler"
+    "waylandProxy"
+  ];
+  d2bHostToolOverrides = lib.genAttrs hostToolOverrideKeys (_: overrideD2bd);
   componentSessionModule = import (flakeRoot + "/nixos-modules/component-session.nix");
   evaluated = (mkGuestEval {
     modules = [
@@ -111,6 +126,30 @@ let
         name = "guest";
       };
     }).config;
+  overridden = (mkGuestEval {
+    modules = [
+      optionSinks
+      componentSessionModule
+      {
+        d2b.componentSession = {
+          enable = true;
+          guestConfigPath = null;
+          shell = {
+            enable = false;
+            defaultName = "default";
+            maxSessions = 8;
+            maxAttached = 1;
+          };
+        };
+      }
+    ];
+    specialArgs = {
+      d2bInputs = { };
+      d2bHostTools = hostTools;
+      inherit d2bHostToolOverrides;
+      name = "guest";
+    };
+  }).config;
   validShell = mkShellEval "alice";
   missingShell = mkShellEval null;
   rootShell = mkShellEval "root";
@@ -126,6 +165,22 @@ in
 {
   "guest-component-session/starts-d2bd-guest" = {
     expr = lib.hasInfix "/bin/d2bd guest " service.ExecStart;
+    expected = true;
+  };
+
+  "guest-component-session/host-tool-override-selects-guest-daemon" = {
+    expr =
+      let
+        packages = overridden.environment.systemPackages;
+        selected = lib.findFirst
+          (package: package.outPath == overrideD2bd.outPath)
+          null
+          packages;
+        service = overridden.systemd.services.d2bd-guest.serviceConfig;
+      in
+      selected != null
+      && selected.outPath != d2bd.outPath
+      && lib.hasPrefix "${overrideD2bd.outPath}/bin/d2bd guest " service.ExecStart;
     expected = true;
   };
 

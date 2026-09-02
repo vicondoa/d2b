@@ -75,6 +75,7 @@ impl std::error::Error for StoreSlotError {}
 pub enum SealIdentityMismatch {
     Zone,
     Store,
+    Epoch,
 }
 
 impl SealIdentityMismatch {
@@ -82,6 +83,7 @@ impl SealIdentityMismatch {
         match self {
             Self::Zone => "mutation-seal-acceptor-zone-mismatch",
             Self::Store => "mutation-seal-acceptor-store-mismatch",
+            Self::Epoch => "mutation-seal-acceptor-store-epoch-mismatch",
         }
     }
 }

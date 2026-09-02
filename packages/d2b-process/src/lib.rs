@@ -11,8 +11,8 @@
 mod backend;
 
 pub use backend::{
-    BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError, ProcessRequest,
-    ProcessStopClass,
+    BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError,
+    ProcessLaunchRequest, ProcessRequest, ProcessStopClass,
 };
 
 pub use d2b_process_conformance::{

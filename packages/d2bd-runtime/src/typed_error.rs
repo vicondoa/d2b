@@ -653,9 +653,6 @@ pub enum TypedError {
         path: PathBuf,
         detail: String,
     },
-    GatewayDisplayUnavailable {
-        detail: String,
-    },
     WireVersionMismatch {
         client_range: String,
         accepted_range: String,
@@ -874,14 +871,6 @@ pub struct ErrorEnvelope {
     pub remediation: String,
 }
 
-fn redact_path_like_tokens(detail: &str) -> String {
-    detail
-        .split_whitespace()
-        .map(|token| if token.contains('/') { "<path>" } else { token })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn public_usb_busid(busid: &str) -> &str {
     if d2b_contracts::usbip::validate_bus_id(busid).is_ok() {
         busid
@@ -902,7 +891,6 @@ impl TypedError {
             Self::InternalConfig { .. } => "internal-config-invalid",
             Self::InternalIo { .. } => "internal-io",
             Self::InternalLockParentInvalid { .. } => "internal-lock-parent-invalid",
-            Self::GatewayDisplayUnavailable { .. } => "gateway-display-unavailable",
             Self::WireVersionMismatch { .. } => "wire-version-mismatch",
             Self::WireUnknownField { .. } => "wire-unknown-field",
             Self::WireIfNameInvalid { .. } => "wire-ifname-invalid",
@@ -947,8 +935,7 @@ impl TypedError {
             | Self::InternalBrokerTimeout { .. }
             | Self::InternalConfig { .. }
             | Self::InternalIo { .. }
-            | Self::InternalLockParentInvalid { .. }
-            | Self::GatewayDisplayUnavailable { .. } => 42,
+            | Self::InternalLockParentInvalid { .. } => 42,
             Self::WireUnknownField { .. } => 51,
             Self::WireVersionMismatch { .. } => 52,
             Self::WireIfNameInvalid { .. } => 53,
@@ -1024,12 +1011,6 @@ impl TypedError {
                 format!(
                     "lock parent failed validation: {}",
                     redacted_lock_parent_reason(detail)
-                )
-            }
-            Self::GatewayDisplayUnavailable { detail } => {
-                format!(
-                    "gateway display unavailable: {}",
-                    redact_path_like_tokens(detail)
                 )
             }
             Self::WireVersionMismatch {
@@ -1179,18 +1160,6 @@ impl TypedError {
             Self::InternalIo { .. } | Self::InternalLockParentInvalid { .. } => {
                 "repair the daemon runtime directory ownership, mode, or symlink posture and retry"
                     .to_owned()
-            }
-            Self::GatewayDisplayUnavailable { detail } => {
-                let redacted = redact_path_like_tokens(detail);
-                if detail.contains("host-held gateway credentials") {
-                    "enroll inside gateway then retry".to_owned()
-                } else if detail.contains("mode 0600") {
-                    format!("repair the operator Waypipe receiver socket permissions and retry: {redacted}")
-                } else if detail.contains("waypipeSocket") {
-                    format!("repair d2b.gateways.<realm>.display.waypipeSocket and retry: {redacted}")
-                } else {
-                    format!("repair the gateway display configuration and retry: {redacted}")
-                }
             }
             Self::WireVersionMismatch { .. } => {
                 "use a client whose SemverRange includes the daemon's selected version"
@@ -1432,7 +1401,6 @@ impl TypedError {
             | Self::InternalConfig { .. }
             | Self::InternalIo { .. }
             | Self::InternalLockParentInvalid { .. }
-            | Self::GatewayDisplayUnavailable { .. }
             | Self::BundleTampered { .. }
             | Self::OwnershipMatrixDrift { .. }
             | Self::SshdHostKeyDrift { .. }
@@ -1525,19 +1493,6 @@ mod tests {
         };
         assert_eq!(err.kind(), "internal-lock-parent-invalid");
         assert_no_path_leak("InternalLockParentInvalid", &err.message());
-    }
-
-    #[test]
-    fn gateway_display_unavailable_preserves_actionable_detail_without_paths() {
-        let err = TypedError::GatewayDisplayUnavailable {
-            detail: "waypipeSocket /run/user/1000/wpc.sock must have mode 0600; current mode is 0o660; run chmod 0600 on the socket path".to_owned(),
-        };
-        assert_eq!(err.kind(), "gateway-display-unavailable");
-        assert!(err.message().contains("waypipeSocket"));
-        assert!(err.message().contains("mode 0600"));
-        assert!(err.remediation().contains("mode 0600"));
-        assert_no_path_leak("GatewayDisplayUnavailable", &err.message());
-        assert_no_path_leak("GatewayDisplayUnavailable", &err.remediation());
     }
 
     #[test]

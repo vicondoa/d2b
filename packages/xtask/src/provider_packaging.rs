@@ -369,9 +369,7 @@ mod tests {
     const CATALOG_TO_CONTRACT: &[(&str, &str, &str)] = &[
         ("providerName", "ProviderManifest", "artifact_id"),
         ("publisher", "TrustEvidence", "publisher"),
-        ("packageDigest", "ArtifactDigestSet", "package"),
         ("executableDigest", "ArtifactDigestSet", "executable"),
-        ("manifestDigest", "ArtifactDigestSet", "manifest"),
         ("configDigest", "ArtifactDigestSet", "config"),
         ("apiCompatibility", "CompatibilityRange", "api_major"),
         ("apiCompatibility", "CompatibilityRange", "api_minor"),
@@ -402,6 +400,8 @@ mod tests {
     const CATALOG_FIELDS_WITHOUT_A_CONTRACT_FIELD: &[&str] = &[
         "componentDigest",
         "descriptorDigest",
+        "manifestDigest",
+        "packageDigest",
         "packageName",
         "platform",
         "supportContact",
@@ -413,11 +413,10 @@ mod tests {
     /// the catalog shape, pinned on the same terms as the list above.
     ///
     /// `ArtifactDigestSet::schema` and `ArtifactDigestSet::service` are the
-    /// other half of the digest divergence: both artifacts declare exactly
-    /// six digests and agree on four of them, but the catalog's remaining
-    /// two name the component and descriptor sets while the contract's name
-    /// the exported schema and service surfaces. Those are different facts,
-    /// not two spellings of one.
+    /// contract-only half of the digest split: the catalog carries package and
+    /// manifest digests because those values cannot be self-referential in the
+    /// signed manifest, while the contract carries exported schema and service
+    /// surface digests. These are different facts, not alternate spellings.
     const CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD: &[(&str, &str)] = &[
         ("ArtifactDigestSet", "schema"),
         ("ArtifactDigestSet", "service"),
@@ -540,12 +539,13 @@ mod tests {
             );
         }
 
-        // Both artifacts declare six digests; four of those agree.
+        // Package and manifest digests remain catalog-only because the signed
+        // manifest cannot carry values computed over itself or its package.
         let digest_fields = contract_struct_fields(&source, "ArtifactDigestSet");
         assert_eq!(
             digest_fields.len(),
-            DIGEST_FIELDS.len(),
-            "the catalog and the contract disagree on how many digests pin an artifact"
+            4,
+            "the signed manifest carries only executable, config, schema, and service digests"
         );
     }
 

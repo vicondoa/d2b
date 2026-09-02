@@ -1,9 +1,6 @@
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
-    SessionKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
+    GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionKey, SessionProof,
     SessionRejectReason, SessionState,
 };
 use ring::rand::{SystemRandom, generate};

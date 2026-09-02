@@ -444,10 +444,7 @@ fn explicit_binding_reconciliation_returns_host_and_guest_children() {
         guest_process.process_provider(),
         Some("Provider/system-systemd")
     );
-    assert_eq!(
-        guest_process.process_template(),
-        Some("guest-audio-agent")
-    );
+    assert_eq!(guest_process.process_template(), Some("guest-audio-agent"));
     assert_eq!(guest_process.process_class(), Some("service"));
     assert_eq!(
         guest_process.process_domain(),

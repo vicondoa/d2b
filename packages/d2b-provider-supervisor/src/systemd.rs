@@ -6,8 +6,8 @@ use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
-    GuestExecutionBinding, StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain,
+    BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, GuestExecutionBinding,
+    OpenSystemdUnitPidfdRequest, StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain,
     SystemdUnitIdentity, SystemdUnitRequest,
 };
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;

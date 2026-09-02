@@ -17,6 +17,7 @@ let
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
   vmEvaluatorSource =
     builtins.readFile (flakeRoot + "/nixos-modules/vm-evaluator.nix");
+  flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   hostSourceLines = lib.splitString "\n" hostToolsSource;
   hostSourceBuilderLines =
     lib.filter (line: lib.hasInfix "src = hostSource;" line) hostSourceLines;
@@ -42,11 +43,16 @@ in
   };
 
   "host-tools-source/guest-evaluator-uses-host-tool-overrides" = {
-    expr = lib.all (needle: lib.hasInfix needle vmEvaluatorSource) [
-      "broker = d2bHostToolOverrides.broker"
-      "d2bd = d2bHostToolOverrides.d2bd"
-      "d2bHostTools = guestHostTools"
-    ];
+    expr =
+      lib.all (needle: lib.hasInfix needle vmEvaluatorSource) [
+        "d2bHostTools = guestHostTools"
+        "d2bHostToolOverrides = d2bHostToolOverrides"
+      ]
+      && lib.all (needle: lib.hasInfix needle flakeSource) [
+        "d2bHostToolOverrides ? null"
+        "inherit d2bHostToolOverrides"
+        "evalGuest = args: self.lib.evalGuest (args //"
+      ];
     expected = true;
   };
 }

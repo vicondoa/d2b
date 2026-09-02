@@ -3,10 +3,8 @@ use crate::{
     descriptor::{PeerCredentials, ReceivedControl, ReceivedPacket},
     error::{UnixSessionError, io_error},
 };
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentPolicy, AttachmentPolicyKind, LimitProfile, MAX_PACKET_ATTACHMENTS,
-},
 };
 use rustix::{
     fd::{AsFd, BorrowedFd, OwnedFd},
@@ -27,6 +25,7 @@ use std::{
     collections::VecDeque,
     fmt, io,
     mem::size_of,
+    os::fd::RawFd,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -211,6 +210,20 @@ impl SeqpacketSocket {
         Self::from_owned(fd)
     }
 
+    /// Adopt a broker-inherited descriptor, restoring close-on-exec before
+    /// validating the prearmed Unix seqpacket contract.
+    ///
+    /// The broker deliberately clears close-on-exec while arranging fd 10 so
+    /// the controller can receive it across `execve`. This function validates
+    /// that well-known descriptor without closing it, rearms close-on-exec,
+    /// and then takes ownership before any session use.
+    pub fn from_inherited_fd(raw_fd: RawFd) -> Result<Self, UnixSessionError> {
+        let fd = duplicate_inherited_fd(raw_fd)?;
+        let socket = Self::from_parent_prearmed(fd)?;
+        nix::unistd::close(raw_fd).map_err(nix_io_error)?;
+        Ok(socket)
+    }
+
     pub fn acceptor_peer_credentials(&self) -> Result<PeerCredentials, UnixSessionError> {
         get_socket_peercred(self.io.get_ref())
             .map(PeerCredentials::from_ucred)
@@ -349,6 +362,20 @@ fn verify_parent_prearmed(fd: impl AsFd) -> Result<(), UnixSessionError> {
         true => Ok(()),
         false => Err(UnixSessionError::PasscredNotPrearmed),
     }
+}
+
+fn duplicate_inherited_fd(raw_fd: RawFd) -> Result<OwnedFd, UnixSessionError> {
+    if raw_fd < 0 {
+        return Err(UnixSessionError::InvalidSocket);
+    }
+
+    uapi::fcntl_dupfd_cloexec(raw_fd, 3)
+        .map(Into::into)
+        .map_err(|error| io_error(io::Error::from(error)))
+}
+
+fn nix_io_error(error: nix::errno::Errno) -> UnixSessionError {
+    io_error(io::Error::from_raw_os_error(error as i32))
 }
 
 fn recv_one(
@@ -699,8 +726,22 @@ fn align_up(value: usize, alignment: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlLayout, scan_control_layout};
-    use std::mem::size_of;
+    use super::{ControlLayout, SeqpacketSocket, scan_control_layout};
+    use crate::prearmed_seqpacket_pair;
+    use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
+    use std::{mem::size_of, os::fd::IntoRawFd};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn inherited_fd_is_rearmed_before_session_use() {
+        let (fd, _peer) = prearmed_seqpacket_pair().unwrap();
+        fcntl_setfd(&fd, FdFlags::empty()).unwrap();
+        let socket = SeqpacketSocket::from_inherited_fd(fd.into_raw_fd()).unwrap();
+        assert!(
+            fcntl_getfd(socket.io.get_ref())
+                .unwrap()
+                .contains(FdFlags::CLOEXEC)
+        );
+    }
 
     #[test]
     fn raw_control_scanner_rejects_unknown_and_partial_headers() {

@@ -39,9 +39,7 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::provider::{
-    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
-};
+use super::provider::{BindingTargetType, Exportability, ProjectionFactory, ProviderContractError};
 use d2b_contracts_resource::v3::{
     ResourceRef, ResourceSpec, ResourceTypeName, SchemaFingerprint,
     resource_schema::{
@@ -1186,7 +1184,10 @@ pub(crate) mod tests_support {
                 }
             }
         });
-        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(
+            &serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap()
     }
 
     /// Assert that the canonical minimal base Spec is accepted with no

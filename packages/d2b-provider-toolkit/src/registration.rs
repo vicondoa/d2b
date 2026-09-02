@@ -6,8 +6,8 @@
 
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use d2b_provider::{ProviderDescriptor, ProviderRegistryBuilder, RegistryBuildError};
 use d2b_contracts_provider::v3::ProviderManifest;
+use d2b_provider::{ProviderDescriptor, ProviderRegistryBuilder, RegistryBuildError};
 
 /// A value accepted by [`register_exact_instances`].
 pub trait ExactRegistration<I> {

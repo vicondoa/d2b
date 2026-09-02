@@ -181,11 +181,8 @@ impl Default for ProviderAgentAuditLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName};
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceTypeName,
-};
 
     fn zone() -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse("work").expect("valid label")])

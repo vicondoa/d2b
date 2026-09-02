@@ -213,6 +213,61 @@ rec {
   normalNixosVms = vms: lib.filterAttrs (_: vm: vm.enable && isNixosVm vm) vms;
   qemuMediaVms = vms: lib.filterAttrs (_: vm: vm.enable && isQemuMediaVm vm) vms;
 
+  # Keep transitional VM/env projections only for explicit legacy VM
+  # references owned by enabled gateway-vm realms.
+  gatewayRealms = cfg:
+    lib.filterAttrs
+      (_: realm:
+        (realm.enable or false)
+        && (realm.placement or null) == "gateway-vm")
+      (cfg.realms or { });
+  gatewayRealmMappings = cfg:
+    let
+      vms = cfg.vms or { };
+      mappingFor = realm:
+        let
+          envNames = lib.unique (lib.filter (envName: envName != null)
+            ([ (realm.env or null) ] ++ (realm.network.envs or [ ])));
+          workloadVmNames = lib.unique (lib.filter
+            (vmName: vmName != null)
+            (map (workload: workload.legacyVmName or null)
+              (lib.filter (workload: workload.enable or false)
+                (lib.attrValues (realm.workloads or { })))));
+          acceptedVms = lib.filterAttrs
+            (name: vm:
+              (vm.enable or false)
+              && builtins.elem name workloadVmNames
+              && builtins.elem (vm.env or null) envNames)
+            vms;
+          acceptedEnvNames = lib.sort lib.lessThan (lib.unique (lib.filter
+            (envName: envName != null)
+            (map (vm: vm.env or null) (lib.attrValues acceptedVms))));
+        in {
+          inherit acceptedVms acceptedEnvNames;
+        };
+    in
+    map mappingFor (lib.attrValues (gatewayRealms cfg));
+  gatewayEnvNames = cfg:
+    lib.sort lib.lessThan (lib.unique (lib.concatLists
+      (map (mapping: mapping.acceptedEnvNames)
+        (gatewayRealmMappings cfg))));
+  gatewayVmNames = cfg:
+    lib.sort lib.lessThan (lib.attrNames (gatewayVms cfg));
+  gatewayVms = cfg:
+    lib.foldl'
+      (result: mapping: result // mapping.acceptedVms)
+      { }
+      (gatewayRealmMappings cfg);
+  gatewayEnvs = cfg:
+    let envNames = gatewayEnvNames cfg;
+    in lib.filterAttrs
+      (name: _: builtins.elem name envNames)
+      (cfg.envs or { });
+  gatewayEnvMeta = cfg: envMeta:
+    lib.filterAttrs
+      (name: _: builtins.elem name (gatewayEnvNames cfg))
+      envMeta;
+
   localRuntimeProvider = { id, driver }: {
     inherit id driver;
     type = "local";
@@ -620,6 +675,72 @@ rec {
   # in their owning Provider crates. The helper returns null for
   # backward compat with consumers that touch the path.
   vmDeclaredRunner = _config: _name: null;
+
+  v3GuestSystemFor = guestSystems: zone: name:
+    let
+      byZone =
+        if builtins.isAttrs guestSystems
+          && builtins.hasAttr zone guestSystems
+          && builtins.isAttrs guestSystems.${zone}
+        then guestSystems.${zone}
+        else { };
+    in
+    if builtins.hasAttr name byZone
+    then byZone.${name}
+    else null;
+
+  v3GuestConfigFor = guestSystem:
+    if guestSystem == null then null
+    else if builtins.isAttrs guestSystem && builtins.hasAttr "config" guestSystem
+    then guestSystem.config
+    else if builtins.isAttrs guestSystem
+    then guestSystem
+    else null;
+
+  v3GuestEvaluatorReady = guestSystem:
+    let
+      guestConfig = v3GuestConfigFor guestSystem;
+      guestSystemConfig =
+        if builtins.isAttrs guestConfig
+          && builtins.hasAttr "system" guestConfig
+        then guestConfig.system
+        else { };
+      guestBuild =
+        if builtins.isAttrs guestSystemConfig
+          && builtins.hasAttr "build" guestSystemConfig
+        then guestSystemConfig.build
+        else { };
+    in
+    builtins.isAttrs guestConfig
+    && builtins.isAttrs guestSystemConfig
+    && builtins.isAttrs guestBuild
+    && builtins.hasAttr "toplevel" guestBuild;
+
+  v3GuestRows =
+    { zones
+    , guestSystems ? { }
+    , artifacts ? { }
+    }:
+    lib.concatMap
+      (zoneName:
+        let zone = zones.${zoneName};
+        in lib.mapAttrsToList
+          (resourceName: resource:
+            let
+              spec = resource.spec or { };
+              artifactId = spec.systemArtifactId or null;
+            in {
+              inherit zoneName resourceName resource spec;
+              system = v3GuestSystemFor guestSystems zoneName resourceName;
+              artifact =
+                if artifactId != null
+                  && builtins.isAttrs artifacts
+                  && builtins.hasAttr artifactId artifacts
+                then artifacts.${artifactId}
+                else null;
+            })
+          (lib.filterAttrs (_: resource: resource.type == "Guest") zone.resources))
+      (lib.sort lib.lessThan (lib.attrNames zones));
 
   # guestConfigForbiddenNamespaces - namespace-containment policy check
   # for the per-VM guest-editable `guestConfigFile`.

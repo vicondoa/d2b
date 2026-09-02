@@ -401,10 +401,7 @@ mod tests {
         NotificationResult, SinkError,
         admission::{test_observer, test_source},
     };
-    use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 
     #[derive(Default)]
     struct Effects {

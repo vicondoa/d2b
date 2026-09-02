@@ -27,6 +27,8 @@ pub const GUEST_RESOURCE_TYPE: &str = "Guest";
 pub struct GuestSpec {
     #[serde(flatten)]
     policy: ExecutionPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_ref: Option<ResourceRef>,
     system_artifact_id: Option<BoundedToken>,
 }
 
@@ -38,8 +40,15 @@ impl GuestSpec {
     pub const fn new(policy: ExecutionPolicy, system_artifact_id: Option<BoundedToken>) -> Self {
         Self {
             policy,
+            execution_ref: None,
             system_artifact_id,
         }
+    }
+
+    /// Bind this Guest to the Host or parent Guest that executes it.
+    pub fn with_execution_ref(mut self, execution_ref: ResourceRef) -> Self {
+        self.execution_ref = Some(execution_ref);
+        self
     }
 
     /// Construct the canonical minimal system Guest base spec.
@@ -50,6 +59,11 @@ impl GuestSpec {
     /// Borrow the shared execution policy.
     pub const fn policy(&self) -> &ExecutionPolicy {
         &self.policy
+    }
+
+    /// Borrow the explicit execution target, when configured.
+    pub const fn execution_ref(&self) -> Option<&ResourceRef> {
+        self.execution_ref.as_ref()
     }
 
     /// Borrow the NixOS system closure artifact ID.
@@ -80,6 +94,8 @@ impl<'de> Deserialize<'de> for GuestSpec {
             #[serde(default)]
             volume_attachment_defaults: Vec<CanonicalJsonObject>,
             #[serde(default)]
+            execution_ref: Option<ResourceRef>,
+            #[serde(default)]
             system_artifact_id: Option<BoundedToken>,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -94,7 +110,9 @@ impl<'de> Deserialize<'de> for GuestSpec {
         }
         .into_policy()
         .map_err(serde::de::Error::custom)?;
-        Ok(Self::new(policy, wire.system_artifact_id))
+        let mut spec = Self::new(policy, wire.system_artifact_id);
+        spec.execution_ref = wire.execution_ref;
+        Ok(spec)
     }
 }
 

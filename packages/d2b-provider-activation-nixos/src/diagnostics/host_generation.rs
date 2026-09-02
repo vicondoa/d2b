@@ -1,11 +1,7 @@
 //! Authenticated daemon projection for host-generation handoff.
 
 use d2b_contracts_broker::host_generation::{HandoffCoordinator, HandoffError, HandoffState};
-use d2b_contracts_resource::v3::{
-    ActivationMode,
-    ArtifactId,
-    ResourceRef,
-};
+use d2b_contracts_resource::v3::{ActivationMode, ArtifactId, ResourceRef};
 
 /// Authenticated caller role for activation requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

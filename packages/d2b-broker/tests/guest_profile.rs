@@ -40,6 +40,10 @@ fn guest_profile_admits_only_local_process_effects() {
             "guest profile should admit declared local effect {operation}"
         );
     }
+    assert!(
+        !BrokerProfile::Guest.allows_operation("ConsumeLifecycleLease"),
+        "guest profile must not consume host Guest lifecycle leases"
+    );
 }
 
 #[test]
@@ -109,10 +113,15 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 role_id: RoleId::new("cloud-hypervisor"),
                 resource_ref: None,
                 resource_uid: None,
+                zone_uid: None,
+                owner_ref: None,
+                owner_uid: None,
+                provider_ref: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                runtime_scope: None,
                 activation_input: None,
                 sandbox_plan: None,
                 role: RunnerRole::CloudHypervisor,
@@ -126,6 +135,8 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
+                inherited_fd_count: 0,
+                network_tap_context: None,
             }),
             caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
             test_peer_uid: Some(D2BD_UID),

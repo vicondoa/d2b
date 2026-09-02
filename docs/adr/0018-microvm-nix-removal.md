@@ -212,8 +212,8 @@ dispositions:
 
 Every SpawnRunner role MUST preserve the
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-delegated-subtree path `d2b.slice/<vm>/<role>`, keep the VM
-interior cgroup nodes process-free, hand a pidfd to d2bd over
+delegated-subtree path `d2b.slice/<zone>/<guest>/<role>`, keep the
+Zone/Guest interior cgroup nodes process-free, hand a pidfd to d2bd over
 `SCM_RIGHTS` before lifecycle ownership transfers, and use
 leaf-only **broker-mediated `CgroupKill`** (v1.1-P10 op per
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)

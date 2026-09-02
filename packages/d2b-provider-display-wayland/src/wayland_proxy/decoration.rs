@@ -1,7 +1,7 @@
 //! Proxy-owned Wayland decoration state and drawing helpers.
 //!
 //! The drawing path only consumes resolved configuration, surface dimensions,
-//! and the authenticated VM label. Guest wl_buffers/dma-bufs remain opaque
+//! and the authenticated workload label. Guest wl_buffers/dma-bufs remain opaque
 //! Wayland objects and are never read or sampled here.
 
 use std::{

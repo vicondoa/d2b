@@ -298,6 +298,21 @@ impl ResourceMetadata {
     pub fn owner_ref(&self) -> Option<&ResourceRef> {
         self.owner_ref.as_ref()
     }
+
+    /// Return the store-assigned management owner.
+    pub const fn managed_by(&self) -> ManagedBy {
+        self.managed_by
+    }
+
+    /// Return the configuration generation that owns this resource, if any.
+    pub const fn configuration_generation(&self) -> Option<ConfigurationGeneration> {
+        self.configuration_generation
+    }
+
+    /// Borrow the finalizers attached to this resource.
+    pub fn finalizers(&self) -> &[FinalizerId] {
+        &self.finalizers
+    }
 }
 
 impl core::fmt::Debug for ResourceMetadata {

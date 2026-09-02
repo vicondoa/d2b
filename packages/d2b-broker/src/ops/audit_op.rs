@@ -299,6 +299,14 @@ pub enum OperationFields {
         pid: i32,
         expected_start_time_ticks: u64,
     },
+    ConsumeLifecycleLease {
+        operation_id: String,
+        operation: String,
+        policy_revision: u64,
+        guest_generation: u64,
+        provider_assignment_generation: u64,
+        stop_only: bool,
+    },
     /// Accepted-socket peer pidfd handoff has no caller-controlled fields.
     OpenPeerPidfdFromAcceptedSocket {},
     ObserveRunner {

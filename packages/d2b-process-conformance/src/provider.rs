@@ -1,11 +1,10 @@
 //! The neutral Process Provider trait and its conformance profile.
 
 use std::collections::BTreeSet;
+use std::os::fd::OwnedFd;
 use std::{future::Future, future::ready};
 
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{IdentityBinding, WaitReapOwner};
@@ -77,6 +76,12 @@ pub enum AdoptionOutcome {
     Absent,
     /// A running process was adopted after full identity verification.
     Adopted(ProcessStatusReport),
+    /// One uniquely identified stale process is available for exact
+    /// replacement through the effect port.
+    Stale {
+        /// The private effect-port evidence for the exact stale process.
+        candidate: crate::port::AdoptionCandidate,
+    },
     /// Identity was ambiguous. The process is quarantined and reported as
     /// `Unknown`; it is never broadly killed or reused.
     Quarantined(ProcessStatusReport),
@@ -92,6 +97,25 @@ pub trait ProcessProvider: Send + Sync {
         &self,
         ticket: &LaunchTicket,
     ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send;
+
+    /// Launch with owned descriptors for a Provider-specific child bootstrap.
+    ///
+    /// Providers that do not own a descriptor-bearing launch path reject a
+    /// non-empty vector by default, preserving the ordinary launch contract.
+    fn launch_with_inherited_fds(
+        &self,
+        ticket: &LaunchTicket,
+        inherited_fds: Vec<OwnedFd>,
+    ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send {
+        async move {
+            if inherited_fds.is_empty() {
+                self.launch(ticket).await
+            } else {
+                drop(inherited_fds);
+                Err(ProcessConformanceError::InvalidTicket)
+            }
+        }
+    }
 
     /// Re-establish ownership of an already running process after a
     /// controller restart, verifying identity before any pidfd is opened.
@@ -109,6 +133,18 @@ pub trait ProcessProvider: Send + Sync {
         &self,
         _identity: &crate::identity::ProcessIdentityDigest,
         _class: StopClass,
+    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
+        ready(Err(ProcessConformanceError::StopUnavailable))
+    }
+
+    /// Stop and reap one uniquely identified stale process before replacement.
+    ///
+    /// Providers must keep this path narrow: the candidate's exact identity
+    /// evidence is supplied by the effect adapter, and ambiguity is never
+    /// converted into a stop request.
+    fn stop_stale(
+        &self,
+        _candidate: &crate::port::AdoptionCandidate,
     ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
         ready(Err(ProcessConformanceError::StopUnavailable))
     }

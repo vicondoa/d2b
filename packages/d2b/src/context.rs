@@ -2,9 +2,11 @@
 //! native CLI.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     future::{Future, ready},
-    io::{self, Read as _},
+    io::{self, IoSliceMut, Read as _},
+    os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -15,6 +17,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use d2b_contracts::{
+    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
+    SemverRange,
+};
 use d2b_contracts_control::public_wire::{
     ExecReadOutputResult, ExecStream, ExecWriteStdinResult, NamedProcessStreamErrorKind,
     NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
@@ -23,6 +29,10 @@ use d2b_contracts_control::public_wire::{
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
+};
+use d2b_core::{
+    bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata, host::HostJson,
+    processes::ProcessesJson,
 };
 use d2b_resource_client::{
     AssignmentIdentity, CallOptions, CancellationToken, ClientError, ConnectedSession,
@@ -33,11 +43,17 @@ use d2b_resource_client::{
     ZoneClient, ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin,
     ZoneSocketConnector, resource_verb_is_mutating,
 };
+use nix::sys::socket::{
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, send, socket,
+};
+use rustix::net::sockopt::{Timeout as SocketTimeout, set_socket_timeout};
+use rustix::net::{RecvAncillaryBuffer, RecvFlags, recvmsg};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::terminal_client::TerminalHostIo;
-use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
+use crate::{CliFailure, MAX_FRAME_BYTES, print_stdout};
 
 /// The frozen JSON envelope version emitted by the CLI.
 pub(crate) const JSON_SCHEMA_VERSION: u8 = 1;
@@ -49,6 +65,500 @@ pub(crate) const DEFAULT_REQUEST_LIFETIME_MS: u64 = 30_000;
 pub(crate) const MAX_EXPEDITED_DEADLINE_MS: u64 = 10_000;
 /// The maximum bytes accepted from a caller-provided resource spec.
 pub(crate) const MAX_SPEC_BYTES: usize = 64 * 1024;
+
+pub(crate) const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/d2b/vms.json";
+pub(crate) const DEFAULT_BUNDLE_PATH: &str = "/etc/d2b/bundle.json";
+pub(crate) const DEFAULT_PUBLIC_SOCKET: &str = d2b_contracts::PUBLIC_SOCKET_PATH;
+pub(crate) const DEFAULT_BROKER_SOCKET: &str = d2b_contracts::BROKER_SOCKET_PATH;
+pub(crate) const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/d2b/runtime/host-runtime.json";
+pub(crate) const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
+pub(crate) const RUNTIME_UNKNOWN: &str = "unknown";
+pub(crate) const SYSTEM_TOOL_PATH: &str =
+    "/run/current-system/sw/bin:/usr/bin:/usr/sbin:/bin:/sbin";
+pub(crate) const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
+pub(crate) const DEFAULT_METRICS_URL: &str = "";
+
+pub(crate) fn system_tool_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.env("PATH", SYSTEM_TOOL_PATH);
+    command
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CliContext {
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) public_socket: PathBuf,
+    pub(crate) broker_socket: PathBuf,
+    pub(crate) state_root: Option<PathBuf>,
+    pub(crate) host_runtime_path: PathBuf,
+    pub(crate) system_state_fixture: Option<SystemStateFixture>,
+    pub(crate) auth_status_fixture: Option<AuthStatusFixture>,
+    pub(crate) daemon_state_dir: PathBuf,
+    pub(crate) metrics_url: String,
+}
+
+impl CliContext {
+    pub(crate) fn from_env() -> Result<Self, CliFailure> {
+        Ok(Self {
+            manifest_path: env_path("D2B_MANIFEST_PATH", DEFAULT_MANIFEST_PATH),
+            bundle_path: env_path("D2B_BUNDLE_PATH", DEFAULT_BUNDLE_PATH),
+            public_socket: env_path("D2B_PUBLIC_SOCKET", DEFAULT_PUBLIC_SOCKET),
+            broker_socket: env_path("D2B_BROKER_SOCKET", DEFAULT_BROKER_SOCKET),
+            state_root: env::var_os("D2B_STATE_ROOT").map(PathBuf::from),
+            host_runtime_path: env_path("D2B_HOST_RUNTIME_PATH", DEFAULT_HOST_RUNTIME_PATH),
+            system_state_fixture: maybe_load_json_env("D2B_TEST_SYSTEM_STATE_JSON")?,
+            auth_status_fixture: maybe_load_json_env("D2B_AUTH_STATUS_FIXTURE")?,
+            daemon_state_dir: env_path("D2B_DAEMON_STATE_DIR", DEFAULT_DAEMON_STATE_DIR),
+            metrics_url: env::var("D2B_METRICS_URL")
+                .unwrap_or_else(|_| DEFAULT_METRICS_URL.to_owned()),
+        })
+    }
+
+    pub(crate) fn load_manifest(&self) -> Result<ManifestDocument, CliFailure> {
+        read_json_file(&self.manifest_path).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!("failed to read {}: {err}", self.manifest_path.display()),
+            )
+        })
+    }
+
+    pub(crate) fn load_bundle_context(&self) -> Result<Option<BundleContext>, CliFailure> {
+        match self.bundle_path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(err) => {
+                return Err(CliFailure::new(
+                    1,
+                    format!("failed to inspect {}: {err}", self.bundle_path.display()),
+                ));
+            }
+        }
+        let bundle: Bundle = read_json_file(&self.bundle_path).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!("failed to read {}: {err}", self.bundle_path.display()),
+            )
+        })?;
+        let base_dir = self
+            .bundle_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let host = read_bundle_json::<HostJson>(&base_dir, &bundle.host_path)?;
+        let processes = read_bundle_json::<ProcessesJson>(&base_dir, &bundle.processes_path)?;
+        let mut closures = BTreeMap::new();
+        for closure_ref in &bundle.closures {
+            if let Some(closure) =
+                read_bundle_json::<ClosureMetadata>(&base_dir, &closure_ref.path)?
+            {
+                closures.insert(closure_ref.vm.clone(), closure);
+            }
+        }
+        let host_runtime = if self.host_runtime_path.exists() {
+            read_json_file::<HostRuntime>(&self.host_runtime_path).ok()
+        } else {
+            None
+        };
+        Ok(Some(BundleContext {
+            host,
+            processes,
+            closures,
+            host_runtime,
+        }))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct BundleContext {
+    pub(crate) host: Option<HostJson>,
+    pub(crate) processes: Option<ProcessesJson>,
+    pub(crate) closures: BTreeMap<String, ClosureMetadata>,
+    pub(crate) host_runtime: Option<HostRuntime>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ManifestDocument {
+    #[serde(rename = "_manifest", default)]
+    _manifest: Option<Value>,
+    #[serde(rename = "_observability", default)]
+    _observability: Option<Value>,
+    #[serde(flatten)]
+    pub(crate) entries: BTreeMap<String, ManifestVm>,
+}
+
+impl ManifestDocument {
+    pub(crate) fn vms(&self) -> Vec<&ManifestVm> {
+        self.entries
+            .iter()
+            .filter(|(name, _)| !name.starts_with('_'))
+            .map(|(_, vm)| vm)
+            .collect()
+    }
+
+    pub(crate) fn get_vm(&self, name: &str) -> Option<&ManifestVm> {
+        self.entries.get(name).filter(|_| !name.starts_with('_'))
+    }
+
+    pub(crate) fn bridge_names(&self) -> BTreeSet<String> {
+        self.vms()
+            .iter()
+            .map(|vm| vm.bridge.clone())
+            .collect::<BTreeSet<_>>()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManifestVm {
+    pub(crate) name: String,
+    pub(crate) env: Option<String>,
+    pub(crate) graphics: bool,
+    pub(crate) tpm: bool,
+    pub(crate) audio: bool,
+    pub(crate) usbip_yubikey: bool,
+    pub(crate) static_ip: Option<String>,
+    pub(crate) is_net_vm: bool,
+    pub(crate) state_dir: String,
+    pub(crate) bridge: String,
+    pub(crate) ssh_user: Option<String>,
+    pub(crate) runtime: Option<ManifestRuntime>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManifestRuntime {
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) capabilities: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub(crate) struct SystemStateFixture {
+    pub(crate) units: BTreeMap<String, String>,
+    pub(crate) bridges: BTreeMap<String, BridgeHealthFixture>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BridgeHealthFixture {
+    pub(crate) state: String,
+    pub(crate) admin: String,
+    pub(crate) expected_carrier: String,
+    pub(crate) result: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub(crate) struct AuthStatusFixture {
+    pub(crate) public_reachable: Option<bool>,
+    pub(crate) public_version: Option<String>,
+    pub(crate) broker_reachable: Option<bool>,
+    pub(crate) broker_version: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SocketProbe {
+    pub(crate) reachable: bool,
+    pub(crate) version: Option<String>,
+}
+
+pub(crate) fn env_path(name: &str, default: &str) -> PathBuf {
+    env::var_os(name)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
+}
+
+pub(crate) fn maybe_load_json_env<T>(name: &str) -> Result<Option<T>, CliFailure>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    match env::var_os(name) {
+        Some(path) => read_json_file::<T>(&PathBuf::from(path))
+            .map(Some)
+            .map_err(|err| CliFailure::new(1, format!("failed to read {name}: {err}"))),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn read_json_file<T>(path: &Path) -> Result<T, io::Error>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let data = fs::read(path)?;
+    serde_json::from_slice(&data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+pub(crate) fn read_bundle_json<T>(base_dir: &Path, raw_path: &str) -> Result<Option<T>, CliFailure>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let raw = Path::new(raw_path);
+    let path = if raw.is_absolute() && raw.exists() {
+        raw.to_path_buf()
+    } else if raw.is_absolute() {
+        raw.file_name()
+            .map(|name| base_dir.join(name))
+            .unwrap_or_else(|| raw.to_path_buf())
+    } else {
+        base_dir.join(raw)
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file(&path)
+        .map(Some)
+        .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))
+}
+
+pub(crate) fn read_symlink_target(path: &Path) -> Option<String> {
+    fs::read_link(path)
+        .ok()
+        .map(|target| target.display().to_string())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct HelloOkFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    pub(crate) payload: IpcHelloOk,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct HelloRejectedFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    _payload: IpcHelloRejected,
+    pub(crate) error: DaemonErrorEnvelope,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ErrorFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    pub(crate) error: DaemonErrorEnvelope,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DaemonErrorEnvelope {
+    pub(crate) kind: String,
+    #[serde(alias = "exitCode", alias = "code")]
+    pub(crate) exit_code: u8,
+    pub(crate) message: String,
+    pub(crate) remediation: String,
+}
+
+pub(crate) fn encode_type_tagged_message<T>(
+    type_name: &str,
+    message: &T,
+    context: &str,
+) -> Result<Vec<u8>, CliFailure>
+where
+    T: Serialize,
+{
+    let mut value = serde_json::to_value(message)
+        .map_err(|err| CliFailure::new(1, format!("failed to encode {context}: {err}")))?;
+    value
+        .as_object_mut()
+        .ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!("failed to encode {context}: JSON object required"),
+            )
+        })?
+        .insert("type".to_owned(), Value::String(type_name.to_owned()));
+    serde_json::to_vec(&value)
+        .map_err(|err| CliFailure::new(1, format!("failed to encode {context}: {err}")))
+}
+
+pub(crate) fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
+    vec![
+        KnownFeatureFlag::TypedErrors.wire_value(),
+        KnownFeatureFlag::StatusCheckBridges.wire_value(),
+        KnownFeatureFlag::ExportBrokerAudit.wire_value(),
+        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+    ]
+}
+
+pub(crate) fn daemon_hello_frame(type_name: &str) -> Result<Vec<u8>, CliFailure> {
+    let hello = IpcHello {
+        client_version: SemverRange::new(DEFAULT_CLIENT_VERSION_RANGE).map_err(|err| {
+            CliFailure::new(1, format!("failed to build hello version range: {err}"))
+        })?,
+        supported_features: daemon_supported_features(),
+    };
+    encode_type_tagged_message(type_name, &hello, "hello request")
+}
+
+pub(crate) fn decode_daemon_frame(response: &[u8], context: &str) -> Result<Value, CliFailure> {
+    serde_json::from_slice(response)
+        .map_err(|err| CliFailure::new(1, format!("failed to decode {context}: {err}")))
+}
+
+pub(crate) fn cli_failure_from_daemon_error(error: DaemonErrorEnvelope) -> CliFailure {
+    let message = if error.remediation.is_empty() {
+        format!("{}: {}", error.kind, error.message)
+    } else {
+        format!("{}: {} ({})", error.kind, error.message, error.remediation)
+    };
+    CliFailure::new(i32::from(error.exit_code), message)
+}
+
+pub(crate) fn parse_hello_reply(response: &[u8]) -> Result<IpcHelloOk, CliFailure> {
+    let value = decode_daemon_frame(response, "hello reply")?;
+    let Some(type_name) = value.get("type").and_then(Value::as_str) else {
+        return Err(CliFailure::new(
+            1,
+            "daemon hello reply was missing a type discriminator",
+        ));
+    };
+    match type_name {
+        "helloOk" => serde_json::from_value::<HelloOkFrame>(value)
+            .map(|frame| frame.payload)
+            .map_err(|err| CliFailure::new(1, format!("failed to decode helloOk reply: {err}"))),
+        "helloRejected" => {
+            let frame: HelloRejectedFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode helloRejected reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        "error" => {
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected hello reply type {other}"),
+        )),
+    }
+}
+
+pub(crate) fn is_daemon_unreachable(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
+}
+
+pub(crate) fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
+    let mut socket = SeqpacketUnixSocket::connect(path).map_err(|err| {
+        CliFailure::new(1, format!("failed to connect to {}: {err}", path.display()))
+    })?;
+    let payload = daemon_hello_frame("hello")?;
+    socket
+        .send_frame(&payload)
+        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
+    let response = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
+    let hello = parse_hello_reply(&response)?;
+    Ok(SocketProbe {
+        reachable: true,
+        version: Some(hello.selected_version.as_str().to_owned()),
+    })
+}
+
+pub(crate) struct SeqpacketUnixSocket {
+    fd: OwnedFd,
+}
+
+impl SeqpacketUnixSocket {
+    #[cfg(test)]
+    pub(crate) fn from_owned_fd(fd: OwnedFd) -> Self {
+        Self { fd }
+    }
+
+    pub(crate) fn connect(path: &Path) -> io::Result<Self> {
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .map_err(nix_err_to_io)?;
+        let addr = UnixAddr::new(path).map_err(nix_err_to_io)?;
+        connect(fd.as_raw_fd(), &addr).map_err(nix_err_to_io)?;
+        Ok(Self { fd })
+    }
+
+    pub(crate) fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
+        if payload.len() > MAX_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "frame exceeds 1 MiB limit",
+            ));
+        }
+        let mut frame = Vec::with_capacity(payload.len() + 4);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        let sent = send(self.fd.as_raw_fd(), &frame, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        if sent != frame.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short write on seqpacket socket",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_io_timeout(&self, timeout: Duration) -> io::Result<()> {
+        set_socket_timeout(&self.fd, SocketTimeout::Recv, Some(timeout))
+            .map_err(io::Error::from)?;
+        set_socket_timeout(&self.fd, SocketTimeout::Send, Some(timeout))
+            .map_err(io::Error::from)?;
+        Ok(())
+    }
+
+    pub(crate) fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
+        let mut iov = [IoSliceMut::new(&mut buffer)];
+        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(32))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
+        let received = recvmsg(&self.fd, &mut iov, &mut ancillary, RecvFlags::empty())
+            .map_err(io::Error::from)?;
+        if received.flags.contains(RecvFlags::TRUNC) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversized seqpacket frame",
+            ));
+        }
+        if received.bytes < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short frame from seqpacket socket",
+            ));
+        }
+        let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
+        if expected > MAX_FRAME_BYTES || expected + 4 != received.bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed seqpacket frame",
+            ));
+        }
+        if ancillary.drain().next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ancillary data is not permitted on the CLI transport",
+            ));
+        }
+        Ok(buffer[4..4 + expected].to_vec())
+    }
+}
+
+pub(crate) fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
+    io::Error::from_raw_os_error(err as i32)
+}
 
 /// Which output representation a command should use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,16 +677,8 @@ impl ZoneContext {
         context
     }
 
-    /// Discover the nearest reachable Zone socket.
+    /// Select the root public listener and an optional Zone routing target.
     pub(crate) fn discover(zone_arg: Option<&str>) -> Result<Self, CliFailure> {
-        Self::discover_for_domain(zone_arg, false)
-    }
-
-    /// Discover the nearest socket for either the system or user runtime.
-    pub(crate) fn discover_for_domain(
-        zone_arg: Option<&str>,
-        user_domain: bool,
-    ) -> Result<Self, CliFailure> {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
@@ -184,28 +686,15 @@ impl ZoneContext {
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
-        let candidates = socket_candidates_for_domain(requested_zone.as_deref(), user_domain);
         let direct_override = env::var_os("D2B_PUBLIC_SOCKET").is_some();
-        let socket_path = if direct_override {
-            candidates.first().cloned()
-        } else {
-            candidates
-                .iter()
-                .find(|candidate| socket_reachable(candidate))
-                .cloned()
+        let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
+        if !direct_override && !socket_reachable(&socket_path) {
+            return Err(CliFailure::new(1, "zone-unavailable"));
         }
-        .ok_or_else(|| CliFailure::new(1, "zone-unavailable"))?;
 
-        let selected_zone = requested_zone.unwrap_or_else(|| {
-            socket_path
-                .parent()
-                .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or("local-root")
-                .to_owned()
-        });
+        let selected_zone = requested_zone.unwrap_or_else(|| "local-root".to_owned());
         validate_zone_name(&selected_zone)?;
 
         let zone_path = zone_path(&selected_zone)
@@ -268,8 +757,7 @@ impl ZoneContext {
         format!("Zone/{}", self.zone_name)
     }
 
-    #[cfg(test)]
-    pub(crate) fn socket_path(&self) -> &Path {
+    pub(crate) fn public_socket_path(&self) -> &Path {
         &self.socket_path
     }
 
@@ -1170,8 +1658,7 @@ impl CliZoneConnector {
         socket
             .set_io_timeout(self.handshake_timeout)
             .map_err(classify_client_io_error)?;
-        let hello =
-            crate::daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
+        let hello = daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
         socket
             .send_frame(&hello)
             .map_err(classify_client_io_error)?;
@@ -1716,11 +2203,11 @@ fn validate_operation(
         (
             ZoneServiceKind::ConfigNixos,
             "ConfigNixosService/ReadGuestConfig"
-                | "ConfigNixosService/Stage"
-                | "ConfigNixosService/Diff"
-                | "ConfigNixosService/Approve"
-                | "ConfigNixosService/Reject"
-                | "ConfigNixosService/Status",
+            | "ConfigNixosService/Stage"
+            | "ConfigNixosService/Diff"
+            | "ConfigNixosService/Approve"
+            | "ConfigNixosService/Reject"
+            | "ConfigNixosService/Status",
             Some("invoke"),
         ) => Ok(operation.to_owned()),
         (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
@@ -1746,7 +2233,7 @@ fn canonical_verb(method: &str) -> ResourceVerb {
         "Create" | "DeviceUsbAttach" | "DeviceUsbDetach" | "SecurityKeyCancel" | "Apply" => {
             ResourceVerb::Create
         }
-        "UpdateSpec" => ResourceVerb::UpdateSpec,
+        "UpdateSpec" | "Start" | "Stop" | "Restart" => ResourceVerb::UpdateSpec,
         "Delete" => ResourceVerb::Delete,
         "Upgrade" => ResourceVerb::Upgrade,
         _ => ResourceVerb::Get,
@@ -1754,7 +2241,9 @@ fn canonical_verb(method: &str) -> ResourceVerb {
 }
 
 fn resource_verb(method: &str, mutating: bool) -> ResourceVerb {
-    if mutating {
+    if mutating && matches!(method, "Start" | "Stop" | "Restart") {
+        ResourceVerb::UpdateSpec
+    } else if mutating {
         ResourceVerb::Create
     } else {
         canonical_verb(method)
@@ -2039,44 +2528,6 @@ pub(crate) fn bounded_message(message: &str) -> String {
     bounded
 }
 
-fn socket_candidates(requested_zone: Option<&str>) -> Vec<PathBuf> {
-    socket_candidates_for_domain(requested_zone, false)
-}
-
-fn socket_candidates_for_domain(requested_zone: Option<&str>, user_domain: bool) -> Vec<PathBuf> {
-    if let Some(path) = env::var_os("D2B_PUBLIC_SOCKET") {
-        return vec![PathBuf::from(path)];
-    }
-
-    let runtime_root = if user_domain {
-        env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .map(|path| path.join("d2b"))
-    } else {
-        Some(PathBuf::from("/run/d2b"))
-    };
-    let Some(runtime_root) = runtime_root else {
-        return socket_candidates_for_domain(requested_zone, false);
-    };
-
-    if let Some(zone) = requested_zone {
-        return vec![runtime_root.join("zones").join(zone).join("public.sock")];
-    }
-
-    let mut candidates = Vec::new();
-    let zone_root = runtime_root.join("zones");
-    if let Ok(entries) = fs::read_dir(zone_root) {
-        let mut zone_paths: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path().join("public.sock"))
-            .collect();
-        zone_paths.sort();
-        candidates.extend(zone_paths);
-    }
-    candidates.push(runtime_root.join("public.sock"));
-    candidates
-}
-
 fn validate_zone_name(value: &str) -> Result<(), CliFailure> {
     ZoneId::parse(value.to_owned())
         .map(|_| ())
@@ -2132,7 +2583,7 @@ fn socket_reachable(path: &Path) -> bool {
     if socket.set_io_timeout(timeout).is_err() {
         return false;
     }
-    let Ok(hello) = crate::daemon_hello_frame("hello") else {
+    let Ok(hello) = daemon_hello_frame("hello") else {
         return false;
     };
     if socket.send_frame(&hello).is_err() {
@@ -2270,6 +2721,68 @@ mod tests {
         response: Vec<u8>,
     }
 
+    #[cfg(test)]
+    mod transport_contract_tests {
+        use super::{MAX_FRAME_BYTES, SeqpacketUnixSocket};
+        use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, send, socketpair};
+        use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+        use std::{
+            io::IoSlice,
+            os::fd::{AsFd as _, AsRawFd as _},
+        };
+
+        #[test]
+        fn seqpacket_client_rejects_oversized_declared_packets() {
+            let (client, server) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("create seqpacket pair");
+            let mut socket = SeqpacketUnixSocket { fd: client };
+            let outbound = socket
+                .send_frame(&vec![0_u8; MAX_FRAME_BYTES + 1])
+                .expect_err("outbound oversized frame must fail closed");
+            assert_eq!(outbound.kind(), std::io::ErrorKind::InvalidInput);
+            let payload_len = MAX_FRAME_BYTES + 1;
+            let mut frame = Vec::with_capacity(4);
+            frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
+            send(server.as_raw_fd(), &frame, MsgFlags::empty())
+                .expect("send oversized declaration");
+            let error = socket
+                .recv_frame()
+                .expect_err("oversized declaration must fail closed");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("malformed"));
+        }
+
+        #[test]
+        fn seqpacket_client_rejects_ancillary_file_descriptors() {
+            let (client, server) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("create seqpacket pair");
+            let file = std::fs::File::open("/dev/null").expect("open descriptor fixture");
+            let rights = [file.as_fd()];
+            let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+            let mut control = SendAncillaryBuffer::new(&mut control_bytes);
+            assert!(control.push(SendAncillaryMessage::ScmRights(&rights)));
+            let frame = 0_u32.to_le_bytes();
+            let iov = [IoSlice::new(&frame)];
+            sendmsg(&server, &iov, &mut control, SendFlags::empty()).expect("send ancillary frame");
+            let mut socket = SeqpacketUnixSocket { fd: client };
+            let error = socket
+                .recv_frame()
+                .expect_err("ancillary data must fail closed");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("ancillary"));
+        }
+    }
+
     impl SessionClient for MockClient {
         fn invoke(
             &self,
@@ -2368,8 +2881,7 @@ mod tests {
             response: br#"{"items":[]}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
-                .unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone()).unwrap();
         let response = context
             .invoke(
                 "List",
@@ -2388,14 +2900,38 @@ mod tests {
     }
 
     #[test]
+    fn explicit_zone_changes_the_request_target_but_keeps_the_root_listener() {
+        let client = Arc::new(MockClient {
+            requests: Mutex::new(Vec::new()),
+            response: br#"{"items":[]}"#.to_vec(),
+        });
+        let context =
+            ZoneContext::with_client("child", "/run/d2b/public.sock", client.clone()).unwrap();
+        context
+            .invoke(
+                "List",
+                json!({"resourceType":"Guest"}),
+                ZoneContext::deadline(None).unwrap(),
+                OutputMode::Json,
+            )
+            .unwrap();
+        assert_eq!(
+            context.public_socket_path(),
+            Path::new("/run/d2b/public.sock")
+        );
+        let requests = client.requests.lock().unwrap();
+        let request: Value = serde_json::from_slice(&requests[0]).unwrap();
+        assert_eq!(request["zoneRef"], "Zone/child");
+    }
+
+    #[test]
     fn injected_process_attach_uses_the_typed_zone_attach_operation() {
         let client = Arc::new(MockClient {
             requests: Mutex::new(Vec::new()),
             response: br#"{"ok":true}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
-                .unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone()).unwrap();
         let response = context
             .attach_process(
                 ResourceRef::parse("EphemeralProcess/command").unwrap(),
@@ -2646,8 +3182,7 @@ mod tests {
                 br#"{"ok":false,"errorClass":"authorization-denied","message":"secret-subject"}"#
                     .to_vec(),
         });
-        let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client).unwrap();
+        let context = ZoneContext::with_client("dev", "/run/d2b/public.sock", client).unwrap();
         let error = context
             .attach_process(
                 ResourceRef::parse("EphemeralProcess/command").unwrap(),
@@ -2693,18 +3228,13 @@ mod tests {
     }
 
     #[test]
-    fn direct_socket_overrides_do_not_infer_a_zone_from_an_arbitrary_temp_path() {
-        let candidates = socket_candidates(Some("dev"));
+    fn root_listener_selection_does_not_infer_a_zone_from_socket_paths() {
+        let context = ZoneContext::local_only();
         assert_eq!(
-            candidates,
-            vec![PathBuf::from("/run/d2b/zones/dev/public.sock")]
+            context.public_socket_path(),
+            Path::new("/run/d2b/public.sock")
         );
-        let socket = PathBuf::from("/tmp/test-public.sock");
-        let inferred = socket
-            .parent()
-            .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
-            .and_then(Path::file_name);
-        assert!(inferred.is_none());
+        assert_eq!(context.zone_ref(), "Zone/local-root");
     }
 
     #[test]
