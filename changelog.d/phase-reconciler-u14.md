@@ -166,6 +166,8 @@
 - Deferred U6 endpoint publication while the controller-owned VMM Process is
   still converging by returning a retryable capability result, without
   weakening wrong-owner or wrong-provider checks.
+- Preserved structured Resource API rejection details for U7 owned-child
+  batches so StoreView child fencing failures remain diagnosable.
 
 ### Removed
 

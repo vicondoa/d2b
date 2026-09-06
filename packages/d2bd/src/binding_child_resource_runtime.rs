@@ -721,7 +721,12 @@ async fn apply_mutation_batch(
         request.mutations.push(mutation);
     }
     let response = client.commit_batch(request).await;
-    if response.error.is_some() {
+    if let Some(error) = response.error.as_ref() {
+        tracing::warn!(
+            owner = %owner.resource_ref.to_canonical_string(),
+            error = ?error,
+            "Binding child commit batch rejected by Resource API",
+        );
         return Err(BindingChildRuntimeError::Api);
     }
     Ok(())
