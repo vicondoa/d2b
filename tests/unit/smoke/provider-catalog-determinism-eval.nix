@@ -109,7 +109,7 @@ let
     modules = [ flake.nixosModules.default base ] ++ modules;
   }).config.d2b._providerCatalog.json;
 
-  digestCatalog = (nixosSystem {
+  digestCatalogConfig = nixosSystem {
     inherit system;
     modules = [
       flake.nixosModules.default
@@ -129,7 +129,10 @@ let
         };
       }
     ];
-  }).config.d2b._artifactCatalogV3.catalogData;
+  };
+  digestCatalog = digestCatalogConfig.config.d2b._artifactCatalogV3.catalogData;
+  digestCatalogPath =
+    digestCatalogConfig.config.d2b._artifactCatalogV3.path;
 
   # Evaluation A: one module, attribute-set literal, one authoring order.
   catalogA = evaluate [
@@ -205,6 +208,7 @@ else
     fixedBootstrapProviderIds = shape.fixedBootstrapProviderIds;
     digestContract = {
       entries = digestCatalog.entries;
+      catalogPath = toString digestCatalogPath;
       providerPath = toString digestProvider;
       systemPath = toString digestSystem;
       systemExpected =

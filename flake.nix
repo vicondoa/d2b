@@ -1181,9 +1181,11 @@
 
           with open(sys.argv[1], encoding="utf-8") as handle:
               contract = json.load(handle)["digestContract"]
+          with open(contract["catalogPath"], encoding="utf-8") as handle:
+              catalog = json.load(handle)
           entries = {
               entry["artifactId"]: entry["packageDigest"]
-              for entry in contract["entries"]
+              for entry in catalog["entries"]
           }
           provider_hash = subprocess.run(
               [

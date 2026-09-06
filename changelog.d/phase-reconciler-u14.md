@@ -189,6 +189,8 @@
   typed integrity failure classification.
 - Kept evaluated Guest closure metadata free of import-from-derivation reads;
   the realised artifact catalog now consumes closure files at build time.
+- Updated the realised Provider catalog determinism check to read the
+  authoritative catalog artifact during its build step.
 
 ### Removed
 
