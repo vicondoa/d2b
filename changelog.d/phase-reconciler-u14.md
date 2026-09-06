@@ -185,6 +185,8 @@
   payload construction drift from Resource API admission drift.
 - Completed the universal Export child status update projection with its
   required `status.update.observedGeneration` fence.
+- Redacted raw redb durability error details from stderr while retaining the
+  typed integrity failure classification.
 
 ### Removed
 

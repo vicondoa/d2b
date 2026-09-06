@@ -5259,7 +5259,7 @@ pub(crate) fn integrity_reason(reason: &'static str) -> StoreError {
 }
 
 pub(crate) fn durability_failure(_detail: impl core::fmt::Display) -> StoreError {
-    eprintln!("redb durability failure: {_detail}");
+    eprintln!("redb durability failure");
     integrity_reason("redb-durability-failure")
 }
 
