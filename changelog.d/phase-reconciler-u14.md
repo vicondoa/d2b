@@ -171,6 +171,8 @@
 - Exposed only the typed kind, revision, and retry class for U7 child API
   rejections, keeping error reasons redacted while distinguishing conflicts
   from authorization and integrity failures.
+- Included the typed Resource API rejection reason in U7 diagnostics; the
+  reason is a non-secret schema/authorization classification, not payload data.
 
 ### Removed
 

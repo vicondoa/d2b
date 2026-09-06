@@ -727,6 +727,7 @@ async fn apply_mutation_batch(
             error_kind = ?error.kind,
             current_revision = error.current_revision,
             retry_class = ?error.retry_class,
+            reason = %error.reason,
             "Binding child commit batch rejected by Resource API",
         );
         return Err(BindingChildRuntimeError::Api);
