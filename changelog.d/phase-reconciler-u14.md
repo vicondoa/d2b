@@ -168,6 +168,9 @@
   weakening wrong-owner or wrong-provider checks.
 - Preserved structured Resource API rejection details for U7 owned-child
   batches so StoreView child fencing failures remain diagnosable.
+- Exposed only the typed kind, revision, and retry class for U7 child API
+  rejections, keeping error reasons redacted while distinguishing conflicts
+  from authorization and integrity failures.
 
 ### Removed
 
