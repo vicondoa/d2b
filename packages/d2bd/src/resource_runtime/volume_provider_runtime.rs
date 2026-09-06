@@ -502,6 +502,17 @@ impl DaemonVolumeProviderEffects {
                 error = %error,
                 "U7 child payload failed local envelope validation",
             );
+            if let Err(error) =
+                serde_json::from_slice::<d2b_contracts_resource::v3::ResourceEnvelope>(
+                    &validation_bytes,
+                )
+            {
+                tracing::warn!(
+                    resource = %target.to_canonical_string(),
+                    serde_error = %error,
+                    "U7 child payload serde validation detail",
+                );
+            }
         }
         Ok(canonical)
     }
