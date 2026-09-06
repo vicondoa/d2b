@@ -15727,7 +15727,7 @@ impl ZoneResourceRuntime {
                 phase = ?process_envelope.status().phase(),
                 "Cloud Hypervisor endpoint publication deferred until VMM Process is Ready",
             );
-            return Ok(());
+            return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
         let provider_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor")
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;

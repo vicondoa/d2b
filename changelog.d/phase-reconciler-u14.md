@@ -164,7 +164,8 @@
   registration, setup Volume, endpoint publication, and post-controller
   passes.
 - Deferred U6 endpoint publication while the controller-owned VMM Process is
-  still converging, without weakening wrong-owner or wrong-provider checks.
+  still converging by returning a retryable capability result, without
+  weakening wrong-owner or wrong-provider checks.
 
 ### Removed
 
