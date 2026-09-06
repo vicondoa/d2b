@@ -153,6 +153,9 @@
 - Kept broker-owned StoreView current pointers observer-only at the final
   symlink boundary, so VolumeLocal does not attempt an unsafe metadata repair
   through a symlink while parent traversal remains fail-closed.
+- Added non-sensitive stage diagnostics to U7 Volume source resolution so
+  descriptor, identity, closure-root, and StoreSync mismatches remain
+  distinguishable during host acceptance.
 
 ### Removed
 

@@ -1172,6 +1172,18 @@ impl DaemonVolumeRootResolver {
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)
     }
 
+    fn source_unresolved(
+        &self,
+        stage: &'static str,
+    ) -> d2b_provider_volume_local::VolumeLocalError {
+        tracing::warn!(
+            resource = %self.volume_ref.to_canonical_string(),
+            stage,
+            "U7 Volume source resolution failed",
+        );
+        d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
+    }
+
     fn resolve_nix_closure_root(
         &self,
         system_artifact_id: &BoundedToken,
@@ -1179,38 +1191,39 @@ impl DaemonVolumeRootResolver {
         let guest_ref = self
             .guest_ref
             .as_ref()
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .ok_or_else(|| self.source_unresolved("guest-reference"))?;
         let descriptor = self
             .resolver
             .guest_setup_descriptor_bytes(self.zone.as_str(), guest_ref.name().as_str())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .ok_or_else(|| self.source_unresolved("guest-setup-descriptor"))?;
         let descriptor = serde_json::from_slice::<Value>(descriptor)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .map_err(|_| self.source_unresolved("guest-setup-descriptor-decode"))?;
         let descriptor_artifact_id = descriptor
             .get("systemArtifactId")
             .and_then(Value::as_str)
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .ok_or_else(|| self.source_unresolved("guest-setup-artifact-id"))?;
         let intent = self
             .resolver
             .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .ok_or_else(|| self.source_unresolved("store-view-intent"))?;
         validate_store_view_identity(
             &self.zone,
             guest_ref,
             system_artifact_id,
             descriptor_artifact_id,
             intent,
-        )?;
+        )
+        .map_err(|_| self.source_unresolved("store-view-identity"))?;
         if intent.vm != guest_ref.name().as_str() {
-            return Err(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved);
+            return Err(self.source_unresolved("store-view-guest"));
         }
         let generation_token = u32::try_from(intent.generation)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .map_err(|_| self.source_unresolved("store-view-generation"))?;
         if self.nix_closure_role == Some(NixClosureVolumeRole::SystemVolume) {
             let system_path = d2b_host::hardlink_farm::system_store_path(&intent.closure_paths)
-                .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+                .ok_or_else(|| self.source_unresolved("system-store-path"))?;
             let file = open_anchored_directory(system_path)
-                .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+                .map_err(|_| self.source_unresolved("system-store-open"))?;
             let marker_root = self.marker_root()?;
             return Ok(
                 ResolvedVolumeRoot::new(file, self.volume_uid.clone())?
@@ -1251,10 +1264,10 @@ impl DaemonVolumeRootResolver {
                 != u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX)
             || farm_path != intent.hardlink_farm_path
         {
-            return Err(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved);
+            return Err(self.source_unresolved("store-sync-response"));
         }
         let file = open_anchored_directory(&farm_path)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .map_err(|_| self.source_unresolved("store-view-open"))?;
         let marker_root = self.marker_root()?;
         Ok(ResolvedVolumeRoot::new(file, self.volume_uid.clone())?
             .with_marker_root(marker_root)?
@@ -1294,17 +1307,17 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
             .resolver
             .find_storage_path_spec(&storage_id)
             .map(|spec| spec.path_template.as_str().to_owned())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .ok_or_else(|| self.source_unresolved("storage-path"))?;
         let path = Path::new(&path);
         if !path.is_absolute()
             || path
                 .components()
                 .any(|component| matches!(component, std::path::Component::ParentDir))
         {
-            return Err(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved);
+            return Err(self.source_unresolved("storage-path-safety"));
         }
         let file = open_anchored_directory(path)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
+            .map_err(|_| self.source_unresolved("storage-path-open"))?;
         let marker_file = self.marker_root()?;
         ResolvedVolumeRoot::new(file.into(), volume_uid.clone())?
             .with_marker_root(marker_file.into())
