@@ -183,6 +183,8 @@
   class before redaction.
 - Added matching U7 local envelope validation diagnostics to distinguish child
   payload construction drift from Resource API admission drift.
+- Completed the universal Export child status update projection with its
+  required `status.update.observedGeneration` fence.
 
 ### Removed
 

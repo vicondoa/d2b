@@ -474,6 +474,7 @@ impl DaemonVolumeProviderEffects {
                     "dependencies": {"count": 0, "refs": []},
                     "disruption": "None",
                     "lastAssessedAt": null,
+                    "observedGeneration": 0,
                     "operationId": null,
                     "owned": {"count": 0, "refs": []},
                     "preserveState": true,
