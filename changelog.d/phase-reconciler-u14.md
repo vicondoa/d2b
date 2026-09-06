@@ -178,6 +178,9 @@
 - Bound virtiofs Export provider extensions to the qualified
   `virtiofs.d2bus.org.Export` ResourceType so Resource API schema admission and
   controller parsing use the same identity.
+- Added non-secret Resource API envelope-validation diagnostics for malformed
+  create payloads so typed child admission failures identify their contract
+  class before redaction.
 
 ### Removed
 

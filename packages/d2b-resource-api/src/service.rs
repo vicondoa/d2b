@@ -1964,7 +1964,10 @@ fn parse_create_payload(
         CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
     );
     let envelope = ResourceEnvelope::from_json(&validation_value.to_canonical_bytes())
-        .map_err(|_| schema_error("create resource payload is malformed"))?;
+        .map_err(|error| {
+            eprintln!("resource-api:create-envelope-validation-failed error={error}");
+            schema_error("create resource payload is malformed")
+        })?;
     let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
     Ok((envelope, canonical_resource, payload_digest))
 }
