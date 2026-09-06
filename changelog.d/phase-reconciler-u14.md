@@ -187,6 +187,8 @@
   required `status.update.observedGeneration` fence.
 - Redacted raw redb durability error details from stderr while retaining the
   typed integrity failure classification.
+- Kept evaluated Guest closure metadata free of import-from-derivation reads;
+  the realised artifact catalog now consumes closure files at build time.
 
 ### Removed
 

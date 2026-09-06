@@ -1062,9 +1062,9 @@ in
         artifactCatalogGolden = lib.hasInfix
           "2fa7348cd18ac4f54d28aeb87ef0be5da1fd772c3d173d830ef25e67b7adc63e"
           digestRendererSource;
-        productionCatalogReadsPath = lib.hasInfix
+        productionCatalogEvalAvoidsPathRead = !(lib.hasInfix
           ("builtins.readFile " + "catalogPath")
-          artifactCatalogSource;
+          artifactCatalogSource);
       };
       role = zoneCfg.d2b._resourceCompiler.zones.local-root.role;
       retention = zoneCfg.d2b._resourceCompiler.zones.local-root.retainedGenerations;
@@ -1118,7 +1118,7 @@ in
         resourceBundleGolden = true;
         artifactCatalogDomain = true;
         artifactCatalogGolden = true;
-        productionCatalogReadsPath = true;
+        productionCatalogEvalAvoidsPathRead = true;
       };
       role = {
         type = "Role";

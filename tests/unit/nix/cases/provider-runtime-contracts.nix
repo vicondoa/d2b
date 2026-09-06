@@ -528,7 +528,7 @@ in
           d2b._bundle = {
             zoneResourceBundles = {
               "local-root" = {
-                path = pkgs.writeText "matching-resource-bundle" (builtins.toJSON {
+                path = builtins.toFile "matching-resource-bundle" (builtins.toJSON {
                   artifactCatalogDigest =
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
                 });
@@ -554,7 +554,7 @@ in
               d2b._bundle = {
                 zoneResourceBundles = {
                   "local-root" = {
-                    path = pkgs.writeText "mismatched-resource-bundle"
+                    path = builtins.toFile "mismatched-resource-bundle"
                       (builtins.toJSON {
                         artifactCatalogDigest =
                           "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

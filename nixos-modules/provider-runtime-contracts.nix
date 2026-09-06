@@ -1,8 +1,10 @@
 # Provider-specific runtime and transport boundary assertions.
 #
-# These checks are intentionally eval-time: a malformed Provider placement,
-# raw locator, or cross-boundary credential scope must fail before any bundle
-# or process effect is emitted.
+# These checks are intentionally eval-time where their documents are
+# materialised: a malformed Provider placement, raw locator, or
+# cross-boundary credential scope must fail before any bundle or process
+# effect is emitted. Derivation-backed documents are checked by their
+# build-time emitters without forcing import-from-derivation during eval.
 { config, lib, ... }:
 
 let
@@ -17,37 +19,64 @@ let
     then attrs.${name}
     else fallback;
 
-  appliedCatalogDigest = bundle:
-    let
-      path = attrOr bundle "path" null;
-      parsed =
-        if path == null
-        then { success = true; value = { }; }
-        else builtins.tryEval
-          (builtins.fromJSON
-            (builtins.unsafeDiscardStringContext (builtins.readFile path)));
-    in
-    if parsed.success && builtins.isAttrs parsed.value
-    then attrOr parsed.value "artifactCatalogDigest" null
-    else null;
+  hasDerivationContext = path:
+    lib.any
+      (contextPath: lib.hasSuffix ".drv" contextPath)
+      (builtins.attrNames (builtins.getContext (toString path)));
 
-  # The path is the canonical activation/application artifact. Reading its
-  # emitted JSON keeps this check independent from the eval-time `data`
-  # projection, which is only a copy of the catalog digest.
+  readDocumentDigest = path: field:
+    if hasDerivationContext path then
+      { status = "unrealized"; digest = null; }
+    else
+      let parsed = builtins.tryEval
+        (builtins.fromJSON (builtins.readFile path));
+      in if parsed.success && builtins.isAttrs parsed.value then
+      { status = "present"; digest = attrOr parsed.value field null; }
+    else if !builtins.pathExists path then
+      { status = "unrealized"; digest = null; }
+    else { status = "invalid"; digest = null; };
+
+  appliedCatalogDigest = bundle:
+    let path = attrOr bundle "path" null;
+    in if path == null
+    then { status = "missing"; digest = null; }
+    else readDocumentDigest path "artifactCatalogDigest";
+
+  # The path is the canonical activation/application artifact. Reading a
+  # materialised document keeps this check independent from the eval-time
+  # `data` projection.
   bundleArtifactCatalogAssertions =
     let
       artifactCatalog =
         cfg._artifactCatalogV3 or { };
-      catalogDigest = artifactCatalog.catalogDigest or null;
+      catalog =
+        let path = artifactCatalog.path or null;
+        in if path == null
+        then {
+          status =
+            if artifactCatalog.catalogDigest or null == null
+            then "missing"
+            else "expected";
+          digest = artifactCatalog.catalogDigest or null;
+        }
+        else readDocumentDigest path "catalogDigest";
       bundles =
         (cfg._bundle or { }).zoneResourceBundles or { };
     in
-    lib.optionals (catalogDigest != null) (lib.mapAttrsToList
+    lib.optionals (catalog.status != "missing") (lib.mapAttrsToList
       (zoneName: bundle:
-        let bundleDigest = appliedCatalogDigest bundle;
+        let
+          bundleCatalog = appliedCatalogDigest bundle;
+          bundleDigest = bundleCatalog.digest;
         in {
-          assertion = validDigest bundleDigest
-            && bundleDigest == catalogDigest;
+          assertion =
+            catalog.status == "unrealized"
+            || bundleCatalog.status == "unrealized"
+            || ((catalog.status == "present" || catalog.status == "expected")
+              && bundleCatalog.status == "present"
+              && (catalog.status == "expected" || validDigest catalog.digest)
+              && validDigest bundleDigest
+              && bundleDigest == catalog.digest);
           message = ''
             d2b.zones.${zoneName} activation-time artifactCatalogDigest must
             match the digest emitted in the canonical activation bundle.

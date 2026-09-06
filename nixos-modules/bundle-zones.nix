@@ -426,7 +426,8 @@ let
         inherit providers;
         artifactCatalogPath =
           if catalogPath == null then null else "${catalogPath}";
-        expectedArtifactCatalogDigest = catalogDigest;
+        expectedArtifactCatalogDigest =
+          if catalogPath == null then catalogDigest else null;
         schemaRoot = "${schemaRoot}";
         # The compiler appends signed static Provider controller Processes
         # and their private processTemplates metadata. Those generated rows
