@@ -1,11 +1,50 @@
 //! Production Volume controller and anchored effect-adapter composition.
 
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceRef, ResourceUid,
+    volume::SourceKind,
+};
 use d2b_provider_volume_local::{
-    ContentFile, ContentProjection, ContentProvenance, VolumeLayoutEffectPort,
+    ContentFile, ContentProjection, ContentProvenance, EntryRequest, VolumeLayoutEffectPort,
     VolumeLocalController, VolumeLocalError, VolumeLocalProfile, VolumeSourceEffectPort,
 };
-use d2bd::resource_runtime::{AnchoredVolumeEffectAdapter, FdRootResolver};
+use d2bd::resource_runtime::{
+    AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
+};
+
+#[derive(Debug)]
+struct FixedPrincipalResolver {
+    inner: FdRootResolver,
+    uid: u32,
+    gid: u32,
+}
+
+impl VolumeRootResolver for FixedPrincipalResolver {
+    fn resolve_root(
+        &self,
+        volume_uid: &ResourceUid,
+        source_policy_id: Option<&d2b_contracts_resource::v3::execution_policy::BoundedToken>,
+        system_artifact_id: Option<&d2b_contracts_resource::v3::execution_policy::BoundedToken>,
+        kind: SourceKind,
+    ) -> Result<ResolvedVolumeRoot, VolumeLocalError> {
+        self.inner
+            .resolve_root(volume_uid, source_policy_id, system_artifact_id, kind)
+    }
+
+    fn resolve_principal(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+        if reference.resource_type().as_str() != "User" {
+            return Err(VolumeLocalError::InvalidSpec);
+        }
+        Ok(self.uid)
+    }
+
+    fn resolve_group(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+        if reference.resource_type().as_str() != "User" {
+            return Err(VolumeLocalError::InvalidSpec);
+        }
+        Ok(self.gid)
+    }
+}
 
 fn volume_uid() -> ResourceUid {
     ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").expect("volume uid")
@@ -314,6 +353,50 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     .expect("ready marker evidence");
     assert!(ready.present);
     assert!(ready.zero_length);
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn broker_owned_final_symlink_is_observed_without_metadata_repair() {
+    let base = std::path::PathBuf::from(
+        std::env::var_os("CARGO_TARGET_TMPDIR").unwrap_or_else(|| "target/u7-volume-tests".into()),
+    )
+    .join(format!("final-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("meta/generations")).expect("metadata directories");
+    std::os::unix::fs::symlink("generations/0", base.join("meta/current"))
+        .expect("broker current symlink");
+
+    let uid = volume_uid();
+    let inner = FdRootResolver::new(std::fs::File::open(&base).expect("open root"), uid.clone())
+        .expect("root resolver");
+    let resolver = FixedPrincipalResolver {
+        inner,
+        uid: 0,
+        gid: 0,
+    };
+    let adapter = AnchoredVolumeEffectAdapter::new(resolver);
+    let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
+    let declared = spec
+        .layout()
+        .iter()
+        .find(|entry| entry.path() == "meta/current")
+        .expect("current layout entry");
+    let entry = EntryRequest::resolve(&uid, declared).expect("entry request");
+    let root = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+        &uid,
+        spec.source().settings().source_policy_id(),
+        spec.source().settings().system_artifact_id(),
+        spec.source().settings().kind(),
+    ))
+    .expect("resolve root");
+
+    let observed = d2b_provider_volume_local::testing::block_on(adapter.observe(&root, &entry))
+        .expect("observe final symlink");
+    assert!(observed.present);
+    assert!(observed.drift.is_empty());
+    assert!(base.join("meta/current").is_symlink());
+
     let _ = std::fs::remove_dir_all(base);
 }
 

@@ -555,15 +555,17 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             if !entry_type_matches(stat.st_mode, entry.entry_type()) {
                 drift.insert(DriftClass::EntryType);
             }
-            let owner = self
-                .resolver
-                .resolve_principal(entry.declared().owner_ref())?;
-            let group = self.resolver.resolve_group(entry.declared().group_ref())?;
-            if stat.st_uid != owner || stat.st_gid != group {
-                drift.insert(DriftClass::Owner);
-            }
-            if (stat.st_mode as u32 & 0o777) != parse_mode(entry.declared().mode())? {
-                drift.insert(DriftClass::Mode);
+            if entry.entry_type() != EntryType::Symlink {
+                let owner = self
+                    .resolver
+                    .resolve_principal(entry.declared().owner_ref())?;
+                let group = self.resolver.resolve_group(entry.declared().group_ref())?;
+                if stat.st_uid != owner || stat.st_gid != group {
+                    drift.insert(DriftClass::Owner);
+                }
+                if (stat.st_mode as u32 & 0o777) != parse_mode(entry.declared().mode())? {
+                    drift.insert(DriftClass::Mode);
+                }
             }
             if entry.has_acl() {
                 drift.insert(DriftClass::Acl);

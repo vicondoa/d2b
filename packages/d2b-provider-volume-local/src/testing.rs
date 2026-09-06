@@ -326,6 +326,7 @@ pub mod fixtures {
         let mut current = owned("meta/current", "symlink", "0777");
         current["target"] = json!("generations/0");
         current["noFollow"] = json!(false);
+        current["repairPolicy"] = json!("none");
         let mut lock = owned("sync.lock", "file", "0640");
         lock["cleanupPolicy"] = json!("never");
         parse(json!({

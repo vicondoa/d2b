@@ -150,6 +150,9 @@
   resource passes without weakening their retry or readiness behavior.
 - Provisioned the daemon-owned volume-local marker root through host tmpfiles
   and resolved it from the daemon's authoritative state root.
+- Kept broker-owned StoreView current pointers observer-only at the final
+  symlink boundary, so VolumeLocal does not attempt an unsafe metadata repair
+  through a symlink while parent traversal remains fail-closed.
 
 ### Removed
 
