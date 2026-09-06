@@ -46,6 +46,7 @@
     "d2b-provider-system-core",
     "d2b-provider-system-minijail",
     "d2b-provider-system-systemd",
+    "d2b-provider-test-controller",
     "d2b-provider-toolkit",
     "d2b-provider-transport-azure-relay",
     "d2b-provider-transport-unix",
@@ -67,7 +68,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "22706e370640313fc3cd348f66c980435d73274b07547b73368774d38421af4e",
+  "lock_sha256": "4a69a46062f6c7321d5d7636b9fa6fbafab1f1615f28dc38577bf0d5aae5b498",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -848,6 +849,14 @@
     {
       "id": "d2b-provider-system-systemd@0.0.0-bootstrap#path",
       "name": "d2b-provider-system-systemd",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "d2b-provider-test-controller@0.0.0-bootstrap#path",
+      "name": "d2b-provider-test-controller",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -4481,6 +4490,12 @@
     },
     {
       "from": "d2b-provider-credential-entra@0.0.0-bootstrap#path",
+      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "proc-macro",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-credential-entra@0.0.0-bootstrap#path",
       "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -4517,6 +4532,12 @@
     },
     {
       "from": "d2b-provider-credential-managed-identity@0.0.0-bootstrap#path",
+      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "proc-macro",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-credential-managed-identity@0.0.0-bootstrap#path",
       "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -4549,6 +4570,12 @@
       "from": "d2b-provider-credential-managed-identity@0.0.0-bootstrap#path",
       "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-credential-secret-service@0.0.0-bootstrap#path",
+      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "proc-macro",
       "target": null
     },
     {
@@ -5339,6 +5366,36 @@
     },
     {
       "from": "d2b-provider-system-systemd@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-test-controller@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-test-controller@0.0.0-bootstrap#path",
+      "to": "d2b-core-controller@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-test-controller@0.0.0-bootstrap#path",
+      "to": "d2b-session-unix@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-test-controller@0.0.0-bootstrap#path",
+      "to": "d2b-session@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-test-controller@0.0.0-bootstrap#path",
       "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null

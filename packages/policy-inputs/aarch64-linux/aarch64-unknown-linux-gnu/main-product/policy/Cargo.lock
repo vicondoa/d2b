@@ -1157,6 +1157,7 @@ dependencies = [
 name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1170,6 +1171,7 @@ dependencies = [
 name = "d2b-provider-credential-managed-identity"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1183,12 +1185,16 @@ dependencies = [
 name = "d2b-provider-credential-secret-service"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
  "serde_json",
  "tokio",
+ "ttrpc",
 ]
 
 
@@ -1444,6 +1450,18 @@ dependencies = [
  "d2b-provider-toolkit",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+
+[[package]]
+name = "d2b-provider-test-controller"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "d2b-session",
+ "d2b-session-unix",
  "tokio",
 ]
 
