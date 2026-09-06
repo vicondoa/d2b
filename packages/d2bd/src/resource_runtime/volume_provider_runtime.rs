@@ -484,11 +484,19 @@ impl DaemonVolumeProviderEffects {
                 "resource": status_resource
             }
         });
-        CanonicalJsonValue::parse(
+        let canonical = CanonicalJsonValue::parse(
             &serde_json::to_vec(&value).map_err(|_| SharedVolumeEffectError::InvalidResource)?,
         )
         .map(|value| value.to_canonical_bytes())
-        .map_err(|_| SharedVolumeEffectError::InvalidResource)
+        .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        if let Err(error) = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical) {
+            tracing::warn!(
+                resource = %target.to_canonical_string(),
+                error = %error,
+                "U7 child payload failed local envelope validation",
+            );
+        }
+        Ok(canonical)
     }
 
     fn owned_intent(

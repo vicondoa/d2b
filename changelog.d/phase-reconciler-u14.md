@@ -181,6 +181,8 @@
 - Added non-secret Resource API envelope-validation diagnostics for malformed
   create payloads so typed child admission failures identify their contract
   class before redaction.
+- Added matching U7 local envelope validation diagnostics to distinguish child
+  payload construction drift from Resource API admission drift.
 
 ### Removed
 
