@@ -1278,11 +1278,7 @@ impl DaemonVolumeRootResolver {
             let response = self.sync_store_view(guest_ref, intent, generation_token)?;
             let farm_path =
                 self.validate_store_sync_response(intent, generation_token, &response)?;
-            let live_root = farm_path.join("live");
-            if intent.target_view_path.parent() != Some(live_root.as_path()) {
-                return Err(self.source_unresolved("store-view-target"));
-            }
-            let file = open_anchored_directory(&intent.target_view_path)
+            let file = open_anchored_directory(&farm_path)
                 .map_err(|_| self.source_unresolved("store-view-system-open"))?;
             let marker_root = self.marker_root()?;
             return Ok(

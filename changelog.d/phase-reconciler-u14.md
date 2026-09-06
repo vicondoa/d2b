@@ -157,8 +157,9 @@
   descriptor, identity, closure-root, and StoreSync mismatches remain
   distinguishable during host acceptance.
 - Resolved controller-owned system Volumes from the broker-validated Guest
-  StoreView target after StoreSync, avoiding unsafe cross-mount traversal of
-  the host Nix store while retaining closure identity and generation fences.
+  StoreView farm after StoreSync, avoiding unsafe cross-mount traversal of the
+  host Nix store while retaining a writable lock root and closure identity and
+  generation fences.
 
 ### Removed
 
