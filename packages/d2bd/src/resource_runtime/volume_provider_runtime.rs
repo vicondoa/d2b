@@ -489,7 +489,14 @@ impl DaemonVolumeProviderEffects {
         )
         .map(|value| value.to_canonical_bytes())
         .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        if let Err(error) = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical) {
+        let mut validation_value = value;
+        validation_value["metadata"]["uid"] =
+            serde_json::Value::String("00000000-0000-4000-8000-000000000000".to_owned());
+        let validation_bytes = serde_json::to_vec(&validation_value)
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        if let Err(error) =
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&validation_bytes)
+        {
             tracing::warn!(
                 resource = %target.to_canonical_string(),
                 error = %error,

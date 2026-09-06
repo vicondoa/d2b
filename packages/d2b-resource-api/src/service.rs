@@ -3474,4 +3474,75 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn qualified_export_child_envelope_has_a_valid_status_projection() {
+        let mut value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "virtiofs.d2bus.org.Export",
+            "metadata": {
+                "name": "vol-export-test",
+                "zone": "work",
+                "uid": "00000000-0000-4000-8000-000000000000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": "Volume/store-view-work-vm",
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "controller"
+            },
+            "spec": {
+                "providerRef": "Provider/volume-virtiofs",
+                "volumeRef": "Volume/store-view-work-vm",
+                "executionRef": "Guest/work-vm",
+                "view": "ro-store",
+                "access": "read-only",
+                "mountPath": "/nix/.ro-store",
+                "provider": {
+                    "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
+                    "schemaVersion": "1.0",
+                    "settings": {}
+                }
+            },
+            "status": {
+                "observedGeneration": 0,
+                "phase": "Pending",
+                "conditions": [],
+                "lastReconciledAt": null,
+                "startedAt": null,
+                "completedAt": null,
+                "outcome": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                },
+                "resource": {
+                    "exportReady": false,
+                    "guestMountReady": false
+                }
+            }
+        });
+        let bytes = serde_json::to_vec(&value).expect("Export envelope serializes");
+        assert!(
+            ResourceEnvelope::from_json(&bytes).is_ok(),
+            "qualified Export envelope must parse: {value}"
+        );
+        value["metadata"]["uid"] = serde_json::Value::Null;
+        assert!(
+            ResourceEnvelope::from_json(
+                &serde_json::to_vec(&value).expect("UID-less Export envelope serializes")
+            )
+            .is_err()
+        );
+    }
 }
