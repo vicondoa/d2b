@@ -196,6 +196,7 @@
 - Preserved finalized Guest controllers until their owned child resources
   finish draining, and counted reconciliation attempts before guard
   acquisition for contention coverage.
+- Removed UID-bearing debug formatting from a redb test failure diagnostic.
 
 ### Removed
 

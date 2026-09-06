@@ -6123,13 +6123,9 @@ mod tests {
                 assigned_finalizers,
                 uid.clone(),
             )],
-        )
-        .unwrap();
-        assert!(
-            assigned.results[0].is_ok(),
-            "assignment install failed: {:?}",
-            assigned.results[0]
-        );
+            )
+            .unwrap();
+            assert!(assigned.results[0].is_ok(), "assignment install failed");
 
         let mut unassigned_status = create_mutation(target.clone());
         unassigned_status.kind = ResourceMutationKind::UpdateStatus;
