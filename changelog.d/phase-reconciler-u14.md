@@ -173,6 +173,8 @@
   from authorization and integrity failures.
 - Included the typed Resource API rejection reason in U7 diagnostics; the
   reason is a non-secret schema/authorization classification, not payload data.
+- Initialized the qualified virtiofs Export child status with its required
+  typed readiness projection before the Resource API create.
 
 ### Removed
 

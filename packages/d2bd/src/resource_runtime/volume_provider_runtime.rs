@@ -436,6 +436,16 @@ impl DaemonVolumeProviderEffects {
         owner: &ResourceRef,
         spec: Value,
     ) -> Result<Vec<u8>, SharedVolumeEffectError> {
+        let status_resource = if target.resource_type().as_str()
+            == d2b_provider_volume_virtiofs::EXPORT_RESOURCE_TYPE
+        {
+            json!({
+                "exportReady": false,
+                "guestMountReady": false,
+            })
+        } else {
+            json!({})
+        };
         let value = json!({
             "apiVersion": "resources.d2bus.org/v3",
             "type": target.resource_type().as_str(),
@@ -471,7 +481,7 @@ impl DaemonVolumeProviderEffects {
                     "state": "Unknown",
                     "targetGeneration": 1
                 },
-                "resource": {}
+                "resource": status_resource
             }
         });
         CanonicalJsonValue::parse(
@@ -2187,5 +2197,35 @@ mod tests {
             d2b_provider_volume_virtiofs::ExportPhase::Pending
         );
         assert!(report.worker_process_ref.is_none());
+    }
+
+    #[test]
+    fn export_child_payload_starts_with_typed_status_projection() {
+        let zone = ZoneId::parse("work").expect("Zone");
+        let target = ResourceRef::parse("virtiofs.d2bus.org.Export/vol-export-test")
+            .expect("Export ref");
+        let owner = ResourceRef::parse("Volume/store-view-work-vm").expect("Volume ref");
+        let canonical = DaemonVolumeProviderEffects::child_resource(
+            &zone,
+            &target,
+            &owner,
+            json!({
+                "providerRef": "Provider/volume-virtiofs",
+                "volumeRef": owner.to_canonical_string(),
+                "executionRef": "Guest/work-vm",
+                "view": "ro-store",
+                "access": "read-only",
+                "mountPath": "/nix/.ro-store",
+                "provider": {
+                    "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
+                    "schemaVersion": "1.0",
+                    "settings": {}
+                }
+            }),
+        )
+        .expect("Export child payload");
+        let value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
+        assert_eq!(value["status"]["resource"]["exportReady"], false);
+        assert_eq!(value["status"]["resource"]["guestMountReady"], false);
     }
 }
