@@ -513,6 +513,42 @@ impl DaemonVolumeProviderEffects {
                     "U7 child payload serde validation detail",
                 );
             }
+            if let Some(metadata) = validation_value.get("metadata")
+                && let Err(error) =
+                    serde_json::from_value::<d2b_contracts_resource::v3::ResourceMetadata>(
+                        metadata.clone(),
+                    )
+            {
+                tracing::warn!(
+                    resource = %target.to_canonical_string(),
+                    serde_error = %error,
+                    "U7 child metadata validation detail",
+                );
+            }
+            if let Some(spec) = validation_value.get("spec")
+                && let Err(error) =
+                    serde_json::from_value::<d2b_contracts_resource::v3::ResourceSpec>(
+                        spec.clone(),
+                    )
+            {
+                tracing::warn!(
+                    resource = %target.to_canonical_string(),
+                    serde_error = %error,
+                    "U7 child spec validation detail",
+                );
+            }
+            if let Some(status) = validation_value.get("status")
+                && let Err(error) =
+                    serde_json::from_value::<d2b_contracts_resource::v3::ResourceStatus>(
+                        status.clone(),
+                    )
+            {
+                tracing::warn!(
+                    resource = %target.to_canonical_string(),
+                    serde_error = %error,
+                    "U7 child status validation detail",
+                );
+            }
         }
         Ok(canonical)
     }
