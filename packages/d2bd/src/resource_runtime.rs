@@ -15542,7 +15542,15 @@ impl ZoneResourceRuntime {
                 providers: state
                     .provider_runtime
                     .process_providers()
-                    .ok_or(ResourceRuntimeError::ProviderPathUnavailable)?,
+                    .ok_or_else(|| {
+                        tracing::warn!(
+                            zone = %self.zone.as_str(),
+                            guest = %guest_ref.name().as_str(),
+                            stage = "process-providers",
+                            "Cloud Hypervisor reconcile stage failed",
+                        );
+                        ResourceRuntimeError::ProviderPathUnavailable
+                    })?,
                 guest_sessions: Arc::clone(&state.guest_component_sessions),
                 closed_guest_sessions: Arc::clone(&self.closed_guest_sessions),
                 zone: self.zone.clone(),
@@ -15576,7 +15584,16 @@ impl ZoneResourceRuntime {
             controller
                 .register()
                 .await
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        guest = %guest_ref.name().as_str(),
+                        stage = "controller-register",
+                        error = ?error,
+                        "Cloud Hypervisor reconcile stage failed",
+                    );
+                    ResourceRuntimeError::AuthenticationUnavailable
+                })?;
             if let Err(error) = controller.reconcile(&guest_ref).await {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
@@ -15604,11 +15621,21 @@ impl ZoneResourceRuntime {
                 continue;
             }
             self.reconcile_cloud_hypervisor_setup_volume(&state, &guest_ref)
-                .await?;
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        guest = %guest_ref.name().as_str(),
+                        stage = "setup-volume",
+                        error = ?error,
+                        "Cloud Hypervisor reconcile stage failed",
+                    );
+                })?;
             controller.reconcile(&guest_ref).await.map_err(|error| {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
                     guest = %guest_ref.name().as_str(),
+                    stage = "post-setup-controller-reconcile",
                     error = %error,
                     "Cloud Hypervisor Guest post-setup reconcile refused",
                 );
@@ -15622,7 +15649,16 @@ impl ZoneResourceRuntime {
                 );
             }
             self.reconcile_cloud_hypervisor_endpoints(&guest_ref)
-                .await?;
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        guest = %guest_ref.name().as_str(),
+                        stage = "endpoint-publication",
+                        error = ?error,
+                        "Cloud Hypervisor reconcile stage failed",
+                    );
+                })?;
             match crate::resolve_committed_guest_session_target(self, &guest_ref).await {
                 Ok(target) => {
                     if let Err(error) =
@@ -15645,6 +15681,7 @@ impl ZoneResourceRuntime {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
                     guest = %guest_ref.name().as_str(),
+                    stage = "post-process-controller-reconcile",
                     error = %error,
                     "Cloud Hypervisor Guest post-Process reconcile refused",
                 );

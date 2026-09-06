@@ -160,6 +160,9 @@
   StoreView farm after StoreSync, avoiding unsafe cross-mount traversal of the
   host Nix store while retaining a writable lock root and closure identity and
   generation fences.
+- Added stage-specific U6 Cloud Hypervisor reconcile diagnostics for
+  registration, setup Volume, endpoint publication, and post-controller
+  passes.
 
 ### Removed
 
