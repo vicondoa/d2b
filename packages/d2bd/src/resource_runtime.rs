@@ -780,6 +780,8 @@ impl SharedProviderEffectResult {
 /// Closed failure surface for shared Provider adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedProviderEffectError {
+    /// Cleanup is progressing and the owner should be re-entered.
+    Pending,
     /// The Provider path is not currently available and should retry.
     Unavailable,
     /// Fresh resource or assignment evidence failed closed.
@@ -789,6 +791,7 @@ pub(crate) enum SharedProviderEffectError {
 impl core::fmt::Display for SharedProviderEffectError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Pending => "shared-provider-effect-pending",
             Self::Unavailable => "shared-provider-effect-unavailable",
             Self::InvalidResource => "shared-provider-resource-invalid",
         })
@@ -3573,7 +3576,13 @@ impl DaemonSharedProviderEffects {
         kind: SharedProviderResourceKind,
         context: &SharedProviderEffectContext,
         resource: &ResourceSnapshot,
-    ) -> Result<bool, SharedProviderEffectError> {
+    ) -> Result<
+        (
+            bool,
+            (ResourceRef, ResourceUid, u64, u64, u64, u64),
+        ),
+        SharedProviderEffectError,
+    > {
         let value = self
             .guest_provider_resource(kind, context, resource)
             .await?;
@@ -3669,9 +3678,9 @@ impl DaemonSharedProviderEffects {
         }
         let complete = !controller.finalizer_installed();
         if complete {
-            controllers.remove(&key);
+            return Ok((true, key));
         }
-        Ok(complete)
+        Ok((false, key))
     }
 
     async fn reconcile_guest_runtime(
@@ -3848,19 +3857,20 @@ impl DaemonSharedProviderEffects {
             return Ok(());
         }
         let runtime = self.runtime()?;
-        if !self
+        let (complete, controller_key) = self
             .finalize_guest_controller(kind, context, resource)
-            .await?
-        {
-            return Err(SharedProviderEffectError::Unavailable);
+            .await?;
+        if !complete {
+            return Err(SharedProviderEffectError::Pending);
         }
-        match self
-            .guest_child_progress(&runtime, resource, None)
-            .await?
-        {
-            OneOwnedChildProgress::Converged => Ok(()),
+        let child_progress = self.guest_child_progress(&runtime, resource, None).await?;
+        match child_progress {
+            OneOwnedChildProgress::Converged => {
+                self.guest_controllers.lock().await.remove(&controller_key);
+                Ok(())
+            }
             OneOwnedChildProgress::Mutated | OneOwnedChildProgress::Pending => {
-                Err(SharedProviderEffectError::Unavailable)
+                Err(SharedProviderEffectError::Pending)
             }
         }
     }
@@ -7982,14 +7992,35 @@ impl ResourceReconciler for SharedProviderResourceReconciler {
             ));
         }
         let finalizer = self.descriptor.finalizers().first().cloned();
-        self.effects
+        match self
+            .effects
             .finalize(
                 self.kind,
                 &self.effect_context(context),
                 deleting_resource,
             )
             .await
-            .map_err(SharedProviderReconcileError::Effect)?;
+        {
+            Ok(()) => {}
+            Err(SharedProviderEffectError::Pending) => {
+                return ReconcileResult::new(
+                    deleting_resource.revision(),
+                    deleting_resource.generation(),
+                    None,
+                    None,
+                    ReconcileDisposition::RequeueAt,
+                    Some(
+                        context
+                            .now_tick()
+                            .saturating_add(SHARED_PROVIDER_PROGRESS_REQUEUE_TICKS),
+                    ),
+                    None,
+                    StatusPersistence::NotRequested,
+                )
+                .map_err(|_| SharedProviderReconcileError::InvalidResource);
+            }
+            Err(error) => return Err(SharedProviderReconcileError::Effect(error)),
+        }
         let Some(finalizer) = finalizer else {
             return Ok(ReconcileResult::converged(
                 deleting_resource.revision(),
@@ -16988,6 +17019,8 @@ impl ControllerSessionCoordinator {
         providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
         establish: bool,
     ) -> Result<(), ResourceRuntimeError> {
+        #[cfg(test)]
+        self.reconcile_attempts.fetch_add(1, Ordering::SeqCst);
         let _session_guard = self.controller_session_lock.lock().await;
         self.reconcile_controller_sessions_locked(providers, establish)
             .await
@@ -16998,8 +17031,6 @@ impl ControllerSessionCoordinator {
         providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
         establish: bool,
     ) -> Result<(), ResourceRuntimeError> {
-        #[cfg(test)]
-        self.reconcile_attempts.fetch_add(1, Ordering::SeqCst);
         self.fence(&providers).await?;
         if !establish {
             self.refresh_controller_policy(&providers).await?;

@@ -20,6 +20,7 @@ const NON_PROVIDER_PREFIXED: &[&str] = &[
     "d2b-provider",
     "d2b-provider-config-nixos",
     "d2b-provider-supervisor",
+    "d2b-provider-test-controller",
     "d2b-provider-toolkit",
 ];
 

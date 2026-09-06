@@ -191,6 +191,11 @@
   the realised artifact catalog now consumes closure files at build time.
 - Updated the realised Provider catalog determinism check to read the
   authoritative catalog artifact during its build step.
+- Classified the test-only Provider controller crate outside the production
+  Provider matrix.
+- Preserved finalized Guest controllers until their owned child resources
+  finish draining, and counted reconciliation attempts before guard
+  acquisition for contention coverage.
 
 ### Removed
 
