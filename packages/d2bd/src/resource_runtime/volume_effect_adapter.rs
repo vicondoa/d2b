@@ -34,7 +34,7 @@ use rustix::{
 use d2b_contracts_resource::v3::{
     ResourceRef, ResourceUid, SchemaFingerprint, SchemaVersion, VolumeStateSchemaId,
     execution_policy::BoundedToken,
-    volume::{EntryType, SourceKind},
+    volume::{EntryType, RepairPolicy, SourceKind},
 };
 
 use d2b_provider_volume_local::{
@@ -555,7 +555,9 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             if !entry_type_matches(stat.st_mode, entry.entry_type()) {
                 drift.insert(DriftClass::EntryType);
             }
-            if entry.entry_type() != EntryType::Symlink {
+            let observer_only_symlink = entry.entry_type() == EntryType::Symlink
+                && entry.repair_policy() == RepairPolicy::None;
+            if !observer_only_symlink {
                 let owner = self
                     .resolver
                     .resolve_principal(entry.declared().owner_ref())?;
