@@ -1184,6 +1184,61 @@ impl DaemonVolumeRootResolver {
         d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
     }
 
+    fn sync_store_view(
+        &self,
+        guest_ref: &ResourceRef,
+        intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
+        generation_token: u32,
+    ) -> Result<
+        d2b_contracts_broker::broker_wire::StoreSyncResponse,
+        d2b_provider_volume_local::VolumeLocalError,
+    > {
+        let response = crate::dispatch_broker_request_as(
+            &self.state,
+            d2b_contracts_broker::broker_wire::BrokerRequest::StoreSync(
+                d2b_contracts_broker::broker_wire::StoreSyncRequest {
+                    vm_id: d2b_contracts::types::VmId::new(guest_ref.name().as_str()),
+                    bundle_closure_ref: d2b_contracts::types::BundleClosureRef::new(
+                        intent.intent_id.clone(),
+                    ),
+                    generation_token,
+                    tracing_span_id: None,
+                },
+            ),
+            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        )
+        .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
+        match response {
+            d2b_contracts_broker::broker_wire::BrokerResponse::StoreSync(response) => Ok(response),
+            _ => Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed),
+        }
+    }
+
+    fn validate_store_sync_response(
+        &self,
+        intent: &d2b_core::bundle_resolver::ResolvedStoreViewIntent,
+        generation_token: u32,
+        response: &d2b_contracts_broker::broker_wire::StoreSyncResponse,
+    ) -> Result<PathBuf, d2b_provider_volume_local::VolumeLocalError> {
+        let expected_generation_id = d2b_host::hardlink_farm::generation_id(
+            &intent.closure_paths,
+            d2b_host::hardlink_farm::system_store_path(&intent.closure_paths),
+        );
+        let farm_path = PathBuf::from(&response.hardlink_farm_path);
+        if response.vm != intent.vm
+            || response.generation_id != expected_generation_id
+            || response.generation_token != generation_token
+            || response.closure_count
+                != u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX)
+            || farm_path != intent.hardlink_farm_path
+        {
+            return Err(self.source_unresolved("store-sync-response"));
+        }
+        Ok(farm_path)
+    }
+
     fn resolve_nix_closure_root(
         &self,
         system_artifact_id: &BoundedToken,
@@ -1220,10 +1275,15 @@ impl DaemonVolumeRootResolver {
         let generation_token = u32::try_from(intent.generation)
             .map_err(|_| self.source_unresolved("store-view-generation"))?;
         if self.nix_closure_role == Some(NixClosureVolumeRole::SystemVolume) {
-            let system_path = d2b_host::hardlink_farm::system_store_path(&intent.closure_paths)
-                .ok_or_else(|| self.source_unresolved("system-store-path"))?;
-            let file = open_anchored_directory(system_path)
-                .map_err(|_| self.source_unresolved("system-store-open"))?;
+            let response = self.sync_store_view(guest_ref, intent, generation_token)?;
+            let farm_path =
+                self.validate_store_sync_response(intent, generation_token, &response)?;
+            let live_root = farm_path.join("live");
+            if intent.target_view_path.parent() != Some(live_root.as_path()) {
+                return Err(self.source_unresolved("store-view-target"));
+            }
+            let file = open_anchored_directory(&intent.target_view_path)
+                .map_err(|_| self.source_unresolved("store-view-system-open"))?;
             let marker_root = self.marker_root()?;
             return Ok(
                 ResolvedVolumeRoot::new(file, self.volume_uid.clone())?
@@ -1231,41 +1291,8 @@ impl DaemonVolumeRootResolver {
                     .with_preexisting_state(),
             );
         }
-        let response = crate::dispatch_broker_request_as(
-            &self.state,
-            d2b_contracts_broker::broker_wire::BrokerRequest::StoreSync(
-                d2b_contracts_broker::broker_wire::StoreSyncRequest {
-                    vm_id: d2b_contracts::types::VmId::new(guest_ref.name().as_str()),
-                    bundle_closure_ref: d2b_contracts::types::BundleClosureRef::new(
-                        intent.intent_id.clone(),
-                    ),
-                    generation_token,
-                    tracing_span_id: None,
-                },
-            ),
-            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
-        )
-        .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
-        let response = match response {
-            d2b_contracts_broker::broker_wire::BrokerResponse::StoreSync(response) => response,
-            _ => return Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed),
-        };
-        let expected_generation_id = d2b_host::hardlink_farm::generation_id(
-            &intent.closure_paths,
-            d2b_host::hardlink_farm::system_store_path(&intent.closure_paths),
-        );
-        let farm_path = PathBuf::from(&response.hardlink_farm_path);
-        if response.vm != guest_ref.name().as_str()
-            || response.generation_id != expected_generation_id
-            || response.generation_token != generation_token
-            || response.closure_count
-                != u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX)
-            || farm_path != intent.hardlink_farm_path
-        {
-            return Err(self.source_unresolved("store-sync-response"));
-        }
+        let response = self.sync_store_view(guest_ref, intent, generation_token)?;
+        let farm_path = self.validate_store_sync_response(intent, generation_token, &response)?;
         let file = open_anchored_directory(&farm_path)
             .map_err(|_| self.source_unresolved("store-view-open"))?;
         let marker_root = self.marker_root()?;

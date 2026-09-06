@@ -156,6 +156,9 @@
 - Added non-sensitive stage diagnostics to U7 Volume source resolution so
   descriptor, identity, closure-root, and StoreSync mismatches remain
   distinguishable during host acceptance.
+- Resolved controller-owned system Volumes from the broker-validated Guest
+  StoreView target after StoreSync, avoiding unsafe cross-mount traversal of
+  the host Nix store while retaining closure identity and generation fences.
 
 ### Removed
 
