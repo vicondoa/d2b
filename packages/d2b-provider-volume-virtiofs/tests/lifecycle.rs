@@ -297,7 +297,7 @@ fn resource_export_spec_and_children_keep_one_qualified_owner() {
         "access": "read-only",
         "mountPath": "/nix/.ro-store",
         "provider": {
-            "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
+            "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
             "schemaVersion": "1.0",
             "settings": {}
         }

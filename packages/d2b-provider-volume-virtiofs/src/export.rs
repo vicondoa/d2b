@@ -186,7 +186,7 @@ impl ExportSpec {
             .and_then(serde_json::Value::as_object)
             .ok_or(VirtiofsExportError::InvalidExport)?;
         if provider.get("schemaId").and_then(serde_json::Value::as_str)
-            != Some("volume-virtiofs.d2bus.org/Export/spec")
+            != Some("volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec")
             || provider
                 .get("schemaVersion")
                 .and_then(serde_json::Value::as_str)

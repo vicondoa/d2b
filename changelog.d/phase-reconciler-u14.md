@@ -175,6 +175,9 @@
   reason is a non-secret schema/authorization classification, not payload data.
 - Initialized the qualified virtiofs Export child status with its required
   typed readiness projection before the Resource API create.
+- Bound virtiofs Export provider extensions to the qualified
+  `virtiofs.d2bus.org.Export` ResourceType so Resource API schema admission and
+  controller parsing use the same identity.
 
 ### Removed
 

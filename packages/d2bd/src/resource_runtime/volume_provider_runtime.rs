@@ -588,7 +588,7 @@ impl DaemonVolumeProviderEffects {
                 let access = serde_json::to_value(intent.access())
                     .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
                 let provider = json!({
-                    "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
+                    "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
                     "schemaVersion": "1.0",
                     "settings": serde_json::to_value(intent.settings())
                         .map_err(|_| SharedVolumeEffectError::InvalidResource)?
@@ -2217,7 +2217,7 @@ mod tests {
                 "access": "read-only",
                 "mountPath": "/nix/.ro-store",
                 "provider": {
-                    "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
+                    "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
                     "schemaVersion": "1.0",
                     "settings": {}
                 }
