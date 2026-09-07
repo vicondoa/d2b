@@ -8,7 +8,7 @@
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `d2b-provider-volume-virtiofs` crate, volume-virtiofs controller, virtiofsd worker, Export lifecycle |
+| Owners | `d2b-provider-volume-virtiofs` crate, volume-virtiofs controller, virtiofsd worker, VolumeBinding serving status projection |
 | Depends on | `ADR-046-resources-volume`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
 | Supersedes | `nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs` |
 | ADR 0021 | Accepted invariant; fully governs virtiofsd sandbox; no exception or partial closure permitted |
@@ -18,30 +18,32 @@
 ## 1. Purpose
 
 This dossier exhaustively specifies `Provider/volume-virtiofs` - the d2b v3 controller that
-declares and reconciles `virtiofs.d2bus.org.Export` resources and owns every virtiofsd worker
+reconciles `core.d2bus.org/VolumeBinding` resources and owns every virtiofsd worker
 Process. It is the authoritative reference for:
 
 - the crate/package/provider identity and required crate layout;
-- the `virtiofs.d2bus.org.Export` ResourceType owned by this Provider;
+- the `VolumeBinding` ResourceType reconciled by this Provider (minted by the Volume side);
 - the controller component descriptor and watch plan;
-- the virtiofsd worker Process template (owned by Export);
+- the virtiofsd worker Process template (owned by the binding);
 - the ADR 0021 broker-pre-established user-namespace invariant, enforced in full;
 - zero host capability classes and `startRoot: false`;
 - the `--sandbox=chroot` / `--inode-file-handles=never` / `--readonly` argv contract;
-- per-Export status, guest-mount readiness, export-socket privacy;
+- per-binding fenced status, guest-mount readiness, serving-socket privacy;
 - the store-view farm attachment;
-- Export lifecycle creation and deletion;
+- binding lifecycle creation and deletion;
 - Nix authoring, canonical ResourceSpec JSON, eval/build validation, and cleanup;
 - d2b-bus access and RBAC;
 - status/errors/audit/telemetry/performance budgets;
 - exact implementation work items, test file layout, and removal proofs.
 
-`Provider/volume-virtiofs` reconciles `virtiofs.d2bus.org.Export` resources only. It does not
-reconcile Volume resources directly. `Provider/volume-local` controls Volume resources
-(one controller per resource type). volume-local translates each
-`Volume.spec.attachments[transport=virtiofs]` entry into one owned Export resource;
-volume-virtiofs reconciles Export resources and creates the virtiofsd Process per Export;
-volume-local reads Export.status to aggregate `Volume.status.attachmentStatuses`.
+`Provider/volume-virtiofs` reconciles `core.d2bus.org/VolumeBinding` resources only. It does not
+reconcile Volume resources directly and never mints bindings. `Provider/volume-local` controls Volume
+resources (one controller per resource type). volume-local admits each
+`Volume.spec.attachments[transport=virtiofs]` entry and mints one durable `VolumeBinding` per
+Volume / execution-target / named-view relationship;
+volume-virtiofs reconciles bindings and creates the virtiofsd Process per binding;
+volume-local reads binding status (the one authorized cross-controller durable write, KTD3) to
+aggregate `Volume.status.attachmentStatuses`.
 
 Layout provisioning, ACL reconciliation, store management, and single-writer admission belong
 to `Provider/volume-local`.
@@ -57,26 +59,25 @@ to `Provider/volume-local`.
 | Provider resource name | `Provider/volume-virtiofs` |
 | `artifactId` key | `volume-virtiofs-provider` |
 | Package type | `provider` |
-| ResourceTypes declared | `VolumeBinding` (fenced serving status projection owner; the Volume side mints bindings), `virtiofs.d2bus.org.Export` (full attachment lifecycle owner until the clean break) |
-| ResourceTypes consumed/managed | `Volume` (read-only; status aggregated from binding readiness), `Process` (create/delete worker), `Endpoint` (create/delete exported endpoint child) |
+| ResourceTypes declared | `VolumeBinding` (fenced serving status projection owner; the Volume side mints bindings) |
+| ResourceTypes consumed/managed | `Volume` (read-only; status aggregated from binding readiness), `Process` (create/delete worker), `Endpoint` (create/delete binding endpoint child) |
 | Attachment transports owned | `virtiofs` |
-| Dependencies | `d2b-contracts` (v3 Export/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
+| Dependencies | `d2b-contracts` (v3 VolumeBinding/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
 | Prohibited imports | `d2bd`, `d2b-priv-broker` internals, `d2b-provider-volume-local`, any other Provider's implementation |
 
-**D089 desired-spec shape.** `Provider/volume-virtiofs` owns the
-`virtiofs.d2bus.org.Export` ResourceType base spec; base fields include
-`spec.providerRef`, `volumeRef`, `executionRef`, `view`, `access`, and
-`mountPath`. Virtiofs-only desired tunables are carried only in the canonical
-`spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
-`settings` object mirrors `status.provider.details`, is registered/signed in the
-Provider manifest, deny-unknown, bounded, versioned/digested, validated against
-`spec.providerRef` at Nix build and API admission, and cannot shadow base
-fields. Shared fields are promoted to the Export base. The Provider implements
-the exact base spec/status schema version/fingerprint, accepts the canonical
-minimal base Spec, passes base conformance, and rejects an
-unsupported optional base capability only via its signed capability matrix plus
-provider-neutral `unsupported-capability`.
-`spec.provider` aligns with `status.provider`. The `Provider` resource itself
+**D089 desired-spec shape.** `Provider/volume-virtiofs` reconciles the neutral
+`VolumeBinding` ResourceType registered in the canonical contract
+(`core.d2bus.org/VolumeBinding`); it does not own the binding base spec. Base fields are
+`volumeRef`, `executionRef`, `view`, `access`, and `mountPath`, minted and owned by the
+Volume side. The standard catalog admits no provider extension path for the type: the
+binding spec is strictly neutral, `deny-unknown`, and legacy provider-qualified schema ids
+(the pre-cutover Export spec id and the transitional `volume-virtiofs.d2bus.org/VolumeBinding/spec`)
+are rejected at admission — the structural gap the removed Export type hit. The Provider
+implements the exact signed binding status projection schema
+(`core.d2bus.org/VolumeBinding/status`), is the sole writer of that status (KTD3), passes
+base conformance, and rejects an unsupported optional base capability only via its signed
+capability matrix plus provider-neutral `unsupported-capability`. Virtiofs serving posture
+is frozen by the Provider (no binding-carried tunables; see §4.3). The `Provider` resource itself
 keeps the D075 `spec.{artifactId, config}` exception.
 
 ### Required crate layout
@@ -85,24 +86,24 @@ keeps the D075 `spec.{artifactId, config}` exception.
 packages/d2b-provider-volume-virtiofs/
   src/
     main.rs / lib.rs          controller binary entry point
-    controller.rs             volume-virtiofs-controller reconcile loop (Export-based)
-    export.rs                 Export ResourceType DTOs and lifecycle state machine
+    controller.rs             volume-virtiofs-controller reconcile loop (VolumeBinding-based)
+    bindings.rs               neutral VolumeBinding envelope DTOs and lifecycle state machine
+    worker.rs                 binding-owned virtiofsd worker plan (frozen serving posture)
+    port.rs                   VirtiofsBindingEffectPort seam and public binding status report
     virtiofsd_argv.rs         argv generation (reuse from d2b-host/src/virtiofsd_argv.rs)
-    socket_path.rs            private per-Export socket path derivation
-    readiness.rs              export socket and guest-mount readiness probes
+    socket_path.rs            private per-binding socket path derivation
+    readiness.rs              binding socket and guest-mount readiness probes
     user_ns.rs                ADR 0021 user-namespace conformance kit
-    metrics.rs                bounded telemetry labels
-    audit.rs                  volume-virtiofs audit record types
+    testing.rs                hermetic scripted effect-port doubles and canonical fixtures
     error.rs                  typed error catalog
     tests/                    (colocated unit tests - allowed by workspace policy)
   tests/
+    lifecycle.rs              VolumeBinding create / ready / delete / stale-fence lifecycle
     argv_golden.rs            migrated and extended virtiofsd_argv unit tests (≥14 tests)
-    export_lifecycle.rs       Export create / ready / delete lifecycle
     adr021_invariant.rs       ADR 0021 rejection tests
     single_writer.rs          single-writer admission gate (volume-local side)
-    shared_write.rs           shared-write capability gate
     readonly_flag.rs          --readonly per access mode
-    multi_attachment.rs       multi-Export process isolation
+    multi_binding.rs          multi-binding process isolation
     socket_path_privacy.rs    socket path never-in-status invariant
     schema_conformance.rs     ResourceType/controller/fault/redaction conformance
     fake_port.rs              fake-core/bus/supervisor seam tests
@@ -144,17 +145,18 @@ metadata:
   finalizers: []
 spec:
   artifactId: volume-virtiofs-provider
-  config: {}           # no root config; Export tunables live in spec.provider.settings
+  config: {}           # no root config; the serving posture is frozen by the Provider
 ```
 
-No root config is validated (empty `config: {}`). Every per-attachment option is declared
-inside the Export spec's `spec.provider.settings` object and validated against the
-Provider's signed spec settings schema at Nix eval time.
+No root config is validated (empty `config: {}`). The binding envelope is strictly
+neutral (KTD1) and carries no provider tuning: the virtiofs serving posture is the frozen
+default profile (§4.3), and Volume-side attachment options are declared in the Volume
+attachment `settings` object and validated against the Volume base schema at Nix eval time.
 
 Manifest-derived fields (loaded by core ProviderDeployment directly from the
 Provider's signed package manifest, never authored in Nix and never copied into
 the Provider resource row):
-- `exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
+- `resourceTypes`: declares `VolumeBinding` with its schema fingerprint;
 - `components`: describes the volume-virtiofs-controller component and the
   virtiofsd-worker template;
 - `dependencies`: lists required system Provider capabilities;
@@ -213,14 +215,14 @@ ProviderStateSet(zone, "volume-virtiofs") =
 
 `Provider/volume-virtiofs` declares **no** Provider state Volume; its
 `ProviderStateSet` is empty. The controller's authoritative reconcile state
-rests entirely in the Export and Volume resources in the resource store and in
+rests entirely in the VolumeBinding and Volume resources in the resource store and in
 the core Operation ledger; generation counters and adoption markers are not
 persisted in provider payload storage. Its bounded non-secret operational state -
 per-attachment reconcile stage, virtiofsd Process readiness observations,
 bounded counters, and closed-enum error detail - lives in the owning resource's
 `status` subresource and the core Operation ledger (D087).
 
-Because that operational state is fully derivable from the Export/Volume
+Because that operational state is fully derivable from the VolumeBinding/Volume
 resources, their `status`, the core Operation ledger, and independent external
 observation (running virtiofsd re-adopted from declared cgroup leaves and fresh
 pidfds), it fails the storage-need test: the controller declares no state
@@ -230,64 +232,59 @@ identity-only Volume, and the controller Process mounts no state Volume.
 
 ---
 
-## 4. Export ResourceType (`virtiofs.d2bus.org.Export`)
+## 4. VolumeBinding ResourceType (`core.d2bus.org/VolumeBinding`)
 
-### 4.1 What an Export is
+### 4.1 What a VolumeBinding is
 
-A `virtiofs.d2bus.org.Export` resource is the control-plane artifact that binds one virtiofs
-attachment declaration to one running virtiofsd Process. There is one Export per
-`Volume.spec.attachments[transport=virtiofs]` entry.
+A `VolumeBinding` resource is the neutral durable control-plane record of one Volume /
+execution-target / named-view virtiofs attachment relationship. There is one binding per
+Volume / execution-target / named-view relationship (KTD1); it carries the access mode and
+mount intent and nothing provider-specific.
 
-**Owner**: `volume-local` creates each Export when it observes a virtiofs attachment entry
-in a Volume it reconciles. The Export's `ownerRef` is the Volume.
+**Owner**: `volume-local` mints each binding when it admits a virtiofs attachment entry
+in a Volume it reconciles; deterministic binding identity is Volume-side (KTD1). The binding's
+`ownerRef` is the Volume, and admission rejects any create or update without a Volume owner
+reference. `volume-virtiofs` never mints bindings.
 
-**Controller**: `Provider/volume-virtiofs` reconciles Exports. It creates and manages the
-virtiofsd worker Process for each Export, updates Export status (exportReady, worker phase,
-guestMountReady), and owns the `volume-virtiofs.d2bus.org/export` finalizer on each Export.
+**Controller**: `Provider/volume-virtiofs` reconciles bindings. It creates and manages the
+virtiofsd worker Process for each binding, writes the fenced binding status projection
+(binding readiness, guest-mount readiness; sole authorized writer per KTD3), and owns the
+`volume-virtiofs.d2bus.org/volume-binding` finalizer on each binding.
 
-**Consumer**: `Provider/volume-local` reads Export status to populate
-`Volume.status.attachmentStatuses`. volume-local does not interpret Export internal state;
-it only consumes the public `exportReady` and `guestMountReady` booleans and the
-`workerProcessRef` for diagnostic linking.
+**Consumer**: `Provider/volume-local` reads binding status to populate
+`Volume.status.attachmentStatuses`. volume-local does not interpret binding internal state;
+it only consumes the fenced `bindingReady` and `guestMountReady` readiness and the
+`workerProcessRef` for diagnostic linking. Guest start is gated on current binding readiness
+(R15): a readiness report is current only when its UID, generation, and revision fence
+matches the stored binding — stale reports are never accepted as ready and fail closed.
 
-### 4.2 Export ResourceSpec
+### 4.2 VolumeBinding ResourceSpec
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
-type: virtiofs.d2bus.org.Export
+type: core.d2bus.org/VolumeBinding
 metadata:
   name: vol-work-state-x-work-vm
   zone: dev
   uid: <store-generated>
   generation: 1
   ownerRef: Volume/work-state
-  finalizers: [volume-virtiofs.d2bus.org/export]
+  finalizers: [volume-virtiofs.d2bus.org/volume-binding]
 spec:
-  providerRef: Provider/volume-virtiofs
   volumeRef: Volume/work-state
   executionRef: Guest/work-vm
   view: controller
   access: read-write          # read-only | read-write
   mountPath: /state
-  provider:
-    schemaId: volume-virtiofs.d2bus.org/Export/spec
-    schemaVersion: "1.0"
-    settings:
-      posixAcl: false
-      xattr: false
-      cache: auto
-      inodeFileHandles: never
-      threadPoolSize: null      # null → resolved from Guest vcpu count
-      socketGroup: null         # null → broker-default gid
 status:
   phase: Ready                # Pending|Ready|Degraded|Failed|Unknown
   resource:
-    exportReady: true         # export Endpoint resolvable and virtiofsd Process Ready
+    bindingReady: true        # fenced readiness: serving socket present and virtiofsd Process Ready
     guestMountReady: true     # guest-control probe returned MountReady
     endpointRef: Endpoint/vol-work-state-virtiofsd-work-vm
   provider:
     providerRef: Provider/volume-virtiofs
-    schemaId: volume-virtiofs.d2bus.org/Export/status
+    schemaId: core.d2bus.org/VolumeBinding/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -297,7 +294,7 @@ status:
       status: "True"
       reason: process-ready
       observedGeneration: 1
-    - type: ExportReady
+    - type: BindingReady
       status: "True"
       reason: socket-exists
       observedGeneration: 1
@@ -319,20 +316,27 @@ status:
     dependencies: { count: 0, refs: [] }
 ```
 
+The spec is strictly neutral (KTD1): `volumeRef`, `executionRef`, `view`, `access`, and
+`mountPath` only. There is no `spec.providerRef` and no `spec.provider` extension — the
+standard catalog admits no provider extension path for the type, and a `spec.provider`
+block under any schema id is rejected at admission.
+
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `volumeRef` | ResourceRef | Yes | - | `Volume/<name>` in same Zone; core verifies ownerRef consistency |
+| `volumeRef` | ResourceRef | Yes | - | `Volume/<name>` in same Zone; core verifies ownerRef consistency (Volume-owned) |
 | `executionRef` | ResourceRef | Yes | - | `Guest/<name>` in same Zone |
-| `view` | ViewName | Yes | - | Must exist in Volume's `views` map at Export create time |
+| `view` | ViewName | Yes | - | Must exist in Volume's `views` map at binding mint time |
 | `access` | enum | No | `read-only` | `read-only` or `read-write`; `shared-write` is not supported in v3.0 |
 | `mountPath` | absolute path | Yes | - | Guest-side mount path; no overlap with other mounts on same Guest |
-| `provider.settings.*` | see §4.3 | No | see §4.3 | Validated against Provider's signed Export spec settings schema |
 
-The Export references its visible exported endpoint through
-`status.resource.endpointRef` after the Endpoint child exists. Export remains
-the attachment lifecycle owner; consumers that need the stable endpoint use the
+Every binding mutation must be owned by an existing Volume: a create or update without a
+Volume owner reference is a direct external create and is rejected. The binding references
+its visible endpoint through `status.resource.endpointRef` after the Endpoint child exists.
+volume-virtiofs is the sole author of the binding status projection (KTD3): readiness is
+fenced by the binding's UID, generation, and revision — a stale report is never accepted
+as ready and fails closed — and consumers that need the stable endpoint use the
 `Endpoint/<name>` ref, while lifecycle, deletion, and guest-mount readiness stay
-on the Export.
+on the binding.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -340,14 +344,14 @@ type: Endpoint
 metadata:
   name: vol-work-state-virtiofsd-work-vm
   zone: dev
-  ownerRef: virtiofs.d2bus.org.Export/vol-work-state-x-work-vm
+  ownerRef: core.d2bus.org/VolumeBinding/vol-work-state-x-work-vm
 spec:
   providerRef: Provider/volume-virtiofs
   producerRef: Process/vol-work-state-virtiofsd-work-vm
   endpointClass: data
   transport: unix
-  purpose: volume-virtiofs.d2bus.org/export
-  serviceFingerprint: volume-virtiofs.d2bus.org/export.v1
+  purpose: virtiofs-binding
+  serviceFingerprint: volume-virtiofs.d2bus.org/volume-binding.v1
   locality: cross-domain
   visibility: zone
   attachmentPolicy: launch-ticket-only
@@ -380,14 +384,14 @@ status:
 
 ### Endpoint resources (D092)
 
-The exported virtiofs binding is a standard `Endpoint` child when it has visible
+The binding's exported virtiofs view is a standard `Endpoint` child when it has visible
 stable lifecycle and independent consumers. `Endpoint.spec` and
 `Endpoint.status` never contain the virtiofsd socket path, host path, guest
 mount path, CID, port, FD number, gid, or credential; authorized consumers
 resolve `Endpoint/<name>` only through the EffectPort/LaunchTicket path, and
 unauthorized callers receive `endpoint-resolve-denied`. Restarting the
 virtiofsd producer Process bumps `endpointGeneration`, causing consumers to see
-`dependency-changed`. The `virtiofs.d2bus.org.Export` resource still owns
+`dependency-changed`. The `VolumeBinding` resource still owns
 attachment lifecycle, finalizers, guest-mount readiness, and deletion ordering.
 
 ### Retained opaque handles (D092)
@@ -397,89 +401,105 @@ The private virtiofsd socket path, `VolumeMountToken`, per-session named stream,
 index, and `operationId` remain controller-internal or high-churn opaque handles
 under the promotion test. They are not `Endpoint` resources.
 
-### 4.3 `spec.provider.settings`
+### 4.3 Serving posture (no binding-carried tunables)
 
-| Field | Type | Default | Constraints |
-| --- | --- | --- | --- |
-| `posixAcl` | bool | `false` | Passes `--posix-acl`; omitted for store-view shares |
-| `xattr` | bool | `false` | Passes `--xattr` |
-| `cache` | enum | `auto` | `auto` \| `always` \| `never`; maps to `--cache=<mode>` |
-| `inodeFileHandles` | enum | `never` | `never` \| `prefer` \| `mandatory`; `never` is the only tested value in v3.0 |
-| `threadPoolSize` | int or null | `null` | `null` resolves to target Guest's declared vcpu count; range 1-256 |
-| `socketGroup` | int or null | `null` | `null` uses broker-default gid (vfd principal gid); explicit value must be authorized |
+The binding envelope is strictly neutral (KTD1): it carries no provider settings and the
+catalog defines no `spec.provider` extension for the type (any `spec.provider` block is
+rejected at admission). The virtiofs serving posture is frozen by the Provider:
+
+| Aspect | Frozen value | Effect |
+| --- | --- | --- |
+| POSIX ACLs | off | `--posix-acl` is never emitted |
+| Extended attributes | off | `--xattr` is never emitted |
+| Page cache | `auto` | `--cache=auto` |
+| Inode file handles | `never` | `--inode-file-handles=never`; the only tested value in v3.0 |
+| Thread pool size | target Guest's declared vcpu count | resolved at reconcile time; range 1-256 |
+| Socket group | broker-default gid | resolved at the effect boundary; never a binding field |
+
+Volume-side attachment options (`posixAcl`, `xattr`, `cache`, `threadPoolSize`,
+`inodeFileHandles`, `socketGroup`) remain typed fields of the Volume base attachment
+`settings` object; they are validated there at Nix eval time and never reach the binding
+spec or status.
 
 ---
 
-## 5. Volume-to-Export translation (volume-local responsibility)
+## 5. Volume attachment admission and binding minting (volume-local responsibility)
 
 `Provider/volume-local` is the sole controller for Volume resources. When volume-local
 reconciles a Volume and observes `attachments[*].transport == "virtiofs"` entries, it
-translates each such entry into one `virtiofs.d2bus.org.Export` resource:
+admits each entry and mints one durable `core.d2bus.org/VolumeBinding` per Volume /
+execution-target / named-view relationship (KTD1):
 
 ```text
 volume-local controller sees Volume spec with attachments[i].transport == "virtiofs"
-→ compute desired Export set: one Export per virtiofs attachment entry
-→ diff against existing Exports owned by this Volume (watch by ownerRef: Volume/<name>)
+→ compute desired binding set: one VolumeBinding per virtiofs attachment entry
+→ diff against existing bindings owned by this Volume (watch by ownerRef: Volume/<name>)
 → emit ResourceMutationBatch:
-    Create Export for each new attachment (managedBy: controller; ownerRef: Volume/<name>)
-    UpdateSpec Export for each changed attachment
-    Delete Export for each removed attachment
-→ set finalizer volume-local/virtiofs-attachments on Volume while any Export exists
-→ read Export.status (exportReady, guestMountReady) and aggregate into
+    Create VolumeBinding for each new attachment (managedBy: controller; ownerRef: Volume/<name>)
+    UpdateSpec VolumeBinding for each changed attachment
+    Delete VolumeBinding for each removed attachment
+→ set finalizer volume-local/virtiofs-attachments on Volume while any binding exists
+→ read binding.status (fenced bindingReady, guestMountReady) and aggregate into
     Volume.status.attachmentStatuses per attachment entry
 ```
 
 **Single-writer admission**: volume-local rejects the creation of a second `read-write`
-Export for the same Volume before emitting the Create. If a `read-write` Export already
+binding for the same Volume before emitting the Create. If a `read-write` binding already
 exists in `Ready` or `Pending` phase, volume-local writes `SingleWriterViolation: True` on
 the Volume and returns `ResourceConflict`. This is an admission gate, not a race: the
-constraint is enforced at translation time, not inside volume-virtiofs.
+constraint is enforced at minting time, not inside volume-virtiofs.
 
 **volume-virtiofs does not write Volume resources**. It reads Volume.spec (for view
-resolution and vcpu lookup) and receives Export specs to reconcile. Volume status is written
-only by volume-local (aggregated from Export statuses).
+resolution and vcpu lookup) and receives binding specs to reconcile. Volume status is written
+only by volume-local (aggregated from binding statuses).
 
 ---
 
-## 6. Export reconciliation (volume-virtiofs responsibility)
+## 6. Binding reconciliation (volume-virtiofs responsibility)
 
-### 6.1 Export reconcile loop
+### 6.1 Binding reconcile loop
 
-volume-virtiofs-controller watches `virtiofs.d2bus.org.Export` resources:
+volume-virtiofs-controller watches `core.d2bus.org/VolumeBinding` resources:
 
 ```text
-On spec-generation-changed for an Export:
-  1. Resolve View path from Volume.spec.views[Export.spec.view]
-     (read-only Volume Get via ResourceClient)
-  2. If store-view Export: check marker prerequisite (§9 step 4)
-  3. Resolve threadPoolSize from Guest.spec.vcpus if null
+On spec-generation-changed for a VolumeBinding:
+  1. Resolve View path from Volume.spec.views[binding.spec.view]
+     (read-only Volume Get via ResourceClient; dependency-only, never written)
+  2. If store-view binding: check marker prerequisite (§9 step 4)
+  3. Resolve threadPoolSize from Guest.spec.vcpus
   4. Ensure User/vol-<vol>-vfd exists (create if absent; ownerRef: Volume)
   5. Compute desired virtiofsd Process spec and Endpoint child spec
-  6. Diff against existing Process and Endpoint owned by this Export
-  7. Emit Create (or UpdateSpec) for the virtiofsd Process and exported Endpoint
-  8. Update Export.status: phase=Pending, WorkerReady=False, ExportReady=False,
-     endpointRef=Endpoint/<derived-name>
+  6. Diff against existing Process and Endpoint owned by this binding
+  7. Emit Create (or UpdateSpec) for the virtiofsd Process and binding Endpoint
+  8. Write the fenced binding status projection: phase=Pending, WorkerReady=False,
+     BindingReady=False, endpointRef=Endpoint/<derived-name>
 
-On owned-resource-changed (Process or Endpoint owned by Export):
-  1. If Process.status.phase == Ready → poll export socket existence (§readiness)
-  2. If socket present → set Endpoint.status.readiness=Ready and
-     Export.status.exportReady=true, WorkerReady=True
+On owned-resource-changed (Process or Endpoint owned by the binding):
+  1. If Process.status.phase == Ready → poll serving socket existence (§readiness)
+  2. If socket present → set Endpoint.status.readiness=Ready and write
+     BindingReady=True, WorkerReady=True under the binding's current fence (KTD3)
   3. If socket present → send guest-control MountReady? probe
-  4. If probe returns MountReady → set Export.status.guestMountReady=true
-  5. If probe returns MountAbsent or timeout → set guestMountReady=false; phase=Unknown
-  6. If Process.status.phase == Failed → set Export.status.phase=Failed and
+  4. If probe returns MountReady → write guestMountReady=true
+  5. If probe returns MountAbsent or timeout → write guestMountReady=false; phase=Unknown
+  6. If Process.status.phase == Failed → write phase=Failed with the stable reason (KTD5) and
      Endpoint.status.readiness=NotReady
 
-On deletionRequestedAt set on Export:
-  → Two-phase Export teardown (§6.2)
+On deletionRequestedAt set on the binding:
+  → Two-phase binding teardown (§6.2)
 ```
 
+Every readiness write carries the fence observed at reconcile time — the binding's UID,
+spec generation, and Zone-store revision — and the server side rejects a write whose fence
+no longer matches the stored binding or whose writer is not the virtiofs controller
+identity (KTD3). Terminal admission and reconcile failures surface a `Failed` phase with a
+stable reason instead of collapsing to `Pending` (KTD5).
+
 The controller never receives raw host paths, FDs, or broker authority. The Volume view root
-is provided to the virtiofsd Process at launch time by core, resolved from the signed Export
-spec and LaunchTicket - the virtiofs controller never handles FDs directly.
+is provided to the virtiofsd Process at launch time by core, resolved from the binding's
+referenced Volume view and LaunchTicket - the virtiofs controller never handles FDs directly.
 
 **Currency and upgrade (D091).** The controller implements `assess_update`,
-`plan_upgrade`, and `execute_upgrade` for Export attachments and populates only
+`plan_upgrade`, and `execute_upgrade` for virtiofs bindings and populates only
 the universal `status.update`, never `status.provider`, with
 `state: Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`,
 `reasons` from `CoreGenerationChanged`, `ProviderGenerationChanged`,
@@ -489,7 +509,7 @@ generation/digest IDs, `disruption: None|Reload|Restart|Recycle|Replace`,
 `preserveState`, optional `operationId`, `lastAssessedAt`, and
 `owned`/`dependencies` refs. It honors base `spec.updatePolicy` (manual
 disruptive default; auto non-disruptive), while the Core Operation ledger owns
-upgrade operation, idempotency, and progress. Disruptive attachment/Export
+upgrade operation, idempotency, and progress. Disruptive attachment/binding
 changes return `UpgradeRequired` rather than applying in place; the planner
 recycles the virtiofsd Process with `disruption: Recycle`, preserves the
 underlying source Volume data, and drains/restarts dependent Guest attachments.
@@ -506,40 +526,42 @@ and `statusPersistence: pending|committed`; effect idempotency keys derive from
 `(UID,generation,revision,operationId)` in the same per-resource single-flight
 using a bounded priority lane.
 
-### 6.2 Two-phase Export teardown
+### 6.2 Two-phase binding teardown
 
 ```text
 Phase 1 - virtiofsd Process teardown
-  Export.deletionRequestedAt set (by volume-local when attachment removed or Volume deleted)
+  VolumeBinding.deletionRequestedAt set (by volume-local when attachment removed or Volume deleted)
   → volume-virtiofs controller emits Delete for the owned virtiofsd Process
   → system-minijail (via injected effect port) sends SIGTERM; waits via pidfd
   → on process exit: store emits one Deleted revision event; row and index removed atomically
-  → export socket removed by virtiofsd on clean exit; controller cleanup on unclean exit
-  → controller sets Export.status: phase=Degraded, exportReady=false, workerProcessRef=null
+  → serving socket removed by virtiofsd on clean exit; controller cleanup on unclean exit
+  → controller writes binding status: phase=Degraded, bindingReady=false, workerProcessRef=null
 
-Phase 2 - guest mount absent confirmation
-  volume-virtiofs controller sends VirtioFsMountReady? probe to guest-control
+Phase 2 - guest mount absent confirmation and drain
+  volume-virtiofs controller drains the worker and private endpoint and waits while a
+  guest mount is still present (KTD6)
+  → volume-virtiofs controller sends VirtioFsMountReady? probe to guest-control
   → probe returns MountAbsent
-  → controller clears volume-virtiofs.d2bus.org/export finalizer on Export
-  → core emits Deleted revision event for Export; row and index removed atomically
-  → volume-local receives Export Deleted watch event
+  → controller clears volume-virtiofs.d2bus.org/volume-binding finalizer on the binding
+  → core emits Deleted revision event for the binding; row and index removed atomically
+  → volume-local receives binding Deleted watch event
   → volume-local updates Volume.status.attachmentStatuses (entry removed)
-  → when all Exports for a Volume are Deleted, volume-local clears
+  → when all bindings for a Volume are Deleted, volume-local clears
     volume-local/virtiofs-attachments finalizer, allowing Volume deletion to proceed
 ```
 
 The controller does not forcibly unmount guest filesystems. If the Guest is unreachable,
-the health probe times out and Export remains in `Degraded/Unknown` phase with the finalizer
+the health probe times out and the binding remains in `Degraded/Unknown` phase with the finalizer
 held. If Guest runner absence is positively proved via pidfd (mount namespace observably
 gone), the controller clears the finalizer with that proof in the audit record. If absence
 is ambiguous, the finalizer is held until proof arrives or a full Zone reset is performed.
 There is no time-based force-clear.
 
-### 6.3 Export creation concurrency
+### 6.3 Binding reconciliation concurrency
 
-Each Export's reconciliation is independent. Multiple Exports for the same Volume (different
-Guests) are reconciled concurrently. One Export's virtiofsd failure does not affect sibling
-Exports.
+Each binding's reconciliation is independent. Multiple bindings for the same Volume (different
+Guests) are reconciled concurrently. One binding's virtiofsd failure does not affect sibling
+bindings.
 
 ---
 
@@ -547,8 +569,8 @@ Exports.
 
 ### 7.1 Process resource shape
 
-Each Export owns exactly one virtiofsd Process resource. The resource is named
-`vol-<volume-name>-virtiofsd-<guest-name>` and carries `ownerRef: virtiofs.d2bus.org.Export/<export-name>`.
+Each binding owns exactly one virtiofsd Process resource. The resource is named
+`vol-<volume-name>-virtiofsd-<guest-name>` and carries `ownerRef: core.d2bus.org/VolumeBinding/<binding-name>`.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -558,7 +580,7 @@ metadata:
   zone: dev
   uid: <store-generated>
   generation: 1
-  ownerRef: virtiofs.d2bus.org.Export/vol-work-state-x-work-vm
+  ownerRef: core.d2bus.org/VolumeBinding/vol-work-state-x-work-vm
   finalizers: [system-minijail/process]
 spec:
   providerRef: Provider/system-minijail
@@ -603,13 +625,13 @@ never receives or sets these values.
 
 Private implementation data that lives exclusively in the LaunchTicket and effect port state,
 never in the Process spec, status, or any public surface:
-- the export socket path (derived in `socket_path.rs`; opaque in the signed LaunchTicket);
+- the serving socket path (derived in `socket_path.rs`; opaque in the signed LaunchTicket);
 - the cgroup subtree placement (assigned by ProviderSupervisor from executionRef and
   component placement template);
 - the `hostUid`/`hostGid` for the user-namespace single-entry mapping (resolved by
   system-minijail from the `User/vol-<vol>-vfd` principal at LaunchTicket build time);
-- the Volume View root directory reference (routed by core from the signed Export spec;
-  the virtiofsd controller never touches a file descriptor or host path).
+- the Volume View root directory reference (routed by core from the binding's referenced
+  Volume view; the virtiofsd controller never touches a file descriptor or host path).
 
 ### 7.2 ADR 0021 invariant: zero host capability classes and `startRoot: false`
 
@@ -688,11 +710,11 @@ mapping is necessary. That is out of v3.0 scope and requires a new ADR section a
 
 Each Volume that has at least one virtiofs attachment receives a dedicated system User
 resource `User/vol-<volume-name>-vfd`. The volume-virtiofs controller creates this User
-resource when reconciling the first Export for that Volume, if it does not already exist.
+resource when reconciling the first binding for that Volume, if it does not already exist.
 The User resource is owned by the Volume (`ownerRef: Volume/<name>`).
 
 The User resource provides the stable UID/GID that system-minijail resolves when building
-the LaunchTicket for the single-entry user namespace mapping and the export socket gid.
+the LaunchTicket for the single-entry user namespace mapping and the serving socket gid.
 
 The gctl share for guest-control (`d2b-gctl`) uses a separate narrower principal
 `User/vol-<vol>-gctlvfd`. The volume-virtiofs controller selects the principal by share type.
@@ -712,9 +734,8 @@ virtiofsd
   --sandbox=chroot
   --inode-file-handles=never
   --cache=<mode>
-  [--posix-acl]           # present only if Export.spec.provider.settings.posixAcl == true
-  [--xattr]               # present only if Export.spec.provider.settings.xattr == true
-  [--readonly]            # present only if access: read-only
+  # --posix-acl and --xattr are never emitted (frozen serving posture, §4.3)
+  [--readonly]            # present only if access: read-only or the View grants no write
 ```
 
 No `--sandbox=namespace` is ever emitted.
@@ -723,7 +744,7 @@ No free-form `extraArgs` pass-through is accepted; root config is empty.
 
 ### 8.2 `--socket-path` - private derived path
 
-The export socket path is a **private implementation detail of volume-virtiofs**. It is:
+The serving socket path is a **private implementation detail of volume-virtiofs**. It is:
 
 - derived deterministically as:
   ```text
@@ -733,15 +754,15 @@ The export socket path is a **private implementation detail of volume-virtiofs**
   concatenated canonical form `<zone-name>\x00<volume-name>\x00<guest-name>`.
 - no longer than 108 bytes (kernel `sun_path` limit);
 - under `/run/d2b/vms/<guest-name>/` (the Zone/Guest runtime directory);
-- never written to Export spec, Export status, process spec, process status, audit records,
+- never written to binding spec, binding status, process spec, process status, audit records,
   CLI output, telemetry labels, or log messages;
 - opaque in the LaunchTicket; the controller derives the socket path only to build argv,
   passing it as a sealed field in the LaunchTicket, never exposing it post-launch.
 
 ### 8.3 `--shared-dir` - volume root FD path
 
-The Volume view root directory reference is resolved by core from the signed Export spec and
-provided to the LaunchTicket as an inherited FD. The argv generator uses `/proc/self/fd/<N>`
+The Volume view root directory reference is resolved by core from the binding's referenced
+Volume view and provided to the LaunchTicket as an inherited FD. The argv generator uses `/proc/self/fd/<N>`
 as the `--shared-dir` value so that virtiofsd inherits the open FD; the literal host path
 never appears in any public surface. The virtiofsd controller never handles this FD.
 
@@ -753,18 +774,17 @@ only `store-view/live`.
 
 ### 8.4 `--thread-pool-size`
 
-`spec.provider.settings.threadPoolSize == null` (the default) causes the controller to read the target
-Guest's declared `spec.vcpus` at reconciliation time and use that value. If the Guest spec
-has not been reconciled yet, the controller requeues the Export reconciliation with a short
-exponential backoff.
+The controller reads the target Guest's declared `spec.vcpus` at reconciliation time and
+uses that value as the thread pool size. If the Guest spec has not been reconciled yet,
+the controller requeues the binding reconciliation with a short exponential backoff.
 
 ### 8.5 `--readonly`
 
 `--readonly` is emitted when:
-- `access: read-only` is declared on the Export; OR
+- `access: read-only` is declared on the binding; OR
 - the named View's `rights` do not include `write`.
 
-It is NOT emitted for `access: read-write` attachments.
+It is NOT emitted for `access: read-write` bindings over a write-capable View.
 
 ### 8.6 Baseline source and migration
 
@@ -793,8 +813,8 @@ Volume is declared with:
 - one attachment with `transport: virtiofs`, `view: ro-store`, `access: read-only`,
   `mountPath: /nix/.ro-store`.
 
-volume-local translates this attachment to one Export owned by the store-view Volume.
-volume-virtiofs reconciles the Export and creates the virtiofsd Process.
+volume-local mints one binding owned by the store-view Volume.
+volume-virtiofs reconciles the binding and creates the virtiofsd Process.
 
 Key invariants enforced by the controller:
 
@@ -811,7 +831,7 @@ Key invariants enforced by the controller:
    `tokio::task::spawn_blocking` wrapping an `fstatat(2)` relative to the zone runtime
    directory, or an async-safe fd-relative equivalent); no blocking syscall is issued on
    the async executor thread directly. If the marker is absent, the controller requeues
-   the Export reconciliation with exponential backoff.
+   the binding reconciliation with exponential backoff.
 
 ---
 
@@ -849,16 +869,13 @@ rules:
   - resourceTypes: [VolumeBinding]
     verbs: [get, list, watch, update-status, update-finalizers]
     zones: [<zone>]                # sole binding status writer per KTD3; never mints bindings
-  - resourceTypes: [virtiofs.d2bus.org.Export]
-    verbs: [get, list, watch, update-status, update-finalizers]
-    zones: [<zone>]
   - resourceTypes: [Volume]
     verbs: [get, list, watch]      # read-only; no update-status; volume-local owns Volume status
     zones: [<zone>]
   - resourceTypes: [Process]
     verbs: [create, get, list, watch, update-spec, delete]
     zones: [<zone>]
-    ownerConstraint: owned-by-export
+    ownerConstraint: owned-by-binding
   - resourceTypes: [User]
     verbs: [create, get, list, watch]
     zones: [<zone>]
@@ -888,8 +905,6 @@ resourceTypes:
   # Provider/volume-local is the sole Volume reconciler. Volume appears only in watchSelectors (read-only, below).
   - type: VolumeBinding
     verbs: [update-status, update-finalizers, watch]   # sole status writer per KTD3; never mints bindings
-  - type: virtiofs.d2bus.org.Export
-    verbs: [create, update-spec, update-status, update-finalizers, delete, watch]
   - type: Process
     verbs: [create, update-spec, delete, watch]
   - type: User
@@ -897,11 +912,9 @@ resourceTypes:
 watchSelectors:
   - resourceType: VolumeBinding
     filter: ""                         # all bindings in zone
-  - resourceType: virtiofs.d2bus.org.Export
-    filter: ""                         # all Exports in zone
   - resourceType: Process
-    filter: ownerRef starts-with "virtiofs.d2bus.org.Export/"
-    ownerType: virtiofs.d2bus.org.Export
+    filter: ownerRef starts-with "core.d2bus.org/VolumeBinding/"
+    ownerType: core.d2bus.org/VolumeBinding
   - resourceType: User
     filter: name starts-with "vol-" and name ends-with "-vfd"
   - resourceType: Volume
@@ -910,18 +923,18 @@ watchSelectors:
     filter: ""                         # read-only watch for vcpu-count resolution
 ownerChildTriggers:
   - trigger: owned-resource-changed
-    ownerType: virtiofs.d2bus.org.Export
+    ownerType: core.d2bus.org/VolumeBinding
     childTypes: [Process, User]
 dependencySelectors:
   - resourceType: Guest
     purpose: vcpu-count-resolution
   - resourceType: User
     purpose: vfd-principal-uid-resolution
-reconcileConcurrency: 16          # 16 parallel Export reconciliations
+reconcileConcurrency: 16          # 16 parallel binding reconciliations
 maxPendingResources: 1024
 observeIntervalSeconds: 0         # event-driven only
 finalizers:
-  - volume-virtiofs.d2bus.org/export
+  - volume-virtiofs.d2bus.org/volume-binding
 serviceFingerprint: <sha256 of attachment.schema.json>
 ```
 
@@ -931,19 +944,20 @@ serviceFingerprint: <sha256 of attachment.schema.json>
 
 | Error code | Meaning | Retryable |
 | --- | --- | --- |
-| `virtiofsd-launch-failed` | LaunchTicket dispatch returned error or clone3 failed | yes, with backoff |
-| `user-ns-sync-timeout` | child blocked on sync pipe; parent uid_map write timeout | yes, once |
-| `export-socket-timeout` | socket did not appear within `readiness.timeout` | yes, with backoff |
-| `guest-mount-probe-timeout` | guest-control health probe timed out | yes; Export phase → Unknown |
+| `worker-launch-failed` | LaunchTicket dispatch returned error or clone3 failed | yes, with backoff |
+| `binding-not-ready` | serving socket did not appear within `readiness.timeout` | yes, with backoff |
+| `guest-mount-not-ready` | guest-control health probe timed out or returned MountAbsent | yes; binding phase → Unknown |
+| `drain-incomplete` | a binding-owned child is still present; finalizer drain not complete | yes; retried while draining |
 | `shared-write-unsupported` | shared-write requested but Provider does not declare supportsSharedWrite | no |
-| `view-not-found` | Export references a View that does not exist in Volume spec | no |
-| `execution-ref-not-found` | Export executionRef does not resolve to a Guest in this Zone | no; fails closed |
-| `vcpu-count-unavailable` | Guest spec not yet reconciled; threadPoolSize cannot be resolved | yes; requeue |
-| `vfd-user-creation-failed` | User resource for vfd principal could not be created | yes, with backoff |
-| `store-view-marker-absent` | `live/.d2b-marker-<guest>` absent; farm not yet populated | yes; requeue |
+| `view-not-found` | binding names a Volume view the referenced Volume does not declare | no |
+| `view-rights-insufficient` | requested access exceeds the rights the selected view grants | no; fails closed |
+| `invalid-binding` | binding does not satisfy a frozen conformance bound | no |
+| `store-view-marker-missing` | `live/.d2b-marker-<guest>` absent or non-empty; farm not yet populated | yes; requeue |
+| `sandbox-invariant-violated` | ADR 0021 posture violation detected at preflight | no; halt |
+| `stale-fence` | status projection rejected: its fence no longer matches the stored binding (KTD3) | yes; re-reconcile |
+| `unauthorized-writer` | status or finalizer mutation by a non-virtiofs identity (KTD3) | no; fail closed |
 | `process-adoption-ambiguous` | virtiofsd process identity ambiguous on controller restart | no; quarantine |
 | `socket-cleanup-failed` | stale socket unlink failed; previous virtiofsd may still be running | yes, once |
-| `adr021-violation-detected` | `capabilityClasses` non-empty or `startRoot: true` detected at preflight | no; halt |
 
 All error messages are bounded at 512 bytes, UTF-8/control-character validated, and contain
 no host paths, socket paths, guest paths, process data, terminal bytes, raw errno details,
@@ -953,33 +967,33 @@ or credential material.
 
 ## 13. Status conditions
 
-Export-level status conditions (on `virtiofs.d2bus.org.Export`):
+Binding-level status conditions (on `core.d2bus.org/VolumeBinding`):
 
 | Condition type | Normal value | Abnormal state |
 | --- | --- | --- |
 | `WorkerReady` | `"True"` / reason `process-ready` | `"False"` when virtiofsd not yet started or has crashed |
-| `ExportReady` | `"True"` / reason `socket-exists` | `"False"` if socket absent or cleanup in progress |
+| `BindingReady` | `"True"` / reason `socket-exists` | `"False"` if socket absent or cleanup in progress |
 | `GuestMountReady` | `"True"` / reason `health-probe-ok` | `"False"` / `Unknown` on probe timeout or Guest off |
 | `FinalizerDraining` | `"False"` (not draining) | `"True"` while virtiofsd Process deletion is pending |
 
 Per D088, `volume-virtiofs` contributes only bounded virtiofs-specific
-attachment/export observations: Volume attachment readiness promoted for generic
+binding observations: Volume attachment readiness promoted for generic
 consumers is `Volume.status.resource.attachmentStatuses`, identical to sibling
-Volume implementations and written by `volume-local` from aggregated Export
-status. Virtiofs worker/export detail stays in `status.provider.details`
+Volume implementations and written by `volume-local` from aggregated binding
+status. Virtiofs worker detail stays in `status.provider.details`
 with `providerRef: Provider/volume-virtiofs`, qualified `schemaId`
-(`volume-virtiofs.d2bus.org/Export/status`), `schemaVersion`, and
+(`core.d2bus.org/VolumeBinding/status`), `schemaVersion`, and
 `observedProviderGeneration`. Any status writer writes all present layers
 atomically in one mutation; shared fields are never duplicated into
 `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
 registered and signed in the Provider manifest.
 
-Volume-level conditions (written by volume-local from aggregated Export statuses):
+Volume-level conditions (written by volume-local from aggregated binding statuses):
 
 | Condition type | Normal value | Abnormal state |
 | --- | --- | --- |
-| `AttachmentsReady` | `"True"` | `"False"` or `Unknown` while any Export is not fully ready |
-| `SingleWriterViolation` | absent | `"True"` if second read-write Export was rejected at admission |
+| `AttachmentsReady` | `"True"` | `"False"` or `Unknown` while any binding is not fully ready |
+| `SingleWriterViolation` | absent | `"True"` if second read-write binding was rejected at admission |
 
 ---
 
@@ -988,14 +1002,14 @@ Volume-level conditions (written by volume-local from aggregated Export statuses
 All volume-virtiofs audit records use the Zone-local audit stream
 (`d2b-audit` over the private local Unix datagram socket).
 
-### 14.1 Export create
+### 14.1 Binding create
 
 ```json
 {
   "subject_digest": "sha256:<hex>",
   "zone": "dev",
   "verb": "create-virtiofsd-process",
-  "resourceRef": "virtiofs.d2bus.org.Export/vol-work-state-x-work-vm",
+  "resourceRef": "core.d2bus.org/VolumeBinding/vol-work-state-x-work-vm",
   "volumeRefDigest": "sha256:<hex-of-Volume/work-state>",
   "executionRefDigest": "sha256:<hex-of-Guest/work-vm>",
   "workerTemplate": "virtiofsd-worker",
@@ -1006,29 +1020,29 @@ All volume-virtiofs audit records use the Zone-local audit stream
 }
 ```
 
-### 14.2 Export delete
+### 14.2 Binding delete
 
 ```json
 {
   "subject_digest": "sha256:<hex>",
   "zone": "dev",
   "verb": "delete-virtiofsd-process",
-  "resourceRef": "virtiofs.d2bus.org.Export/vol-work-state-x-work-vm",
+  "resourceRef": "core.d2bus.org/VolumeBinding/vol-work-state-x-work-vm",
   "virtiofsdProcessRefDigest": "sha256:<hex>",
-  "reason": "export-deleted",
+  "reason": "binding-deleted",
   "correlationId": "<opaque>",
   "outcome": "process-deletion-requested"
 }
 ```
 
-### 14.3 Export finalizer hold policy
+### 14.3 Binding finalizer hold policy
 
 If the Guest runner process absence can be positively proved (the runner process that owns the
 Guest mount namespace is confirmed dead via pidfd, making the mount namespace observably gone),
-the controller clears the Export finalizer with that proof recorded in the audit record
+the controller clears the binding finalizer with that proof recorded in the audit record
 (verb: `finalizer-cleared-with-proof`).
 
-If the Guest is unreachable or the absence is ambiguous, the Export remains in
+If the Guest is unreachable or the absence is ambiguous, the binding remains in
 `Degraded/Unknown` phase with the finalizer held. There is no time-based force-clear; the
 finalizer is held until either the proof arrives or a full Zone reset. The audit record in
 the ambiguous case carries `outcome: finalizer-held` and
@@ -1057,7 +1071,7 @@ no host paths, no socket paths, no guest names beyond a stable opaque digest.
 | Label | Values |
 | --- | --- |
 | `provider` | `volume-virtiofs` (literal constant) |
-| `operation` | `export-create` \| `export-delete` \| `spawn-virtiofsd` \| `readiness-probe` \| `finalizer-drain` |
+| `operation` | `binding-create` \| `binding-delete` \| `spawn-virtiofsd` \| `readiness-probe` \| `finalizer-drain` |
 | `outcome` | `success` \| `error` \| `timeout` \| `conflict` \| `unknown` |
 | `access_mode` | `read-only` \| `read-write` |
 | `error_class` | stable error code from §12 Error catalog |
@@ -1072,22 +1086,22 @@ only in bounded OTEL resource attributes, re-stamped at the ingress boundary.
 
 | Metric | Type | Description |
 | --- | --- | --- |
-| `d2b_volume_virtiofs_exports_total` | Counter | Total Export create attempts, labeled by outcome |
-| `d2b_volume_virtiofs_export_deletes_total` | Counter | Total Export delete attempts, labeled by outcome |
-| `d2b_volume_virtiofs_ready_exports` | Gauge | Current count of Exports with both exportReady and guestMountReady true |
-| `d2b_volume_virtiofs_export_ready_seconds` | Histogram | Time from virtiofsd spawn to export socket appearing |
-| `d2b_volume_virtiofs_mount_ready_seconds` | Histogram | Time from export socket ready to guest mount confirmed |
+| `d2b_volume_virtiofs_bindings_total` | Counter | Total binding create attempts, labeled by outcome |
+| `d2b_volume_virtiofs_binding_deletes_total` | Counter | Total binding delete attempts, labeled by outcome |
+| `d2b_volume_virtiofs_ready_bindings` | Gauge | Current count of bindings with both bindingReady and guestMountReady true |
+| `d2b_volume_virtiofs_binding_ready_seconds` | Histogram | Time from virtiofsd spawn to serving socket appearing |
+| `d2b_volume_virtiofs_mount_ready_seconds` | Histogram | Time from serving socket ready to guest mount confirmed |
 | `d2b_volume_virtiofs_process_restarts_total` | Counter | virtiofsd Process restart events, labeled by error_class |
-| `d2b_volume_virtiofs_finalizer_drain_seconds` | Histogram | Time from Export deletion request to finalizer cleared |
+| `d2b_volume_virtiofs_finalizer_drain_seconds` | Histogram | Time from binding deletion request to finalizer cleared |
 
 ### 15.4 Performance budgets
 
 | Gate | Requirement |
 | --- | --- |
-| Export socket appears after virtiofsd spawn | p95 ≤ 500 ms for a warmed NixOS host |
+| Serving socket appears after virtiofsd spawn | p95 ≤ 500 ms for a warmed NixOS host |
 | Guest mount confirmed (probe round trip) | p95 ≤ 2 s for a running Guest |
-| Export status written after virtiofsd Ready | p95 ≤ 5 ms (matches core commit-to-handler budget) |
-| Controller reconcile loop iteration (one Export) | p95 ≤ 10 ms excluding spawn and probe I/O |
+| Binding status written after virtiofsd Ready | p95 ≤ 5 ms (matches core commit-to-handler budget) |
+| Controller reconcile loop iteration (one binding) | p95 ≤ 10 ms excluding spawn and probe I/O |
 
 ---
 
@@ -1157,41 +1171,28 @@ d2b.zones."dev".resources."work-state" = {
 };
 ```
 
-volume-local translates the `transport = "virtiofs"` attachment into one
-`virtiofs.d2bus.org.Export` resource automatically. No separate Export resource declaration
+volume-local admits the `transport = "virtiofs"` attachment and mints one
+`core.d2bus.org/VolumeBinding` for it automatically. No separate binding resource declaration
 is required in Nix.
 
-### 16.4 Canonical Export ResourceSpec JSON (attachment defaults materialized)
+### 16.4 Canonical VolumeBinding ResourceSpec JSON (as minted by volume-local)
 
 ```json
 {
   "apiVersion": "resources.d2bus.org/v3",
-  "type": "virtiofs.d2bus.org.Export",
+  "type": "core.d2bus.org/VolumeBinding",
   "metadata": {
     "name": "vol-work-state-x-work-vm",
     "zone": "dev",
     "ownerRef": "Volume/work-state",
-    "finalizers": ["volume-virtiofs.d2bus.org/export"]
+    "finalizers": ["volume-virtiofs.d2bus.org/volume-binding"]
   },
   "spec": {
-    "providerRef": "Provider/volume-virtiofs",
     "volumeRef": "Volume/work-state",
     "executionRef": "Guest/work-vm",
     "view": "controller",
     "access": "read-write",
-    "mountPath": "/state",
-    "provider": {
-      "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
-      "schemaVersion": "1.0",
-      "settings": {
-        "cache": "auto",
-        "inodeFileHandles": "never",
-        "posixAcl": false,
-        "socketGroup": null,
-        "threadPoolSize": null,
-        "xattr": false
-      }
-    }
+    "mountPath": "/state"
   },
   "status": {
     "observedGeneration": 0,
@@ -1230,9 +1231,10 @@ The following validations are fatal at Nix eval time for virtiofs attachments:
    View with only `[read, traverse]` aborts.
 4. `shared-write` aborts unconditionally in v3.0 (Provider does not declare
    `supportsSharedWrite: true`).
-5. `spec.provider.settings` is validated against the Provider's signed Export
-   spec settings schema from the private artifact catalog entry. Unknown fields
-   abort; out-of-range values abort.
+5. Attachment `settings` are validated against the Volume base attachment schema and the
+   Provider's signed attachment settings schema from the private artifact catalog entry.
+   Unknown fields abort; out-of-range values abort. The binding envelope itself is strictly
+   neutral: no provider extension path exists for the type.
 6. `executionRef` must resolve to a `Guest/<name>` resource in the same Zone.
 7. At most one `read-write` attachment per Volume at eval time. The Nix resource compiler
    rejects two simultaneous `read-write` entries at build time.
@@ -1313,17 +1315,18 @@ d2b.zones."dev".resources."store-view-work-vm" = {
 When a Volume with virtiofs attachments is deleted:
 
 1. volume-local controller observes `deletionRequestedAt` set on the Volume.
-2. volume-local emits Delete for each owned Export resource.
-3. volume-virtiofs controller observes `deletionRequestedAt` on each Export.
+2. volume-local emits Delete for each owned VolumeBinding resource.
+3. volume-virtiofs controller observes `deletionRequestedAt` on each binding.
 4. volume-virtiofs emits Delete for each owned virtiofsd Process resource.
 5. system-minijail effect port sends SIGTERM to each virtiofsd process; waits via pidfd.
 6. On process exit: store emits Deleted revision event for Process; row and index removed
    atomically.
 7. volume-virtiofs controller queries guest-control health probe; waits for `MountAbsent`.
-8. When mount absent confirmed, volume-virtiofs clears `volume-virtiofs.d2bus.org/export` finalizer.
-9. Store emits Deleted revision event for Export; row and index removed atomically.
-10. volume-local receives Export Deleted events; clears `volume-local/virtiofs-attachments`
-    finalizer after all Exports for the Volume are deleted.
+8. When mount absent confirmed and the drain is complete, volume-virtiofs clears the
+   `volume-virtiofs.d2bus.org/volume-binding` finalizer.
+9. Store emits Deleted revision event for the binding; row and index removed atomically.
+10. volume-local receives binding Deleted events; clears `volume-local/virtiofs-attachments`
+    finalizer after all bindings for the Volume are deleted.
 11. volume-local finalizer proceeds (child finalizers first).
 12. After all finalizers cleared, volume-local emits Deleted revision event for the Volume;
     row and index removed atomically.
@@ -1338,12 +1341,12 @@ When a specific attachment entry is removed from the Volume spec while the Volum
 remains:
 
 1. volume-local detects attachment list change via `spec-generation-changed` hint.
-2. volume-local deletes only the Export owned by that attachment.
+2. volume-local deletes only the binding owned by that attachment.
 3. volume-virtiofs drains the virtiofsd Process per the two-phase teardown (§6.2).
-4. After Export deletion and guest mount absent confirmation, volume-virtiofs clears the
-   Export finalizer; Export row is removed; volume-local updates
+4. After binding deletion and guest mount absent confirmation, volume-virtiofs clears the
+   binding finalizer; the binding row is removed; volume-local updates
    `Volume.status.attachmentStatuses` (entry removed).
-5. volume-local does not touch Exports for other Guests on the same Volume.
+5. volume-local does not touch bindings for other Guests on the same Volume.
 
 ### 17.3 Configuration-removed condition
 
@@ -1362,7 +1365,7 @@ status:
   attachmentStatuses:
     - executionRef: Guest/work-vm
       state: detaching
-      exportReady: false
+      bindingReady: false
       guestMountReady: false
 ```
 
@@ -1371,11 +1374,16 @@ status:
 The Zone retains the last `retainedGenerations` generations (default 3, range 1-16).
 A Volume that has been deleted but whose generation is within the retention window may be
 reactivated via `ActivateGeneration`. Reactivation cancels in-flight Delete for the Volume
-and its owned Exports and Processes; the controller reconciles from the retained spec.
+and its owned bindings and Processes; the controller reconciles from the retained spec.
 
 ---
 
 ## 18. Current-code fit
+
+[Superseded 2026-09-07: the pre-cutover Export model described in this baseline table was
+replaced by the neutral `VolumeBinding` contract in the clean-break cutover; see
+`ADR-046-resources-volume.md` and the binding-model sections above. The rows below are
+retained as dated baseline evidence and use the model names of their time.]
 
 | Item | Evidence class | Treatment |
 | --- | --- | --- |
@@ -1401,6 +1409,10 @@ it does not import session implementation internals directly.
 ---
 
 ## 19. Implementation work items
+[Superseded 2026-09-07: these work items were authored against the pre-cutover
+`virtiofs.d2bus.org.Export` model, since replaced by `VolumeBinding` in the clean-break
+cutover (KTD10); see `ADR-046-resources-volume.md`. The items below are retained as dated
+planning records and use the model names of their time.]
 
 ### ADR046-vvfs-001 - crate bootstrap and argv extraction
 
@@ -1531,9 +1543,9 @@ The four required fixture subdirectories and their coverage obligations:
 
 | Subdirectory | Coverage |
 | --- | --- |
-| `virtiofsd_launch/` | Spawns a real virtiofsd process (from `pkgs/virtiofsd`) against a local tmpfs Volume. Asserts: process starts; export socket appears within 5 s; process exits cleanly on SIGTERM. Requirements: virtiofsd binary in PATH; `/dev/fuse` accessible. |
+| `virtiofsd_launch/` | Spawns a real virtiofsd process (from `pkgs/virtiofsd`) against a local tmpfs Volume. Asserts: process starts; serving socket appears within 5 s; process exits cleanly on SIGTERM. Requirements: virtiofsd binary in PATH; `/dev/fuse` accessible. |
 | `guest_mount_readiness/` | Uses a container/Host fixture with a running guest-control stub. Asserts: guest-control probe returns `MountReady` after virtiofsd starts; probe returns `MountAbsent` after socket removed. Requirements: podman; network access disabled. |
-| `finalizer_drain/` | Simulates Guest restart during Export deletion. Asserts: volume-virtiofs Export finalizer is not cleared while Guest is unreachable and no pidfd proof is available; finalizer is cleared after Guest comes back and confirms `MountAbsent`; finalizer is cleared immediately when pidfd proof of mount-namespace death is present. Requirements: podman; guest-control stub container. |
+| `finalizer_drain/` | Simulates Guest restart during binding deletion. Asserts: the volume-virtiofs binding finalizer is not cleared while Guest is unreachable and no pidfd proof is available; finalizer is cleared after Guest comes back and confirms `MountAbsent`; finalizer is cleared immediately when pidfd proof of mount-namespace death is present. Requirements: podman; guest-control stub container. |
 | `store_view_readonly/` | Mounts a real store-view Volume (tmpfs-backed for CI) via virtiofsd. Asserts: `--shared-dir` resolves to `live/` not `/nix/store`; marker prerequisite gates launch; read-only flag set; no host-store paths accessible. Requirements: virtiofsd binary in PATH; `/dev/fuse` accessible; fake hardlink-farm marker fixture. |
 
 ### Fast hermetic execution and test placement (D094)
@@ -1558,6 +1570,10 @@ budget.
 ---
 
 ## 21. Removal proofs
+
+[Superseded 2026-09-07: the Export-model removal proofs below were authored against the
+pre-cutover model, since replaced by `VolumeBinding` in the clean-break cutover; see
+`ADR-046-resources-volume.md`. The rows are retained as dated planning records.]
 
 | Current artifact | Removed after | Successor |
 | --- | --- | --- |

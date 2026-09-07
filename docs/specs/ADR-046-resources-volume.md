@@ -44,7 +44,7 @@ destination.
 | `ProviderId` | `d2b-realm-core/src/ids.rs` | Provider ResourceRef | Provider resource identity |
 | `VmProcessDag` | `d2b-core/src/processes.rs` | Set of Process/EphemeralProcess resources under a Guest | Currently emitted as `processes.json` bundle artifact |
 | `ProcessRole` | `d2b-core/src/processes.rs` | Process/EphemeralProcess ResourceType classification | enum variant → resource spec template name |
-| `ProcessRole::Virtiofsd` | same | Process resource, template `virtiofsd-worker`, owned by `virtiofs.d2bus.org.Export` and reconciled by volume-virtiofs | Currently a dag node under Guest (WorkloadId) |
+| `ProcessRole::Virtiofsd` | same | Process resource, template `virtiofsd-worker`, owned by `core.d2bus.org/VolumeBinding` and reconciled by volume-virtiofs | Currently a dag node under Guest (WorkloadId) |
 | `ProcessRole::Swtpm` | same | Process resource owned by a device-tpm Provider (not Volume) | TPM state belongs to Volume; swtpm lifecycle to device-tpm |
 | `ProcessRole::CloudHypervisorRunner` | same | Process resource template `cloud-hypervisor-runner` under Guest | Core VM runner |
 | `d2b.vms.<vm>` | `nixos-modules/options-vms.nix` | v3 target: flat `d2b.zones.<zone>.resources.<name>` with `type = "Guest"` | Current Nix option namespace for VM config |
@@ -506,32 +506,34 @@ attachments:
 | `mountPath` | absolute path string | Yes | - | Guest-side mount path |
 | `settings` | typed attachment-options object | No | `{}` | Volume base nested attachment (mount) options defined by the Volume base schema (`posixAcl`, `xattr`, `cache`, `threadPoolSize`, `inodeFileHandles`, `socketGroup`) and validated against it; a ResourceType-common structure, not a Provider extension. Genuinely implementation-only tuning uses `spec.provider.settings`, never this base object. |
 
-The sole Volume controller, volume-local, translates each attachment with
-`transport: virtiofs` into one owned `virtiofs.d2bus.org.Export`. Multiple
-attachments with distinct `executionRef` values each get a separate Export.
-volume-virtiofs reconciles those Exports and never writes a Volume row.
+The sole Volume controller, volume-local, admits each attachment with
+`transport: virtiofs` and mints one durable `core.d2bus.org/VolumeBinding`
+per Volume / execution-target / named-view relationship. Multiple attachments
+with distinct `executionRef` values each get a separate binding.
+volume-virtiofs reconciles those bindings and never writes a Volume row.
 
 ## virtiofs attachment controller (volume-virtiofs)
 
-`Provider/volume-virtiofs` reconciles `virtiofs.d2bus.org.Export` resources,
+`Provider/volume-virtiofs` reconciles `core.d2bus.org/VolumeBinding` resources,
 not Volume resources. It is one Provider crate with one controller component
 and one worker Process binary (virtiofsd itself).
 
 ### Responsibilities
 
-1. volume-local translates each Volume virtiofs attachment into one Export
-   owned by that Volume.
-2. For each Export, volume-virtiofs ensures exactly one virtiofsd `Process` and
-   one stable `Endpoint` exist, both owned by the Export.
-3. On Export create/repair, it emits `Create` or `UpdateSpec` for those children.
-4. On Export delete, it deletes the children, confirms guest-mount absence, and
-   clears only its `volume-virtiofs.d2bus.org/export` finalizer.
-5. volume-virtiofs writes Export status. volume-local alone reads those statuses
-   and writes the aggregated Volume `attachmentStatuses`.
+1. volume-local admits each Volume virtiofs attachment and mints one durable
+   VolumeBinding owned by that Volume.
+2. For each VolumeBinding, volume-virtiofs ensures exactly one virtiofsd
+   `Process` and one stable `Endpoint` exist, both owned by the binding.
+3. On binding create/repair, it emits `Create` or `UpdateSpec` for those children.
+4. On binding delete, it deletes the children, confirms guest-mount absence, and
+   clears only its `volume-virtiofs.d2bus.org/volume-binding` finalizer.
+5. volume-virtiofs is the sole author of the binding status projection (KTD3).
+   volume-local alone reads those statuses and writes the aggregated Volume
+   `attachmentStatuses`.
 
 ### Owned virtiofsd Process
 
-The virtiofsd Process resource is owned by the Export (via `ownerRef`) and
+The virtiofsd Process resource is owned by the VolumeBinding (via `ownerRef`) and
 managed by volume-virtiofs. Its spec follows the common Process spec with
 Provider-specific fields:
 
@@ -539,13 +541,13 @@ Provider-specific fields:
 type: Process
 metadata:
   name: vol-work-state-virtiofsd-work-vm
-  ownerRef: virtiofs.d2bus.org.Export/vol-work-state-x-work-vm
+  ownerRef: core.d2bus.org/VolumeBinding/vol-work-state-x-work-vm
 spec:
   providerRef: Provider/system-minijail
   executionRef: Host/host-system
   domain: system
   processClass: worker
-  template: virtiofsd-worker   # resolves through Provider/volume-virtiofs registered as the Export controller
+  template: virtiofsd-worker   # resolves through Provider/volume-virtiofs registered as the binding controller
   sandbox:
     namespaceClasses: [mount, user]
     capabilityClasses: []
@@ -603,40 +605,41 @@ introduces host capabilities, `startRoot: true`, or `--sandbox=namespace`
 violates ADR 0021. This invariant is tested by `tests/minijail-validator-virtiofsd.sh`
 and enforced by the `tests/unit/nix/cases/broker-caps.nix` policy gate.
 
-### Export status and Volume aggregation
+### Binding status and Volume aggregation
 
-volume-virtiofs writes status only on its Export:
+volume-virtiofs writes status only on its VolumeBinding:
 
 ```yaml
 status:
   observedGeneration: 1
   phase: Ready
   resource:
-    exportReady: true
+    bindingReady: true
     guestMountReady: true
     endpointRef: Endpoint/vol-work-state-virtiofsd-work-vm
   provider:
     providerRef: Provider/volume-virtiofs
-    schemaId: volume-virtiofs.d2bus.org/Export/status
+    schemaId: core.d2bus.org/VolumeBinding/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
       workerProcessRef: Process/vol-work-state-virtiofsd-work-vm
   conditions:
-    - type: ExportReady
+    - type: BindingReady
       status: "True"
       reason: socket-exists
       observedGeneration: 1
 ```
 
-volume-local reads Export `status.resource` and alone writes the corresponding
+volume-local reads binding `status.resource` and alone writes the corresponding
 Volume `status.resource.attachmentStatuses` entry. volume-virtiofs has read-only
 access to the referenced Volume for view and Guest-vCPU resolution.
 
 The virtiofsd export socket path is an internal implementation detail of
 volume-virtiofs and is never exposed as a status field, spec field, or API surface.
-Export readiness is detected by the Unix socket listener check (current:
-`unix-socket-exists` readiness kind). Guest mount readiness is observed via the
+Binding readiness is fenced by UID, generation, and revision — stale reports
+are never accepted as ready — and is detected by the Unix socket listener check
+(current: `unix-socket-exists` readiness kind). Guest mount readiness is observed via the
 guest-control health protocol.
 
 ## Store-view Volume
@@ -787,9 +790,9 @@ explicit state transfer.
 Attachment base status, layout phase/conditions, marker/invariant observations,
 quota observations, and per-attachment readiness are frozen in
 `status.resource`. volume-local aggregates per-attachment readiness from
-provider-owned resources such as `virtiofs.d2bus.org.Export`; an attachment
-Provider never writes the Volume row. Implementation-specific Export
-observation belongs only in the Export's `status.provider.details`.
+provider-owned resources such as `core.d2bus.org/VolumeBinding`; an attachment
+Provider never writes the Volume row. Implementation-specific binding
+observation belongs only in the binding's `status.provider.details`.
 
 Common resource status plus:
 
@@ -825,15 +828,16 @@ Volume reconciliation follows the common reconciliation loop
    with a path-free audit record. The controller itself never imports or
    calls the broker.
 5. Controller writes status batch with expected revision; conflict → re-read/retry.
-6. volume-local translates every virtiofs attachment into one
-   `virtiofs.d2bus.org.Export` owned by the Volume and diffs that Export set on
-   attachment changes.
-7. volume-virtiofs receives Export reconcile hints and emits or updates the
-   Export-owned virtiofsd Process and Endpoint.
-8. volume-virtiofs observes those children and writes Export status; volume-local
-   reads Export status and writes aggregated Volume attachment status.
-9. On Volume deletion, volume-local requests deletion of every owned Export.
-   Each Export drains its volume-virtiofs finalizer and children before
+6. volume-local admits every virtiofs attachment and mints one durable
+   `core.d2bus.org/VolumeBinding` owned by the Volume; it diffs the binding set
+   on attachment changes.
+7. volume-virtiofs receives binding reconcile hints and emits or updates the
+   binding-owned virtiofsd Process and Endpoint.
+8. volume-virtiofs observes those children and writes the binding status
+   projection (KTD3, sole author); volume-local reads binding status and writes
+   aggregated Volume attachment status.
+9. On Volume deletion, volume-local requests deletion of every owned binding.
+   Each binding drains its volume-virtiofs finalizer and children before
    volume-local clears the Volume attachment finalizer and proceeds to layout
    cleanup.
 
@@ -873,9 +877,9 @@ volume-local adds finalizer `volume-local.d2bus.org/layout` when any layout entr
 `cleanupPolicy != never`. It is cleared after cleanup completes or is skipped.
 
 volume-local adds `volume-local/virtiofs-attachments` to the Volume while any
-owned Export exists. volume-virtiofs adds `volume-virtiofs.d2bus.org/export` only to each
-Export; it clears that finalizer after the Export-owned Process and Endpoint are
-deleted and the guest mount is confirmed absent. Once every Export is deleted,
+owned binding exists. volume-virtiofs adds `volume-virtiofs.d2bus.org/volume-binding` only to each
+binding; it clears that finalizer after the binding-owned Process and Endpoint are
+deleted and the guest mount is confirmed absent. Once every binding is deleted,
 volume-local clears the Volume attachment finalizer.
 
 ### Snapshots and migrations
@@ -1055,17 +1059,17 @@ volume-local controller reconcile flow:
 | Field | Value |
 | --- | --- |
 | Crate | `packages/d2b-provider-volume-virtiofs/` |
-| ResourceTypes | `virtiofs.d2bus.org.Export`; read-only watch of Volume |
+| ResourceTypes | `core.d2bus.org/VolumeBinding` (reconciled; never minted); read-only watch of Volume |
 | Attachment transport | `virtiofs` |
 | Controller component | `volume-virtiofs-controller`; Process under Host |
 | Worker binary | `virtiofsd` (upstream Rust virtiofsd from `pkgs/virtiofsd/`) |
 | Worker Process template | `virtiofsd-worker` |
-| Owned Process naming | `vol-<volume-name>-virtiofsd-<guest-name>`; ownerRef is the Export |
+| Owned Process naming | `vol-<volume-name>-virtiofsd-<guest-name>`; ownerRef is the VolumeBinding |
 | Broker ops (dispatched via `ProcessLaunchEffectPort`/`VolumeSourceEffectPort`/ProviderSupervisor, never called by the Provider process itself) | `SpawnRunner` (virtiofsd), `VirtiofsdLaunch`, `ProvideFdToWorker` |
 | State | Per-attachment virtiofsd export socket (boot-scoped; path is a private implementation detail of volume-virtiofs; never exposed in spec/status/API) |
 | Permissions | `volume-virtiofs/spawn-virtiofsd` (authorizes only a `ProcessLaunchEffectPort` call); receives source Volume FD from volume-local via ProviderSupervisor, never a direct cross-Provider or broker call |
-| Finalizers | `volume-virtiofs.d2bus.org/export` on Export only |
-| Required crate layout | `src/` (Export controller, virtiofsd argv generation, Export lifecycle, socket readiness, ADR 0021 semantic conformance validation, colocated unit tests); `tests/` (hermetic: argv golden/pinned vectors, ADR 0021 invariant rejection, Export create/ready/delete lifecycle, read-only flag per access mode, multi-Export isolation, socket path never-in-status invariant, no Volume mutation); `integration/` (container fixtures: virtiofsd launch, guest-mount readiness, Export finalizer drain under Guest restart); `README.md` (identity, virtiofsd argv options, owned ResourceTypes, ADR 0021 invariant summary, socket path privacy contract, placement, deps/RBAC, security invariants, state/telemetry, build/test/integration commands) |
+| Finalizers | `volume-virtiofs.d2bus.org/volume-binding` on VolumeBinding only |
+| Required crate layout | `src/` (binding controller, virtiofsd argv generation, binding lifecycle, socket readiness, ADR 0021 semantic conformance validation, colocated unit tests); `tests/` (hermetic: argv golden/pinned vectors, ADR 0021 invariant rejection, binding create/ready/delete lifecycle, read-only flag per access mode, multi-binding isolation, socket path never-in-status invariant, no Volume mutation); `integration/` (container fixtures: virtiofsd launch, guest-mount readiness, binding finalizer drain under Guest restart); `README.md` (identity, virtiofsd argv options, owned ResourceTypes, ADR 0021 invariant summary, socket path privacy contract, placement, deps/RBAC, security invariants, state/telemetry, build/test/integration commands) |
 
 virtiofsd argv shape (baseline: `packages/d2b-host/src/virtiofsd_argv.rs`):
 
@@ -1098,7 +1102,7 @@ The virtiofsd worker is tested by:
 | `packages/d2b-core/src/storage.rs`: `StorageJson`, `StoragePathSpec`, all policy enums (`CleanupPolicy`, `RepairPolicy`, `StorageRestartPolicy`, `StorageAdoptionPolicy`, `LeaseClass`, `SensitivityClass`, `StorageInvariant`, `StoragePathKind`, `PrincipalRef`, `ActorRef`, `AclGrant`) | `generated-or-eval-contract` | Extract and adapt to Volume LayoutEntry; enum values preserved with renames where noted |
 | `packages/d2b-core/src/sync.rs`: `SyncJson`, `LockSpec` | `generated-or-eval-contract` | OFD lock rows become Volume layout entries with `leaseClass: file-record`; per-process advisory lock semantics preserved |
 | `packages/d2b-core/src/storage_lifecycle.rs`: `StorageLifecycleReport`, `StorageLifecycleIssue`, `StorageContractValidationReason`, `SyncContractValidationReason` | `implemented-and-reachable` | Daemon startup lifecycle report; migrated to Volume controller phase/condition reporting |
-| `packages/d2b-core/src/processes.rs`: `VmProcessDag`, `ProcessRole::Virtiofsd`, `ProcessRole::Swtpm`, `ProcessRole::CloudHypervisorRunner` | `generated-or-eval-contract` | `ProcessRole::Virtiofsd` → v3 Process resource template `virtiofsd-worker` owned by an Export and reconciled by volume-virtiofs; `VmProcessDag` → per-Guest set of Process resources |
+| `packages/d2b-core/src/processes.rs`: `VmProcessDag`, `ProcessRole::Virtiofsd`, `ProcessRole::Swtpm`, `ProcessRole::CloudHypervisorRunner` | `generated-or-eval-contract` | `ProcessRole::Virtiofsd` → v3 Process resource template `virtiofsd-worker` owned by a `core.d2bus.org/VolumeBinding` and reconciled by volume-virtiofs; `VmProcessDag` → per-Guest set of Process resources |
 | `packages/d2b-realm-core/src/ids.rs`: `RealmId`, `WorkloadId`, `NodeId`, `ProviderId` (newtype label-validated types) | `implemented-and-reachable` | Current identifier layer; maps to Zone/Guest/Provider `<ResourceType>/<name>` ResourceRef in v3 |
 | `packages/d2b-realm-core/src/workload.rs`: `WorkloadId`, `WorkloadProviderKind` (LocalVm/QemuMedia/ProviderManaged/UnsafeLocal), `IsolationPosture`, `WorkloadExecutionPosture` | `implemented-and-reachable` | Current VM/workload classification layer; LocalVm/QemuMedia → Guest (VirtualMachine isolation); ProviderManaged → Guest under Provider; UnsafeLocal → user-only Host under Provider/system-core |
 | `nixos-modules/storage-json.nix` (1086 lines): all path rows with `scope:"vm:<vm>"`/`scope:"host"`, owner, mode, cleanup/repair/restart/adoption/lease/sensitivity/invariants | `generated-or-eval-contract` | Each path row maps to a Volume LayoutEntry or a non-Volume host path (see migration table below); `scope:"vm:<vm>"` → `ownerRef: Guest/<vm>` |
@@ -1112,7 +1116,7 @@ The virtiofsd worker is tested by:
 | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`: swtpm provisioning, fail-closed marker, reconcile-in-place, ancestor traverse ACL, `seccomp_policy_ref: "w1-swtpm"` | `implemented-and-reachable` | Migrated to volume-local `create-if-never-provisioned` + fail-closed repair for TPM Volume |
 | `packages/d2b-host/src/virtiofsd_argv.rs`: `VirtiofsdArgvInput`, `generate_virtiofsd_argv` (14 unit tests, golden `argv.txt` lines 166-184) | `implemented-and-reachable` | Extracted to volume-virtiofs virtiofsd-worker template; all 14 existing tests migrated |
 | `nixos-modules/minijail-profiles.nix`: `virtiofsdProfiles`; principal `d2b-<vm>-runner` (normal shares); principal `d2b-<vm>-gctlfs` (d2b-gctl share); exception `"ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS"` | `generated-or-eval-contract` | Becomes virtiofsd worker sandbox spec; ADR 0021 invariants preserved; principal names → `User/<name>` ResourceRef (typed ResourceRef only; no numeric form) |
-| `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by an Export-owned Process resource reconciled by volume-virtiofs; store-view/live redirect preserved |
+| `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by a VolumeBinding-owned Process resource reconciled by volume-virtiofs; store-view/live redirect preserved |
 | `packages/d2bd/src/supervisor/dag.rs`: virtiofsd `VmProcessDag` node supervised as `ProcessRole::Virtiofsd` dag entry under a WorkloadId (current `d2b-realm-core::WorkloadId`-keyed dag) | `implemented-and-reachable` | Replaced by Process controller lifecycle in v3 |
 | `packages/d2b-contract-tests/tests/storage_sync_contracts.rs`: `storage_and_sync_emitters_are_wired_into_private_bundle`, `broker_storage_and_sync_requests_stay_opaque_only`, `host_mutation_sources_are_registered_with_storage_or_sync_policy`, `tmpfiles_host_mutable_paths_are_covered_by_storage_contract_roots` | `implemented-and-reachable` | Live gate asserting storage.json/sync.json bundle wiring and opaque-id contract; adapted to Volume resource parity gate in v3 |
 | `tests/unit/nix/cases/per-vm-state-ownership.nix` | `implemented-and-reachable` | Adapted to v3 Volume LayoutEntry matrix |
@@ -1549,12 +1553,12 @@ When a Volume is absent from the new Nix generation but its resource row carries
    reason: absent-from-configuration
    message: "Volume removed from Nix generation; pending finalizer drain"
    ```
-3. volume-local requests Delete for every Export owned by the Volume and marks
+3. volume-local requests Delete for every VolumeBinding owned by the Volume and marks
    the corresponding aggregated attachment status `detaching`.
-4. For each Export, volume-virtiofs deletes the Export-owned virtiofsd Process
+4. For each binding, volume-virtiofs deletes the binding-owned virtiofsd Process
    and Endpoint, confirms guest-mount absence, clears
-   `volume-virtiofs.d2bus.org/export`, and allows the Export row to be deleted.
-5. After every Export is gone, volume-local clears
+   `volume-virtiofs.d2bus.org/volume-binding`, and allows the binding row to be deleted.
+5. After every binding is gone, volume-local clears
    `volume-local/virtiofs-attachments` and executes layout cleanup per each
    entry's `cleanupPolicy`. Entries with `cleanupPolicy: never` are preserved.
    Entries with `cleanupPolicy: boot` or
@@ -1584,9 +1588,8 @@ When a Volume is being deleted:
 
 ### Controller-created resources are not touched by config cleanup
 
-If a Volume's spec removes an attachment while the Volume remains in Nix,
-volume-local deletes only the corresponding controller-created Export.
-volume-virtiofs then drains that Export's Process and Endpoint children. The
+volume-local deletes only the corresponding controller-minted VolumeBinding.
+volume-virtiofs then drains that binding's Process and Endpoint children. The
 configuration handler does not touch any of those controller-created resources.
 
 A controller-created Volume has `metadata.managedBy = "controller"` and is
@@ -1633,7 +1636,7 @@ status:
   attachmentStatuses:
     - executionRef: Guest/work-vm
       state: detaching
-      exportReady: false
+      bindingReady: false
       guestMountReady: false
 ```
 
@@ -1713,9 +1716,9 @@ audit record.
 | Current source | `packages/d2b-host/src/virtiofsd_argv.rs` (`VirtiofsdArgvInput`, `generate_virtiofsd_argv`), `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles; principals `d2b-<vm>-runner`, `d2b-<vm>-gctlfs`), `nixos-modules/processes-json.nix` (virtiofsdRunner shape; `roStoreSharedDir` sentinel), `packages/d2b-core/src/processes.rs` (`ProcessRole::Virtiofsd`, `VmProcessDag`; the virtiofsd dag node is a `ProcessRole::Virtiofsd` entry in a WorkloadId-keyed `VmProcessDag`), `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (`SpawnRunnerPlan` for virtiofsd; current `SpawnRunnerPlanInput` carries `adr_carve_out` for virtiofsd swtpm path), `packages/d2b-priv-broker/src/sys.rs` (clone3/user-NS pre-establishment), ADR 0021 |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/` (controller, virtiofsd_argv.rs); `packages/d2b-provider-volume-virtiofs/tests/` (hermetic argv/lifecycle/ADR-0021 tests); `packages/d2b-provider-volume-virtiofs/integration/` (virtiofsd launch and guest-mount fixtures); `packages/d2b-provider-volume-virtiofs/README.md` |
-| Detailed design | volume-virtiofs controller owns `virtiofs.d2bus.org.Export` lifecycle and status, reads the referenced Volume without mutation, and creates/updates/deletes the Export-owned virtiofsd Process and Endpoint; argv generation reuses the current 14 tests; ADR 0021 invariant (`capabilityClasses: []`, `startRoot: false`, `sandbox: chroot`, user-NS via `userNamespace.mappingClass: process-principal-root`); per-Export socket readiness check (`unix-socket-exists` readiness kind; current v2 socket path: `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock`; v3: stable hash-derived private path under Zone runtime directory, never exposed in spec/status/API); guest-mount status observation; `volume-virtiofs.d2bus.org/export` finalizer drain. volume-local remains the sole Volume writer and translates Volume attachments to Exports. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | volume-virtiofs registered under Host; volume-local creates one Export per virtiofs attachment; virtiofsd Process and Endpoint resources are owned by the Export; guest-control health integration feeds Export status, which volume-local aggregates into Volume status |
-| Data migration | Current `processes-json.nix` virtiofsd `VmProcessDag` nodes (keyed by `WorkloadId` = current VM name, role `ProcessRole::Virtiofsd`) are replaced by Export-owned virtiofsd Process resources |
+| Detailed design | volume-virtiofs controller reconciles `core.d2bus.org/VolumeBinding` resources and is the sole author of the binding status projection (KTD3), reads the referenced Volume without mutation, and creates/updates/deletes the binding-owned virtiofsd Process and Endpoint; argv generation reuses the current 14 tests; ADR 0021 invariant (`capabilityClasses: []`, `startRoot: false`, `sandbox: chroot`, user-NS via `userNamespace.mappingClass: process-principal-root`); per-binding socket readiness check (`unix-socket-exists` readiness kind; current v2 socket path: `/run/d2b/vms/<vm>/<vm>-virtiofs-<tag>.sock`; v3: stable hash-derived private path under Zone runtime directory, never exposed in spec/status/API); guest-mount status observation; `volume-virtiofs.d2bus.org/volume-binding` finalizer drain. volume-local remains the sole Volume writer and admits Volume attachments by minting bindings. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | volume-virtiofs registered under Host; volume-local admits each virtiofs attachment by minting a VolumeBinding; virtiofsd Process and Endpoint resources are owned by the binding; guest-control health integration feeds binding status, which volume-local aggregates into Volume status |
+| Data migration | Current `processes-json.nix` virtiofsd `VmProcessDag` nodes (keyed by `WorkloadId` = current VM name, role `ProcessRole::Virtiofsd`) are replaced by VolumeBinding-owned virtiofsd Process resources |
 | Validation | Migrated `virtiofsd_argv` unit tests (14 tests); `tests/tools/gen-migration-ledger.sh` virtiofsd-argv-shape gate adapted; `minijail-validator-virtiofsd` gate adapted to Process sandbox spec; new: attachment lifecycle (create/ready/delete), ADR 0021 invariant rejection test, multi-attachment isolation, readOnly flag per access mode, store-view shared-dir = store-view/live (never /nix/store) |
 | Removal proof | `nixos-modules/processes-json.nix` virtiofsdRunner block removed only after virtiofsd Process resources pass parity; `packages/d2bd/src/supervisor/dag.rs` `ProcessRole::Virtiofsd` path removed after controller lifecycle covers all cases |
 | Implementation state | Planned |
@@ -1729,7 +1732,7 @@ audit record.
 | Current source | `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`, `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.*` - current VM Nix option namespace; virtiofs shares and TPM enable are configured here), `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.stateDir` - current realm workload state root), `packages/d2b-realm-core/src/workload.rs` (`WorkloadProviderKind::LocalVm`/`QemuMedia`/`UnsafeLocal` - informs which WorkloadIds need store-view Volumes vs. no Volume) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-volume.nix`, `nixos-modules/options-volumes.nix` |
-| Detailed design | Nix resource compiler for Volume/LayoutEntry/View/Attachment from d2b.zones config; strict schema validation; emit canonical JSON per Volume; generate store-view Volume per Guest (from current `d2b.vms.<vm>` → future flat `d2b.zones.<zone>.resources.<name>` with `type = "Guest"`) with hardlink-farm layout (gcroots/, state/ at root per `hardlink_farm.rs`); generate swtpm Volume for TPM-enabled Guests; emit provider-neutral Volume attachment entries per virtiofs share, which volume-local translates to runtime Export resources; migration: store-view stateDir root configuration |
+| Detailed design | Nix resource compiler for Volume/LayoutEntry/View/Attachment from d2b.zones config; strict schema validation; emit canonical JSON per Volume; generate store-view Volume per Guest (from current `d2b.vms.<vm>` → future flat `d2b.zones.<zone>.resources.<name>` with `type = "Guest"`) with hardlink-farm layout (gcroots/, state/ at root per `hardlink_farm.rs`); generate swtpm Volume for TPM-enabled Guests; emit provider-neutral Volume attachment entries per virtiofs share, which volume-local admits by minting runtime VolumeBinding resources; migration: store-view stateDir root configuration |
 | Integration | `nixos-modules/default.nix` wires resources-volume.nix; Nix evaluation tests verify canonical output |
 | Data migration | `d2b.vms.<vm>.shares` (virtiofs entries) → Volume attachments; `d2b.vms.<vm>.tpm.enable` → swtpm Volume |
 | Validation | nix-unit cases for store-view Volume output (gcroots at root), TPM Volume spec, virtiofs attachment spec, anchored-path rejection; render parity with current storage.json path rows; canonical JSON golden vector; Provider schema validation rejection; symlink target validation; bundle digest coverage |
@@ -1744,8 +1747,8 @@ audit record.
 | Dependency/owner | ADR046-volume-002, ADR046-volume-003; respective Provider owners |
 | Current source | N/A (no baseline evidence for block-image, quota enforcement, snapshots, or tmpfs Volume paths) |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-volume-local/src/` (block-image, quota, snapshots, tmpfs, ACL reconciliation, single-writer admission and Export translation); `packages/d2b-provider-volume-local/tests/` (hermetic quota/tmpfs/ACL/block-image/snapshot/single-writer tests); `packages/d2b-provider-volume-local/integration/` (block-image virtio-blk, FS-without-quota fixture, tmpfs memory-budget, shared-write admission fixture); `packages/d2b-provider-volume-virtiofs/src/` (Export reconciliation and private socket path contract); `packages/d2b-provider-volume-virtiofs/tests/` (Export lifecycle, read-only projection, socket-path invariant, no Volume mutation); `packages/d2b-provider-volume-virtiofs/integration/` (Export-owned worker fixture) |
-| Detailed design | (1) **block-image SourceKind**: add `SourceKind::BlockImage` to volume-local; manage raw/qcow2 image file lifecycle; emit virtio-blk attachment spec consumed by Guest Provider; `quota.maxBytes` required; add store-overlay.img migration path for current `DiskInit` plan-op. (2) **Quota hard enforcement**: implement `enforcement: hard` capability check in volume-local at Volume creation time; query backing FS for quota/limits support; test with no-project-quota fixture; enforce `maxBytes`/`maxInodes` via xfs project quota or ext4 per-dir quota where available. (3) **Volume snapshots/migrations**: design and implement EphemeralProcess templates in volume-local catalog for snapshot (copy-on-write or rsync capture) and content migration (atomic rename + sync); no CLI-only path; all operations surface through resource API. (4) **Single-writer enforcement**: volume-local checks the desired Export set while translating Volume attachments and rejects a second `read-write` Export before creation (`ResourceConflict`); `shared-write` mode is accepted only if the selected attachment Provider declares `supportsSharedWrite: true`. volume-virtiofs only enforces its Export spec and never writes Volume. (5) **tmpfs source**: implement tmpfs mount/unmount lifecycle in volume-local; `maxBytes` → `size=`, `maxInodes` → `nr_inodes=` mount options; charge memory against Host/Guest budget; cleanup unmounts on Volume deletion or restart. (6) **Bounds enforcement**: enforce max 1024 layout entries, 64 Views, 64 attachments at schema validation layer; add corresponding row to API request-size limit table in `ADR-046-resource-api-and-authorization`. (7) **File/symlink first-class lifecycle**: implement independent `createPolicy`/`repairPolicy`/`cleanupPolicy` for `file` and `symlink` entries; implement `target` field validation (relative, no `..`, must resolve within Volume root); `symlink` create writes the target link. (8) **ACL principal ResourceRef**: remove bare `{type,ref}` struct from AclGrant; implement `User/<name>` ResourceRef resolution with User resource watch and re-reconcile on User revision change. (9) **Continuous ACL reconciliation**: implement `foreignChildPolicy: preserve|fail` in broker reconcile loop; re-apply `accessAcl`/`defaultAcl` to all existing entries and children on every repair cycle; emit `ForeignAclViolation` condition when `foreignChildPolicy: fail` and unexpected entries found. (10) **virtiofsd socket path contract**: implement stable hash-derived private socket path in volume-virtiofs (deterministic hash of Zone name + Volume name + attachment executionRef); assert path never appears in public status, spec, audit, or CLI output; validate with a dedicated security invariant test. |
+| Destination | `packages/d2b-provider-volume-local/src/` (block-image, quota, snapshots, tmpfs, ACL reconciliation, single-writer admission and binding minting); `packages/d2b-provider-volume-local/tests/` (hermetic quota/tmpfs/ACL/block-image/snapshot/single-writer tests); `packages/d2b-provider-volume-local/integration/` (block-image virtio-blk, FS-without-quota fixture, tmpfs memory-budget, shared-write admission fixture); `packages/d2b-provider-volume-virtiofs/src/` (binding reconciliation and private socket path contract); `packages/d2b-provider-volume-virtiofs/tests/` (binding lifecycle, read-only projection, socket-path invariant, no Volume mutation); `packages/d2b-provider-volume-virtiofs/integration/` (binding-owned worker fixture) |
+| Detailed design | (1) **block-image SourceKind**: add `SourceKind::BlockImage` to volume-local; manage raw/qcow2 image file lifecycle; emit virtio-blk attachment spec consumed by Guest Provider; `quota.maxBytes` required; add store-overlay.img migration path for current `DiskInit` plan-op. (2) **Quota hard enforcement**: implement `enforcement: hard` capability check in volume-local at Volume creation time; query backing FS for quota/limits support; test with no-project-quota fixture; enforce `maxBytes`/`maxInodes` via xfs project quota or ext4 per-dir quota where available. (3) **Volume snapshots/migrations**: design and implement EphemeralProcess templates in volume-local catalog for snapshot (copy-on-write or rsync capture) and content migration (atomic rename + sync); no CLI-only path; all operations surface through resource API. (4) **Single-writer enforcement**: volume-local checks the desired VolumeBinding set while admitting Volume attachments and rejects a second `read-write` binding before minting (`ResourceConflict`); `shared-write` mode is accepted only if the selected attachment Provider declares `supportsSharedWrite: true`. volume-virtiofs only enforces its binding spec and never writes Volume. (5) **tmpfs source**: implement tmpfs mount/unmount lifecycle in volume-local; `maxBytes` → `size=`, `maxInodes` → `nr_inodes=` mount options; charge memory against Host/Guest budget; cleanup unmounts on Volume deletion or restart. (6) **Bounds enforcement**: enforce max 1024 layout entries, 64 Views, 64 attachments at schema validation layer; add corresponding row to API request-size limit table in `ADR-046-resource-api-and-authorization`. (7) **File/symlink first-class lifecycle**: implement independent `createPolicy`/`repairPolicy`/`cleanupPolicy` for `file` and `symlink` entries; implement `target` field validation (relative, no `..`, must resolve within Volume root); `symlink` create writes the target link. (8) **ACL principal ResourceRef**: remove bare `{type,ref}` struct from AclGrant; implement `User/<name>` ResourceRef resolution with User resource watch and re-reconcile on User revision change. (9) **Continuous ACL reconciliation**: implement `foreignChildPolicy: preserve|fail` in broker reconcile loop; re-apply `accessAcl`/`defaultAcl` to all existing entries and children on every repair cycle; emit `ForeignAclViolation` condition when `foreignChildPolicy: fail` and unexpected entries found. (10) **virtiofsd socket path contract**: implement stable hash-derived private socket path in volume-virtiofs (deterministic hash of Zone name + Volume name + attachment executionRef); assert path never appears in public status, spec, audit, or CLI output; validate with a dedicated security invariant test. |
 | Integration | Each sub-item produces a focused spec amendment; resolved decisions already reflected in spec revision 2 |
 | Data migration | Per-sub-item; block-image and tmpfs are new capabilities with no legacy migration required |
 | Validation | (1) `VirtioblkArgvInput` unit tests; block-image integration fixture. (2) Quota-enforcement fixture with FS-without-quota; hard-enforcement failure test. (3) EphemeralProcess snapshot lifecycle test; content-migration parity test. (4) Single-writer rejection test; shared-write capability gate test. (5) tmpfs mount/unmount lifecycle test; memory-budget accounting assertion. (6) Schema bound rejection tests (1025 entries, 65 views, 65 attachments). (7) File/symlink independent lifecycle tests; target validation (absolute rejected, `..` rejected, escape rejected). (8) ACL principal ResourceRef validation; numeric form rejected; User revision trigger test. (9) foreignChildPolicy preserve/fail tests; continuous repair cycle test. (10) Socket path invariant test; no-status-leak assertion. |

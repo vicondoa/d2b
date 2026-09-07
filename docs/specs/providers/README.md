@@ -99,9 +99,12 @@ Providers carry ZoneLink sessions and own no Zone ResourceType.
 | `Provider/transport-unix` | transport-only (none) | ZoneLink Unix transport | [transport-unix](ADR-046-provider-transport-unix.md) |
 | `Provider/transport-vsock` | transport-only (none) | ZoneLink/delegation vsock controller | [transport-vsock](ADR-046-provider-transport-vsock.md) |
 | `Provider/volume-local` | `Volume` | controller (Host source-side storage, ACL/quota/marker) | [volume-local](ADR-046-provider-volume-local.md) |
-| `Provider/volume-virtiofs` | qualified `virtiofs.d2bus.org.Export` (does not own `Volume`) | controller + virtiofsd Process (Guest-side mount) | [volume-virtiofs](ADR-046-provider-volume-virtiofs.md) |
+| `Provider/volume-virtiofs` | `VolumeBinding` (does not own `Volume`; fenced serving status projection, bindings minted by the Volume side) | controller + virtiofsd Process (Guest-side mount) | [volume-virtiofs](ADR-046-provider-volume-virtiofs.md) |
 
 Volume ownership stays split: `Provider/volume-local` is the sole `Volume`
-reconciler and owns Host source-side storage; `Provider/volume-virtiofs` owns
-the virtiofsd Process and the qualified `virtiofs.d2bus.org.Export` attachment,
-and never adds `Volume` to its exported ResourceTypes.
+reconciler, owns Host source-side storage, and owns attachment admission - it
+mints one durable, provider-neutral `VolumeBinding` per Volume /
+execution-target / named-view relationship. `Provider/volume-virtiofs` never
+mints bindings - it owns the virtiofsd Process, reconciles `VolumeBinding`, and
+is the sole author of the fenced binding status projection, never adding
+`Volume` to its exported ResourceTypes.
