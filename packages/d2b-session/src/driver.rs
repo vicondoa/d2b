@@ -2044,17 +2044,23 @@ mod tests {
         task.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn unbatched_writes_preserve_the_cancellation_slot() {
+    fn unix_descriptor(
+        capacity: usize,
+    ) -> (
+        DriverTransport,
+        mpsc::Sender<WriterCommand>,
+        mpsc::UnboundedSender<WriterCommand>,
+        mpsc::Receiver<WriterCommand>,
+    ) {
         let descriptor = TransportDescriptor {
             class: d2b_contracts_zone_session::v3::component_session::TransportClass::UnixSeqpacket,
             locality: d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
             packet_atomic: true,
             supports_attachments: false,
         };
-        let (writes, mut receiver) = mpsc::channel(2);
+        let (writes, receiver) = mpsc::channel(capacity);
         let (priority, _priority_receiver) = mpsc::unbounded_channel();
-        let mut transport = DriverTransport {
+        let transport = DriverTransport {
             descriptor,
             reader: Box::new(DisconnectedReader),
             writes: writes.clone(),
@@ -2063,6 +2069,12 @@ mod tests {
             writer_fence: Cancellation::new(),
             batch: None,
         };
+        (transport, writes, priority, receiver)
+    }
+
+    #[tokio::test]
+    async fn unbatched_writes_preserve_the_cancellation_slot() {
+        let (mut transport, writes, priority, mut receiver) = unix_descriptor(2);
         transport.send(TransportPacket::new(vec![1])).await.unwrap();
         assert_eq!(
             transport
@@ -2093,23 +2105,7 @@ mod tests {
 
     #[tokio::test]
     async fn driver_transport_enqueues_a_logical_packet_batch_atomically() {
-        let descriptor = TransportDescriptor {
-            class: d2b_contracts_zone_session::v3::component_session::TransportClass::UnixSeqpacket,
-            locality: d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
-            packet_atomic: true,
-            supports_attachments: false,
-        };
-        let (writes, mut receiver) = mpsc::channel(1);
-        let (priority, _priority_receiver) = mpsc::unbounded_channel();
-        let mut transport = DriverTransport {
-            descriptor,
-            reader: Box::new(DisconnectedReader),
-            writes: writes.clone(),
-            priority,
-            write_cancellation: None,
-            writer_fence: Cancellation::new(),
-            batch: None,
-        };
+        let (mut transport, writes, _priority, mut receiver) = unix_descriptor(1);
         transport.begin_write_batch(None);
         transport.send(TransportPacket::new(vec![1])).await.unwrap();
         transport.send(TransportPacket::new(vec![2])).await.unwrap();

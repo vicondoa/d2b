@@ -43,7 +43,7 @@ rust_library(
 
 rust_test(
     name = "config_cleanup",
-    srcs = ["tests/config_cleanup.rs"],
+    srcs = ["tests/common/mod.rs", "tests/config_cleanup.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
@@ -57,7 +57,7 @@ rust_test(
 
 rust_test(
     name = "configuration_name_conflict",
-    srcs = ["tests/configuration_name_conflict.rs"],
+    srcs = ["tests/common/mod.rs", "tests/configuration_name_conflict.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
@@ -71,7 +71,7 @@ rust_test(
 
 rust_test(
     name = "gen_cleanup",
-    srcs = ["tests/gen_cleanup.rs"],
+    srcs = ["tests/common/mod.rs", "tests/gen_cleanup.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
@@ -85,7 +85,7 @@ rust_test(
 
 rust_test(
     name = "gen_cleanup_audit",
-    srcs = ["tests/gen_cleanup_audit.rs"],
+    srcs = ["tests/common/mod.rs", "tests/gen_cleanup_audit.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
@@ -99,7 +99,7 @@ rust_test(
 
 rust_test(
     name = "gen_cleanup_controller_protected",
-    srcs = ["tests/gen_cleanup_controller_protected.rs"],
+    srcs = ["tests/common/mod.rs", "tests/gen_cleanup_controller_protected.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
@@ -127,7 +127,7 @@ rust_test(
 
 rust_test(
     name = "generation_transition",
-    srcs = ["tests/generation_transition.rs"],
+    srcs = ["tests/common/mod.rs", "tests/generation_transition.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [

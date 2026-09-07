@@ -202,6 +202,7 @@ fn single_request_policy() -> EndpointPolicy {
     policy
 }
 
+
 fn bootstrap_policy() -> EndpointPolicy {
     EndpointPolicy {
         purpose: EndpointPurpose::Bootstrap,

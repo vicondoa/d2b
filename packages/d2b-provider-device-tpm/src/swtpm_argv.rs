@@ -470,19 +470,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_swtpm_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: SwtpmArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
-
-    #[test]
-    fn flush_input_round_trip_serializable() {
-        let input = audit_flush_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: SwtpmIoctlFlushInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 }

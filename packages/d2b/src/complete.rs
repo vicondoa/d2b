@@ -13,6 +13,7 @@ use crate::{
 
 pub(crate) const MAX_COMPLETION_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_PROVIDER_FETCH_MS: u64 = 10_000;
+const _: () = assert!(MAX_PROVIDER_FETCH_MS < crate::context::MAX_REQUEST_LIFETIME_MS);
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct CompleteArgs {
@@ -186,9 +187,5 @@ mod tests {
             assert!(!output.contains('\r'));
         }
     }
-
-    #[test]
-    fn completion_deadline_is_not_longer_than_request_bound() {
-        const _: () = assert!(MAX_PROVIDER_FETCH_MS < crate::context::MAX_REQUEST_LIFETIME_MS);
-    }
 }
+

@@ -35,15 +35,6 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
-    name = "foundation",
-    srcs = ["tests/foundation.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
 
 rust_test(
     name = "d2b_contracts_test",

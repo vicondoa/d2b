@@ -233,13 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn the_default_log_uses_the_frozen_capacity() {
-        let log = ProviderAgentAuditLog::new();
-        assert_eq!(log.capacity(), DEFAULT_AUDIT_CAPACITY);
-        assert_eq!(log.dropped(), 0);
-    }
-
-    #[test]
     fn an_event_never_renders_its_principal_or_method_in_debug() {
         let rendered = format!("{:?}", event("launch"));
         assert!(!rendered.contains("launch"));

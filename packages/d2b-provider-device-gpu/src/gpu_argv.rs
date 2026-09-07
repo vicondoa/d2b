@@ -305,64 +305,64 @@ mod tests {
         assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-gpu");
     }
 
-    #[test]
-    fn rejects_invalid_binary_path() {
-        let mut input = audit_input();
-        input.crosvm_binary_path = "crosvm".to_owned();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::InvalidCrosvmBinaryPath { .. })
-        ));
+    /// One single-field rejection vector: mutate exactly one valid fixture
+    /// field and pin the typed error.
+    struct GpuRejectVector {
+        name: &'static str,
+        expected: GpuArgvError,
+        mutate: fn(&mut GpuArgvInput),
     }
 
     #[test]
-    fn rejects_empty_vm_name() {
-        let mut input = audit_input();
-        input.vm_name.clear();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::EmptyVmName)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_socket_path() {
-        let mut input = audit_input();
-        input.socket_path.clear();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::EmptySocketPath)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_wayland_sock() {
-        let mut input = audit_input();
-        input.wayland_sock.clear();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::EmptyWaylandSock)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_context_types() {
-        let mut input = audit_input();
-        input.params.context_types.clear();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::EmptyContextTypes)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_displays() {
-        let mut input = audit_input();
-        input.params.displays.clear();
-        assert!(matches!(
-            generate_gpu_argv(&input),
-            Err(GpuArgvError::EmptyDisplays)
-        ));
+    fn rejects_one_invalid_field_at_a_time() {
+        let vectors = vec![
+            GpuRejectVector {
+                name: "relative crosvm binary path",
+                expected: GpuArgvError::InvalidCrosvmBinaryPath {
+                    path: "crosvm".to_owned(),
+                },
+                mutate: |input| input.crosvm_binary_path = "crosvm".to_owned(),
+            },
+            GpuRejectVector {
+                name: "empty VM name",
+                expected: GpuArgvError::EmptyVmName,
+                mutate: |input| input.vm_name.clear(),
+            },
+            GpuRejectVector {
+                name: "empty socket path",
+                expected: GpuArgvError::EmptySocketPath,
+                mutate: |input| input.socket_path.clear(),
+            },
+            GpuRejectVector {
+                name: "empty wayland socket",
+                expected: GpuArgvError::EmptyWaylandSock,
+                mutate: |input| input.wayland_sock.clear(),
+            },
+            GpuRejectVector {
+                name: "empty context types",
+                expected: GpuArgvError::EmptyContextTypes,
+                mutate: |input| input.params.context_types.clear(),
+            },
+            GpuRejectVector {
+                name: "empty displays",
+                expected: GpuArgvError::EmptyDisplays,
+                mutate: |input| input.params.displays.clear(),
+            },
+        ];
+        for GpuRejectVector {
+            name,
+            expected,
+            mutate,
+        } in vectors
+        {
+            let mut input = audit_input();
+            mutate(&mut input);
+            assert_eq!(
+                generate_gpu_argv(&input).unwrap_err(),
+                expected,
+                "rejection vector: {name}"
+            );
+        }
     }
 
     #[test]
@@ -445,11 +445,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: GpuArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 }

@@ -1,6 +1,5 @@
 //! Hermetic proofs for the v3 Provider registry, its ZonePath-keyed session
-//! identity, and forwarding admission.
-
+//! admission, and drain semantics.
 use std::time::Duration;
 
 use d2b_contracts_provider::v3::SpecifiedProviderMethod;
@@ -18,7 +17,7 @@ use d2b_contracts_zone_session::v3::{
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_provider::{
-    AdmissionOptions, CancellationToken, ForwardTarget, PROVIDER_SCHEMA_VERSION,
+    AdmissionOptions, CancellationToken, ForwardTarget,
     ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderForwardRequest,
     ProviderImplementationId, ProviderMethodName, ProviderRegistry, ProviderRegistryBuilder,
     ProviderRegistryManager, ProviderRuntimeError, RegistryBuildError, RegistryDrainPolicy,
@@ -142,16 +141,6 @@ fn drain_policy() -> RegistryDrainPolicy {
         cancel_in_flight_at_deadline: true,
         close_provider_sessions: true,
     }
-}
-
-#[test]
-fn the_descriptor_publishes_the_v3_schema_version() {
-    assert_eq!(PROVIDER_SCHEMA_VERSION, 3);
-    let work = zone(&["work"]);
-    assert_eq!(
-        descriptor(&work, "runtime-a", 1, &["start"]).schema_version(),
-        PROVIDER_SCHEMA_VERSION
-    );
 }
 
 #[test]

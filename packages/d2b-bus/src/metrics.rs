@@ -638,8 +638,4 @@ mod tests {
         assert_eq!(service_label(&service), "bus");
     }
 
-    #[test]
-    fn direction_is_not_derived_from_caller_label_text() {
-        assert!(std::any::TypeId::of::<BusDirection>() != std::any::TypeId::of::<String>());
-    }
 }

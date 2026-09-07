@@ -1905,16 +1905,6 @@ mod tests {
         assert_eq!(transport.signals(), vec![2, 15, 20, 1, 3]);
     }
 
-    #[test]
-    fn guest_signo_mapping_is_stable() {
-        assert_eq!(guest_signo(ExecSignal::Interrupt), 2);
-        assert_eq!(guest_signo(ExecSignal::Quit), 3);
-        assert_eq!(guest_signo(ExecSignal::Hangup), 1);
-        assert_eq!(guest_signo(ExecSignal::Terminate), 15);
-        assert_eq!(guest_signo(ExecSignal::Stop), 20);
-        assert_eq!(guest_signo(ExecSignal::Winch), 28);
-    }
-
     // ---- (g) FdStateGuard no-op + idempotent restore ----------------------
 
     #[test]

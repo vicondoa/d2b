@@ -1,54 +1,28 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ConfigurationGeneration, ResourceName, ResourceTypeName,
-    SchemaFingerprint, Timestamp, ZoneId,
-};
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
+use d2b_contracts_resource::v3::{ConfigurationGeneration, Timestamp, ZoneId};
+use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_core_controller::{
     configuration::{
         ActivationOutcome, BundleResource as PlannedResource, CanonicalSpec, ConfigurationService,
-        ResourceBundle, ResourceKey, RetainedGenerations,
+        ResourceBundle, RetainedGenerations,
         generation_transition::{committed_configuration_generation, plan_generation_transition},
     },
     resource_store::{PersistedResourceMetadata, PersistedResourceRecord},
 };
 
-fn digest(byte: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
-}
+mod common;
 
-fn key(resource_type: &str, name: &str) -> ResourceKey {
-    ResourceKey::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
-
-fn input(resource_type: &str, name: &str) -> BundleResource {
-    BundleResource::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        BundleMetadata::new(
-            ResourceName::parse(name).unwrap(),
-            ZoneId::parse("work").unwrap(),
-            None,
-            BTreeMap::new(),
-            BTreeMap::new(),
-        )
-        .unwrap(),
-        CanonicalJsonObject::parse(br#"{"value":"configured"}"#).unwrap(),
-    )
-    .unwrap()
-}
+use common::{input, key};
 
 fn bundle() -> ZoneBundle {
-    ZoneBundle::build(
-        ZoneId::parse("work").unwrap(),
-        digest('a'),
-        vec![input("Volume", "conflict"), input("Network", "main")],
-        BTreeMap::new(),
+    common::bundle(
+        'a',
+        vec![
+            input("Volume", "conflict", "configured"),
+            input("Network", "main", "configured"),
+        ],
     )
-    .unwrap()
 }
 
 fn committed()
@@ -89,13 +63,13 @@ fn committed()
 }
 
 #[test]
-fn controller_owned_name_conflict_skips_only_that_item() {
-    assert_conflict(PersistedResourceMetadata::controller());
-}
-
-#[test]
-fn api_owned_name_conflict_skips_only_that_item() {
-    assert_conflict(PersistedResourceMetadata::api());
+fn owned_name_conflict_skips_only_that_item() {
+    for (name, metadata) in [
+        ("controller owned", PersistedResourceMetadata::controller()),
+        ("api owned", PersistedResourceMetadata::api()),
+    ] {
+        assert_conflict(name, metadata);
+    }
 }
 
 #[test]
@@ -140,7 +114,7 @@ fn foreign_same_name_with_different_resource_type_does_not_conflict() {
     );
 }
 
-fn assert_conflict(metadata: PersistedResourceMetadata) {
+fn assert_conflict(row: &str, metadata: PersistedResourceMetadata) {
     let plan = plan_generation_transition(
         &bundle(),
         committed(),
@@ -152,14 +126,23 @@ fn assert_conflict(metadata: PersistedResourceMetadata) {
         &Timestamp::parse("2026-07-31T00:01:00.000Z").unwrap(),
     )
     .unwrap();
-    assert_eq!(plan.name_conflicts().len(), 1);
+    assert_eq!(plan.name_conflicts().len(), 1, "row: {row}");
     assert_eq!(
         plan.name_conflicts()[0].condition(),
-        "Degraded/name-conflict"
+        "Degraded/name-conflict",
+        "row: {row}"
     );
-    assert_eq!(plan.name_conflicts()[0].key(), &key("Volume", "conflict"));
-    assert_eq!(plan.upserts().len(), 1);
-    assert_eq!(plan.upserts()[0].key(), &key("Network", "main"));
+    assert_eq!(
+        plan.name_conflicts()[0].key(),
+        &key("Volume", "conflict"),
+        "row: {row}"
+    );
+    assert_eq!(plan.upserts().len(), 1, "row: {row}");
+    assert_eq!(
+        plan.upserts()[0].key(),
+        &key("Network", "main"),
+        "row: {row}"
+    );
     assert_eq!(
         plan.audits()
             .iter()
@@ -168,6 +151,7 @@ fn assert_conflict(metadata: PersistedResourceMetadata) {
                 d2b_core_controller::configuration::generation_transition::GenerationTransitionAudit::ResourceConflictSkipped
             ))
             .count(),
-        1
+        1,
+        "row: {row}"
     );
 }

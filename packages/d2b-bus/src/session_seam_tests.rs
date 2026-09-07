@@ -267,14 +267,13 @@ async fn admit(
     subject: &str,
     uid: &str,
     provider: &str,
-    _allowed: impl IntoIterator<Item = SessionVerb>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar, policy, subject, uid, provider, _allowed, None, true, None,
+        registrar, policy, subject, uid, provider, None, true, None,
     )
     .await
 }
@@ -285,14 +284,13 @@ async fn admit_without_echo(
     subject: &str,
     uid: &str,
     provider: &str,
-    allowed: impl IntoIterator<Item = SessionVerb>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
     admit_inner(
-        registrar, policy, subject, uid, provider, allowed, None, false, None,
+        registrar, policy, subject, uid, provider, None, false, None,
     )
     .await
 }
@@ -303,7 +301,6 @@ async fn admit_with_writer_pause(
     subject: &str,
     uid: &str,
     provider: &str,
-    _allowed: impl IntoIterator<Item = SessionVerb>,
     writer_pause: Option<Arc<WriterPause>>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
@@ -316,7 +313,6 @@ async fn admit_with_writer_pause(
         subject,
         uid,
         provider,
-        _allowed,
         writer_pause,
         true,
         None,
@@ -331,7 +327,6 @@ async fn admit_controller(
     uid: &str,
     process_ref: &str,
     execution_ref: &str,
-    allowed: impl IntoIterator<Item = SessionVerb>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
@@ -343,7 +338,6 @@ async fn admit_controller(
         provider,
         uid,
         provider,
-        allowed,
         None,
         true,
         Some(CommittedControllerProcessSubjectInput {
@@ -420,7 +414,6 @@ async fn admit_inner(
     subject: &str,
     uid: &str,
     provider: &str,
-    _allowed: impl IntoIterator<Item = SessionVerb>,
     writer_pause: Option<Arc<WriterPause>>,
     start_echo: bool,
     controller_subject: Option<CommittedControllerProcessSubjectInput>,
@@ -713,7 +706,6 @@ async fn committed_controller_subject_carries_authoritative_context() {
         "55555555-5555-4555-8555-555555555555",
         "Process/external-controller",
         "Host/host-system",
-        [SessionVerb::Connect],
     )
     .await;
 
@@ -1031,7 +1023,6 @@ async fn service_registration_returns_the_only_transport_reader() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let (ingress, service_driver) = registrar
@@ -1062,7 +1053,6 @@ async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Connect],
     )
     .await;
 
@@ -1543,7 +1533,6 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let endpoint_subject = native
@@ -1573,7 +1562,6 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -1700,7 +1688,6 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let store_identity = StoreSealIdentity::new(
@@ -1756,7 +1743,6 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -1965,7 +1951,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let resource_endpoint = registrar
@@ -1982,7 +1967,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let resource_caller = registrar
@@ -2015,7 +1999,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let resource_endpoint = registrar
@@ -2032,7 +2015,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let resource_caller = registrar
@@ -2066,7 +2048,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Provider/audit",
         "33333333-3333-4333-8333-333333333333",
         "Provider/audit",
-        [SessionVerb::AuditExport],
     )
     .await;
     let audit_endpoint = registrar
@@ -2079,7 +2060,6 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "Guest/bob",
         "44444444-4444-4444-8444-444444444444",
         "Provider/audit",
-        [SessionVerb::AuditExport],
     )
     .await;
     let audit_caller = registrar
@@ -2168,7 +2148,6 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     endpoint_echo.abort();
@@ -2186,7 +2165,6 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke, SessionVerb::Cancel],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2274,7 +2252,6 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     endpoint_echo.abort();
@@ -2292,7 +2269,6 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2349,7 +2325,6 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     endpoint_echo.abort();
@@ -2367,7 +2342,6 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2437,7 +2411,6 @@ async fn uncorrelatable_response_terminates_every_waiter() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     endpoint_echo.abort();
@@ -2455,7 +2428,6 @@ async fn uncorrelatable_response_terminates_every_waiter() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2528,7 +2500,6 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
         Some(Arc::clone(&pause)),
     )
     .await;
@@ -2546,7 +2517,6 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2602,7 +2572,6 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
         Some(Arc::clone(&pause)),
     )
     .await;
@@ -2621,7 +2590,6 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let (caller, _, caller_echo) = admit(
@@ -2634,7 +2602,6 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke, SessionVerb::Cancel],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2695,7 +2662,6 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     endpoint_echo.abort();
@@ -2713,7 +2679,6 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke, SessionVerb::Cancel],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2764,7 +2729,6 @@ async fn deadline_signals_the_correlated_remote_request() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     echo.abort();
@@ -2782,7 +2746,6 @@ async fn deadline_signals_the_correlated_remote_request() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2853,7 +2816,6 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     echo.abort();
@@ -2871,7 +2833,6 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke, SessionVerb::Cancel],
     )
     .await;
     let caller = std::sync::Arc::new(registrar.register_component_session(caller).await.unwrap());
@@ -2942,7 +2903,6 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
         "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     echo.abort();
@@ -2960,7 +2920,6 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
         "Provider/system-core",
-        [SessionVerb::Invoke],
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();

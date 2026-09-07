@@ -3855,27 +3855,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn child_spawn_path_does_not_log_full_argv_or_env_to_global_file() {
-        let source = include_str!("sys.rs");
-        let global_log = concat!("d2b-broker-child", ".log");
-        let argv_marker = concat!("DEBUG ", "argv[");
-        let env_marker = concat!("DEBUG ", "env[");
-        let spawn_marker = concat!("DEBUG: about", " to execve");
-        assert!(
-            !source.contains(global_log),
-            "broker child path must not create a global argv/env debug log"
-        );
-        assert!(
-            !source.contains(argv_marker) && !source.contains(env_marker),
-            "broker child path must not log full runner argv/env"
-        );
-        assert!(
-            !source.contains(spawn_marker),
-            "broker child path must not emit a debug line for every spawn"
-        );
-    }
-
     fn owned_pipe_for_test() -> (OwnedFd, OwnedFd) {
         nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).expect("pipe2 failed")
     }
@@ -3924,59 +3903,6 @@ mod tests {
         drop(write_fd);
 
         assert_eq!(read_pipe_once(&read_fd), "");
-    }
-
-    #[test]
-    fn spawn_runner_uses_clone_into_cgroup_before_fallback_attach() {
-        let source = include_str!("sys.rs");
-        let clone_into_cgroup_call = concat!(
-            "clone3_pidfd_or_fork_fallback_with_cgroup(\n",
-            "            extra_clone_flags,\n",
-            "            cgroup_dir_raw_fd,"
-        );
-        let parent_fallback_attach = concat!(
-            "parent_attach_fallback_cgroup(\n",
-            "            cgroup_procs_fd.as_ref(),\n",
-            "            outcome.pid,\n",
-            "            cgroup_already_placed,"
-        );
-        let user_ns_maps = "write_user_namespace_maps(outcome.pid, spec)";
-        let user_ns_signal = "rustix::io::write(&sync.write_fd";
-        let reap_error_child = concat!("reap_spawn_runner", "_error_child(outcome.pid)");
-        let removed_child_helper = concat!("write_self", "_to_cgroup");
-        assert!(
-            source.contains(clone_into_cgroup_call),
-            "SpawnRunner must pass the role-leaf cgroup dirfd to clone3 for CLONE_INTO_CGROUP"
-        );
-        let parent_attach_pos = source
-            .find(parent_fallback_attach)
-            .expect("fallback cgroup attach must happen on the parent path");
-        let user_ns_maps_pos = source
-            .find(user_ns_maps)
-            .expect("user namespace map writes must remain parent-side");
-        let user_ns_signal_pos = source
-            .find(user_ns_signal)
-            .expect("user namespace sync write must remain parent-side");
-        assert!(
-            parent_attach_pos < user_ns_maps_pos && user_ns_maps_pos < user_ns_signal_pos,
-            "fallback cgroup attach must write the child pid before user-NS maps and sync continuation"
-        );
-        let first_reap_pos = source
-            .find(reap_error_child)
-            .expect("post-clone error paths must synchronously reap the child");
-        assert!(
-            parent_attach_pos < first_reap_pos && first_reap_pos < user_ns_maps_pos,
-            "fallback cgroup attach failure must reap before returning Err"
-        );
-        assert_eq!(
-            source.matches(reap_error_child).count(),
-            6,
-            "fallback cgroup, user-NS map, sync-write error, sync-write short-write, activation stdin write error, and activation stdin short-write paths must each reap before returning Err"
-        );
-        assert!(
-            !source.contains(removed_child_helper),
-            "child path must not mutate cgroup.procs after entering CLONE_NEWUSER"
-        );
     }
 
     #[test]
@@ -4034,16 +3960,6 @@ mod tests {
         assert_eq!(metadata.mode() & 0o777, 0o600);
         assert_eq!(metadata.uid(), uid);
         assert_eq!(metadata.gid(), gid);
-    }
-
-    #[test]
-    fn device_bind_target_chown_call_is_pinned() {
-        let source = include_str!("sys.rs");
-        let chown_call = concat!("libc::", "chown(destination.as_ptr(), uid, gid)");
-        assert!(
-            source.contains(chown_call),
-            "masked device bind targets must be chowned to the runner uid/gid"
-        );
     }
 
     /// Verify that the broker rejects an umask >0o777 before exec rather

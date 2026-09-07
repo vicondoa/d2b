@@ -209,6 +209,8 @@ mod tests {
         });
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.dropped_count(), 1);
+        assert_eq!(queue.take_dropped_count(), 1);
+        assert_eq!(queue.take_dropped_count(), 0);
     }
 
     #[test]
@@ -218,6 +220,28 @@ mod tests {
         assert!(!json.contains("preview"));
         assert!(!json.contains("payload"));
         assert!(!json.contains("clipboard"));
+        let value = serde_json::to_value(event("vm-a", "r1")).expect("value");
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "attribution",
+                "byte_count",
+                "decision",
+                "destination_realm",
+                "mime_type",
+                "reason",
+                "request_id",
+                "source_realm",
+                "timestamp_unix_ms",
+            ],
+        );
     }
 
     #[test]
@@ -237,14 +261,4 @@ mod tests {
         assert!(json.contains("image/png; exploit=1"));
     }
 
-    #[test]
-    fn metrics_queue_take_dropped_count_resets_counter() {
-        let mut queue = MetricsQueue::new(0);
-        queue.enqueue_droppable(MetricEvent {
-            name: MetricName::PickerTimeout,
-            reason: Some(ReasonCode::PickerTimeout),
-        });
-        assert_eq!(queue.take_dropped_count(), 1);
-        assert_eq!(queue.take_dropped_count(), 0);
-    }
 }

@@ -724,12 +724,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_closes_final_permit_notify_race() {
-        prove_final_drop_between_check_and_await_completes().await;
-    }
-
-    #[tokio::test]
-    async fn finish_drain_closes_final_permit_notify_race() {
+    async fn dropping_the_final_permit_between_check_and_await_notifies_drain_waiters() {
         prove_final_drop_between_check_and_await_completes().await;
     }
 }
