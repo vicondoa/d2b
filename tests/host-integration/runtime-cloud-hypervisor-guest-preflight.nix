@@ -235,7 +235,7 @@ pkgs.testers.runNixOSTest {
             type = "Role";
             spec.rules = [
               {
-                resourceTypes = [ "Endpoint" "Guest" "Host" "Process" "Provider" "Volume" ];
+                resourceTypes = [ "Endpoint" "Guest" "Host" "Process" "Provider" "Volume" "VolumeBinding" ];
                 verbs = [ "get" "list" ];
                 subresources = [ ];
                 resourceNames = [ ];
@@ -248,6 +248,15 @@ pkgs.testers.runNixOSTest {
                 verbs = [ "delete" ];
                 subresources = [ ];
                 resourceNames = [ "acceptance-guest" ];
+                zones = [ "work" ];
+                executionRefs = [ ];
+                sessionVerbs = [ "connect" "invoke" ];
+              }
+              {
+                resourceTypes = [ "Volume" ];
+                verbs = [ "delete" ];
+                subresources = [ ];
+                resourceNames = [ "state" ];
                 zones = [ "work" ];
                 executionRefs = [ ];
                 sessionVerbs = [ "connect" "invoke" ];
@@ -298,6 +307,44 @@ pkgs.testers.runNixOSTest {
               config.controllerExecutionRef = "Host/host-system";
             };
           };
+          state = {
+            type = "Volume";
+            spec = {
+              providerRef = "Provider/volume-local";
+              kind = "state";
+              source = {
+                executionRef = "Host/host-system";
+                settings = {
+                  kind = "local-path";
+                  sourcePolicyId = "default-state";
+                };
+              };
+              layout = [{
+                path = "state";
+                type = "directory";
+                ownerRef = "User/alice";
+                groupRef = "User/alice";
+                mode = "0700";
+                noFollow = true;
+              }];
+              views.controller = {
+                path = "";
+                rights = [ "read" "write" "traverse" ];
+              };
+              # KTD1: the attachment stays declared input only. The Volume
+              # side mints the durable VolumeBinding at reconcile; the
+              # deterministic binding identity below is
+              # vol-binding-6a8ea4307a30f7ceae6533f2 (volume, execution
+              # target, view, mount path).
+              attachments = [{
+                executionRef = "Guest/acceptance-guest";
+                transport = "virtiofs";
+                view = "controller";
+                access = "read-only";
+                mountPath = "/state";
+              }];
+            };
+          };
           runtime-cloud-hypervisor = {
             type = "Provider";
             spec = {
@@ -338,7 +385,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         "set -o pipefail; "
         ": > /run/d2b-preflight-summary.log; "
-        "for resource_type in Guest Process Endpoint Volume Provider; do "
+        "for resource_type in Guest Process Endpoint Volume Provider VolumeBinding; do "
         "printf '%s: ' \"$resource_type\" >> /run/d2b-preflight-summary.log; "
         "timeout 5s runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -675,6 +722,59 @@ pkgs.testers.runNixOSTest {
         "$uids | length == 2 and (unique | length == 2)' "
         "/run/d2b-volume-ready.json"
     )
+
+    # U7: the declared Volume/state attachment is served end to end through
+    # the neutral binding chain. The Volume side mints exactly one
+    # deterministically named binding owned by the Volume, and only a
+    # current fence (binding UID and generation) can report it ready.
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list VolumeBinding "
+        ">/run/d2b-binding-ready.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"VolumeBinding\" and "
+        ".metadata.ownerRef == \"Volume/state\")] | length) == 1 and "
+        "([.resources[] | select(.type == \"VolumeBinding\" and "
+        ".metadata.name == \"vol-binding-6a8ea4307a30f7ceae6533f2\" and "
+        ".metadata.ownerRef == \"Volume/state\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation and "
+        ".status.resource.ready == true and "
+        ".status.resource.fence.uid == .metadata.uid and "
+        ".status.resource.fence.generation == .metadata.generation and "
+        ".status.resource.fence.revision > 0)] | length) == 1' "
+        "/run/d2b-binding-ready.json",
+        timeout=180,
+    )
+    # The virtiofs serving side owns only its worker Process and private
+    # Endpoint as binding-owned children; the worker adopts the per-Volume
+    # vfd principal synthesized from the declared attachment.
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process "
+        ">/run/d2b-binding-worker.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == "
+        "\"VolumeBinding/vol-binding-6a8ea4307a30f7ceae6533f2\" and "
+        ".spec.providerRef == \"Provider/system-minijail\" and "
+        ".spec.executionRef == \"Host/host-system\" and "
+        ".spec.processClass == \"worker\" and "
+        ".spec.template == \"virtiofsd-worker\" and "
+        ".spec.userRef == \"User/vol-state-vfd\" and "
+        ".status.phase == \"Ready\")] | length) == 1' "
+        "/run/d2b-binding-worker.json && "
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Endpoint "
+        ">/run/d2b-binding-endpoint.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Endpoint\" and "
+        ".metadata.ownerRef == "
+        "\"VolumeBinding/vol-binding-6a8ea4307a30f7ceae6533f2\" and "
+        ".status.phase == \"Ready\")] | length) == 1' "
+        "/run/d2b-binding-endpoint.json",
+        timeout=60,
+    )
     machine.wait_until_succeeds(
         "test -S "
         "/var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock",
@@ -919,6 +1019,47 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         "test ! -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock"
+    )
+
+    # U7 teardown (F2/AE6): deleting the owning Volume drives the binding
+    # through its drain: deletion is requested first, then the worker and
+    # the private endpoint are gone before the binding disappears, leaving
+    # no orphaned serving effects.
+    machine.succeed(
+        "volume_revision=$(runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Volume | "
+        "jq -er '.resources[] | select(.type == \"Volume\" and "
+        ".metadata.name == \"state\") | .metadata.revision') && "
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json delete Volume/state "
+        "--revision \"$volume_revision\" >/run/d2b-volume-state-delete.json"
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list VolumeBinding "
+        ">/run/d2b-binding-draining.json && "
+        "jq -e 'any(.resources[]; .type == \"VolumeBinding\" and "
+        ".metadata.name == \"vol-binding-6a8ea4307a30f7ceae6533f2\" and "
+        ".metadata.deletionRequestedAt != null)' "
+        "/run/d2b-binding-draining.json",
+        timeout=30,
+    )
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list VolumeBinding "
+        ">/run/d2b-binding-drained.json && "
+        "jq -e 'all(.resources[]; .metadata.ownerRef != \"Volume/state\")' "
+        "/run/d2b-binding-drained.json && "
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process | "
+        "jq -e 'all(.resources[]; .metadata.ownerRef != "
+        "\"VolumeBinding/vol-binding-6a8ea4307a30f7ceae6533f2\")' && "
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Endpoint | "
+        "jq -e 'all(.resources[]; .metadata.ownerRef != "
+        "\"VolumeBinding/vol-binding-6a8ea4307a30f7ceae6533f2\")'",
+        timeout=120,
     )
   '';
 }
