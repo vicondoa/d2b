@@ -792,22 +792,28 @@ mod tests {
     }
 
     #[test]
-    fn explicit_and_declared_plans_differ_only_in_claim_source() {
-        // Canonical step order, stop order, and executor-driven execution are
-        // asserted once on the declared plan above; here the explicit plan is
-        // proven identical except for its claim source (the daemon selects
-        // different broker ops from that field alone).
-        let declared = synthetic_plan(declared_claim_source());
-        let mut explicit = synthetic_plan(UsbipClaimSource::Explicit);
-        assert_eq!(explicit.claim_source, UsbipClaimSource::Explicit);
-        assert!(matches!(
-            declared.claim_source,
-            UsbipClaimSource::Declared { .. }
-        ));
-        explicit.claim_source = declared.claim_source.clone();
+    fn explicit_plan_preserves_step_stop_and_execution_order() {
+        let plan = build_usbip_explicit_plan("1-2", "work", "corp-vm")
+            .expect("explicit plan succeeds");
+        assert_eq!(plan.steps, CANONICAL_STEPS.to_vec());
+        let stop = plan.stop_order();
         assert_eq!(
-            explicit, declared,
-            "explicit and declared plans differ only in claim_source"
+            stop,
+            vec![
+                UsbipBusidStep::Bind,
+                UsbipBusidStep::Firewall,
+                UsbipBusidStep::Withhold,
+                UsbipBusidStep::Lock,
+                UsbipBusidStep::Modprobe,
+            ],
         );
+        assert!(!stop.contains(&UsbipBusidStep::Backend));
+        assert!(!stop.contains(&UsbipBusidStep::Proxy));
+        let mut exec = FixtureExecutor::ok();
+        let report = execute_usbip_plan(&plan, &mut exec).expect("explicit happy path succeeds");
+        assert!(report.is_ok());
+        assert_eq!(report.completed, CANONICAL_STEPS.to_vec());
+        assert_eq!(exec.calls, CANONICAL_STEPS.to_vec());
+        assert!(report.failed.is_none());
     }
 }
