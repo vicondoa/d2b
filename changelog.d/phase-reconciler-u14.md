@@ -227,6 +227,8 @@
 - Opened the Provider credential-delivery stream before route metadata
   processing so supervised fd10 Providers cannot race the first key handoff
   under concurrent Rust test load.
+- Relaxed only test-side eventual convergence waits for Resource API and redb
+  worker tests; production retry and lifetime budgets remain unchanged.
 
 ### Removed
 

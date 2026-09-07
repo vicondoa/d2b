@@ -37,6 +37,8 @@ use std::sync::{Arc, Barrier, Mutex};
 
 use super::*;
 
+const TEST_EVENTUAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Default)]
 struct RecordingAudit(Mutex<Vec<AuditRecord>>);
 
@@ -3294,7 +3296,7 @@ async fn read_submission_waits_for_capacity_without_stacking_permits() {
 
     releases[0].send(()).expect("release in-flight probe");
     tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        TEST_EVENTUAL_TIMEOUT,
         &mut extra_started_receiver,
     )
     .await

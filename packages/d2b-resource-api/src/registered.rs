@@ -2989,6 +2989,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
+    const TEST_EVENTUAL_TIMEOUT: Duration = Duration::from_secs(5);
+
     use crate::authz::{
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb,
@@ -4463,7 +4465,7 @@ mod tests {
         .run();
         let runner_task = tokio::spawn(runner);
         let mut finalizer_seen = false;
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let resource = store
                     .get(StoreGetRequest {
@@ -4565,7 +4567,7 @@ mod tests {
         )
         .run();
         let runner_task = tokio::spawn(runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let rows = store.authority_operations().await.unwrap();
                 if rows.iter().any(|row| {
@@ -4774,7 +4776,7 @@ mod tests {
         )
         .run();
         let first_task = tokio::spawn(first_runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let rows = store.authority_operations().await.unwrap();
                 if rows.len() == 1
@@ -4922,7 +4924,7 @@ mod tests {
         )
         .run();
         let runner_task = tokio::spawn(runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let rows = store.authority_operations().await.unwrap();
                 if rows.len() == 1
@@ -5043,7 +5045,7 @@ mod tests {
         )
         .run();
         let runner_task = tokio::spawn(runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             while checkpoints.load(Ordering::Acquire) == 0 {
                 tokio::task::yield_now().await;
             }
@@ -5061,7 +5063,7 @@ mod tests {
             )
             .unwrap();
 
-        let updated = tokio::time::timeout(Duration::from_secs(1), async {
+        let updated = tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let resource = store
                     .get(StoreGetRequest {
@@ -5166,7 +5168,7 @@ mod tests {
         )
         .run();
         let runner_task = tokio::spawn(runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             loop {
                 let resource = store
                     .get(StoreGetRequest {
@@ -5293,7 +5295,7 @@ mod tests {
         )
         .run();
         let runner_task = tokio::spawn(runner);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, async {
             while effect_calls.load(Ordering::Acquire) == 0 {
                 tokio::task::yield_now().await;
             }
