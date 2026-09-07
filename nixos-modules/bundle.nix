@@ -28,6 +28,10 @@ let
       path = config.d2b._bundle.privilegesJson.path;
     }
     {
+      key = "/etc/d2b/storage.json";
+      path = config.d2b._bundle.storageJson.path;
+    }
+    {
       key = "/etc/d2b/realm-workloads-launcher-v2.json";
       path = config.d2b._bundle.realmWorkloadsLauncherV2Json.path;
     }
@@ -35,12 +39,12 @@ let
     key = "/etc/d2b/${row.path}";
     path = config.d2b._bundle.zoneResourceBundles.${row.zone}.path;
   }) zoneBundleRefs ++ extraArtifactHashInputs;
-
   dataWithoutHash = {
     artifactHashes = null;
     bundleVersion = 1;
     schemaVersion = "v3";
     privilegesPath = "/etc/d2b/privileges.json";
+    storagePath = "/etc/d2b/storage.json";
     realmWorkloadsLauncherV2Path =
       "/etc/d2b/realm-workloads-launcher-v2.json";
     zones = zoneBundleRefs;

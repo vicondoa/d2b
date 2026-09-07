@@ -200,6 +200,8 @@ struct ZoneNativeBundleIndex {
     schema_version: String,
     privileges_path: String,
     #[serde(default)]
+    storage_path: Option<String>,
+    #[serde(default)]
     realm_workloads_launcher_v2_path: Option<String>,
     zones: Vec<ZoneNativeBundleRef>,
     generation: BundleGeneration,
@@ -1295,7 +1297,11 @@ impl BundleResolver {
                 .to_string_lossy()
                 .into_owned(),
             privileges_path: normalize_zone_native_ref(bundle_root, &index.privileges_path)?,
-            storage_path: None,
+            storage_path: index
+                .storage_path
+                .as_deref()
+                .map(|path| normalize_zone_native_ref(bundle_root, path))
+                .transpose()?,
             sync_path: None,
             allocator_path: None,
             realm_controllers_path: None,
@@ -1328,6 +1334,7 @@ impl BundleResolver {
             load_zone_native_topology(&bundle, &zone_resource_bundles, bundle_root, policy)?;
         let realm_workloads_launcher_v2 =
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
+        let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let host = empty_zone_native_host();
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
@@ -1351,7 +1358,7 @@ impl BundleResolver {
                 guest_store_view_intents,
                 provider_controller_templates,
                 zone_storage_rows,
-                storage: None,
+                storage,
                 sync: None,
                 realm_controllers: None,
                 realm_identity: None,
@@ -8521,6 +8528,23 @@ mod tests {
             intent.namespaces.net,
             "audio namespaces.net must be true (D5/P2.3 Tier 2: unshare CLONE_NEWNET \
              inside user NS for AF_NETLINK support without host CAP_NET_RAW)"
+        );
+    }
+    #[test]
+    fn zone_native_index_accepts_optional_storage_path() {
+        let base = r#"{"artifactHashes":{},"bundleHash":"x","bundleVersion":1,"schemaVersion":"v3","privilegesPath":"/etc/d2b/privileges.json","zones":[],"generation":{"generator":"t","sourceRevision":null,"generatedAt":null}}"#;
+        let without: ZoneNativeBundleIndex =
+            serde_json::from_str(base).expect("pre-storage index parses");
+        assert!(without.storage_path.is_none());
+        let with = base.replace(
+            "\"zones\"",
+            "\"storagePath\":\"/etc/d2b/storage.json\",\"zones\"",
+        );
+        let with: ZoneNativeBundleIndex =
+            serde_json::from_str(&with).expect("storage index parses");
+        assert_eq!(
+            with.storage_path.as_deref(),
+            Some("/etc/d2b/storage.json")
         );
     }
 }
