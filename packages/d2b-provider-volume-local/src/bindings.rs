@@ -8,7 +8,7 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeSpec,
+    AttachmentAccess, AttachmentTransport, VolumeSpec,
 };
 use sha2::{Digest, Sha256};
 
@@ -25,7 +25,6 @@ pub struct BindingIntent {
     view: BoundedToken,
     access: AttachmentAccess,
     mount_path: String,
-    settings: AttachmentSettings,
 }
 
 impl BindingIntent {
@@ -63,13 +62,7 @@ impl BindingIntent {
     pub fn mount_path(&self) -> &str {
         &self.mount_path
     }
-
-    /// Borrow the typed base attachment settings.
-    pub const fn settings(&self) -> &AttachmentSettings {
-        &self.settings
-    }
 }
-
 impl core::fmt::Debug for BindingIntent {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -104,7 +97,6 @@ pub fn desired_binding_intents(
             view: attachment.view().clone(),
             access: attachment.access(),
             mount_path: attachment.mount_path().to_owned(),
-            settings: attachment.settings().clone(),
         });
     }
     debug_assert_eq!(intents.len(), admitted.len());

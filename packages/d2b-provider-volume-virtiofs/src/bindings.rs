@@ -18,8 +18,8 @@ use d2b_contracts_resource::v3::{
 
 use crate::error::VirtiofsBindingError;
 
-/// The standard ResourceType name this Provider serves.
-pub const VOLUME_BINDING_RESOURCE_TYPE: &str = "VolumeBinding";
+/// The standard ResourceType name this Provider serves (canonical contract).
+pub use d2b_contracts_resource::v3::volume_binding::VOLUME_BINDING_RESOURCE_TYPE;
 
 /// The finalizer volume-virtiofs adds to each VolumeBinding, and to
 /// nothing else.

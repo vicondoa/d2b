@@ -273,6 +273,7 @@ struct SharedVolumeEffectContext {
     operation_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SharedVolumeEffectPhase {
     Ready,
     Pending,

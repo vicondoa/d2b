@@ -14,7 +14,7 @@ use super::{
     ResourceRef, ResourceUid,
     execution_policy::{BoundedToken, PrimitiveSpecError},
     identity::{ResourceGeneration, ZoneRevision},
-    resource_status::{ResourceCondition, ResourcePhase, StatusCode},
+    resource_status::StatusCode,
     volume::{AttachmentAccess, validate_mount_path},
 };
 
@@ -202,19 +202,6 @@ impl VolumeBindingStatusResource {
     ) -> bool {
         self.ready && self.fence.matches(uid, generation, revision)
     }
-}
-
-/// Public VolumeBinding status projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct VolumeBindingStatus {
-    /// Universal lifecycle phase.
-    pub phase: ResourcePhase,
-    /// Universal conditions.
-    #[serde(default)]
-    pub conditions: Vec<ResourceCondition>,
-    /// Binding-specific fenced readiness facts.
-    pub resource: VolumeBindingStatusResource,
 }
 
 #[cfg(test)]
@@ -406,14 +393,10 @@ mod tests {
 
     #[test]
     fn status_serialization_exposes_no_paths_sockets_argv_or_numeric_identities() {
-        let status = VolumeBindingStatus {
-            phase: ResourcePhase::Ready,
-            conditions: Vec::new(),
-            resource: VolumeBindingStatusResource {
-                ready: true,
-                fence: fence(),
-                reason: None,
-            },
+        let status = VolumeBindingStatusResource {
+            ready: true,
+            fence: fence(),
+            reason: None,
         };
         let rendered = serde_json::to_string(&status).expect("status serializes");
         let banned = [
@@ -446,31 +429,26 @@ mod tests {
         // the fence value.
         let value = serde_json::to_value(&status).expect("status serializes");
         assert_eq!(
-            value["resource"]["fence"]["uid"],
+            value["fence"]["uid"],
             serde_json::json!("123e4567-e89b-42d3-a456-426614174000")
         );
-        assert_eq!(value["resource"]["ready"], serde_json::json!(true));
-        assert!(value["resource"].get("reason").is_none());
+        assert_eq!(value["ready"], serde_json::json!(true));
+        assert!(value.get("reason").is_none());
 
-        let parsed: VolumeBindingStatus =
+        let parsed: VolumeBindingStatusResource =
             serde_json::from_value(serde_json::to_value(&status).expect("serializes"))
                 .expect("status round trips");
         assert_eq!(parsed, status);
     }
-
     #[test]
     fn status_rejects_unknown_fields() {
-        let mut unknown = serde_json::to_value(VolumeBindingStatus {
-            phase: ResourcePhase::Pending,
-            conditions: Vec::new(),
-            resource: VolumeBindingStatusResource {
-                ready: false,
-                fence: fence(),
-                reason: None,
-            },
+        let mut unknown = serde_json::to_value(VolumeBindingStatusResource {
+            ready: false,
+            fence: fence(),
+            reason: None,
         })
         .expect("status serializes");
         unknown["unexpected"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<VolumeBindingStatus>(unknown).is_err());
+        assert!(serde_json::from_value::<VolumeBindingStatusResource>(unknown).is_err());
     }
 }
