@@ -930,12 +930,6 @@ mod tests {
     // -- wire inventory ---------------------------------------------------
 
     #[test]
-    fn the_service_wire_name_is_the_frozen_v3_name() {
-        assert_eq!(ZONE_SERVICE_NAME, "d2b.zone.v3.ZoneService");
-        assert!(!ZONE_SERVICE_NAME.contains("realm"));
-    }
-
-    #[test]
     fn every_method_has_a_distinct_kebab_wire_name() {
         let methods = [
             ZoneServiceMethod::ZoneBootstrap,

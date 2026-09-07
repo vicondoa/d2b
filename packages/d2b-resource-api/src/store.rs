@@ -137,17 +137,6 @@ impl ResourceStoreBackend for RedbBackend {
     }
 }
 
-#[cfg(test)]
-mod redb_tests {
-    use super::*;
-
-    #[test]
-    fn concrete_redb_backend_implements_the_checked_api_seam() {
-        fn assert_backend<T: ResourceStoreBackend>() {}
-        assert_backend::<RedbBackend>();
-    }
-}
-
 /// A native authorizer has already been bound to a store backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreBindingError;

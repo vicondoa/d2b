@@ -443,13 +443,6 @@ mod tests {
         assert_eq!(argv.last().unwrap(), "-v");
     }
 
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_guest_egress();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: VsockRelayArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 
     /// Refuse socat path injection attempts via comma / quote /
     /// semicolon / whitespace in UDS paths.

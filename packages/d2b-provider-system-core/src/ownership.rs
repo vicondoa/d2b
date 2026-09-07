@@ -10,9 +10,10 @@
 //!
 //! The boundary is therefore an allowlist. [`OWNED_RESOURCE_TYPES`] is the
 //! whole of it, and anything absent is refused, whether or not it appears
-//! in [`DISOWNED_RESOURCE_TYPES`]. That named list exists so a test can
-//! assert the specification's exact negative enumeration is still refused,
-//! not because refusal depends on membership in it.
+//! in [`DISOWNED_RESOURCE_TYPES`]. That named list documents the
+//! specification's exact negative enumeration; refusal itself is enforced
+//! by the owner check and covered end-to-end in `tests/ownership.rs`,
+//! not by membership in the list.
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::host::HOST_RESOURCE_TYPE;
@@ -71,19 +72,6 @@ pub fn require_resource_type(
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_owned_set_is_exactly_host_and_user() {
-        assert!(owns(HOST_RESOURCE_TYPE));
-        assert!(owns(USER_RESOURCE_TYPE));
-        assert_eq!(OWNED_RESOURCE_TYPES.len(), 2);
-    }
-
-    #[test]
-    fn every_named_disowned_type_is_refused() {
-        for disowned in DISOWNED_RESOURCE_TYPES {
-            assert!(!owns(disowned), "{disowned} must not be owned");
-        }
-    }
 
     #[test]
     fn an_unclaimed_resource_type_is_refused_too() {

@@ -661,107 +661,271 @@ fn static_controller_projection_keeps_bootstrap_components_in_process() {
     assert!(projection.templates.is_empty());
 }
 
-#[test]
-fn nix_build_required_outputs_missing() {
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.remove(MANIFEST_PATH);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-required-output-absent"
-    );
+/// One nix-build failure vector: rebuild the default launchable fixture,
+/// mutate exactly the scenario's inputs, and pin the resulting diagnostic
+/// code.
+struct NixFailureVector {
+    name: &'static str,
+    expected_code: &'static str,
+    mutate: fn(
+        (
+            ArtifactCatalogEntry,
+            MemoryDir,
+            StaticPublisherKeys,
+            Vec<u8>,
+        ),
+    ) -> (
+        ArtifactCatalogEntry,
+        MemoryDir,
+        StaticPublisherKeys,
+        Vec<u8>,
+    ),
 }
 
 #[test]
-fn nix_build_layout_entry_unexpected() {
-    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let tree = tree.file("share/d2b/provider/stray", b"unpinned".to_vec(), 0o644);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-layout-entry-unexpected"
-    );
-}
-
-#[test]
-fn nix_build_required_output_not_regular() {
-    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let tree = tree.node(SCHEMA_PATH, Node::Symlink);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-required-output-not-regular"
-    );
-}
-
-#[test]
-fn nix_build_required_output_special_nodes_are_rejected_without_blocking() {
-    for node in [Node::Fifo, Node::Socket, Node::Device] {
-        let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
+fn nix_build_failure_codes() {
+    let vectors = vec![
+        NixFailureVector {
+            name: "manifest output missing",
+            expected_code: "provider-required-output-absent",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.remove(MANIFEST_PATH);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "unexpected layout entry",
+            expected_code: "provider-layout-entry-unexpected",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.file("share/d2b/provider/stray", b"unpinned".to_vec(), 0o644);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "schema output is a symlink",
+            expected_code: "provider-required-output-not-regular",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.node(SCHEMA_PATH, Node::Symlink);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "schema output is a fifo",
+            expected_code: "provider-required-output-not-regular",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.node(SCHEMA_PATH, Node::Fifo);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "schema output is a socket",
+            expected_code: "provider-required-output-not-regular",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.node(SCHEMA_PATH, Node::Socket);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "schema output is a device node",
+            expected_code: "provider-required-output-not-regular",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.node(SCHEMA_PATH, Node::Device);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "signature publisher unregistered",
+            expected_code: "provider-signature-publisher-unregistered",
+            mutate: |(entry, tree, _, _)| {
+                (entry, tree, StaticPublisherKeys::default(), Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "signature id unresolvable",
+            expected_code: "provider-signature-id-unresolvable",
+            mutate: |(entry, tree, _, _)| {
+                let mut keys = StaticPublisherKeys::default();
+                keys.register_publisher(PUBLISHER);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "signature is 63 zero bytes",
+            expected_code: "provider-signature-malformed",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.insert(
+                    SIGNATURE_PATH.to_owned(),
+                    Node::File {
+                        bytes: vec![0; 63],
+                        mode: 0o644,
+                    },
+                );
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "signature fails verification",
+            expected_code: "provider-signature-verification-failed",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.insert(
+                    SIGNATURE_PATH.to_owned(),
+                    Node::File {
+                        bytes: vec![0; 64],
+                        mode: 0o644,
+                    },
+                );
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "executable is not ELF",
+            expected_code: "provider-executable-not-elf",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.file("bin/test-controller", b"#!/bin/sh\necho no".to_vec(), 0o755);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "executable is not executable",
+            expected_code: "provider-executable-not-executable",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.file("bin/test-controller", elf(), 0o644);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "executable name is invalid",
+            expected_code: "provider-executable-name-invalid",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.insert(
+                    "bin/Bad_Name".to_owned(),
+                    Node::File {
+                        bytes: elf(),
+                        mode: 0o755,
+                    },
+                );
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "executable is a directory",
+            expected_code: "provider-executable-not-regular",
+            mutate: |(entry, tree, keys, _)| {
+                let tree = tree.node("bin/test-controller", Node::Directory);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "executable digest mismatch",
+            expected_code: "provider-digest-mismatch",
+            mutate: |(mut entry, tree, keys, _)| {
+                let wrong = CatalogDigests::new(
+                    entry.digests().package().clone(),
+                    sha256_digest(b"wrong"),
+                    entry.digests().manifest().clone(),
+                    entry.digests().config_schema().clone(),
+                );
+                entry = entry.with_digests(wrong);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "manifest digest mismatch",
+            expected_code: "provider-digest-mismatch",
+            mutate: |(mut entry, tree, keys, _)| {
+                let wrong = CatalogDigests::new(
+                    entry.digests().package().clone(),
+                    entry.digests().executable().clone(),
+                    sha256_digest(b"wrong"),
+                    entry.digests().config_schema().clone(),
+                );
+                entry = entry.with_digests(wrong);
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "declared executable absent",
+            expected_code: "provider-executable-declaration-inconsistent",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.remove("bin/test-controller");
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "binary ref unresolved",
+            expected_code: "provider-binary-ref-unresolved",
+            mutate: |(entry, mut tree, keys, _)| {
+                tree.nodes.remove("bin/test-controller");
+                tree.nodes.insert(
+                    "bin/other".to_owned(),
+                    Node::File {
+                        bytes: elf(),
+                        mode: 0o755,
+                    },
+                );
+                (entry, tree, keys, Vec::new())
+            },
+        },
+        NixFailureVector {
+            name: "installation contract is enforced",
+            expected_code: "provider-component-execution-invalid",
+            mutate: |(mut entry, mut tree, keys, manifest_bytes)| {
+                let mut manifest: serde_json::Value =
+                    serde_json::from_slice(&manifest_bytes).unwrap();
+                manifest["components"][0]["instanceScope"] =
+                    serde_json::Value::String("zone-singleton".to_owned());
+                let encoded = serde_json::to_vec(&manifest).unwrap();
+                let canonical =
+                    canonical_json_bytes(&CanonicalJsonValue::parse(&encoded).unwrap()).unwrap();
+                let keypair = Ed25519KeyPair::from_seed_unchecked(&[7_u8; 32]).unwrap();
+                let signature = keypair.sign(&canonical).as_ref().to_vec();
+                tree.nodes.insert(
+                    MANIFEST_PATH.to_owned(),
+                    Node::File {
+                        bytes: canonical.clone(),
+                        mode: 0o644,
+                    },
+                );
+                tree.nodes.insert(
+                    SIGNATURE_PATH.to_owned(),
+                    Node::File {
+                        bytes: signature,
+                        mode: 0o644,
+                    },
+                );
+                let package_digest = entry.digests().package().clone();
+                let executable_digest = entry.digests().executable().clone();
+                let config_schema_digest = entry.digests().config_schema().clone();
+                entry = entry.with_digests(CatalogDigests::new(
+                    package_digest,
+                    executable_digest,
+                    sha256_digest(&canonical),
+                    config_schema_digest,
+                ));
+                (entry, tree, keys, Vec::new())
+            },
+        },
+    ];
+    for NixFailureVector {
+        name,
+        expected_code,
+        mutate,
+    } in vectors
+    {
+        let (entry, tree, keys, _) = mutate(fixture(ComponentExecution::Launchable {
             binary_ref: BinaryRef::parse("test-controller").unwrap(),
-        });
-        let tree = tree.node(SCHEMA_PATH, node);
+        }));
+        let Err(diagnostic) = compile(&entry, &tree, &keys) else {
+            panic!("nix-build failure vector {name}: expected {expected_code}, compiled Ok");
+        };
         assert_eq!(
-            kind(compile(&entry, &tree, &keys)),
-            "provider-required-output-not-regular"
+            diagnostic.code(),
+            expected_code,
+            "nix-build failure vector: {name}"
         );
     }
 }
 
-#[test]
-fn nix_build_manifest_signature_invalid_has_four_codes() {
-    let (entry, tree, _, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let keys = StaticPublisherKeys::default();
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-signature-publisher-unregistered"
-    );
-
-    let (entry, tree, _, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let mut keys = StaticPublisherKeys::default();
-    keys.register_publisher(PUBLISHER);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-signature-id-unresolvable"
-    );
-
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.insert(
-        SIGNATURE_PATH.to_owned(),
-        Node::File {
-            bytes: vec![0; 63],
-            mode: 0o644,
-        },
-    );
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-signature-malformed"
-    );
-
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.insert(
-        SIGNATURE_PATH.to_owned(),
-        Node::File {
-            bytes: vec![0; 64],
-            mode: 0o644,
-        },
-    );
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-signature-verification-failed"
-    );
-}
 
 #[test]
 fn nix_build_manifest_not_canonical() {
@@ -795,29 +959,6 @@ fn nix_build_manifest_not_canonical() {
     );
 }
 
-#[test]
-fn nix_build_executable_not_elf() {
-    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let tree = tree.file("bin/test-controller", b"#!/bin/sh\necho no".to_vec(), 0o755);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-executable-not-elf"
-    );
-}
-
-#[test]
-fn nix_build_executable_not_executable() {
-    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let tree = tree.file("bin/test-controller", elf(), 0o644);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-executable-not-executable"
-    );
-}
 
 #[test]
 fn nix_build_executable_set_empty() {
@@ -831,71 +972,6 @@ fn nix_build_executable_set_empty() {
     );
 }
 
-#[test]
-fn nix_build_executable_name_invalid() {
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.insert(
-        "bin/Bad_Name".to_owned(),
-        Node::File {
-            bytes: elf(),
-            mode: 0o755,
-        },
-    );
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-executable-name-invalid"
-    );
-}
-
-#[test]
-fn nix_build_executable_not_regular_file() {
-    let (entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let tree = tree.node("bin/test-controller", Node::Directory);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-executable-not-regular"
-    );
-}
-
-#[test]
-fn nix_build_executable_digest_mismatch() {
-    let (mut entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let wrong = CatalogDigests::new(
-        entry.digests().package().clone(),
-        sha256_digest(b"wrong"),
-        entry.digests().manifest().clone(),
-        entry.digests().config_schema().clone(),
-    );
-    entry = entry.with_digests(wrong);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-digest-mismatch"
-    );
-}
-
-#[test]
-fn nix_build_catalog_manifest_disagreement() {
-    let (mut entry, tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let wrong = CatalogDigests::new(
-        entry.digests().package().clone(),
-        entry.digests().executable().clone(),
-        sha256_digest(b"wrong"),
-        entry.digests().config_schema().clone(),
-    );
-    entry = entry.with_digests(wrong);
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-digest-mismatch"
-    );
-}
 
 #[test]
 fn nix_build_component_execution_invalid() {
@@ -907,36 +983,7 @@ fn nix_build_component_execution_invalid() {
     );
 }
 
-#[test]
-fn nix_build_executable_declaration_inconsistent() {
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.remove("bin/test-controller");
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-executable-declaration-inconsistent"
-    );
-}
 
-#[test]
-fn nix_build_binary_ref_unresolved() {
-    let (entry, mut tree, keys, _) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    tree.nodes.remove("bin/test-controller");
-    tree.nodes.insert(
-        "bin/other".to_owned(),
-        Node::File {
-            bytes: elf(),
-            mode: 0o755,
-        },
-    );
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-binary-ref-unresolved"
-    );
-}
 
 #[test]
 fn nix_build_manifest_binary_ref_wire_compatible() {
@@ -948,46 +995,6 @@ fn nix_build_manifest_binary_ref_wire_compatible() {
     assert!(compile(&entry, &tree, &keys).is_ok());
 }
 
-#[test]
-fn nix_build_manifest_installation_contract_is_enforced() {
-    let (mut entry, mut tree, keys, manifest_bytes) = fixture(ComponentExecution::Launchable {
-        binary_ref: BinaryRef::parse("test-controller").unwrap(),
-    });
-    let mut manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
-    manifest["components"][0]["instanceScope"] =
-        serde_json::Value::String("zone-singleton".to_owned());
-    let encoded = serde_json::to_vec(&manifest).unwrap();
-    let canonical = canonical_json_bytes(&CanonicalJsonValue::parse(&encoded).unwrap()).unwrap();
-    let keypair = Ed25519KeyPair::from_seed_unchecked(&[7_u8; 32]).unwrap();
-    let signature = keypair.sign(&canonical).as_ref().to_vec();
-    tree.nodes.insert(
-        MANIFEST_PATH.to_owned(),
-        Node::File {
-            bytes: canonical.clone(),
-            mode: 0o644,
-        },
-    );
-    tree.nodes.insert(
-        SIGNATURE_PATH.to_owned(),
-        Node::File {
-            bytes: signature,
-            mode: 0o644,
-        },
-    );
-    let package_digest = entry.digests().package().clone();
-    let executable_digest = entry.digests().executable().clone();
-    let config_schema_digest = entry.digests().config_schema().clone();
-    entry = entry.with_digests(CatalogDigests::new(
-        package_digest,
-        executable_digest,
-        sha256_digest(&canonical),
-        config_schema_digest,
-    ));
-    assert_eq!(
-        kind(compile(&entry, &tree, &keys)),
-        "provider-component-execution-invalid"
-    );
-}
 
 #[test]
 fn nix_build_provider_error_redaction_worst_case_bound() {

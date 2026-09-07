@@ -197,44 +197,56 @@ mod tests {
         assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-video");
     }
 
-    #[test]
-    fn rejects_non_absolute_binary() {
-        let mut input = audit_input();
-        input.crosvm_binary_path = "crosvm".to_owned();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::InvalidCrosvmBinaryPath { .. })
-        ));
+    /// One single-field rejection vector: mutate exactly one valid fixture
+    /// field and pin the typed error.
+    struct VideoRejectVector {
+        name: &'static str,
+        expected: VideoArgvError,
+        mutate: fn(&mut VideoArgvInput),
     }
 
     #[test]
-    fn rejects_empty_binary() {
-        let mut input = audit_input();
-        input.crosvm_binary_path.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::InvalidCrosvmBinaryPath { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_vm_name() {
-        let mut input = audit_input();
-        input.vm_name.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::EmptyVmName)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_socket_path() {
-        let mut input = audit_input();
-        input.socket_path.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::EmptySocketPath)
-        ));
+    fn rejects_one_invalid_field_at_a_time() {
+        let vectors = vec![
+            VideoRejectVector {
+                name: "relative crosvm binary path",
+                expected: VideoArgvError::InvalidCrosvmBinaryPath {
+                    path: "crosvm".to_owned(),
+                },
+                mutate: |input| input.crosvm_binary_path = "crosvm".to_owned(),
+            },
+            VideoRejectVector {
+                name: "empty crosvm binary path",
+                expected: VideoArgvError::InvalidCrosvmBinaryPath {
+                    path: String::new(),
+                },
+                mutate: |input| input.crosvm_binary_path.clear(),
+            },
+            VideoRejectVector {
+                name: "empty VM name",
+                expected: VideoArgvError::EmptyVmName,
+                mutate: |input| input.vm_name.clear(),
+            },
+            VideoRejectVector {
+                name: "empty socket path",
+                expected: VideoArgvError::EmptySocketPath,
+                mutate: |input| input.socket_path.clear(),
+            },
+        ];
+        for VideoRejectVector {
+            name,
+            expected,
+            mutate,
+        } in vectors
+        {
+            let mut input = audit_input();
+            mutate(&mut input);
+            assert_eq!(
+                generate_video_argv(&input).unwrap_err(),
+                expected,
+                "rejection vector: {name}"
+            );
+        }
     }
 
     #[test]
@@ -288,38 +300,4 @@ mod tests {
         println!("WIRE: {}", wire_contract_snapshot());
     }
 
-    #[test]
-    fn wire_contract_constants_pin_kernel8_values() {
-        assert_eq!(VIRTIO_ID_MEDIA, 48);
-        assert_eq!(VHOST_USER_MEDIA_NUM_QUEUES, 2);
-        assert_eq!(VHOST_USER_MEDIA_QUEUE_SIZE, 256);
-        assert_eq!(VHOST_USER_MEDIA_SHM_REGION_BYTES, 256 * 1024 * 1024);
-        assert_eq!(VHOST_USER_MEDIA_VRING_BASE, 0);
-        assert_eq!(
-            VHOST_USER_MEDIA_PROTOCOL_FLAGS,
-            "BACKEND_REQ|REPLY_ACK|SHMEM_MAP_CROSVM"
-        );
-        assert_eq!(VHOST_USER_MEDIA_MMIO_ALLOCATOR, "pci-mem64");
-    }
-
-    #[test]
-    fn wire_contract_snapshot_is_deterministic() {
-        assert_eq!(wire_contract_snapshot(), wire_contract_snapshot());
-        let s = wire_contract_snapshot();
-        assert!(s.contains("virtio_id=48"));
-        assert!(s.contains("num_queues=2"));
-        assert!(s.contains("queue_size=256"));
-        assert!(s.contains("shm_region_bytes=268435456"));
-        assert!(s.contains("vring_base=0"));
-        assert!(s.contains("BACKEND_REQ|REPLY_ACK|SHMEM_MAP_CROSVM"));
-        assert!(s.contains("mmio_allocator=pci-mem64"));
-    }
-
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: VideoArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 }

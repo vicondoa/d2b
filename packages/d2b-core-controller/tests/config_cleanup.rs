@@ -1,10 +1,5 @@
-use std::collections::BTreeMap;
-
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName, ResourceUid,
-    SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
-};
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle, ZoneBundleError};
+use d2b_contracts_resource::v3::{ResourceBundleGenerationId, ResourceUid, ZoneRevision};
+use d2b_contracts_zone_session::v3::{BundleResource, ZoneBundle, ZoneBundleError};
 use d2b_core_controller::{
     audit::{AuditEventKind, AuditReason},
     cleanup::{CleanupZonePhase, PendingCleanupState},
@@ -16,54 +11,9 @@ use d2b_core_controller::{
     },
 };
 
-fn zone() -> ZoneId {
-    ZoneId::parse("work").unwrap()
-}
+mod common;
 
-fn timestamp() -> Timestamp {
-    Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap()
-}
-
-fn digest(byte: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
-}
-
-fn generation(byte: char) -> ResourceBundleGenerationId {
-    ResourceBundleGenerationId::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
-}
-
-fn key(resource_type: &str, name: &str) -> ResourceKey {
-    ResourceKey::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
-
-fn input(resource_type: &str, name: &str, value: &str) -> BundleResource {
-    BundleResource::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        BundleMetadata::new(
-            ResourceName::parse(name).unwrap(),
-            zone(),
-            None,
-            BTreeMap::new(),
-            BTreeMap::new(),
-        )
-        .unwrap(),
-        CanonicalJsonObject::parse(format!(r#"{{"value":"{value}"}}"#).as_bytes()).unwrap(),
-    )
-    .unwrap()
-}
-
-fn bundle(byte: char, resources: impl IntoIterator<Item = BundleResource>) -> ZoneBundle {
-    ZoneBundle::build(
-        zone(),
-        digest(byte),
-        resources.into_iter().collect(),
-        BTreeMap::new(),
-    )
-    .unwrap()
-}
+use common::{bundle, digest, generation, input, key, now, zone};
 
 fn stored(
     resource_type: &str,
@@ -150,7 +100,7 @@ fn managedby_configuration_set_on_activated_resources() {
         .activate(
             BundleActivation::new(bundle('a', resources)),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
 
@@ -211,7 +161,7 @@ fn absent_resource_receives_delete_on_new_generation() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&provider_key).unwrap();
@@ -226,7 +176,7 @@ fn absent_resource_receives_delete_on_new_generation() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     assert!(result.effects().iter().any(|effect| matches!(
@@ -235,7 +185,7 @@ fn absent_resource_receives_delete_on_new_generation() {
             key,
             deletion_requested_at,
             ..
-        } if key == &provider_key && deletion_requested_at == &timestamp()
+        } if key == &provider_key && deletion_requested_at == &now()
     )));
     assert_eq!(result.state().pending_cleanup_count(), 1);
     assert!(result.audits().iter().any(|event| {
@@ -258,7 +208,7 @@ fn cleanup_does_not_touch_controller_children() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&provider_key).unwrap();
@@ -282,7 +232,7 @@ fn cleanup_does_not_touch_controller_children() {
                     "child",
                 ),
             ],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     let deleted: Vec<_> = result
@@ -308,7 +258,7 @@ fn deletion_sets_deletionrequestedat_not_phase() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&resource_key).unwrap();
@@ -322,7 +272,7 @@ fn deletion_sets_deletionrequestedat_not_phase() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     let delete = result
@@ -336,7 +286,7 @@ fn deletion_sets_deletionrequestedat_not_phase() {
             _ => None,
         })
         .expect("a removed resource receives a Delete intent");
-    assert_eq!(delete, &timestamp());
+    assert_eq!(delete, &now());
     let rendered = format!("{result:?}");
     assert!(!rendered.contains("Deleting"));
 }
@@ -345,11 +295,11 @@ fn deletion_sets_deletionrequestedat_not_phase() {
 fn final_deletion_is_atomic() {
     let mut service = ConfigurationService::empty(zone(), RetainedGenerations::default_value());
     let first = configured_bundle('a', [input("Provider", "observability-otel", "provider")]);
-    let first_plan = match service.begin_activation(&first, &[], &timestamp()).unwrap() {
+    let first_plan = match service.begin_activation(&first, &[], &now()).unwrap() {
         ActivationOutcome::Planned(plan) => plan,
         ActivationOutcome::Unchanged => panic!("first generation must be new"),
     };
-    let proof = service.commit_activation(first_plan, &timestamp()).unwrap();
+    let proof = service.commit_activation(first_plan, &now()).unwrap();
     service.release_activation_effects(proof).unwrap();
     let resource_key = key("Provider", "observability-otel");
     service.complete_intent(&resource_key).unwrap();
@@ -365,7 +315,7 @@ fn final_deletion_is_atomic() {
                 Some(generation('a')),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap()
     {
@@ -373,7 +323,7 @@ fn final_deletion_is_atomic() {
         ActivationOutcome::Unchanged => panic!("second generation must remove the provider"),
     };
     let proof = service
-        .commit_activation(second_plan, &timestamp())
+        .commit_activation(second_plan, &now())
         .unwrap();
     service.release_activation_effects(proof).unwrap();
     let revision = ZoneRevision::new(17);
@@ -415,7 +365,7 @@ fn pending_cleanup_condition_set_on_zone() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&resource_key).unwrap();
@@ -429,7 +379,7 @@ fn pending_cleanup_condition_set_on_zone() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     let condition = result.state().pending_cleanup_condition();
@@ -449,7 +399,7 @@ fn zone_is_degraded_not_failed_during_cleanup() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&resource_key).unwrap();
@@ -463,7 +413,7 @@ fn zone_is_degraded_not_failed_during_cleanup() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     assert_eq!(result.state().phase(), GenerationPhase::Degraded);
@@ -481,7 +431,7 @@ fn pending_cleanup_cleared_after_deletion_completes() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&resource_key).unwrap();
@@ -495,12 +445,12 @@ fn pending_cleanup_cleared_after_deletion_completes() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     assert_eq!(
         controller
-            .observe_deleted(&resource_key, ZoneRevision::new(9), &timestamp())
+            .observe_deleted(&resource_key, ZoneRevision::new(9), &now())
             .unwrap(),
         d2b_core_controller::configuration::CleanupOutcome::Deleted
     );
@@ -515,13 +465,13 @@ fn prior_generation_retained_count_based() {
     let mut service = ConfigurationService::empty(zone(), RetainedGenerations::default_value());
     for byte in ['a', 'b', 'c', 'd', 'e'] {
         let plan = match service
-            .begin_activation(&configured_bundle(byte, []), &[], &timestamp())
+            .begin_activation(&configured_bundle(byte, []), &[], &now())
             .unwrap()
         {
             ActivationOutcome::Planned(plan) => plan,
             ActivationOutcome::Unchanged => panic!("each generation has a new digest"),
         };
-        let proof = service.commit_activation(plan, &timestamp()).unwrap();
+        let proof = service.commit_activation(plan, &now()).unwrap();
         service.release_activation_effects(proof).unwrap();
     }
     let record = service.record().unwrap();
@@ -539,11 +489,11 @@ fn rollback_schedules_delete_for_new_generation_resources() {
     let provider_key = key("Provider", "observability-otel");
     let first = bundle('a', []);
     controller
-        .activate(BundleActivation::new(first.clone()), &[], &timestamp())
+        .activate(BundleActivation::new(first.clone()), &[], &now())
         .unwrap();
     let second = bundle('b', [input("Provider", "observability-otel", "provider")]);
     let second_result = controller
-        .activate(BundleActivation::new(second), &[], &timestamp())
+        .activate(BundleActivation::new(second), &[], &now())
         .unwrap();
     complete_create(
         &mut controller,
@@ -561,7 +511,7 @@ fn rollback_schedules_delete_for_new_generation_resources() {
                 Some('b'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     assert!(rolled_back.effects().iter().any(|effect| matches!(
@@ -582,7 +532,7 @@ fn audit_segments_preserved_on_provider_delete() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&provider_key).unwrap();
@@ -599,7 +549,7 @@ fn audit_segments_preserved_on_provider_delete() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     let after_schedule = controller.audit().events();
@@ -627,7 +577,7 @@ fn cleanup_stall_condition_set() {
                 [input("Provider", "observability-otel", "provider")],
             )),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     controller.complete_intent(&provider_key).unwrap();
@@ -641,13 +591,13 @@ fn cleanup_stall_condition_set() {
                 Some('a'),
                 "provider",
             )],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
 
     assert_eq!(
         controller
-            .mark_cleanup_stalled(&provider_key, AuditReason::FinalizerBlocked, &timestamp())
+            .mark_cleanup_stalled(&provider_key, AuditReason::FinalizerBlocked, &now())
             .unwrap(),
         d2b_core_controller::configuration::CleanupOutcome::Stalled
     );
@@ -675,7 +625,7 @@ fn generation_rejected_emits_audit_record() {
     ))
     .with_schema_validation_failure();
     let error = controller
-        .activate(candidate, &[], &timestamp())
+        .activate(candidate, &[], &now())
         .unwrap_err();
     assert_eq!(
         error,
@@ -708,7 +658,7 @@ fn invalid_provider_config_does_not_block_unrelated_resource_activation() {
             ))
             .with_invalid_provider_config([provider_key.clone()]),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
 
@@ -746,7 +696,7 @@ fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
     let mut controller = ZoneConfigController::with_defaults(zone());
     controller.set_artifact_catalog_digest(digest('f'));
     let catalog_error = controller
-        .activate(BundleActivation::new(bundle('a', [])), &[], &timestamp())
+        .activate(BundleActivation::new(bundle('a', [])), &[], &now())
         .unwrap_err();
     assert_eq!(
         catalog_error,
@@ -760,7 +710,7 @@ fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
                 bundle('a', [input("Device", "gpu", "first")]).with_zone_uid(uid.clone()),
             ),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap();
     let error = controller
@@ -769,7 +719,7 @@ fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
                 bundle('b', [input("Device", "gpu", "second")]).with_zone_uid(other_uid),
             ),
             &[],
-            &timestamp(),
+            &now(),
         )
         .unwrap_err();
     assert_eq!(

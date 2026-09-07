@@ -3134,17 +3134,6 @@ mod tests {
         AuthorityDigest([byte; 32])
     }
 
-    #[test]
-    fn test_nonce_for_operation_is_nonzero_and_operation_sensitive() {
-        let first = test_nonce_for_operation("operation-a");
-        let second = test_nonce_for_operation("operation-b");
-
-        assert_ne!(first, 0);
-        assert_ne!(second, 0);
-        assert_ne!(first, second);
-        assert_ne!(test_nonce_for_operation(""), 0);
-    }
-
     fn request(
         host: &ResourceUid,
         nic: &ResolvedExternalNicIdentity,

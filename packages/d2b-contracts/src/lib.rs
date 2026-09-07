@@ -342,8 +342,6 @@ mod tests {
 
     #[test]
     fn hello_unknown_fields_fail_closed() {
-        let frame = br#"\x24\0\0\0{"#;
-        let _ = frame;
         let json = serde_json::json!({
             "clientVersion": ">=0.4.0, <0.5.0",
             "supportedFeatures": ["typed-errors"],

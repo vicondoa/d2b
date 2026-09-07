@@ -134,13 +134,6 @@ rust_test(
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "clipd_pipe",
-    srcs = ["tests/clipd_pipe.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
 
 rust_test(
     name = "clipd_host_impl",

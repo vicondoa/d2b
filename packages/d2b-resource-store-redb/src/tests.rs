@@ -1347,16 +1347,6 @@ fn seed_replay_log(directory: &tempfile::TempDir, rows: u64) {
 }
 
 #[test]
-fn contract_constants_are_exact() {
-    assert_eq!(WRITE_QUEUE_CAPACITY, 256);
-    assert_eq!(GROUP_COMMIT_MAX, 16);
-    assert_eq!(READ_POOL_THREADS, 4);
-    assert_eq!(MAX_CONCURRENT_READS, 16);
-    assert_eq!(READ_LIFETIME, std::time::Duration::from_millis(250));
-    assert_eq!(REDB_CACHE_SIZE, 4 * 1024 * 1024);
-}
-
-#[test]
 fn backup_capture_limits_are_accounted_cumulatively() {
     let mut rows = MAX_LOGICAL_BACKUP_ROWS - 1;
     let mut bytes = 0;

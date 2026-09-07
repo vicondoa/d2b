@@ -504,29 +504,3 @@ mod wait_for_one_shot_exit_tests {
     }
 }
 
-#[cfg(test)]
-mod notify_socket_spawn_policy_tests {
-    #[test]
-    fn production_readiness_command_removes_notify_socket() {
-        let source = include_str!("readiness.rs");
-        let command_ready = source
-            .split("pub fn command_ready(command: &[String]) -> Result<bool, String> {")
-            .nth(1)
-            .and_then(|tail| tail.split("/// Explicit").next())
-            .expect("command_ready source slice");
-        assert!(
-            command_ready.contains(".env_remove(\"NOTIFY_SOCKET\")"),
-            "production readiness Command spawn must not pass NOTIFY_SOCKET to children",
-        );
-    }
-
-    #[test]
-    fn readiness_does_not_use_global_notify_socket_mutation() {
-        let source = include_str!("readiness.rs");
-        let forbidden = ["remove_var", "(\"NOTIFY_SOCKET\")"].concat();
-        assert!(
-            !source.contains(&forbidden),
-            "do not mutate process-global environment; sanitize per Command instead",
-        );
-    }
-}

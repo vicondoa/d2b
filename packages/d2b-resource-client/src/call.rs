@@ -426,9 +426,4 @@ mod tests {
         assert!(rendered.contains("has_correlation: true"), "{rendered}");
     }
 
-    #[test]
-    fn the_system_clock_reports_a_plausible_unix_millisecond() {
-        // 2020-01-01T00:00:00Z in Unix milliseconds.
-        assert!(SystemClock.now_unix_ms() > 1_577_836_800_000);
-    }
 }

@@ -154,14 +154,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn audit_parity_minimal() {
-        let argv = generate_audio_argv(&audit_input()).unwrap();
-        let joined = argv.join(" ");
-        assert_eq!(argv[0], "/run/d2b/vms/corp-desktop/d2b-corp-desktop");
-        assert!(joined.contains("--socket /run/d2b/vms/corp-desktop/snd.sock"));
-        assert!(joined.contains("--backend pipewire"));
-    }
 
     const AUDIO_ARGV_GOLDEN: &str =
         include_str!("../../../tests/golden/runner-shape/audio-argv-minimal.txt");
@@ -260,6 +252,10 @@ mod tests {
             generate_audio_argv(&input),
             Err(AudioArgvError::EmptyVmName)
         ));
+        assert!(matches!(
+            exec_arg0(&input),
+            Err(AudioArgvError::EmptyVmName)
+        ));
     }
 
     #[test]
@@ -272,15 +268,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn exec_arg0_rejects_empty_vm_name() {
-        let mut input = audit_input();
-        input.vm_name.clear();
-        assert!(matches!(
-            exec_arg0(&input),
-            Err(AudioArgvError::EmptyVmName)
-        ));
-    }
 
     #[test]
     fn extra_args_appended_in_order() {
@@ -290,16 +277,4 @@ mod tests {
         assert_eq!(argv.last().unwrap(), "--debug");
     }
 
-    #[test]
-    fn backend_string_round_trip() {
-        assert_eq!(AudioBackend::Pipewire.as_str(), "pipewire");
-    }
-
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: AudioArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 }

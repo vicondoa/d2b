@@ -578,11 +578,26 @@ mod tests {
         assert_eq!(&frame[MESSAGE_HEADER_LENGTH..], b"abc");
     }
 
+    fn cancel_test_harness(
+        frame: Vec<u8>,
+        service: Service,
+    ) -> (
+        Arc<BlockingDriver>,
+        tokio::task::JoinHandle<Result<(), SessionServerError>>,
+    ) {
+        let driver = Arc::new(BlockingDriver::new(frame));
+        let serving_driver: Arc<dyn TtrpcServerDriver> = driver.clone();
+        let serving = tokio::spawn(serve_ttrpc_services_inner(
+            serving_driver,
+            HashMap::from([("test.Service".to_owned(), service)]),
+        ));
+        (driver, serving)
+    }
+
     #[tokio::test]
     async fn service_cancellation_reaches_handler_and_suppresses_late_response() {
         let started = Arc::new(Notify::new());
         let observed = Arc::new(Notify::new());
-        let driver = Arc::new(BlockingDriver::new(request_frame(23)));
         let service = Service {
             methods: HashMap::from([(
                 "Block".to_owned(),
@@ -593,11 +608,7 @@ mod tests {
             )]),
             streams: HashMap::new(),
         };
-        let serving_driver: Arc<dyn TtrpcServerDriver> = driver.clone();
-        let serving = tokio::spawn(serve_ttrpc_services_inner(
-            serving_driver,
-            HashMap::from([("test.Service".to_owned(), service)]),
-        ));
+        let (driver, serving) = cancel_test_harness(request_frame(23), service);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
             .await
@@ -624,7 +635,6 @@ mod tests {
         let started = Arc::new(Notify::new());
         let observed = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let driver = Arc::new(BlockingDriver::new(request_frame_for(29, "Watch")));
         let service = Service {
             methods: HashMap::new(),
             streams: HashMap::from([(
@@ -636,11 +646,7 @@ mod tests {
                 }) as Arc<dyn StreamHandler + Send + Sync>,
             )]),
         };
-        let serving_driver: Arc<dyn TtrpcServerDriver> = driver.clone();
-        let serving = tokio::spawn(serve_ttrpc_services_inner(
-            serving_driver,
-            HashMap::from([("test.Service".to_owned(), service)]),
-        ));
+        let (driver, serving) = cancel_test_harness(request_frame_for(29, "Watch"), service);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
             .await

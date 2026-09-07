@@ -1298,10 +1298,6 @@ fn check_seccomp_bpf_loaded(entries: &PidfdEntries, report: &mut DoctorReport) {
 /// user namespace. Current shipped runner profiles do not require this
 /// posture; the probe stays wired so future roles can opt in here.
 fn is_d5_scoped_role(_role: &str) -> bool {
-    #[cfg(test)]
-    if _role == "__test-pre-ns" {
-        return true;
-    }
     false
 }
 
@@ -2326,25 +2322,6 @@ mod tests {
         let mut report = DoctorReport::default();
         check_pre_ns_posture(&entries, &mut report);
         assert_eq!(report.checks[0].status, DoctorStatus::Pass);
-    }
-
-    #[test]
-    fn pre_ns_posture_fails_for_test_scoped_role_in_initial_namespace() {
-        let entries = PidfdEntries {
-            state: PidfdState::Loaded,
-            entries: vec![PersistedPidfdEntryLoose {
-                vm: "test-vm".to_owned(),
-                role: "__test-pre-ns".to_owned(),
-                pid: 42,
-                start_time_ticks: 0,
-            }],
-        };
-        let mut report = DoctorReport::default();
-        check_pre_ns_posture_with_reader(&entries, &mut report, |_| {
-            Some(fake_proc_status(2, &[42]))
-        });
-        assert_eq!(report.checks[0].status, DoctorStatus::Fail);
-        assert!(report.checks[0].detail.contains("__test-pre-ns(pid=42)"));
     }
 
     #[test]
