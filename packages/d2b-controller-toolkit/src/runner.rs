@@ -1108,7 +1108,7 @@ where
                                                 ScheduledQueueItem::PersistenceRetry {
                                                     key: key.clone(),
                                                     generation,
-                                                    reason,
+                                                    reason: persisted_reason,
                                                     operation: persistence_operation,
                                                 },
                                             );
@@ -2080,7 +2080,6 @@ enum FailurePersistenceAttempt {
     Persisted,
     Skipped,
     Conflict,
-    Uncertain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2151,7 +2150,7 @@ where
     if current.key() != target
         || expected_generation.is_some_and(|generation| current.generation() != generation)
     {
-        return Ok(FailurePersistenceAttempt::Uncertain);
+        return Ok(FailurePersistenceAttempt::Skipped);
     }
     let projection = ReconcileProjection::new(
         current.key().clone(),
@@ -2220,9 +2219,6 @@ where
                 return Ok(FailurePersistence::Persisted);
             }
             FailurePersistenceAttempt::Skipped => return Ok(FailurePersistence::Skipped),
-            FailurePersistenceAttempt::Uncertain => {
-                return Ok(FailurePersistence::Uncertain);
-            }
             FailurePersistenceAttempt::Conflict
                 if attempt + 1 < FAILURE_PERSISTENCE_MAX_ATTEMPTS => {}
             FailurePersistenceAttempt::Conflict => {

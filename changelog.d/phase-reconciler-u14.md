@@ -217,6 +217,11 @@
   retry path so handler effects are not executed again with a reset attempt.
 - Distinguished expected VMM Process convergence from invalid Cloud Hypervisor
   endpoint ownership and identity failures so only the former becomes Pending.
+- Skipped stale failure projections after a generation change so the
+  persistence-only recovery path releases the running key for fresh work,
+  while preserving HandlerExhausted as the terminal reason.
+- Treated failed or deleted VMM Process phases as capability failures instead
+  of endlessly deferring endpoint publication.
 
 ### Removed
 

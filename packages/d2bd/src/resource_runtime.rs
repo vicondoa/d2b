@@ -15803,14 +15803,19 @@ impl ZoneResourceRuntime {
         {
             return Err(ResourceRuntimeError::CapabilityUnavailable);
         }
-        if process_envelope.status().phase() != ResourcePhase::Ready {
+        let process_phase = process_envelope.status().phase();
+        if process_phase != ResourcePhase::Ready {
             tracing::debug!(
                 zone = %self.zone.as_str(),
                 guest = %guest_ref.name().as_str(),
-                phase = ?process_envelope.status().phase(),
+                phase = ?process_phase,
                 "Cloud Hypervisor endpoint publication deferred until VMM Process is Ready",
             );
-            return Ok(CloudHypervisorEndpointOutcome::Pending);
+            return if matches!(process_phase, ResourcePhase::Pending | ResourcePhase::Unknown) {
+                Ok(CloudHypervisorEndpointOutcome::Pending)
+            } else {
+                Err(ResourceRuntimeError::CapabilityUnavailable)
+            };
         }
         let provider_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor")
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
