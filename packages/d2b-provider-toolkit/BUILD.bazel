@@ -116,6 +116,7 @@ rust_test(
     name = "supervised_runtime",
     srcs = ["tests/supervised_runtime.rs"],
     compile_data = ["Cargo.toml"],
+    args = ["--test-threads=1"],
     data = [
         "//packages/d2b-provider-credential-secret-service:d2b-provider-credential-secret-service",
         "//packages/d2b-provider-credential-entra:d2b-provider-credential-entra",
