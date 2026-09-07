@@ -177,6 +177,13 @@ impl StoredBinding {
         base.remove("providerRef");
         let binding: VolumeBindingSpec = serde_json::from_value(serde_json::Value::Object(base))
             .map_err(|_| invalid)?;
+        if metadata
+            .get("ownerRef")
+            .and_then(serde_json::Value::as_str)
+            != Some(binding.volume_ref().to_canonical_string().as_str())
+        {
+            return Err(invalid);
+        }
         Ok(Self::new(binding, uid, generation, revision))
     }
 

@@ -449,7 +449,9 @@ fn resource_binding_spec_keeps_one_strict_owner() {
 
     let mut foreign_owner = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
     foreign_owner["metadata"]["ownerRef"] = serde_json::json!("Guest/work-vm");
-    assert!(StoredBinding::from_resource_spec(&foreign_owner).is_err());
+    let mut mismatched_owner = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    mismatched_owner["metadata"]["ownerRef"] = serde_json::json!("Volume/other");
+    assert!(StoredBinding::from_resource_spec(&mismatched_owner).is_err());
 
     let mut tuned = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
     tuned["spec"]["threadPoolSize"] = serde_json::json!(2);
