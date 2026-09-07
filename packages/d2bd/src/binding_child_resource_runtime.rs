@@ -297,8 +297,16 @@ pub(crate) fn guest_binding_refs(
         .filter(|binding| {
             let spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
                 .ok()
-                .and_then(|value| {
-                    serde_json::from_value::<VolumeBindingSpec>(value["spec"].clone()).ok()
+                .and_then(|value| value.get("spec").cloned())
+                .and_then(|spec| {
+                    let mut object = spec.as_object()?.clone();
+                    for field in ["providerRef", "updatePolicy", "provider"] {
+                        object.remove(field);
+                    }
+                    serde_json::from_value::<VolumeBindingSpec>(
+                        serde_json::Value::Object(object),
+                    )
+                    .ok()
                 });
             match spec {
                 Some(spec) => spec.execution_ref() == guest_ref,
@@ -1696,12 +1704,41 @@ mod tests {
             "Pending",
         );
 
-        let refs = guest_binding_refs(&[own, foreign, broken, unrelated], &guest_ref);
+        // Minted records carry the reserved envelope providerRef alongside
+        // the five typed fields; the filter must attribute them by execution
+        // target instead of keeping everything through the broken-spec path.
+        let minted_spec = |execution_ref: &str| {
+            serde_json::json!({
+                "volumeRef": "Volume/work-state",
+                "executionRef": execution_ref,
+                "view": "controller",
+                "access": "read-only",
+                "mountPath": "/state",
+                "providerRef": "Provider/volume-virtiofs",
+            })
+        };
+        let own_minted = stored_resource_with_spec(
+            &target("VolumeBinding", "own-minted"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            minted_spec(guest_ref.to_canonical_string().as_str()),
+        );
+        let foreign_minted = stored_resource_with_spec(
+            &target("VolumeBinding", "foreign-minted"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            minted_spec(other_guest_ref.to_canonical_string().as_str()),
+        );
+        let refs = guest_binding_refs(
+            &[own, foreign, broken, unrelated, own_minted, foreign_minted],
+            &guest_ref,
+        );
         assert_eq!(
             refs,
             vec![
                 target("VolumeBinding", "own"),
-                target("VolumeBinding", "broken")
+                target("VolumeBinding", "broken"),
+                target("VolumeBinding", "own-minted")
             ]
         );
     }

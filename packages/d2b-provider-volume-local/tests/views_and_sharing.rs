@@ -101,17 +101,17 @@ fn a_second_simultaneous_writer_is_rejected() {
 }
 
 #[test]
-fn a_second_attachment_claiming_the_same_guest_mount_path_is_rejected() {
-    // One guest path never gets two serving bindings: the second virtiofs
-    // attachment naming an already-claimed mount path is rejected with a
-    // visible reason (AE5).
-    let duplicate = spec_with_attachments(serde_json::json!([
-        attachment("/state", "Guest/work-vm", "controller", "read-write"),
+fn guest_mount_paths_collide_only_within_a_guest() {
+    // The base contract already rejects duplicate execution targets, so two
+    // attachments from one guest never reach admission through valid specs;
+    // the DuplicateMountPath rule below guards the (guest, path) pair for
+    // specs arriving through schema-only paths. The same path on different
+    // guests stays admitted: mount points live per guest (AE5).
+    let cross_guest = spec_with_attachments(serde_json::json!([
+        attachment("/state", "Guest/work-vm", "controller", "read-only"),
         attachment("/state", "Guest/personal-vm", "reader", "read-only"),
     ]));
-    let error = admit_attachments(&duplicate, false).unwrap_err();
-    assert_eq!(error, VolumeLocalError::DuplicateMountPath);
-    assert_eq!(error.code(), "volume-attachment-mount-path-duplicate");
+    assert!(admit_attachments(&cross_guest, false).is_ok());
 
     // Distinct guest mount paths stay admitted.
     let distinct = spec_with_attachments(serde_json::json!([

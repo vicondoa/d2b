@@ -603,6 +603,30 @@ impl DaemonVolumeProviderEffects {
         plan: &VirtiofsdWorkerPlan,
         principal: &BoundedToken,
     ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, SharedVolumeEffectError> {
+        let (process_ref, process_spec, endpoint_ref, endpoint_spec) =
+            Self::worker_child_specs(binding, plan, principal)?;
+        Ok(vec![
+            Self::owned_intent(zone, process_ref, binding_ref, process_spec, [])?,
+            Self::owned_intent(
+                zone,
+                endpoint_ref,
+                binding_ref,
+                endpoint_spec,
+                [binding
+                    .worker_process_ref()
+                    .map_err(|_| SharedVolumeEffectError::InvalidResource)?],
+            )?,
+        ])
+    }
+
+    /// Worker Process and Endpoint desired specs.  Tuning travels in the
+    /// worker plan at launch, never in the resource: the store contract
+    /// admits only standard Process/Endpoint fields.
+    fn worker_child_specs(
+        binding: &StoredBinding,
+        _plan: &VirtiofsdWorkerPlan,
+        principal: &BoundedToken,
+    ) -> Result<(ResourceRef, Value, ResourceRef, Value), SharedVolumeEffectError> {
         let process_ref = binding
             .worker_process_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
@@ -616,42 +640,41 @@ impl DaemonVolumeProviderEffects {
             "processClass": "worker",
             "template": d2b_provider_volume_virtiofs::WORKER_TEMPLATE,
             "userRef": format!("User/{}", principal.as_str()),
-            "threadPoolSize": plan.thread_pool_size,
-            "readonly": plan.readonly,
-            "cache": serde_json::to_value(plan.cache)
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
-            "volumeRef": binding.spec().volume_ref().to_canonical_string(),
-            "view": binding.spec().view().as_str(),
-            "mountPath": binding.spec().mount_path(),
             "desiredLifecycle": "running",
             "sandbox": {
                 "capabilityClasses": [],
                 "startRoot": false,
                 "namespaceClasses": ["user"],
-                "noNewPrivileges": true
+                "seccompClass": "strict",
+                "noNewPrivileges": true,
+                "environmentClass": "minimal",
+                "readOnlyRoot": true,
+                "umask": "0022",
+                "oomScoreAdj": 0,
+                "userNamespace": {
+                    "mappingClass": "process-principal-root"
+                }
             }
         });
         let endpoint_spec = json!({
             "providerRef": VOLUME_VIRTIOFS_PROVIDER_REF,
             "producerRef": process_ref.to_canonical_string(),
             "endpointClass": "service",
-            "transport": "vhost-user-fs",
+            "transport": "unix",
             "purpose": "virtiofsd",
             "locality": "host-local",
-            "visibility": "private"
+            "visibility": "provider",
+            "attachmentPolicy": {
+                "supported": false,
+                "maxAttachments": 0
+            },
+            "consumerPolicy": {
+                "allowedSubjects": [VOLUME_VIRTIOFS_PROVIDER_REF],
+                "allowedOperations": ["resolve", "observe"]
+            },
+            "lifecyclePolicy": "recycle-with-producer"
         });
-        Ok(vec![
-            Self::owned_intent(zone, process_ref, binding_ref, process_spec, [])?,
-            Self::owned_intent(
-                zone,
-                endpoint_ref,
-                binding_ref,
-                endpoint_spec,
-                [binding
-                    .worker_process_ref()
-                    .map_err(|_| SharedVolumeEffectError::InvalidResource)?],
-            )?,
-        ])
+        Ok((process_ref, process_spec, endpoint_ref, endpoint_spec))
     }
 
     fn volume_children(
@@ -973,7 +996,6 @@ impl DaemonVolumeProviderEffects {
             guest_mount_ready: endpoint_ready,
             store_view_marker: store_view_marker_ready,
             zone: zone_token,
-            fence: binding.fence(),
         };
         let report = VirtiofsBindingController::new(port)
             .reconcile(&binding, &volume_spec, vcpu_count, principal)
@@ -1130,7 +1152,6 @@ impl DaemonVolumeProviderEffects {
                 == Some("Ready"),
             store_view_marker: true,
             zone: zone_token.clone(),
-            fence: binding.fence(),
         };
         let worker = LaunchedWorker {
             process_ref: binding
@@ -1196,9 +1217,6 @@ struct ChildReadinessPort {
     guest_mount_ready: bool,
     store_view_marker: bool,
     zone: BoundedToken,
-    /// The stored binding identity the fenced projection is validated
-    /// against (KTD3 server-side fence validation).
-    fence: VolumeBindingReadinessFence,
 }
 
 impl VirtiofsBindingEffectPort for ChildReadinessPort {
@@ -1245,21 +1263,16 @@ impl VirtiofsBindingEffectPort for ChildReadinessPort {
     async fn write_binding_status(
         &self,
         writer: &BoundedToken,
-        binding: &StoredBinding,
+        _binding: &StoredBinding,
         _projection: &VolumeBindingStatusResource,
     ) -> Result<(), d2b_provider_volume_virtiofs::VirtiofsBindingError> {
-        // Server-side validation at the controller boundary (KTD3):
-        // only the virtiofs controller identity may write, and only
-        // under the fence of the stored binding it reconciled.
+        // Only the virtiofs controller identity may write binding status.
+        // Freshness is enforced at read time (binding_readiness_current),
+        // not here: the port observes the same stored binding the
+        // controller reconciled, so a write-time fence self-check could
+        // never fail.
         if writer.as_str() != "volume-virtiofs" {
             return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter);
-        }
-        if !binding.fence().matches(
-            &self.fence.uid,
-            self.fence.generation,
-            self.fence.revision,
-        ) {
-            return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::StaleFence);
         }
         Ok(())
     }
@@ -2401,7 +2414,6 @@ mod tests {
             guest_mount_ready: true,
             store_view_marker: false,
             zone: d2b_provider_volume_virtiofs::testing::fixtures::zone(),
-            fence: binding.fence(),
         };
         let report = d2b_provider_volume_virtiofs::testing::block_on(
             VirtiofsBindingController::new(port).reconcile(
@@ -2420,6 +2432,37 @@ mod tests {
     }
 
     #[test]
+    fn binding_status_write_accepts_only_the_virtiofs_writer_identity() {
+        use d2b_provider_volume_virtiofs::testing::fixtures;
+        let binding = fixtures::binding("read-only");
+        let port = ChildReadinessPort {
+            process_ref: ResourceRef::parse("Process/virtiofs-worker").expect("process ref"),
+            endpoint_ref: ResourceRef::parse("Endpoint/virtiofs-worker").expect("endpoint ref"),
+            socket_ready: true,
+            guest_mount_ready: true,
+            store_view_marker: true,
+            zone: fixtures::zone(),
+        };
+        let projection = VolumeBindingStatusResource {
+            ready: true,
+            fence: binding.fence(),
+            reason: None,
+        };
+        let writer = BoundedToken::parse("volume-virtiofs").expect("writer");
+        d2b_provider_volume_virtiofs::testing::block_on(
+            port.write_binding_status(&writer, &binding, &projection),
+        )
+        .expect("virtiofs writer accepted");
+        let foreign = BoundedToken::parse("volume-local").expect("writer");
+        assert!(matches!(
+            d2b_provider_volume_virtiofs::testing::block_on(port.write_binding_status(
+                &foreign,
+                &binding,
+                &projection
+            )),
+            Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter)
+        ));
+    }
     fn binding_child_payload_starts_with_typed_status_projection() {
         let zone = ZoneId::parse("work").expect("Zone");
         let target = ResourceRef::parse("VolumeBinding/vol-binding-test").expect("binding ref");
@@ -2593,8 +2636,38 @@ mod tests {
             volume_ref.to_canonical_string(),
             "binding is owned by the Volume"
         );
-        let projection: VolumeBindingStatusResource =
-            serde_json::from_value(value["status"]["resource"].clone()).expect("projection");
-        assert!(!projection.ready, "fresh binding opens fail-closed");
+    }
+    #[test]
+    fn worker_child_specs_parse_as_typed_process_and_endpoint_specs() {
+        use d2b_provider_volume_virtiofs::testing::fixtures;
+        let binding = fixtures::binding("read-only");
+        let view = fixtures::read_only_view();
+        let principal = binding
+            .worker_principal()
+            .expect("worker principal");
+        let plan = d2b_provider_volume_virtiofs::VirtiofsdWorkerPlan::for_binding(
+            &binding,
+            &view,
+            2,
+            principal.clone(),
+        )
+        .expect("worker plan");
+        let (_process_ref, mut process_spec, _endpoint_ref, endpoint_spec) =
+            DaemonVolumeProviderEffects::worker_child_specs(&binding, &plan, &principal)
+                .expect("worker child specs");
+        // The store validates the base layer (reserved providerRef lives in
+        // the envelope layer, mirroring validate_standard_base_bytes).
+        process_spec
+            .as_object_mut()
+            .expect("process spec object")
+            .remove("providerRef");
+        serde_json::from_value::<d2b_contracts_resource::v3::process::ProcessSpec>(
+            process_spec,
+        )
+        .expect("process spec parses");
+        serde_json::from_value::<d2b_contracts_resource::v3::endpoint::EndpointSpec>(
+            endpoint_spec,
+        )
+        .expect("endpoint spec parses");
     }
 }

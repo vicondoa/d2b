@@ -141,9 +141,12 @@ impl<'de> Deserialize<'de> for VolumeBindingSpec {
 
 /// The UID / generation / revision fence on readiness evidence.
 ///
-/// A readiness report is only current when all three fields match the
-/// binding's own identity, so a stale or reassigned binding never reports
-/// ready.
+/// A readiness report is only current when the UID and generation match the
+/// binding's own identity and the fence revision is at most the stored
+/// revision.  Every store mutation (including the status write carrying the
+/// report itself) advances the stored revision past the observed one, so an
+/// exact-revision rule could never latch; the UID pins reassignment and the
+/// generation pins spec changes, which together bound report staleness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VolumeBindingReadinessFence {
@@ -163,7 +166,7 @@ impl VolumeBindingReadinessFence {
         generation: ResourceGeneration,
         revision: ZoneRevision,
     ) -> bool {
-        self.uid == *uid && self.generation == generation && self.revision == revision
+        self.uid == *uid && self.generation == generation && self.revision <= revision
     }
 }
 
@@ -187,8 +190,10 @@ pub struct VolumeBindingStatusResource {
 impl VolumeBindingStatusResource {
     /// Whether this projection reports ready under the current fence.
     ///
-    /// Readiness that is not fenced by the binding's current UID,
-    /// generation, and revision is never current (fail-closed).
+    /// Readiness without a matching UID and generation is never current
+    /// (fail-closed).  The fence revision only needs to precede the stored
+    /// revision: the status write carrying the report advances the store
+    /// past the observed commit.
     pub fn readiness_is_current(
         &self,
         uid: &ResourceUid,
@@ -369,11 +374,21 @@ mod tests {
             ZoneRevision::new(9),
         ));
 
-        // Older revision: a report from a superseded commit is stale.
-        assert!(!status.readiness_is_current(
+        // Newer stored revision: later store commits (including the status
+        // write carrying this report) do not invalidate the evidence, so
+        // the report stays current while UID and generation match.
+        assert!(status.readiness_is_current(
             &uid(),
             ResourceGeneration::new(1).expect("nonzero generation"),
             ZoneRevision::new(10),
+        ));
+
+        // Future-dated fence: evidence claiming a commit newer than the
+        // stored resource is forged or corrupt, never current.
+        assert!(!status.readiness_is_current(
+            &uid(),
+            ResourceGeneration::new(1).expect("nonzero generation"),
+            ZoneRevision::new(8),
         ));
 
         // Not ready stays not ready under any fence.
