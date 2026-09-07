@@ -120,6 +120,24 @@ fn guest_mount_paths_collide_only_within_a_guest() {
     ]));
     assert!(admit_attachments(&distinct, false).is_ok());
 }
+#[test]
+fn non_frozen_serving_settings_are_rejected_instead_of_silently_ignored() {
+    // Bindings serve the frozen default only: a virtiofs attachment
+    // declaring live tuning is rejected with a visible reason.
+    let mut tuned = attachment("/state", "Guest/work-vm", "controller", "read-only");
+    tuned["settings"] = serde_json::json!({
+        "posixAcl": false,
+        "xattr": false,
+        "cache": "always",
+        "inodeFileHandles": "never",
+        "threadPoolSize": null,
+        "socketGroup": null,
+    });
+    let spec = spec_with_attachments(serde_json::json!([tuned]));
+    let error = admit_attachments(&spec, false).unwrap_err();
+    assert_eq!(error, VolumeLocalError::AttachmentSettingsUnsupported);
+    assert_eq!(error.code(), "volume-attachment-settings-unsupported");
+}
 
 #[test]
 fn the_shipped_provider_does_not_declare_shared_write() {

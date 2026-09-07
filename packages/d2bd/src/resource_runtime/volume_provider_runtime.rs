@@ -45,8 +45,9 @@ use d2b_core_controller::{
     UpgradePlan, UpgradeStage, ValidationResult,
 };
 use d2b_provider_volume_local::{
-    VolumeLayoutEffectPort, VolumeLocalController, VolumeLocalProfile, VolumeRunnerContract,
-    VolumeSourceEffectPort, desired_binding_intents, marker_path,
+    ConditionSeverity, EntryCondition, EntryDigest, LayoutPhase, VolumeLayoutEffectPort,
+    VolumeLocalController, VolumeLocalProfile, VolumeRunnerContract, VolumeSourceEffectPort,
+    VolumeStatusReport, desired_binding_intents, marker_path,
 };
 use d2b_provider_volume_virtiofs::{
     LaunchedWorker, StoredBinding, VirtiofsBindingController, VirtiofsBindingEffectPort,
@@ -758,17 +759,23 @@ impl DaemonVolumeProviderEffects {
         let adapter = AnchoredVolumeEffectAdapter::new(resolver);
         let controller =
             VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
-        let report = controller
+        let report = match controller
             .reconcile(resource.key().uid(), &spec, provider, owner_ref.as_ref())
             .await
-            .map_err(|error| {
+        {
+            Ok(report) => report,
+            Err(error) => {
                 tracing::warn!(
                     resource = %resource.key().resource_ref().to_canonical_string(),
                     error = ?error,
                     "U7 VolumeLocal reconcile failed",
                 );
-                SharedVolumeEffectError::Unavailable
-            })?;
+                if Self::is_terminal_admission_error(error) {
+                    return Ok(Self::failed_volume_result(resource, &spec, error));
+                }
+                return Err(SharedVolumeEffectError::Unavailable);
+            }
+        };
         let desired = Self::volume_children(&self.zone, resource.key().resource_ref(), &spec)?;
         let owner = self.stored(&runtime, resource).await?;
         let client = runtime
@@ -821,21 +828,45 @@ impl DaemonVolumeProviderEffects {
             Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
         };
         let runtime = self.runtime()?;
-        let volume_resource = self
+        // A binding whose Volume is missing or unparseable can never serve:
+        // surface Failed with a stable reason instead of retrying
+        // Unavailable forever.  The phase recomputes every pass, so the
+        // binding recovers silently when the Volume appears.
+        let volume_resource = match self
             .committed_resource(
                 &runtime,
                 binding.spec().volume_ref().clone(),
                 &context.operation_id,
             )
-            .await?;
+            .await
+        {
+            Ok(volume_resource) => volume_resource,
+            Err(_) => {
+                return Ok(Self::failed_binding_result(
+                    resource,
+                    d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
+                ))
+            }
+        };
         if volume_resource.resource_ref != *binding.spec().volume_ref() {
-            return Err(SharedVolumeEffectError::InvalidResource);
+            return Ok(Self::failed_binding_result(
+                resource,
+                d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
+            ));
         }
         // Dependency-only Volume read (AE2): the envelope is parsed and
         // the view resolved; nothing in this path writes the Volume.
         let volume_value = serde_json::from_slice::<Value>(&volume_resource.canonical_json)
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let volume_spec = Self::volume_spec(&volume_value)?;
+        let volume_spec = match Self::volume_spec(&volume_value) {
+            Ok(volume_spec) => volume_spec,
+            Err(_) => {
+                return Ok(Self::failed_binding_result(
+                    resource,
+                    d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
+                ))
+            }
+        };
         let guest_value = runtime
             .committed_resource_value(
                 &binding.spec().execution_ref().clone(),
@@ -1043,6 +1074,54 @@ impl DaemonVolumeProviderEffects {
             resource_projection: Some(resource_projection),
         }
     }
+    /// Whether a VolumeLocal failure is terminal admission input rather
+    /// than a transient effect fault.  Terminal admission rejections can
+    /// never succeed on retry; they surface Failed instead of Pending.
+    fn is_terminal_admission_error(error: d2b_provider_volume_local::VolumeLocalError) -> bool {
+        use d2b_provider_volume_local::VolumeLocalError as LocalError;
+        matches!(
+            error,
+            LocalError::ViewNotFound
+                | LocalError::ViewRightsInsufficient
+                | LocalError::SingleWriterConflict
+                | LocalError::SharedWriteUnsupported
+                | LocalError::DuplicateMountPath
+                | LocalError::AttachmentSettingsUnsupported
+        )
+    }
+
+    /// A Failed Volume result carrying the stable admission reason.  The
+    /// entry digest names the first declared attachment opaquely (or the
+    /// Volume itself); no path or principal reaches status.
+    fn failed_volume_result(
+        resource: &ResourceSnapshot,
+        spec: &VolumeSpec,
+        reason: d2b_provider_volume_local::VolumeLocalError,
+    ) -> SharedVolumeEffectResult {
+        let anchor = spec
+            .attachments()
+            .first()
+            .map(|attachment| attachment.mount_path().to_owned())
+            .unwrap_or_else(|| resource.key().resource_ref().name().to_string());
+        let report = VolumeStatusReport {
+            provider: BoundedToken::parse("volume-local").expect("frozen provider name"),
+            kind: spec.kind(),
+            layout_phase: LayoutPhase::Failed,
+            layout_conditions: vec![EntryCondition {
+                entry: EntryDigest::derive(resource.key().uid(), &anchor),
+                reason,
+                severity: ConditionSeverity::Failed,
+            }],
+            attachment_statuses: Vec::new(),
+            content: None,
+        };
+        let resource_projection =
+            serde_json::to_value(&report).expect("typed report serializes");
+        SharedVolumeEffectResult {
+            phase: SharedVolumeEffectPhase::Failed,
+            resource_projection: Some(resource_projection),
+        }
+    }
 
     async fn finalize_volume(
         &self,
@@ -1104,15 +1183,54 @@ impl DaemonVolumeProviderEffects {
         resource: &ResourceSnapshot,
     ) -> Result<(), SharedVolumeEffectError> {
         let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
-        let binding = StoredBinding::from_resource_spec(&value)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        // An unparseable spec still drains by owner key below; only the
+        // mount gate needs the parsed binding.
+        let binding = StoredBinding::from_resource_spec(&value).ok();
         let runtime = self.runtime()?;
         let owner = self.stored(&runtime, resource).await?;
         let client = runtime
             .status_client()
             .map_err(|_| SharedVolumeEffectError::Unavailable)?;
-        // The owned worker and Endpoint are drained first; the drain
-        // converges only once both children are gone.
+        // KTD6: observe the guest mount BEFORE deleting anything.  The
+        // published Endpoint is Ready only while the guest-side share is
+        // served; a present mount keeps the finalizer and skips child
+        // deletion so the share is never orphaned mid-serve.
+        let children = crate::binding_child_resource_runtime::list_binding_children(
+            &runtime.store,
+            &self.zone,
+        )
+        .await
+        .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        if let Some(binding) = binding.as_ref() {
+            let endpoint_ref = binding
+                .endpoint_ref()
+                .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            let zone_token = BoundedToken::parse(self.zone.as_str().to_owned())
+                .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            let port = ChildReadinessPort {
+                process_ref: binding
+                    .worker_process_ref()
+                    .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
+                endpoint_ref: endpoint_ref.clone(),
+                socket_ready: false,
+                guest_mount_ready: child_phase(&children, &endpoint_ref).as_deref()
+                    == Some("Ready"),
+                store_view_marker: true,
+                zone: zone_token.clone(),
+            };
+            let worker = LaunchedWorker {
+                process_ref: binding
+                    .worker_process_ref()
+                    .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
+                socket: binding.socket_identity(&zone_token),
+            };
+            VirtiofsBindingController::new(port)
+                .drain(&binding, &worker)
+                .await
+                .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        }
+        // The owned worker and Endpoint drain last; the drain converges
+        // only once both children are gone.
         let converged = crate::binding_child_resource_runtime::reconcile_owned_children(
             &runtime.store,
             &client,
@@ -1128,42 +1246,7 @@ impl DaemonVolumeProviderEffects {
         if !converged.contains(context.target.resource_ref()) {
             return Err(SharedVolumeEffectError::Unavailable);
         }
-        // KTD6: the controller drain check gates finalizer removal — a
-        // guest mount that is still present blocks the drain (AE6). The
-        // mount observation is the published Endpoint: it is only Ready
-        // while the guest-side share is served.
-        let children = crate::binding_child_resource_runtime::list_binding_children(
-            &runtime.store,
-            &self.zone,
-        )
-        .await
-        .map_err(|_| SharedVolumeEffectError::Unavailable)?;
-        let endpoint_ref = binding
-            .endpoint_ref()
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let zone_token = BoundedToken::parse(self.zone.as_str().to_owned())
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let port = ChildReadinessPort {
-            process_ref: binding
-                .worker_process_ref()
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
-            endpoint_ref: endpoint_ref.clone(),
-            socket_ready: false,
-            guest_mount_ready: child_phase(&children, &endpoint_ref).as_deref()
-                == Some("Ready"),
-            store_view_marker: true,
-            zone: zone_token.clone(),
-        };
-        let worker = LaunchedWorker {
-            process_ref: binding
-                .worker_process_ref()
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
-            socket: binding.socket_identity(&zone_token),
-        };
-        VirtiofsBindingController::new(port)
-            .drain(&binding, &worker)
-            .await
-            .map_err(|_| SharedVolumeEffectError::Unavailable)
+        Ok(())
     }
 }
 
@@ -2670,5 +2753,33 @@ mod tests {
             endpoint_spec,
         )
         .expect("endpoint spec parses");
+    }
+    #[test]
+    fn terminal_admission_errors_map_to_failed_while_transients_retry() {
+        use d2b_provider_volume_local::VolumeLocalError as LocalError;
+        for terminal in [
+            LocalError::ViewNotFound,
+            LocalError::ViewRightsInsufficient,
+            LocalError::SingleWriterConflict,
+            LocalError::SharedWriteUnsupported,
+            LocalError::DuplicateMountPath,
+            LocalError::AttachmentSettingsUnsupported,
+        ] {
+            assert!(
+                DaemonVolumeProviderEffects::is_terminal_admission_error(terminal),
+                "{terminal:?} must surface Failed, not retry forever"
+            );
+        }
+        for transient in [
+            LocalError::SourceUnresolved,
+            LocalError::EffectFailed,
+            LocalError::EntryMissing,
+            LocalError::StoreViewMarkerMissing,
+        ] {
+            assert!(
+                !DaemonVolumeProviderEffects::is_terminal_admission_error(transient),
+                "{transient:?} must stay retryable"
+            );
+        }
     }
 }

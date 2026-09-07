@@ -65,13 +65,12 @@ pub struct AttachmentPlan {
     pub settings: AttachmentSettings,
 }
 
-/// Admit every declared attachment of a Volume.
-///
 /// Rejects a view that does not exist, an access level the view's rights
 /// do not cover, a second simultaneous writer, `shared-write` when
-/// the selected attachment Provider does not declare it, and a second
-/// virtiofs attachment naming a (guest, mount path) pair that an earlier
-/// attachment already claimed (AE5).
+/// the selected attachment Provider does not declare it, serving settings
+/// outside the frozen serving default, and a second virtiofs attachment
+/// naming a (guest, mount path) pair that an earlier attachment already
+/// claimed (AE5).
 pub fn admit_attachments(
     spec: &VolumeSpec,
     supports_shared_write: bool,
@@ -92,6 +91,9 @@ pub fn admit_attachments(
             return Err(VolumeLocalError::SingleWriterConflict);
         }
         if attachment.transport() == AttachmentTransport::Virtiofs {
+            if attachment.settings() != &AttachmentSettings::default() {
+                return Err(VolumeLocalError::AttachmentSettingsUnsupported);
+            }
             if plans.iter().any(|plan| {
                 plan.execution_ref == *attachment.execution_ref()
                     && plan.mount_path == attachment.mount_path()
