@@ -10,9 +10,10 @@
 //!
 //! The boundary is therefore an allowlist. [`OWNED_RESOURCE_TYPES`] is the
 //! whole of it, and anything absent is refused, whether or not it appears
-//! in [`DISOWNED_RESOURCE_TYPES`]. That named list exists so a test can
-//! assert the specification's exact negative enumeration is still refused,
-//! not because refusal depends on membership in it.
+//! in [`DISOWNED_RESOURCE_TYPES`]. That named list documents the
+//! specification's exact negative enumeration; refusal itself is enforced
+//! by the owner check and covered end-to-end in `tests/ownership.rs`,
+//! not by membership in the list.
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::host::HOST_RESOURCE_TYPE;
