@@ -342,6 +342,14 @@ pkgs.testers.runNixOSTest {
                 view = "controller";
                 access = "read-only";
                 mountPath = "/state";
+                settings = {
+                  posixAcl = false;
+                  xattr = false;
+                  cache = "auto";
+                  inodeFileHandles = "never";
+                  threadPoolSize = null;
+                  socketGroup = null;
+                };
               }];
             };
           };
