@@ -1,4 +1,4 @@
-//! The Export-owned virtiofsd worker.
+//! The binding-owned virtiofsd worker.
 //!
 //! The worker's sandbox posture is frozen by ADR 0021: zero host
 //! capabilities, no start as root, a chroot sandbox whose privileges live
@@ -12,24 +12,22 @@ use std::fmt;
 use serde::Serialize;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::volume::{
-    AttachmentAccess, AttachmentCache, InodeFileHandles, ViewRight, ViewSpec,
-};
+use d2b_contracts_resource::v3::volume::{AttachmentAccess, AttachmentCache, ViewRight, ViewSpec};
 
-use crate::error::VirtiofsExportError;
-use crate::export::ExportSpec;
+use crate::error::VirtiofsBindingError;
+use crate::export::StoredBinding;
 
 /// The frozen sandbox mode of every virtiofsd worker.
 pub const SANDBOX_MODE: &str = "chroot";
 /// The frozen inode file-handle mode of every virtiofsd worker.
 pub const INODE_FILE_HANDLES: &str = "never";
-/// The Process template every Export-owned worker uses.
+/// The Process template every binding-owned worker uses.
 pub const WORKER_TEMPLATE: &str = "virtiofsd-worker";
 /// The user-namespace mapping class the worker resolves through its
 /// launch port.
 pub const USER_NAMESPACE_MAPPING_CLASS: &str = "process-principal-root";
 
-/// The path-free launch plan of one Export's virtiofsd worker.
+/// The path-free launch plan of one binding's virtiofsd worker.
 ///
 /// It names no socket path, no shared directory, no numeric group, and
 /// no store path. The effect adapter joins it to the private root
@@ -39,8 +37,8 @@ pub const USER_NAMESPACE_MAPPING_CLASS: &str = "process-principal-root";
 pub struct VirtiofsdWorkerPlan {
     /// The Process template this worker instantiates.
     pub template: &'static str,
-    /// The number of worker threads, resolved from the attachment
-    /// settings or the target Guest's vcpu count.
+    /// The number of worker threads, resolved from the target Guest's
+    /// vcpu count.
     pub thread_pool_size: u32,
     /// Whether the share is served read-only.
     pub readonly: bool,
@@ -58,47 +56,37 @@ pub struct VirtiofsdWorkerPlan {
 }
 
 impl VirtiofsdWorkerPlan {
-    /// Build the worker plan for one Export.
+    /// Build the worker plan for one binding.
     ///
-    /// `vcpu_count` supplies the thread-pool size when the attachment
-    /// declares none. The plan is read-only whenever the Export declares
-    /// read-only access or the selected view grants no write right, so a
-    /// view that never granted write cannot be widened by an Export.
-    pub fn for_export(
-        export: &ExportSpec,
+    /// `vcpu_count` supplies the thread-pool size. The plan is read-only
+    /// whenever the binding declares read-only access or the selected
+    /// view grants no write right, so a view that never granted write
+    /// cannot be widened by a binding. The neutral binding envelope
+    /// carries no attachment tuning (KTD1): the serving posture is the
+    /// frozen default profile — no POSIX ACLs, no xattrs, `auto` page
+    /// cache, and `never` inode file handles — so the ADR 0021 sandbox
+    /// invariant holds by construction.
+    pub fn for_binding(
+        binding: &StoredBinding,
         view: &ViewSpec,
         vcpu_count: u32,
         principal: BoundedToken,
-    ) -> Result<Self, VirtiofsExportError> {
+    ) -> Result<Self, VirtiofsBindingError> {
         if vcpu_count == 0 {
-            return Err(VirtiofsExportError::InvalidExport);
+            return Err(VirtiofsBindingError::InvalidBinding);
         }
         let writes = view.rights().contains(&ViewRight::Write);
-        if export.access() != AttachmentAccess::ReadOnly && !writes {
-            return Err(VirtiofsExportError::ViewRightsInsufficient);
-        }
-        let settings = export.settings();
-        let rendered =
-            serde_json::to_value(settings).map_err(|_| VirtiofsExportError::InvalidExport)?;
-        let flag = |name: &str| rendered.get(name).and_then(serde_json::Value::as_bool);
-        let thread_pool_size = rendered
-            .get("threadPoolSize")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(vcpu_count);
-        if thread_pool_size == 0 {
-            return Err(VirtiofsExportError::InvalidExport);
-        }
-        if settings.inode_file_handles() != InodeFileHandles::Never {
-            return Err(VirtiofsExportError::SandboxInvariantViolated);
+        let access = binding.spec().access();
+        if access != AttachmentAccess::ReadOnly && !writes {
+            return Err(VirtiofsBindingError::ViewRightsInsufficient);
         }
         Ok(Self {
             template: WORKER_TEMPLATE,
-            thread_pool_size,
-            readonly: export.access() == AttachmentAccess::ReadOnly || !writes,
-            posix_acl: flag("posixAcl").unwrap_or(false),
-            xattr: flag("xattr").unwrap_or(false),
-            cache: settings.cache(),
+            thread_pool_size: vcpu_count,
+            readonly: access == AttachmentAccess::ReadOnly || !writes,
+            posix_acl: false,
+            xattr: false,
+            cache: AttachmentCache::Auto,
             user_namespace_mapping_class: USER_NAMESPACE_MAPPING_CLASS,
             principal,
         })
@@ -140,13 +128,13 @@ impl WorkerSandbox {
     }
 
     /// Reject any posture that is not the frozen one.
-    pub fn assert_conformant(&self) -> Result<(), VirtiofsExportError> {
+    pub fn assert_conformant(&self) -> Result<(), VirtiofsBindingError> {
         if !self.capability_classes.is_empty()
             || self.start_root
             || self.sandbox_mode != SANDBOX_MODE
             || !self.read_only_root
         {
-            return Err(VirtiofsExportError::SandboxInvariantViolated);
+            return Err(VirtiofsBindingError::SandboxInvariantViolated);
         }
         Ok(())
     }
@@ -155,7 +143,7 @@ impl WorkerSandbox {
 /// Everything the effect adapter resolves privately for one worker.
 ///
 /// This type is crate-private on purpose: it is the only place a
-/// resolved shared directory, an export socket path, and a socket group
+/// resolved shared directory, a binding socket path, and a socket group
 /// meet, and none of them may reach the public surface. Its callers are
 /// the in-crate renderer below and, once ProviderSupervisor hosts it,
 /// the effect adapter.
@@ -188,20 +176,20 @@ impl fmt::Debug for ResolvedWorkerPaths {
 pub(crate) fn render_argv(
     plan: &VirtiofsdWorkerPlan,
     paths: &ResolvedWorkerPaths,
-) -> Result<Vec<String>, VirtiofsExportError> {
+) -> Result<Vec<String>, VirtiofsBindingError> {
     if paths.binary_path.is_empty() || !paths.binary_path.starts_with('/') {
-        return Err(VirtiofsExportError::InvalidExport);
+        return Err(VirtiofsBindingError::InvalidBinding);
     }
     for value in [&paths.socket_path, &paths.socket_group, &paths.shared_dir] {
         if value.is_empty() {
-            return Err(VirtiofsExportError::InvalidExport);
+            return Err(VirtiofsBindingError::InvalidBinding);
         }
     }
     if !is_inherited_fd_path(&paths.shared_dir) {
-        return Err(VirtiofsExportError::InvalidExport);
+        return Err(VirtiofsBindingError::InvalidBinding);
     }
     if plan.thread_pool_size == 0 {
-        return Err(VirtiofsExportError::InvalidExport);
+        return Err(VirtiofsBindingError::InvalidBinding);
     }
 
     let cache = match plan.cache {
@@ -307,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_flags_are_emitted_only_when_the_attachment_asks_for_them() {
+    fn optional_flags_are_emitted_only_when_the_plan_asks_for_them() {
         let mut opted = plan(true);
         opted.posix_acl = true;
         opted.xattr = true;
@@ -341,7 +329,7 @@ mod tests {
             broken.binary_path = binary.to_owned();
             assert_eq!(
                 render_argv(&plan(true), &broken).unwrap_err(),
-                VirtiofsExportError::InvalidExport
+                VirtiofsBindingError::InvalidBinding
             );
         }
     }
@@ -357,7 +345,7 @@ mod tests {
             mutate(&mut broken);
             assert_eq!(
                 render_argv(&plan(true), &broken).unwrap_err(),
-                VirtiofsExportError::InvalidExport
+                VirtiofsBindingError::InvalidBinding
             );
         }
     }
@@ -368,7 +356,7 @@ mod tests {
         broken.thread_pool_size = 0;
         assert_eq!(
             render_argv(&broken, &paths()).unwrap_err(),
-            VirtiofsExportError::InvalidExport
+            VirtiofsBindingError::InvalidBinding
         );
     }
 
@@ -383,7 +371,7 @@ mod tests {
             store.shared_dir = shared_dir.to_owned();
             assert_eq!(
                 render_argv(&plan(true), &store).unwrap_err(),
-                VirtiofsExportError::InvalidExport
+                VirtiofsBindingError::InvalidBinding
             );
         }
     }
@@ -423,41 +411,45 @@ mod tests {
         ] {
             assert_eq!(
                 broken.assert_conformant().unwrap_err(),
-                VirtiofsExportError::SandboxInvariantViolated
+                VirtiofsBindingError::SandboxInvariantViolated
             );
         }
     }
 
     #[test]
     fn the_thread_pool_falls_back_to_the_guest_vcpu_count() {
-        let export = fixtures::export("read-only");
+        let binding = fixtures::binding("read-only");
         let view = fixtures::read_only_view();
-        let plan = VirtiofsdWorkerPlan::for_export(&export, &view, 8, fixtures::principal())
+        let plan = VirtiofsdWorkerPlan::for_binding(&binding, &view, 8, fixtures::principal())
             .expect("conformant plan");
         assert_eq!(plan.thread_pool_size, 8);
         assert!(plan.readonly);
     }
 
     #[test]
-    fn a_write_export_over_a_read_only_view_is_rejected() {
-        let export = fixtures::export("read-write");
+    fn a_write_binding_over_a_read_only_view_is_rejected() {
+        let binding = fixtures::binding("read-write");
         let view = fixtures::read_only_view();
         assert_eq!(
-            VirtiofsdWorkerPlan::for_export(&export, &view, 4, fixtures::principal()).unwrap_err(),
-            VirtiofsExportError::ViewRightsInsufficient
+            VirtiofsdWorkerPlan::for_binding(&binding, &view, 4, fixtures::principal()).unwrap_err(),
+            VirtiofsBindingError::ViewRightsInsufficient
         );
     }
 
     #[test]
-    fn a_non_never_inode_file_handle_setting_is_rejected() {
-        let export = fixtures::export_with_settings(
-            "read-only",
-            serde_json::json!({ "inodeFileHandles": "prefer" }),
-        );
+    fn the_frozen_default_posture_survives_the_neutral_envelope() {
+        // The neutral envelope carries no attachment tuning (KTD1); the
+        // plan keeps the frozen default profile the Export-era default
+        // settings produced (KTD9).
+        let binding = fixtures::binding("read-only");
         let view = fixtures::read_only_view();
-        assert_eq!(
-            VirtiofsdWorkerPlan::for_export(&export, &view, 4, fixtures::principal()).unwrap_err(),
-            VirtiofsExportError::SandboxInvariantViolated
-        );
+        let plan = VirtiofsdWorkerPlan::for_binding(&binding, &view, 4, fixtures::principal())
+            .expect("conformant plan");
+        assert_eq!(plan.template, WORKER_TEMPLATE);
+        assert!(!plan.posix_acl);
+        assert!(!plan.xattr);
+        assert_eq!(plan.cache, AttachmentCache::Auto);
+        assert_eq!(plan.user_namespace_mapping_class, USER_NAMESPACE_MAPPING_CLASS);
+        assert!(WorkerSandbox::conformant().assert_conformant().is_ok());
     }
 }

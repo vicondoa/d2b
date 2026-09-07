@@ -17,6 +17,7 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid, VOLUME_BINDING_RESOURCE_TYPE, ZoneId,
     execution_policy::BoundedToken, identity::ReconnectGeneration,
+    resource_status::StatusCode,
     volume::{SourceKind, VolumeSpec},
     volume_binding::{VolumeBindingReadinessFence, VolumeBindingSpec, VolumeBindingStatusResource},
 };
@@ -34,7 +35,7 @@ use d2b_provider_volume_local::{
     VolumeSourceEffectPort, desired_binding_intents, marker_path,
 };
 use d2b_provider_volume_virtiofs::{
-    ExportSpec, LaunchedWorker, VirtiofsExportController, VirtiofsExportEffectPort,
+    LaunchedWorker, StoredBinding, VirtiofsBindingController, VirtiofsBindingEffectPort,
     VirtiofsRunnerContract, VirtiofsdWorkerPlan,
 };
 use d2b_resource_api::registered::RedbRegisteredControllerApi;
@@ -258,10 +259,11 @@ struct SharedVolumeEffectContext {
     operation_id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SharedVolumeEffectPhase {
     Ready,
     Pending,
+    /// A terminal admission or reconcile failure surfaced per KTD5.
+    Failed,
 }
 
 struct SharedVolumeEffectResult {
@@ -582,15 +584,15 @@ impl DaemonVolumeProviderEffects {
     fn binding_children(
         &self,
         zone: &ZoneId,
-        export_ref: &ResourceRef,
-        export: &ExportSpec,
+        binding_ref: &ResourceRef,
+        binding: &StoredBinding,
         plan: &VirtiofsdWorkerPlan,
         principal: &BoundedToken,
     ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, SharedVolumeEffectError> {
-        let process_ref = export
+        let process_ref = binding
             .worker_process_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let endpoint_ref = export
+        let endpoint_ref = binding
             .endpoint_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let process_spec = json!({
@@ -604,9 +606,9 @@ impl DaemonVolumeProviderEffects {
             "readonly": plan.readonly,
             "cache": serde_json::to_value(plan.cache)
                 .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
-            "volumeRef": export.volume_ref().to_canonical_string(),
-            "view": export.view().as_str(),
-            "mountPath": export.mount_path(),
+            "volumeRef": binding.spec().volume_ref().to_canonical_string(),
+            "view": binding.spec().view().as_str(),
+            "mountPath": binding.spec().mount_path(),
             "desiredLifecycle": "running",
             "sandbox": {
                 "capabilityClasses": [],
@@ -625,13 +627,13 @@ impl DaemonVolumeProviderEffects {
             "visibility": "private"
         });
         Ok(vec![
-            Self::owned_intent(zone, process_ref, export_ref, process_spec, [])?,
+            Self::owned_intent(zone, process_ref, binding_ref, process_spec, [])?,
             Self::owned_intent(
                 zone,
                 endpoint_ref,
-                export_ref,
+                binding_ref,
                 endpoint_spec,
-                [export
+                [binding
                     .worker_process_ref()
                     .map_err(|_| SharedVolumeEffectError::InvalidResource)?],
             )?,
@@ -648,9 +650,10 @@ impl DaemonVolumeProviderEffects {
             .into_iter()
             .map(|intent| {
                 // Neutral binding payload only (KTD1): access mode and
-                // mount intent.  Attachment tuning is re-derived
-                // Volume-side at serving time, so the envelope carries no
-                // provider extension or settings.
+                // mount intent.  The envelope carries no provider
+                // extension or settings: the standard catalog admits no
+                // extension path for the type, and the serving posture
+                // is the frozen default.
                 let binding = VolumeBindingSpec::new(
                     intent.volume_ref().clone(),
                     intent.execution_ref().clone(),
@@ -771,64 +774,35 @@ impl DaemonVolumeProviderEffects {
         &self,
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
-    ) -> Result<SharedVolumeEffectPhase, SharedVolumeEffectError> {
+    ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
         let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
-        let binding_spec_value = value
-            .get("spec")
-            .ok_or(SharedVolumeEffectError::InvalidResource)?;
-        let mut base_spec = binding_spec_value
-            .as_object()
-            .ok_or(SharedVolumeEffectError::InvalidResource)?
-            .clone();
-        for field in ["providerRef", "provider"] {
-            base_spec.remove(field);
-        }
-        let binding = serde_json::from_value::<VolumeBindingSpec>(Value::Object(base_spec))
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        VolumeBindingSpec::admit_owner_ref(
-            value
-                .pointer("/metadata/ownerRef")
-                .and_then(Value::as_str)
-                .and_then(|owner| ResourceRef::parse(owner).ok())
-                .as_ref(),
-        )
-        .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        // U4: the reconciler input is the stored binding envelope
+        // itself, parsed strictly against the neutral binding contract.
+        let binding = match StoredBinding::from_resource_spec(&value) {
+            Ok(binding) => binding,
+            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+        };
         let runtime = self.runtime()?;
         let volume_resource = self
-            .committed_resource(&runtime, binding.volume_ref().clone(), &context.operation_id)
+            .committed_resource(
+                &runtime,
+                binding.spec().volume_ref().clone(),
+                &context.operation_id,
+            )
             .await?;
-        if volume_resource.resource_ref != *binding.volume_ref() {
+        if volume_resource.resource_ref != *binding.spec().volume_ref() {
             return Err(SharedVolumeEffectError::InvalidResource);
         }
+        // Dependency-only Volume read (AE2): the envelope is parsed and
+        // the view resolved; nothing in this path writes the Volume.
         let volume_value = serde_json::from_slice::<Value>(&volume_resource.canonical_json)
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let volume_spec = Self::volume_spec(&volume_value)?;
-        // Serving bridge: U4 retypes the provider reconciler input onto
-        // bindings.  Until then the binding serves through the existing
-        // Export input, with the declared attachment settings re-derived
-        // from the owning Volume (they are never part of the neutral
-        // binding envelope, per KTD1).
-        let settings = volume_spec
-            .attachments()
-            .iter()
-            .find(|attachment| {
-                attachment.execution_ref() == binding.execution_ref()
-                    && attachment.view().as_str() == binding.view().as_str()
-                    && attachment.mount_path() == binding.mount_path()
-            })
-            .map(|attachment| attachment.settings().clone())
-            .ok_or(SharedVolumeEffectError::InvalidResource)?;
-        let export = ExportSpec::new(
-            binding.volume_ref().clone(),
-            binding.execution_ref().clone(),
-            binding.view().clone(),
-            binding.access(),
-            settings,
-        )
-        .and_then(|export| export.with_mount_path(binding.mount_path()))
-        .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let guest_value = runtime
-            .committed_resource_value(&export.execution_ref().clone(), &context.operation_id)
+            .committed_resource_value(
+                &binding.spec().execution_ref().clone(),
+                &context.operation_id,
+            )
             .await
             .ok();
         let vcpu_count = guest_value
@@ -838,17 +812,28 @@ impl DaemonVolumeProviderEffects {
             .and_then(|value| u32::try_from(value).ok())
             .filter(|value| *value > 0)
             .unwrap_or(1);
-        let principal = export
+        let principal = binding
             .worker_principal()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let view = d2b_provider_volume_virtiofs::resolve_view(&volume_spec, &export)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let plan = VirtiofsdWorkerPlan::for_export(&export, view, vcpu_count, principal.clone())
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let store_view_marker_ready = if export.view().as_str() == "ro-store" {
+        let view = match d2b_provider_volume_virtiofs::resolve_view(&volume_spec, &binding) {
+            Ok(view) => view,
+            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+        };
+        let plan =
+            match VirtiofsdWorkerPlan::for_binding(&binding, view, vcpu_count, principal.clone()) {
+                Ok(plan) => plan,
+                Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+            };
+        let store_view_marker_ready = if binding.spec().view().as_str() == "ro-store" {
             let nix_identity =
                 (volume_spec.source().settings().kind() == SourceKind::NixClosure)
-                .then(|| nix_closure_volume_identity(export.volume_ref(), &volume_value, &volume_spec))
+                .then(|| {
+                    nix_closure_volume_identity(
+                        binding.spec().volume_ref(),
+                        &volume_value,
+                        &volume_spec,
+                    )
+                })
                 .transpose()
                 .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
@@ -866,7 +851,7 @@ impl DaemonVolumeProviderEffects {
                 })
                 .flatten();
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
-                && guest_ref.as_ref() != Some(export.execution_ref())
+                && guest_ref.as_ref() != Some(binding.spec().execution_ref())
             {
                 return Err(SharedVolumeEffectError::InvalidResource);
             }
@@ -876,7 +861,7 @@ impl DaemonVolumeProviderEffects {
             let resolver = DaemonVolumeRootResolver::new(
                 &self.state,
                 self.zone.clone(),
-                export.volume_ref().clone(),
+                binding.spec().volume_ref().clone(),
                 volume_resource.uid.clone(),
                 guest_ref,
                 nix_closure_role,
@@ -893,8 +878,10 @@ impl DaemonVolumeProviderEffects {
                 )
                 .await
                 .map_err(|_| SharedVolumeEffectError::Unavailable)?;
-            let guest = BoundedToken::parse(export.execution_ref().name().as_str().to_owned())
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            let guest = BoundedToken::parse(
+                binding.spec().execution_ref().name().as_str().to_owned(),
+            )
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
             let evidence = adapter
                 .observe_store_view_marker(&root, &marker_path(&guest))
                 .await
@@ -903,13 +890,16 @@ impl DaemonVolumeProviderEffects {
         } else {
             true
         };
-        if export.view().as_str() == "ro-store" && !store_view_marker_ready {
-            return Ok(SharedVolumeEffectPhase::Pending);
+        if binding.spec().view().as_str() == "ro-store" && !store_view_marker_ready {
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
         }
         let desired = self.binding_children(
             &self.zone,
             context.target.resource_ref(),
-            &export,
+            &binding,
             &plan,
             &principal,
         )?;
@@ -930,7 +920,10 @@ impl DaemonVolumeProviderEffects {
         .await
         .map_err(|_| SharedVolumeEffectError::Unavailable)?;
         if !converged.contains(context.target.resource_ref()) {
-            return Ok(SharedVolumeEffectPhase::Pending);
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
         }
         let children = crate::binding_child_resource_runtime::list_binding_children(
             &runtime.store,
@@ -944,12 +937,15 @@ impl DaemonVolumeProviderEffects {
             fenced: false,
         };
         if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
-            return Ok(SharedVolumeEffectPhase::Pending);
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
         }
-        let process_ref = export
+        let process_ref = binding
             .worker_process_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let endpoint_ref = export
+        let endpoint_ref = binding
             .endpoint_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let process_ready = child_phase(&children, &process_ref).as_deref() == Some("Ready");
@@ -963,18 +959,52 @@ impl DaemonVolumeProviderEffects {
             guest_mount_ready: endpoint_ready,
             store_view_marker: store_view_marker_ready,
             zone: zone_token,
+            fence: binding.fence(),
         };
-        let report = VirtiofsExportController::new(port)
-            .reconcile(&export, &volume_spec, vcpu_count, principal)
+        let report = VirtiofsBindingController::new(port)
+            .reconcile(&binding, &volume_spec, vcpu_count, principal)
             .await
             .map_err(|_| SharedVolumeEffectError::Unavailable)?;
-        Ok(
-            if report.phase == d2b_provider_volume_virtiofs::ExportPhase::Ready {
-                SharedVolumeEffectPhase::Ready
-            } else {
-                SharedVolumeEffectPhase::Pending
+        let phase = match report.phase {
+            d2b_provider_volume_virtiofs::BindingPhase::Ready => SharedVolumeEffectPhase::Ready,
+            d2b_provider_volume_virtiofs::BindingPhase::Failed => SharedVolumeEffectPhase::Failed,
+            _ => SharedVolumeEffectPhase::Pending,
+        };
+        // KTD3: the typed fenced projection travels with every
+        // reconcile so the binding status carries it.
+        let projection = serde_json::to_value(&report.projection)
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        Ok(SharedVolumeEffectResult {
+            phase,
+            resource_projection: Some(projection),
+        })
+    }
+
+    /// A terminal admission failure surfaced per KTD5: Failed phase with
+    /// a stable reason, fenced by the stored binding identity. The
+    /// projection never reports ready.
+    fn failed_binding_result(
+        resource: &ResourceSnapshot,
+        reason: d2b_provider_volume_virtiofs::VirtiofsBindingError,
+    ) -> SharedVolumeEffectResult {
+        let projection = VolumeBindingStatusResource {
+            ready: false,
+            fence: VolumeBindingReadinessFence {
+                uid: resource.key().uid().clone(),
+                generation: resource.generation(),
+                revision: resource.revision(),
             },
-        )
+            reason: Some(
+                StatusCode::parse(reason.code())
+                    .expect("frozen binding error codes are valid status codes"),
+            ),
+        };
+        let resource_projection =
+            serde_json::to_value(&projection).expect("typed projection serializes");
+        SharedVolumeEffectResult {
+            phase: SharedVolumeEffectPhase::Failed,
+            resource_projection: Some(resource_projection),
+        }
     }
 
     async fn finalize_volume(
@@ -1036,12 +1066,16 @@ impl DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<(), SharedVolumeEffectError> {
-        let _ = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
+        let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
+        let binding = StoredBinding::from_resource_spec(&value)
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let runtime = self.runtime()?;
         let owner = self.stored(&runtime, resource).await?;
         let client = runtime
             .status_client()
             .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        // The owned worker and Endpoint are drained first; the drain
+        // converges only once both children are gone.
         let converged = crate::binding_child_resource_runtime::reconcile_owned_children(
             &runtime.store,
             &client,
@@ -1054,11 +1088,46 @@ impl DaemonVolumeProviderEffects {
         )
         .await
         .map_err(|_| SharedVolumeEffectError::Unavailable)?;
-        if converged.contains(context.target.resource_ref()) {
-            Ok(())
-        } else {
-            Err(SharedVolumeEffectError::Unavailable)
+        if !converged.contains(context.target.resource_ref()) {
+            return Err(SharedVolumeEffectError::Unavailable);
         }
+        // KTD6: the controller drain check gates finalizer removal — a
+        // guest mount that is still present blocks the drain (AE6). The
+        // mount observation is the published Endpoint: it is only Ready
+        // while the guest-side share is served.
+        let children = crate::binding_child_resource_runtime::list_binding_children(
+            &runtime.store,
+            &self.zone,
+        )
+        .await
+        .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        let endpoint_ref = binding
+            .endpoint_ref()
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let zone_token = BoundedToken::parse(self.zone.as_str().to_owned())
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let port = ChildReadinessPort {
+            process_ref: binding
+                .worker_process_ref()
+                .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
+            endpoint_ref: endpoint_ref.clone(),
+            socket_ready: false,
+            guest_mount_ready: child_phase(&children, &endpoint_ref).as_deref()
+                == Some("Ready"),
+            store_view_marker: true,
+            zone: zone_token.clone(),
+            fence: binding.fence(),
+        };
+        let worker = LaunchedWorker {
+            process_ref: binding
+                .worker_process_ref()
+                .map_err(|_| SharedVolumeEffectError::InvalidResource)?,
+            socket: binding.socket_identity(&zone_token),
+        };
+        VirtiofsBindingController::new(port)
+            .drain(&binding, &worker)
+            .await
+            .map_err(|_| SharedVolumeEffectError::Unavailable)
     }
 }
 
@@ -1075,7 +1144,9 @@ impl SharedVolumeEffectExecutor for DaemonVolumeProviderEffects {
                 .reconcile_volume(context, resource)
                 .await
                 .map(|result| result.phase),
-            SharedVolumeResourceKind::Binding => self.reconcile_binding(context, resource).await,
+            SharedVolumeResourceKind::Binding => {
+                self.reconcile_binding(context, resource).await.map(|result| result.phase)
+            }
         }
     }
 
@@ -1087,13 +1158,7 @@ impl SharedVolumeEffectExecutor for DaemonVolumeProviderEffects {
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
         match kind {
             SharedVolumeResourceKind::Volume => self.reconcile_volume(context, resource).await,
-            SharedVolumeResourceKind::Binding => self
-                .reconcile_binding(context, resource)
-                .await
-                .map(|phase| SharedVolumeEffectResult {
-                    phase,
-                    resource_projection: None,
-                }),
+            SharedVolumeResourceKind::Binding => self.reconcile_binding(context, resource).await,
         }
     }
 
@@ -1117,46 +1182,71 @@ struct ChildReadinessPort {
     guest_mount_ready: bool,
     store_view_marker: bool,
     zone: BoundedToken,
+    /// The stored binding identity the fenced projection is validated
+    /// against (KTD3 server-side fence validation).
+    fence: VolumeBindingReadinessFence,
 }
 
-impl VirtiofsExportEffectPort for ChildReadinessPort {
+impl VirtiofsBindingEffectPort for ChildReadinessPort {
     async fn launch_worker(
         &self,
-        export: &ExportSpec,
-        _plan: &d2b_provider_volume_virtiofs::VirtiofsdWorkerPlan,
-    ) -> Result<LaunchedWorker, d2b_provider_volume_virtiofs::VirtiofsExportError> {
+        binding: &StoredBinding,
+        _plan: &VirtiofsdWorkerPlan,
+    ) -> Result<LaunchedWorker, d2b_provider_volume_virtiofs::VirtiofsBindingError> {
         Ok(LaunchedWorker {
             process_ref: self.process_ref.clone(),
-            socket: export.socket_identity(&self.zone),
+            socket: binding.socket_identity(&self.zone),
         })
     }
 
     async fn observe_socket(
         &self,
         _worker: &LaunchedWorker,
-    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsExportError> {
+    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsBindingError> {
         Ok(self.socket_ready)
     }
 
     async fn observe_guest_mount(
         &self,
-        _export: &ExportSpec,
-    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsExportError> {
+        _binding: &StoredBinding,
+    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsBindingError> {
         Ok(self.guest_mount_ready)
     }
 
     async fn observe_store_view_marker(
         &self,
-        _export: &ExportSpec,
-    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsExportError> {
+        _binding: &StoredBinding,
+    ) -> Result<bool, d2b_provider_volume_virtiofs::VirtiofsBindingError> {
         Ok(self.store_view_marker)
     }
 
     async fn delete_worker(
         &self,
         _worker: &LaunchedWorker,
-    ) -> Result<(), d2b_provider_volume_virtiofs::VirtiofsExportError> {
+    ) -> Result<(), d2b_provider_volume_virtiofs::VirtiofsBindingError> {
         let _ = &self.endpoint_ref;
+        Ok(())
+    }
+
+    async fn write_binding_status(
+        &self,
+        writer: &BoundedToken,
+        binding: &StoredBinding,
+        _projection: &VolumeBindingStatusResource,
+    ) -> Result<(), d2b_provider_volume_virtiofs::VirtiofsBindingError> {
+        // Server-side validation at the controller boundary (KTD3):
+        // only the virtiofs controller identity may write, and only
+        // under the fence of the stored binding it reconciled.
+        if writer.as_str() != "volume-virtiofs" {
+            return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter);
+        }
+        if !binding.fence().matches(
+            &self.fence.uid,
+            self.fence.generation,
+            self.fence.revision,
+        ) {
+            return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::StaleFence);
+        }
         Ok(())
     }
 }
@@ -1679,10 +1769,10 @@ impl SharedVolumeResourceReconciler {
             "phase".to_owned(),
             Value::String(
                 match result.phase {
-                    SharedVolumeEffectPhase::Ready => "Ready",
-                    SharedVolumeEffectPhase::Pending => "Pending",
+                    SharedVolumeEffectPhase::Ready => "Ready".to_owned(),
+                    SharedVolumeEffectPhase::Pending => "Pending".to_owned(),
+                    SharedVolumeEffectPhase::Failed => "Failed".to_owned(),
                 }
-                .to_owned(),
             ),
         );
         if let Some(projection) = &result.resource_projection {
@@ -2290,7 +2380,7 @@ mod tests {
     use d2bd_runtime::resource_store_runtime::OpenedZoneStore;
     #[test]
     fn production_child_readiness_port_fails_closed_before_ro_store_launch() {
-        let export = d2b_provider_volume_virtiofs::testing::fixtures::export("read-only");
+        let binding = d2b_provider_volume_virtiofs::testing::fixtures::binding("read-only");
         let volume = d2b_provider_volume_local::testing::fixtures::store_view_volume();
         let port = ChildReadinessPort {
             process_ref: ResourceRef::parse("Process/virtiofs-worker").expect("process ref"),
@@ -2299,19 +2389,20 @@ mod tests {
             guest_mount_ready: true,
             store_view_marker: false,
             zone: d2b_provider_volume_virtiofs::testing::fixtures::zone(),
+            fence: binding.fence(),
         };
         let report = d2b_provider_volume_virtiofs::testing::block_on(
-            VirtiofsExportController::new(port).reconcile(
-                &export,
+            VirtiofsBindingController::new(port).reconcile(
+                &binding,
                 &volume,
                 4,
                 d2b_provider_volume_virtiofs::testing::fixtures::principal(),
             ),
         )
-        .expect("export report");
+        .expect("binding report");
         assert_eq!(
             report.phase,
-            d2b_provider_volume_virtiofs::ExportPhase::Pending
+            d2b_provider_volume_virtiofs::BindingPhase::Pending
         );
         assert!(report.worker_process_ref.is_none());
     }

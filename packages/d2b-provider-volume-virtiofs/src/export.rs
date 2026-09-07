@@ -1,36 +1,31 @@
-//! The `virtiofs.d2bus.org.Export` resource.
+//! The neutral `VolumeBinding` resource as `volume-virtiofs` serves it.
 //!
-//! volume-local translates one virtiofs Volume attachment into one
-//! Export. volume-virtiofs reconciles Exports and never writes a Volume
-//! row.
+//! The Volume side mints one binding per Volume / execution-target /
+//! named-view relationship (KTD1). volume-virtiofs observes stored
+//! binding envelopes, resolves the named view dependency-only, and never
+//! writes a Volume row.
 
 use std::fmt;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use d2b_contracts_resource::v3::ResourceRef;
-use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::volume::{
-    AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeAttachment,
-    validate_mount_path,
+use d2b_contracts_resource::v3::{
+    ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
+    execution_policy::BoundedToken,
+    volume_binding::{VolumeBindingReadinessFence, VolumeBindingSpec},
 };
 
-use crate::error::VirtiofsExportError;
+use crate::error::VirtiofsBindingError;
 
-/// The qualified ResourceType name this Provider owns.
-pub const EXPORT_RESOURCE_TYPE: &str = "virtiofs.d2bus.org.Export";
-
-/// The finalizer volume-virtiofs adds to each Export, and to nothing
-/// else.
-pub const EXPORT_FINALIZER: &str = "volume-virtiofs.d2bus.org/export";
+/// The standard ResourceType name this Provider serves.
+pub const VOLUME_BINDING_RESOURCE_TYPE: &str = "VolumeBinding";
 
 /// The finalizer volume-virtiofs adds to each VolumeBinding, and to
-/// nothing else.  U3 mints bindings Volume-side; U4 retypes the serving
-/// reconciler onto this finalizer.
+/// nothing else.
 pub const VOLUME_BINDING_FINALIZER: &str = "volume-virtiofs.d2bus.org/volume-binding";
 
-/// The opaque identity of one Export's private listening socket.
+/// The opaque identity of one binding's private listening socket.
 ///
 /// The socket path is a generated implementation detail of this
 /// Provider. It is never a spec field, a status field, an audit field,
@@ -40,7 +35,7 @@ pub const VOLUME_BINDING_FINALIZER: &str = "volume-virtiofs.d2bus.org/volume-bin
 pub struct SocketIdentity([u8; 32]);
 
 impl SocketIdentity {
-    /// Derive the identity of one Export's socket.
+    /// Derive the identity of one binding's socket.
     pub fn derive(
         zone: &BoundedToken,
         volume_ref: &ResourceRef,
@@ -85,202 +80,170 @@ impl fmt::Debug for SocketIdentity {
     }
 }
 
-/// One Export: exactly one Volume view served to exactly one execution
-/// target.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ExportSpec {
-    provider_ref: ResourceRef,
-    volume_ref: ResourceRef,
-    execution_ref: ResourceRef,
-    view: BoundedToken,
-    access: AttachmentAccess,
-    settings: AttachmentSettings,
-    mount_path: String,
+impl Serialize for SocketIdentity {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
 }
 
-impl ExportSpec {
-    /// Construct an Export after checking both references.
+/// One stored VolumeBinding as the serving reconciler sees it: the strict
+/// neutral spec plus the identity the fenced status projection is
+/// validated against (KTD3).
+///
+/// The neutral envelope carries no attachment settings (KTD1); the
+/// serving posture is the frozen default declared by the worker plan.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StoredBinding {
+    binding: VolumeBindingSpec,
+    uid: ResourceUid,
+    generation: ResourceGeneration,
+    revision: ZoneRevision,
+}
+
+impl StoredBinding {
+    /// Construct a stored binding from its typed spec and identity.
     pub fn new(
-        volume_ref: ResourceRef,
-        execution_ref: ResourceRef,
-        view: BoundedToken,
-        access: AttachmentAccess,
-        settings: AttachmentSettings,
-    ) -> Result<Self, VirtiofsExportError> {
-        if volume_ref.resource_type().as_str() != "Volume" {
-            return Err(VirtiofsExportError::InvalidExport);
+        binding: VolumeBindingSpec,
+        uid: ResourceUid,
+        generation: ResourceGeneration,
+        revision: ZoneRevision,
+    ) -> Self {
+        Self {
+            binding,
+            uid,
+            generation,
+            revision,
         }
-        if execution_ref.resource_type().as_str() != "Guest" {
-            return Err(VirtiofsExportError::InvalidExport);
-        }
-        Ok(Self {
-            provider_ref: ResourceRef::parse("Provider/volume-virtiofs")
-                .map_err(|_| VirtiofsExportError::InvalidExport)?,
-            volume_ref,
-            execution_ref,
-            view,
-            access,
-            settings,
-            mount_path: "/".to_owned(),
-        })
     }
 
-    /// Borrow the Provider that owns this Export.
-    pub const fn provider_ref(&self) -> &ResourceRef {
-        &self.provider_ref
-    }
-
-    /// Translate one virtiofs Volume attachment into one Export.
+    /// Parse a stored VolumeBinding resource envelope.
     ///
-    /// A `virtio-blk` attachment is not this Provider's concern and is
-    /// rejected rather than reinterpreted.
-    pub fn from_attachment(
-        volume_ref: ResourceRef,
-        attachment: &VolumeAttachment,
-    ) -> Result<Self, VirtiofsExportError> {
-        if attachment.transport() != AttachmentTransport::Virtiofs {
-            return Err(VirtiofsExportError::InvalidExport);
-        }
-
-        Self::new(
-            volume_ref,
-            attachment.execution_ref().clone(),
-            attachment.view().clone(),
-            attachment.access(),
-            attachment.settings().clone(),
-        )
-        .and_then(|export| export.with_mount_path(attachment.mount_path()))
-    }
-
-    /// Parse an Export `spec` object from a Resource envelope.
-    pub fn from_resource_spec(value: &serde_json::Value) -> Result<Self, VirtiofsExportError> {
-        let provider_ref = value
-            .get("providerRef")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| ResourceRef::parse(value).ok())
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        if provider_ref != ResourceRef::parse("Provider/volume-virtiofs").unwrap() {
-            return Err(VirtiofsExportError::InvalidExport);
-        }
-        let volume_ref = value
-            .get("volumeRef")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| ResourceRef::parse(value).ok())
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        let execution_ref = value
-            .get("executionRef")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| ResourceRef::parse(value).ok())
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        let view = value
-            .get("view")
-            .cloned()
-            .ok_or(VirtiofsExportError::InvalidExport)
-            .and_then(|value| {
-                serde_json::from_value(value).map_err(|_| VirtiofsExportError::InvalidExport)
-            })?;
-        let access = value
-            .get("access")
-            .cloned()
-            .ok_or(VirtiofsExportError::InvalidExport)
-            .and_then(|value| {
-                serde_json::from_value(value).map_err(|_| VirtiofsExportError::InvalidExport)
-            })?;
-        let provider = value
-            .get("provider")
-            .and_then(serde_json::Value::as_object)
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        if provider.get("schemaId").and_then(serde_json::Value::as_str)
-            != Some("volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec")
-            || provider
-                .get("schemaVersion")
-                .and_then(serde_json::Value::as_str)
-                != Some("1.0")
+    /// The envelope must be a `VolumeBinding` owned by an existing
+    /// Volume and served by this Provider, and it must be strictly
+    /// neutral: the standard catalog admits no provider extension path
+    /// for the type, so a `spec.provider` block — old Export schema id
+    /// or otherwise — is rejected, and the envelope never carries
+    /// attachment settings (KTD1). The serving posture is the frozen
+    /// default declared by the worker plan.
+    pub fn from_resource_spec(value: &serde_json::Value) -> Result<Self, VirtiofsBindingError> {
+        let invalid = VirtiofsBindingError::InvalidBinding;
+        if value.get("type").and_then(serde_json::Value::as_str)
+            != Some(VOLUME_BINDING_RESOURCE_TYPE)
         {
-            return Err(VirtiofsExportError::InvalidExport);
+            return Err(invalid);
         }
-        let settings = provider
-            .get("settings")
-            .cloned()
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        let settings: AttachmentSettings =
-            serde_json::from_value(settings).map_err(|_| VirtiofsExportError::InvalidExport)?;
-        let mount_path = value
-            .get("mountPath")
+        let metadata = value
+            .get("metadata")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(invalid)?;
+        let uid = metadata
+            .get("uid")
             .and_then(serde_json::Value::as_str)
-            .ok_or(VirtiofsExportError::InvalidExport)?;
-        Self::new(volume_ref, execution_ref, view, access, settings)?.with_mount_path(mount_path)
-    }
-
-    /// Borrow the Volume this Export serves.
-    pub const fn volume_ref(&self) -> &ResourceRef {
-        &self.volume_ref
-    }
-
-    /// Borrow the Host or Guest this Export serves.
-    pub const fn execution_ref(&self) -> &ResourceRef {
-        &self.execution_ref
-    }
-
-    /// Borrow the selected named view.
-    pub const fn view(&self) -> &BoundedToken {
-        &self.view
-    }
-
-    /// Return the admitted access level.
-    pub const fn access(&self) -> AttachmentAccess {
-        self.access
-    }
-
-    /// Borrow the typed base attachment options.
-    pub const fn settings(&self) -> &AttachmentSettings {
-        &self.settings
-    }
-
-    /// Borrow the guest-side mount path carried by the attachment.
-    pub fn mount_path(&self) -> &str {
-        &self.mount_path
-    }
-
-    /// Set the mount path after applying the same closed path contract as
-    /// the public Volume attachment.
-    pub fn with_mount_path(
-        mut self,
-        mount_path: impl Into<String>,
-    ) -> Result<Self, VirtiofsExportError> {
-        let mount_path = mount_path.into();
-        if !validate_mount_path(&mount_path) {
-            return Err(VirtiofsExportError::InvalidExport);
+            .and_then(|value| ResourceUid::parse(value).ok())
+            .ok_or(invalid)?;
+        let generation = metadata
+            .get("generation")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| ResourceGeneration::new(value).ok())
+            .ok_or(invalid)?;
+        let revision = metadata
+            .get("revision")
+            .and_then(serde_json::Value::as_u64)
+            .map(ZoneRevision::new)
+            .ok_or(invalid)?;
+        VolumeBindingSpec::admit_owner_ref(
+            metadata
+                .get("ownerRef")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|owner| ResourceRef::parse(owner).ok())
+                .as_ref(),
+        )
+        .map_err(|_| invalid)?;
+        let spec = value
+            .get("spec")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(invalid)?;
+        if spec.get("providerRef").and_then(serde_json::Value::as_str)
+            != Some("Provider/volume-virtiofs")
+        {
+            return Err(invalid);
         }
-        self.mount_path = mount_path;
-        Ok(self)
+        if spec.contains_key("provider") {
+            // No provider extension path exists for the standard type
+            // (U1 admission); an envelope carrying one is never served.
+            return Err(invalid);
+        }
+        let mut base = spec.clone();
+        base.remove("providerRef");
+        let binding: VolumeBindingSpec = serde_json::from_value(serde_json::Value::Object(base))
+            .map_err(|_| invalid)?;
+        Ok(Self::new(binding, uid, generation, revision))
+    }
+
+    /// Borrow the strict neutral binding specification.
+    pub const fn spec(&self) -> &VolumeBindingSpec {
+        &self.binding
+    }
+
+    /// Borrow the binding UID the fence is pinned to.
+    pub const fn uid(&self) -> &ResourceUid {
+        &self.uid
+    }
+
+    /// Return the binding spec generation the fence is pinned to.
+    pub const fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+
+    /// Return the Zone-store revision the fence is pinned to.
+    pub const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+
+    /// The readiness fence this binding reports under (KTD3).
+    pub fn fence(&self) -> VolumeBindingReadinessFence {
+        VolumeBindingReadinessFence {
+            uid: self.uid.clone(),
+            generation: self.generation,
+            revision: self.revision,
+        }
     }
 
     /// Derive the stable per-Volume worker principal name.
-    pub fn worker_principal(&self) -> Result<BoundedToken, VirtiofsExportError> {
-        BoundedToken::parse(format!("vol-{}-vfd", self.volume_ref.name().as_str()))
-            .map_err(|_| VirtiofsExportError::InvalidExport)
+    pub fn worker_principal(&self) -> Result<BoundedToken, VirtiofsBindingError> {
+        BoundedToken::parse(format!("vol-{}-vfd", self.binding.volume_ref().name().as_str()))
+            .map_err(|_| VirtiofsBindingError::InvalidBinding)
     }
 
-    /// Derive this Export's private socket identity within a Zone.
+    /// Derive this binding's private socket identity within a Zone.
     pub fn socket_identity(&self, zone: &BoundedToken) -> SocketIdentity {
-        SocketIdentity::derive(zone, &self.volume_ref, &self.execution_ref)
+        SocketIdentity::derive(
+            zone,
+            self.binding.volume_ref(),
+            self.binding.execution_ref(),
+        )
     }
 
-    /// Derive the Export-owned virtiofsd Process reference.
-    pub fn worker_process_ref(&self) -> Result<ResourceRef, VirtiofsExportError> {
-        derive_child_ref("Process", &self.volume_ref, &self.execution_ref, "worker")
+    /// Derive the binding-owned virtiofsd Process reference.
+    pub fn worker_process_ref(&self) -> Result<ResourceRef, VirtiofsBindingError> {
+        derive_child_ref(
+            "Process",
+            self.binding.volume_ref(),
+            self.binding.execution_ref(),
+            "worker",
+        )
     }
 
-    /// Derive the Export-owned Endpoint reference.
-    pub fn endpoint_ref(&self) -> Result<ResourceRef, VirtiofsExportError> {
+    /// Derive the binding-owned Endpoint reference.
+    pub fn endpoint_ref(&self) -> Result<ResourceRef, VirtiofsBindingError> {
         derive_child_ref(
             "Endpoint",
-            &self.volume_ref,
-            &self.execution_ref,
+            self.binding.volume_ref(),
+            self.binding.execution_ref(),
             "endpoint",
         )
     }
+
 }
 
 fn derive_child_ref(
@@ -288,7 +251,7 @@ fn derive_child_ref(
     volume_ref: &ResourceRef,
     execution_ref: &ResourceRef,
     role: &str,
-) -> Result<ResourceRef, VirtiofsExportError> {
+) -> Result<ResourceRef, VirtiofsBindingError> {
     let mut hasher = Sha256::new();
     hasher.update(b"d2b/volume-virtiofs/child/v1");
     hasher.update(volume_ref.to_canonical_string().as_bytes());
@@ -302,18 +265,12 @@ fn derive_child_ref(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     ResourceRef::parse(&format!("{resource_type}/vol-vfd-{suffix}"))
-        .map_err(|_| VirtiofsExportError::InvalidExport)
+        .map_err(|_| VirtiofsBindingError::InvalidBinding)
 }
 
-impl fmt::Debug for ExportSpec {
+impl fmt::Debug for StoredBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ExportSpec(<redacted>)")
-    }
-}
-
-impl Serialize for SocketIdentity {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_hex())
+        f.write_str("StoredBinding(<redacted>)")
     }
 }
 
@@ -321,42 +278,110 @@ impl Serialize for SocketIdentity {
 mod tests {
     use super::*;
 
-    #[test]
-    fn compatibility_mount_path_setter_keeps_the_closed_path_contract() {
-        let export = ExportSpec::new(
-            ResourceRef::parse("Volume/data").unwrap(),
-            ResourceRef::parse("Guest/work-vm").unwrap(),
-            BoundedToken::parse("live").unwrap(),
-            AttachmentAccess::ReadOnly,
-            AttachmentSettings::default(),
-        )
-        .unwrap();
-        assert!(export.clone().with_mount_path("/guest/data").is_ok());
-        for rejected in [
-            "../escape",
-            "/guest/\u{FF0F}data",
-            "/guest/\u{FF0E}/data",
-            "/guest/\u{0001}data",
-            "/guest/\0data",
-        ] {
-            assert!(
-                export.clone().with_mount_path(rejected).is_err(),
-                "unsafe mount path admitted: {rejected:?}"
-            );
-        }
+    fn envelope(type_name: &str, owner: serde_json::Value, spec: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": type_name,
+            "metadata": {
+                "uid": "123e4567-e89b-42d3-a456-426614174000",
+                "generation": 1,
+                "revision": 7,
+                "ownerRef": owner,
+            },
+            "spec": spec,
+        })
+    }
+
+    fn binding_spec() -> serde_json::Value {
+        serde_json::json!({
+            "providerRef": "Provider/volume-virtiofs",
+            "volumeRef": "Volume/work-state",
+            "executionRef": "Guest/work-vm",
+            "view": "ro-store",
+            "access": "read-only",
+            "mountPath": "/nix/.ro-store",
+        })
     }
 
     #[test]
-    fn export_rejects_host_execution_targets() {
-        assert!(matches!(
-            ExportSpec::new(
-                ResourceRef::parse("Volume/data").unwrap(),
-                ResourceRef::parse("Host/host-system").unwrap(),
-                BoundedToken::parse("live").unwrap(),
-                AttachmentAccess::ReadOnly,
-                AttachmentSettings::default(),
-            ),
-            Err(VirtiofsExportError::InvalidExport)
-        ));
+    fn stored_binding_parses_a_strictly_neutral_envelope() {
+        let stored = StoredBinding::from_resource_spec(&envelope(
+            VOLUME_BINDING_RESOURCE_TYPE,
+            serde_json::json!("Volume/work-state"),
+            binding_spec(),
+        ))
+        .expect("conformant stored binding");
+        assert_eq!(
+            stored.spec().volume_ref().to_canonical_string(),
+            "Volume/work-state"
+        );
+        assert_eq!(stored.spec().mount_path(), "/nix/.ro-store");
+        assert_eq!(stored.generation().get(), 1);
+        assert_eq!(stored.revision().get(), 7);
+        assert_eq!(
+            stored.fence().uid.to_canonical_string(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("uid")
+                .to_canonical_string()
+        );
+    }
+
+    #[test]
+    fn any_provider_extension_rejects_the_envelope() {
+        // The standard catalog admits no provider extension path for the
+        // neutral type (U1); the old Export schema identity never
+        // re-enters through the binding envelope.
+        for schema_id in [
+            "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
+            "volume-virtiofs.d2bus.org/VolumeBinding/spec",
+        ] {
+            let mut extended = envelope(
+                VOLUME_BINDING_RESOURCE_TYPE,
+                serde_json::json!("Volume/work-state"),
+                binding_spec(),
+            );
+            extended["spec"]["provider"] = serde_json::json!({
+                "schemaId": schema_id,
+                "schemaVersion": "1.0",
+                "settings": {},
+            });
+            assert!(StoredBinding::from_resource_spec(&extended).is_err());
+        }
+
+        let mut foreign_owner = envelope(
+            VOLUME_BINDING_RESOURCE_TYPE,
+            serde_json::json!("Guest/work-vm"),
+            binding_spec(),
+        );
+        foreign_owner["metadata"]["ownerRef"] = serde_json::json!("Guest/work-vm");
+        assert!(StoredBinding::from_resource_spec(&foreign_owner).is_err());
+    }
+
+    #[test]
+    fn the_envelope_never_carries_attachment_settings() {
+        let mut tuned = envelope(
+            VOLUME_BINDING_RESOURCE_TYPE,
+            serde_json::json!("Volume/work-state"),
+            binding_spec(),
+        );
+        tuned["spec"]["threadPoolSize"] = serde_json::json!(2);
+        assert!(StoredBinding::from_resource_spec(&tuned).is_err());
+    }
+
+    #[test]
+    fn worker_and_endpoint_children_keep_distinct_stable_refs() {
+        let stored = StoredBinding::from_resource_spec(&envelope(
+            VOLUME_BINDING_RESOURCE_TYPE,
+            serde_json::json!("Volume/work-state"),
+            binding_spec(),
+        ))
+        .expect("conformant stored binding");
+        assert_ne!(
+            stored.worker_process_ref().unwrap(),
+            stored.endpoint_ref().unwrap()
+        );
+        assert_eq!(
+            stored.worker_process_ref().unwrap(),
+            stored.worker_process_ref().unwrap()
+        );
     }
 }

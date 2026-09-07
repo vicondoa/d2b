@@ -1,69 +1,69 @@
-//! Bounded socket and guest-mount readiness decisions.
+//! Fail-closed readiness classification for the binding serving side.
 
-use crate::error::VirtiofsExportError;
-use crate::port::ExportPhase;
+use crate::error::VirtiofsBindingError;
+use crate::port::BindingPhase;
 
-/// Observation of the private export socket.
+/// Observation of the private binding socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketObservation {
     /// The socket exists and is listening.
     Ready,
-    /// The socket is not present yet.
+    /// The socket is absent.
     Absent,
 }
 
-/// Observation returned by the component-session mount probe.
+/// Observation of the guest mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuestMountObservation {
     /// The guest reports the mount present.
     Ready,
-    /// The guest reports the mount absent.
+    /// The mount is not observed inside the guest.
     Absent,
-    /// The guest could not be reached.
+    /// The guest-side probe could not be completed.
     Unreachable,
 }
 
-/// Bounded readiness observation for a store-view marker.
+/// Observation of the zero-length store-view marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreViewMarkerObservation {
-    /// Marker file exists.
+    /// Whether the marker file exists.
     pub present: bool,
-    /// Marker file has zero length.
+    /// Whether the marker file is zero-length.
     pub zero_length: bool,
 }
 
-/// Classify Export status from the two readiness probes.
+/// Classify binding status from the two readiness probes.
 pub const fn classify_readiness(
     socket: SocketObservation,
     guest: Option<GuestMountObservation>,
-) -> (ExportPhase, Option<VirtiofsExportError>) {
+) -> (BindingPhase, Option<VirtiofsBindingError>) {
     match socket {
         SocketObservation::Absent => (
-            ExportPhase::Pending,
-            Some(VirtiofsExportError::ExportNotReady),
+            BindingPhase::Pending,
+            Some(VirtiofsBindingError::BindingNotReady),
         ),
         SocketObservation::Ready => match guest {
-            Some(GuestMountObservation::Ready) => (ExportPhase::Ready, None),
+            Some(GuestMountObservation::Ready) => (BindingPhase::Ready, None),
             Some(GuestMountObservation::Unreachable) => (
-                ExportPhase::Degraded,
-                Some(VirtiofsExportError::GuestMountNotReady),
+                BindingPhase::Degraded,
+                Some(VirtiofsBindingError::GuestMountNotReady),
             ),
             Some(GuestMountObservation::Absent) | None => (
-                ExportPhase::Degraded,
-                Some(VirtiofsExportError::GuestMountNotReady),
+                BindingPhase::Degraded,
+                Some(VirtiofsBindingError::GuestMountNotReady),
             ),
         },
     }
 }
 
-/// Require a valid zero-length store-view marker before launch.
+/// Require a present, zero-length store-view marker before launch.
 pub const fn require_store_view_marker(
     observation: StoreViewMarkerObservation,
-) -> Result<(), VirtiofsExportError> {
+) -> Result<(), VirtiofsBindingError> {
     if observation.present && observation.zero_length {
         Ok(())
     } else {
-        Err(VirtiofsExportError::StoreViewMarkerMissing)
+        Err(VirtiofsBindingError::StoreViewMarkerMissing)
     }
 }
 
@@ -72,35 +72,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn socket_must_be_ready_before_guest_mount_is_probed() {
+    fn classification_fails_closed_on_absent_probes() {
         assert_eq!(
             classify_readiness(SocketObservation::Absent, None),
             (
-                ExportPhase::Pending,
-                Some(VirtiofsExportError::ExportNotReady)
+                BindingPhase::Pending,
+                Some(VirtiofsBindingError::BindingNotReady)
             )
         );
         assert_eq!(
             classify_readiness(SocketObservation::Ready, Some(GuestMountObservation::Ready)),
-            (ExportPhase::Ready, None)
+            (BindingPhase::Ready, None)
         );
     }
 
     #[test]
-    fn store_view_marker_requires_zero_length_presence() {
-        assert!(
-            require_store_view_marker(StoreViewMarkerObservation {
-                present: true,
-                zero_length: true,
-            })
-            .is_ok()
-        );
+    fn a_missing_store_view_marker_never_launches() {
         assert_eq!(
             require_store_view_marker(StoreViewMarkerObservation {
                 present: true,
                 zero_length: false,
             }),
-            Err(VirtiofsExportError::StoreViewMarkerMissing)
+            Err(VirtiofsBindingError::StoreViewMarkerMissing)
         );
     }
 }
