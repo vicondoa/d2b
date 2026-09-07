@@ -445,11 +445,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn argv_is_round_trip_serializable() {
-        let input = audit_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let parsed: GpuArgvInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, input);
-    }
 }

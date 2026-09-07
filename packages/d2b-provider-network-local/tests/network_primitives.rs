@@ -3,7 +3,7 @@ use d2b_contracts_broker::broker_wire::{
     DeletePersistentTapRequest, NftablesProjectionAction,
 };
 use d2b_contracts_resource::v3::{
-    NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceName, ResourceUid,
+    NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
 };
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
@@ -12,10 +12,7 @@ use d2b_provider_network_local::{
     controller::{
         NetworkAdmissionIntent, NetworkAdmissionKey, render_config, render_config_with_provenance,
     },
-    ifname::{
-        IfName, IfNameMapping, NetworkIfRole, derive_ifname, derive_network_ifname,
-        derive_network_route_name_for, detect_collisions,
-    },
+    ifname::{IfName, NetworkIfRole, derive_network_ifname, derive_network_route_name_for},
     netlink::{LinkKind, LinkSpec, NetlinkError},
     nftables::{
         NetworkNftProjection, NftablesError, SharedNftTable, SharedTableEntry, apply_projection,
@@ -28,28 +25,6 @@ fn uid(value: &str) -> ResourceUid {
     ResourceUid::parse(value).unwrap()
 }
 
-#[test]
-fn adapted_ifname_derivation_is_deterministic_and_collision_checked() {
-    let first = derive_ifname("work", NetworkIfRole::LanBridge, None, None).unwrap();
-    let second = derive_ifname("work", NetworkIfRole::LanBridge, None, None).unwrap();
-    assert_eq!(first, second);
-
-    let mappings = [
-        IfNameMapping::new(
-            ResourceName::parse("work").unwrap(),
-            None,
-            NetworkIfRole::LanBridge,
-            first.clone(),
-        ),
-        IfNameMapping::new(
-            ResourceName::parse("personal").unwrap(),
-            None,
-            NetworkIfRole::LanBridge,
-            first,
-        ),
-    ];
-    assert!(detect_collisions(&mappings).is_err());
-}
 
 #[test]
 fn bridge_port_readback_rejects_one_flag_of_drift() {

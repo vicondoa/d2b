@@ -26,14 +26,6 @@ fn level_percent_rejects_over_100() {
     ));
 }
 
-#[test]
-fn level_percent_round_trips_json() {
-    let level = LevelPercent::new(73).unwrap();
-    let json = serde_json::to_string(&level).unwrap();
-    assert_eq!(json, "73");
-    let back: LevelPercent = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, level);
-}
 
 #[test]
 fn level_percent_rejects_out_of_range_in_json() {

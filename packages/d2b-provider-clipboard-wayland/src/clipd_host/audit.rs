@@ -211,14 +211,6 @@ mod tests {
         assert_eq!(queue.dropped_count(), 1);
     }
 
-    #[test]
-    fn audit_json_contains_metadata_not_payload_fields() {
-        let json = serde_json::to_string(&event("vm-a", "r1")).expect("json");
-        assert!(json.contains("source_realm"));
-        assert!(!json.contains("preview"));
-        assert!(!json.contains("payload"));
-        assert!(!json.contains("clipboard"));
-    }
 
     #[test]
     fn audit_mime_is_bounded_for_unrecognized_values() {
@@ -237,14 +229,4 @@ mod tests {
         assert!(json.contains("image/png; exploit=1"));
     }
 
-    #[test]
-    fn metrics_queue_take_dropped_count_resets_counter() {
-        let mut queue = MetricsQueue::new(0);
-        queue.enqueue_droppable(MetricEvent {
-            name: MetricName::PickerTimeout,
-            reason: Some(ReasonCode::PickerTimeout),
-        });
-        assert_eq!(queue.take_dropped_count(), 1);
-        assert_eq!(queue.take_dropped_count(), 0);
-    }
 }

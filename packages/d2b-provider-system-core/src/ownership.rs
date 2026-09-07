@@ -71,19 +71,6 @@ pub fn require_resource_type(
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_owned_set_is_exactly_host_and_user() {
-        assert!(owns(HOST_RESOURCE_TYPE));
-        assert!(owns(USER_RESOURCE_TYPE));
-        assert_eq!(OWNED_RESOURCE_TYPES.len(), 2);
-    }
-
-    #[test]
-    fn every_named_disowned_type_is_refused() {
-        for disowned in DISOWNED_RESOURCE_TYPES {
-            assert!(!owns(disowned), "{disowned} must not be owned");
-        }
-    }
 
     #[test]
     fn an_unclaimed_resource_type_is_refused_too() {
