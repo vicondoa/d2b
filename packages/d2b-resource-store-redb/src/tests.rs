@@ -3229,7 +3229,9 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
             .await
     });
     started_receiver.await.unwrap();
-    tokio::task::yield_now().await;
+    for _ in 0..3 {
+        tokio::task::yield_now().await;
+    }
     tokio::time::advance(HOLD_PROBE_LIFETIME + std::time::Duration::from_millis(25)).await;
     assert!(
         !probe.is_finished(),
