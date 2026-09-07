@@ -358,41 +358,19 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::io::AsRawFd;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl TestDir {
-        fn new() -> io::Result<Self> {
-            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::current_dir()?
-                .join("target")
-                .join("d2b-host-activation-helper-tests")
-                .join(format!("{}-{id}", std::process::id()));
-            fs::create_dir_all(&path)?;
-            Ok(Self(path))
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use tempfile::tempdir;
 
     #[test]
     fn migrate_then_fail_closed_scan_reopens_root_for_full_walk() {
-        let dir = TestDir::new().expect("test dir");
-        let nested = dir.0.join("nested");
+        let dir = tempdir().expect("test dir");
+        let nested = dir.path().join("nested");
         fs::create_dir(&nested).expect("nested dir");
         fs::write(nested.join("legacy"), b"legacy").expect("legacy file");
 
         let current_gid =
             fs::metadata(nested.join("legacy")).expect("metadata").gid() as libc::gid_t;
         let cfg = Config {
-            root: dir.0.clone(),
+            root: dir.path().to_path_buf(),
             legacy_gids: BTreeSet::from([current_gid]),
             target_gid: current_gid,
             skip_while_lock_held: None,
@@ -414,10 +392,10 @@ mod tests {
 
     #[test]
     fn held_lock_fail_closed_runs_postscan_and_exits_nonzero() {
-        let dir = TestDir::new().expect("test dir");
-        let legacy_path = dir.0.join("legacy");
+        let dir = tempdir().expect("test dir");
+        let legacy_path = dir.path().join("legacy");
         fs::write(&legacy_path, b"legacy").expect("legacy file");
-        let lock_path = dir.0.join("migration.lock");
+        let lock_path = dir.path().join("migration.lock");
         let lock_file = fs::File::create(&lock_path).expect("lock file");
         let mut flock = libc::flock {
             l_type: libc::F_WRLCK as libc::c_short,
@@ -432,7 +410,7 @@ mod tests {
         let current_gid = fs::metadata(&legacy_path).expect("metadata").gid() as libc::gid_t;
         let target_gid = if current_gid == 0 { 1 } else { 0 };
         let cfg = Config {
-            root: dir.0.clone(),
+            root: dir.path().to_path_buf(),
             legacy_gids: BTreeSet::from([current_gid]),
             target_gid,
             skip_while_lock_held: Some(lock_path),

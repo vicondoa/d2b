@@ -61,7 +61,7 @@ The workspace accumulates tests that pin implementation text, re-assert derive-g
 
 - R9. Duplicated fixture constructors are hoisted once: the six controller test files share one common test module, and the session cancellation and admission setups share one harness each.
 - R10. Same-shape test rows become table-driven: audio policy parsing, security-key event options, GPU argument rejections, resource-compiler failure setups, and name-conflict ownership variants.
-- R11. The pure parameter-forwarding wrapper layers collapse to single helpers with explicit arguments at call sites.
+- R11. The wrapper-layer collapse is dropped: the sole forwarding-wrapper candidate proved production-owned by other files and stays untouched per the no-production-changes boundary.
 - R12. The hand-rolled temporary-directory helper is replaced with the temporary-directory helper sibling crates already use.
 
 **PR hygiene and shipping tail**
@@ -188,10 +188,10 @@ The workspace accumulates tests that pin implementation text, re-assert derive-g
 ### U5. Fixture-hoist shrinks
 
 - **Goal:** Hoist duplicated test fixtures into shared per-crate helpers.
-- **Requirements:** R9, R11, R12.
+- **Requirements:** R9, R12.
 - **Dependencies:** U2, U3, U4.
-- **Files:** `packages/d2b-core-controller/tests/`, `packages/d2b-session/src/driver.rs`, `packages/d2b-session/src/server.rs`, `packages/d2b-session/tests/admission.rs`, `packages/d2b-provider-notification-desktop/src/admission.rs`, `packages/d2b-provider-audio-pipewire/src/audio_argv.rs`, `packages/d2b-host-activation-helper/src/main.rs`, `packages/d2b/tests/stub_no_socket.rs`, `packages/d2bd/tests/stub_no_socket.rs`.
-- **Approach:** Create the shared common module per KTD1 and migrate the six controller files to it. Extract the cancellation harness and fold driver construction into the existing policy fixture. Collapse forwarding wrapper layers to single helpers with explicit arguments. Replace the hand-rolled temporary directory with the shared helper. Deduplicate the snapshot helper across the two stub tests.
+- **Files:** `packages/d2b-core-controller/tests/`, `packages/d2b-core-controller/BUILD.bazel`, `packages/d2b-session/src/driver.rs`, `packages/d2b-session/src/server.rs`, `packages/d2b-session/tests/admission.rs`, `packages/d2b-host-activation-helper/src/main.rs`, `packages/d2b-host-activation-helper/Cargo.toml`, `packages/d2b-host-activation-helper/BUILD.bazel`, `packages/d2b/tests/stub_no_socket.rs`, `packages/d2bd/tests/stub_no_socket.rs`.
+- **Approach:** Create the shared common module per KTD1 and migrate the six controller files to it. Extract the cancellation harness and fold driver construction into the existing policy fixture. Replace the hand-rolled temporary directory with the shared helper, adding the dev-dependency and its build-rule wiring. Document the intentional twin snapshot helpers with a comment instead of cross-crate sharing.
 - **Patterns to follow:** The per-crate common-module precedent with dead-code allowance at the top.
 - **Test scenarios:**
   - Every migrated test file passes through the shared helper with identical assertions.

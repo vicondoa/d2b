@@ -4,6 +4,10 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
+// Kept in sync with packages/d2b/tests/stub_no_socket.rs: the two stub tests live in
+// different crates whose Bazel rust_test rules compile a single source file each, so a
+// cross-crate #[path] share would need exports_files/srcs wiring in both packages for
+// one std-only helper.
 fn snapshot_directory(path: &Path) -> BTreeSet<PathBuf> {
     let Ok(entries) = std::fs::read_dir(path) else {
         return BTreeSet::new();

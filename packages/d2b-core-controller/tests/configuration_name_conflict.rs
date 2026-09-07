@@ -1,54 +1,28 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ConfigurationGeneration, ResourceName, ResourceTypeName,
-    SchemaFingerprint, Timestamp, ZoneId,
-};
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
+use d2b_contracts_resource::v3::{ConfigurationGeneration, Timestamp, ZoneId};
+use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_core_controller::{
     configuration::{
         ActivationOutcome, BundleResource as PlannedResource, CanonicalSpec, ConfigurationService,
-        ResourceBundle, ResourceKey, RetainedGenerations,
+        ResourceBundle, RetainedGenerations,
         generation_transition::{committed_configuration_generation, plan_generation_transition},
     },
     resource_store::{PersistedResourceMetadata, PersistedResourceRecord},
 };
 
-fn digest(byte: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
-}
+mod common;
 
-fn key(resource_type: &str, name: &str) -> ResourceKey {
-    ResourceKey::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
-
-fn input(resource_type: &str, name: &str) -> BundleResource {
-    BundleResource::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        BundleMetadata::new(
-            ResourceName::parse(name).unwrap(),
-            ZoneId::parse("work").unwrap(),
-            None,
-            BTreeMap::new(),
-            BTreeMap::new(),
-        )
-        .unwrap(),
-        CanonicalJsonObject::parse(br#"{"value":"configured"}"#).unwrap(),
-    )
-    .unwrap()
-}
+use common::{input, key};
 
 fn bundle() -> ZoneBundle {
-    ZoneBundle::build(
-        ZoneId::parse("work").unwrap(),
-        digest('a'),
-        vec![input("Volume", "conflict"), input("Network", "main")],
-        BTreeMap::new(),
+    common::bundle(
+        'a',
+        vec![
+            input("Volume", "conflict", "configured"),
+            input("Network", "main", "configured"),
+        ],
     )
-    .unwrap()
 }
 
 fn committed()

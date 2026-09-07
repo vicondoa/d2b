@@ -18,6 +18,7 @@ rust_test(
     name = "d2b-host-activation-helper_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b-host-activation-helper",
+    deps = ["@crates//:tempfile"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 # keep

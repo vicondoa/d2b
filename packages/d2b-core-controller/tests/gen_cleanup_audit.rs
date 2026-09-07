@@ -1,64 +1,28 @@
-use std::collections::BTreeMap;
-
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceName, ResourceTypeName, SchemaFingerprint, Timestamp, ZoneId,
-    ZoneRevision,
-};
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
+use d2b_contracts_resource::v3::{ZoneId, ZoneRevision};
+use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_core_controller::{
     audit::{AuditError, AuditEventKind},
     configuration::{
-        BundleActivation, CanonicalSpec, ManagementAgent, ResourceKey, RetainedGenerations,
+        BundleActivation, CanonicalSpec, ManagementAgent, RetainedGenerations,
         StoredResource, ZoneConfigController,
     },
 };
 
-fn digest(value: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", value.to_string().repeat(64))).unwrap()
-}
+mod common;
 
-fn now() -> Timestamp {
-    Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap()
-}
-
-fn key(name: &str) -> ResourceKey {
-    ResourceKey::new(
-        ResourceTypeName::parse("Device").unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
+use common::{input, key, now};
 
 fn bundle(value: char, include: bool) -> ZoneBundle {
-    let resources = include
-        .then(|| {
-            BundleResource::new(
-                ResourceTypeName::parse("Device").unwrap(),
-                BundleMetadata::new(
-                    ResourceName::parse("sensitive-device-name").unwrap(),
-                    ZoneId::parse("work").unwrap(),
-                    None,
-                    BTreeMap::new(),
-                    BTreeMap::new(),
-                )
-                .unwrap(),
-                CanonicalJsonObject::parse(br#"{"value":"desired"}"#).unwrap(),
-            )
-            .unwrap()
-        })
+    let resources: Vec<_> = include
+        .then(|| input("Device", "sensitive-device-name", "desired"))
         .into_iter()
         .collect();
-    ZoneBundle::build(
-        ZoneId::parse("work").unwrap(),
-        digest(value),
-        resources,
-        BTreeMap::new(),
-    )
-    .unwrap()
+    common::bundle(value, resources)
 }
 
 fn stored() -> StoredResource {
     StoredResource::new(
-        key("sensitive-device-name"),
+        key("Device", "sensitive-device-name"),
         ManagementAgent::Configuration,
         Some(bundle('a', true).content_hash().clone()),
         CanonicalSpec::from_fields([("spec", r#"{"value":"desired"}"#)]).unwrap(),
@@ -75,7 +39,7 @@ fn cleanup_audit_is_redacted_and_recovery_append_is_exactly_once() {
         .activate(BundleActivation::new(bundle('a', true)), &[], &now())
         .unwrap();
     controller
-        .complete_intent(&key("sensitive-device-name"))
+        .complete_intent(&key("Device", "sensitive-device-name"))
         .unwrap();
     let result = controller
         .activate(
@@ -93,11 +57,11 @@ fn cleanup_audit_is_redacted_and_recovery_append_is_exactly_once() {
     assert!(!rendered.contains("desired"));
 
     controller
-        .observe_deleted(&key("sensitive-device-name"), ZoneRevision::new(17), &now())
+        .observe_deleted(&key("Device", "sensitive-device-name"), ZoneRevision::new(17), &now())
         .unwrap();
     assert_eq!(
         controller
-            .observe_deleted(&key("sensitive-device-name"), ZoneRevision::new(17), &now())
+            .observe_deleted(&key("Device", "sensitive-device-name"), ZoneRevision::new(17), &now())
             .unwrap(),
         d2b_core_controller::configuration::CleanupOutcome::Deleted
     );

@@ -1,62 +1,26 @@
-use std::collections::BTreeMap;
-
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceName, ResourceTypeName, SchemaFingerprint, Timestamp, ZoneId,
-    ZoneRevision,
-};
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
+use d2b_contracts_resource::v3::{ZoneId, ZoneRevision};
+use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_core_controller::configuration::{
-    BundleActivation, CanonicalSpec, GenerationPhase, ManagementAgent, ResourceKey,
-    RetainedGenerations, StoredResource, ZoneConfigController,
+    BundleActivation, CanonicalSpec, GenerationPhase, ManagementAgent, RetainedGenerations,
+    StoredResource, ZoneConfigController,
 };
 
-fn digest(value: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", value.to_string().repeat(64))).unwrap()
-}
+mod common;
 
-fn now() -> Timestamp {
-    Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap()
-}
-
-fn key(name: &str) -> ResourceKey {
-    ResourceKey::new(
-        ResourceTypeName::parse("Device").unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
+use common::{bundle, input, key, now};
 
 fn input_bundle(value: char, include_device: bool) -> ZoneBundle {
     let resources = if include_device {
-        vec![
-            BundleResource::new(
-                ResourceTypeName::parse("Device").unwrap(),
-                BundleMetadata::new(
-                    ResourceName::parse("device-a").unwrap(),
-                    ZoneId::parse("work").unwrap(),
-                    None,
-                    BTreeMap::new(),
-                    BTreeMap::new(),
-                )
-                .unwrap(),
-                CanonicalJsonObject::parse(br#"{"value":"configured"}"#).unwrap(),
-            )
-            .unwrap(),
-        ]
+        vec![input("Device", "device-a", "configured")]
     } else {
         Vec::new()
     };
-    ZoneBundle::build(
-        ZoneId::parse("work").unwrap(),
-        digest(value),
-        resources,
-        BTreeMap::new(),
-    )
-    .unwrap()
+    bundle(value, resources)
 }
 
 fn stored_device() -> StoredResource {
     StoredResource::new(
-        key("device-a"),
+        key("Device", "device-a"),
         ManagementAgent::Configuration,
         Some(input_bundle('a', true).content_hash().clone()),
         CanonicalSpec::from_fields([("spec", r#"{"value":"configured"}"#)]).unwrap(),
@@ -74,7 +38,7 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
         .unwrap();
     assert!(!first.is_noop());
     assert_eq!(first.state().phase(), GenerationPhase::Pending);
-    controller.complete_intent(&key("device-a")).unwrap();
+    controller.complete_intent(&key("Device", "device-a")).unwrap();
 
     let second = controller
         .activate(
@@ -92,7 +56,7 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
             deletion_requested_at,
             ..
         }
-            if target == &key("device-a")
+            if target == &key("Device", "device-a")
                 && deletion_requested_at == &now()
     )));
     assert!(!second.effects().iter().any(|effect| matches!(
@@ -105,7 +69,7 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
     )));
 
     controller
-        .observe_deleted(&key("device-a"), ZoneRevision::new(9), &now())
+        .observe_deleted(&key("Device", "device-a"), ZoneRevision::new(9), &now())
         .unwrap();
     assert_eq!(controller.state().phase(), GenerationPhase::Ready);
     assert_eq!(controller.state().pending_cleanup_count(), 0);
@@ -120,7 +84,7 @@ fn ordinary_activation_cancels_an_outstanding_delete_for_a_revived_device() {
     controller
         .activate(BundleActivation::new(input_bundle('a', true)), &[], &now())
         .unwrap();
-    controller.complete_intent(&key("device-a")).unwrap();
+    controller.complete_intent(&key("Device", "device-a")).unwrap();
     controller
         .activate(
             BundleActivation::new(input_bundle('b', false)),
@@ -141,14 +105,14 @@ fn ordinary_activation_cancels_an_outstanding_delete_for_a_revived_device() {
     assert!(revived.effects().iter().any(|effect| matches!(
         effect,
         d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::CancelDelete(target)
-            if target == &key("device-a")
+            if target == &key("Device", "device-a")
     )));
     assert!(!revived.effects().iter().any(|effect| matches!(
         effect,
         d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::DeleteResource {
             key: target,
             ..
-        } if target == &key("device-a")
+        } if target == &key("Device", "device-a")
     )));
 }
 
@@ -163,7 +127,7 @@ fn rollback_cancels_cleanup_for_resources_reintroduced_by_the_retained_bundle() 
     controller
         .activate(BundleActivation::new(first), &[], &now())
         .unwrap();
-    controller.complete_intent(&key("device-a")).unwrap();
+    controller.complete_intent(&key("Device", "device-a")).unwrap();
     controller
         .activate(
             BundleActivation::new(input_bundle('b', false)),

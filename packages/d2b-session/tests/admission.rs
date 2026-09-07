@@ -43,8 +43,7 @@ impl SessionRegistrationCapability<()> for TestRegistrationCapability {
 #[tokio::test]
 async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
     let zone = ZoneId::parse("work").unwrap();
-    let policy = single_request_policy();
-    let (initiator, responder) = engine_pair(&policy).await;
+    let (policy, initiator, responder) = single_request_policy_with_engines().await;
     let admitted = session_acceptor(
         policy,
         zone.clone(),
@@ -200,6 +199,17 @@ fn single_request_policy() -> EndpointPolicy {
     let mut policy = endpoint_policy();
     policy.limits.ttrpc_control_queue_bytes = 4 * 1024;
     policy
+}
+
+/// Single-request policy with a connected initiator/responder engine pair.
+async fn single_request_policy_with_engines() -> (
+    EndpointPolicy,
+    SessionEngine<TestTransport>,
+    SessionEngine<TestTransport>,
+) {
+    let policy = single_request_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    (policy, initiator, responder)
 }
 
 fn bootstrap_policy() -> EndpointPolicy {

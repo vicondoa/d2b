@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceName, ResourceTypeName, SchemaFingerprint, Timestamp, ZoneId,
+    CanonicalJsonObject, ResourceName, ResourceTypeName, Timestamp, ZoneId,
 };
 use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
 use d2b_core_controller::{
@@ -15,16 +15,9 @@ use d2b_core_controller::{
     resource_store::{ManagedBy, PersistedResourceMetadata, PersistedResourceRecord},
 };
 
-fn digest(byte: char) -> SchemaFingerprint {
-    SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
-}
+mod common;
 
-fn key(resource_type: &str, name: &str) -> d2b_core_controller::configuration::ResourceKey {
-    d2b_core_controller::configuration::ResourceKey::new(
-        ResourceTypeName::parse(resource_type).unwrap(),
-        ResourceName::parse(name).unwrap(),
-    )
-}
+use common::{digest, key};
 
 fn input(resource_type: &str, name: &str) -> BundleResource {
     BundleResource::new(
