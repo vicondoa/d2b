@@ -333,8 +333,8 @@ pkgs.testers.runNixOSTest {
                 recursive = false;
                 sensitivity = "private";
                 createPolicy = "create-if-never-provisioned";
-                repairPolicy = "fail-closed";
-                cleanupPolicy = "never";
+                repairPolicy = "exact-owner";
+                cleanupPolicy = "owner-controlled";
                 adoptionPolicy = "quarantine-on-ambiguity";
                 restartPolicy = "preserve-across-controller-restart";
                 leaseClass = "none";
