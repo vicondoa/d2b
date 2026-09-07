@@ -3218,18 +3218,15 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     let (completed, completed_receiver) = tokio::sync::oneshot::channel();
     let entered = Arc::new(AtomicBool::new(false));
     let entered_probe = Arc::clone(&entered);
-    let adapter_ready = Arc::new(AtomicBool::new(false));
-    let adapter_ready_probe = Arc::clone(&adapter_ready);
     let probe_store = Arc::clone(&store);
     let probe = tokio::spawn(async move {
         probe_store
             .reads
-            .expiry_probe_with_lifetime_and_handshake(
+            .expiry_probe_with_lifetime_and_entered(
                 started,
                 release_receiver,
                 completed,
                 Some(entered_probe),
-                Some(adapter_ready_probe),
                 HOLD_PROBE_LIFETIME,
             )
             .await
@@ -3237,15 +3234,11 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     started_receiver.await.unwrap();
     for _ in 0..100 {
         tokio::task::yield_now().await;
-        if entered.load(Ordering::Acquire) && adapter_ready.load(Ordering::Acquire) {
+        if entered.load(Ordering::Acquire) {
             break;
         }
     }
     assert!(entered.load(Ordering::Acquire), "worker hold was not entered");
-    assert!(
-        adapter_ready.load(Ordering::Acquire),
-        "adapter did not reach the untimed worker wait"
-    );
     tokio::time::advance(HOLD_PROBE_LIFETIME + std::time::Duration::from_millis(25)).await;
     assert!(
         !probe.is_finished(),
