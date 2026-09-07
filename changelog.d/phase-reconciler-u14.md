@@ -243,6 +243,8 @@
   starving one another.
 - Limited total hosted Rust-main Bazel jobs to eight so local compilation
   actions cannot starve the serialized test process.
+- Enabled full test output for the hosted Rust-main lane so any remaining
+  target-local failure names and assertions are preserved in CI logs.
 - Added a manual dispatch entry point to the fixed Layer-1 workflow so a
   reviewed head can recover required checks when a pull-request event is
   not delivered.
