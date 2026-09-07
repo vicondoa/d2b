@@ -1956,6 +1956,7 @@ impl ReadPool {
         let (response, receiver) = oneshot::channel();
         let (worker_started, worker_started_receiver) = oneshot::channel();
         let wait_for_worker_completion = hold.is_some();
+        #[cfg(test)]
         let adapter_ready = hold
             .as_ref()
             .and_then(|hold| hold.adapter_ready.as_ref())
@@ -1982,6 +1983,7 @@ impl ReadPool {
             .await
             .map_err(|_| timeout())?
             .map_err(|_| crate::transaction::integrity("read-start-closed"))?;
+        #[cfg(test)]
         if let Some(adapter_ready) = adapter_ready {
             adapter_ready.store(true, Ordering::Release);
         }
