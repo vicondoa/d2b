@@ -240,6 +240,8 @@
   shell-supervisor output wait so hosted scheduling cannot race test evidence.
 - Added an explicit test-only worker-hold handshake so the paused redb test
   advances time only after the blocking worker owns its permit.
+- Added a second test-only adapter-wait handshake so the paused redb test
+  advances time only after the async adapter leaves its timed startup wait.
 - Relaxed the Resource API large-relist test budget for hosted-runner
   scheduling while retaining a bounded fail-fast performance assertion.
 - Serialized the supervised fd10 Provider test binary because its fixed

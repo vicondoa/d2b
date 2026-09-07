@@ -1956,6 +1956,10 @@ impl ReadPool {
         let (response, receiver) = oneshot::channel();
         let (worker_started, worker_started_receiver) = oneshot::channel();
         let wait_for_worker_completion = hold.is_some();
+        let adapter_ready = hold
+            .as_ref()
+            .and_then(|hold| hold.adapter_ready.as_ref())
+            .map(Arc::clone);
         self.senders[worker]
             .try_send(ReadWork {
                 command: make(response),
@@ -1978,6 +1982,9 @@ impl ReadPool {
             .await
             .map_err(|_| timeout())?
             .map_err(|_| crate::transaction::integrity("read-start-closed"))?;
+        if let Some(adapter_ready) = adapter_ready {
+            adapter_ready.store(true, Ordering::Release);
+        }
         let result = if wait_for_worker_completion {
             receiver
                 .await
@@ -2119,6 +2126,27 @@ impl ReadPool {
         entered: Option<Arc<AtomicBool>>,
         lifetime: Duration,
     ) -> Result<(), StoreError> {
+        self.expiry_probe_with_lifetime_and_handshake(
+            started,
+            release,
+            completed,
+            entered,
+            None,
+            lifetime,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn expiry_probe_with_lifetime_and_handshake(
+        &self,
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        completed: oneshot::Sender<()>,
+        entered: Option<Arc<AtomicBool>>,
+        adapter_ready: Option<Arc<AtomicBool>>,
+        lifetime: Duration,
+    ) -> Result<(), StoreError> {
         self.submit_with_hold_for(
             "scan",
             |response| ReadCommand::NeverRespond { response },
@@ -2127,6 +2155,7 @@ impl ReadPool {
                 release,
                 completed,
                 entered,
+                adapter_ready,
             }),
             lifetime,
         )
@@ -2186,6 +2215,7 @@ struct ReadHold {
     release: std::sync::mpsc::Receiver<()>,
     completed: oneshot::Sender<()>,
     entered: Option<Arc<AtomicBool>>,
+    adapter_ready: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(not(test))]
