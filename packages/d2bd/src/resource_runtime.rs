@@ -10783,6 +10783,12 @@ pub(crate) enum CloudHypervisorReconcileOutcome {
     Pending,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudHypervisorEndpointOutcome {
+    Ready,
+    Pending,
+}
+
 impl ZoneResourceRuntime {
     /// Install the daemon-owned typed effect executor used by U8 Provider
     /// runners. The binding is replaced only during trusted composition.
@@ -14536,6 +14542,7 @@ impl ZoneResourceRuntime {
             std::mem::take(&mut *tasks)
         };
         for task in stale {
+            task.abort();
             let _ = task.await;
         }
 
@@ -15710,8 +15717,8 @@ impl ZoneResourceRuntime {
                 );
             }
             match self.reconcile_cloud_hypervisor_endpoints(&guest_ref).await {
-                Ok(()) => {}
-                Err(ResourceRuntimeError::CapabilityUnavailable) => {
+                Ok(CloudHypervisorEndpointOutcome::Ready) => {}
+                Ok(CloudHypervisorEndpointOutcome::Pending) => {
                     guest_outcome = CloudHypervisorReconcileOutcome::Pending;
                     overall_outcome = CloudHypervisorReconcileOutcome::Pending;
                     tracing::debug!(
@@ -15770,7 +15777,7 @@ impl ZoneResourceRuntime {
     async fn reconcile_cloud_hypervisor_endpoints(
         &self,
         guest_ref: &ResourceRef,
-    ) -> Result<(), ResourceRuntimeError> {
+    ) -> Result<CloudHypervisorEndpointOutcome, ResourceRuntimeError> {
         let process_ref = deterministic_child_ref(guest_ref, ChildRole::VmmProcess)
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         let process = self
@@ -15803,7 +15810,7 @@ impl ZoneResourceRuntime {
                 phase = ?process_envelope.status().phase(),
                 "Cloud Hypervisor endpoint publication deferred until VMM Process is Ready",
             );
-            return Err(ResourceRuntimeError::CapabilityUnavailable);
+            return Ok(CloudHypervisorEndpointOutcome::Pending);
         }
         let provider_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor")
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
@@ -15851,7 +15858,7 @@ impl ZoneResourceRuntime {
             )
             .await?;
         }
-        Ok(())
+        Ok(CloudHypervisorEndpointOutcome::Ready)
     }
 
     async fn reconcile_cloud_hypervisor_setup_volume(

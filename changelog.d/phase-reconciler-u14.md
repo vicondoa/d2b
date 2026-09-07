@@ -211,6 +211,12 @@
 - Kept provider executable and package digest projections eval-safe when their
   digest derivations are not realized; build-time artifacts remain authoritative
   for the realized values.
+- Restarted all U12 siblings after a mixed-liveness failure, aborting the
+  remaining live task before rebuilding the runner set.
+- Recovered uncertain accepted-effect persistence through a persistence-only
+  retry path so handler effects are not executed again with a reset attempt.
+- Distinguished expected VMM Process convergence from invalid Cloud Hypervisor
+  endpoint ownership and identity failures so only the former becomes Pending.
 
 ### Removed
 

@@ -76,7 +76,6 @@ impl core::fmt::Debug for QueueHint {
 }
 
 /// Work removed from the pending lane and marked running.
-#[derive(Clone)]
 pub struct QueuedWork {
     key: ResourceKey,
     high_water_revision: ZoneRevision,
@@ -396,15 +395,6 @@ impl PendingQueue {
     pub fn retry(&self, work: QueuedWork, revision: ZoneRevision) -> Result<(), QueueError> {
         let attempt = work.attempt.saturating_add(1);
         self.retry_with_attempt(work, revision, attempt)
-    }
-
-    /// Requeue persistence recovery without consuming another handler attempt.
-    pub fn retry_persistence(
-        &self,
-        work: QueuedWork,
-        revision: ZoneRevision,
-    ) -> Result<(), QueueError> {
-        self.retry_with_attempt(work, revision, 1)
     }
 
     fn retry_with_attempt(
@@ -893,31 +883,6 @@ mod tests {
         assert_eq!(retry.attempt(), 2);
         assert_eq!(retry.high_water_revision(), ZoneRevision::new(5));
         assert!(retry.reasons().contains(TriggerReason::RetryDue));
-    }
-
-    #[test]
-    fn persistence_retry_resets_handler_attempt() {
-        let queue = PendingQueue::new(2, 1);
-        let target = key("app", 0);
-        queue
-            .push(hint(
-                target.clone(),
-                2,
-                TriggerReason::ManualReconcile,
-                PriorityLane::Ordinary,
-                "ordinary",
-            ))
-            .unwrap();
-        let first = queue.pop_ready().unwrap();
-        queue.retry(first, ZoneRevision::new(3)).unwrap();
-        let second = queue.pop_ready().unwrap();
-        assert_eq!(second.attempt(), 2);
-        queue
-            .retry_persistence(second, ZoneRevision::new(4))
-            .unwrap();
-        let recovery = queue.pop_ready().unwrap();
-        assert_eq!(recovery.attempt(), 1);
-        assert!(recovery.reasons().contains(TriggerReason::RetryDue));
     }
 
     #[test]

@@ -1102,19 +1102,14 @@ where
                                             completion.persistence_operation
                                         {
                                             let lane = completion.work.lane();
-                                            let recovery_revision =
-                                                completion.work.high_water_revision();
-                                            let work = completion
-                                                .work
-                                                .with_persistence_operation(Some(
-                                                    persistence_operation,
-                                                ));
                                             schedule_queue_item(
                                                 &mut requeues,
                                                 Arc::clone(&self.clock),
                                                 ScheduledQueueItem::PersistenceRetry {
-                                                    work,
-                                                    revision: recovery_revision,
+                                                    key: key.clone(),
+                                                    generation,
+                                                    reason,
+                                                    operation: persistence_operation,
                                                 },
                                             );
                                             observe_counter(
@@ -1256,22 +1251,39 @@ where
                         .ok_or(RunnerError::TaskFailed)?
                         .map_err(|_| RunnerError::TaskFailed)?;
                     match scheduled {
-                        ScheduledQueueItem::PersistenceRetry { work, revision } => {
-                            let retry_work = work.clone();
-                            match queue.retry_persistence(work, revision) {
-                                Ok(()) => {}
-                                Err(QueueError::Backpressure
-                                | QueueError::ExpeditedBackpressure) => {
+                        ScheduledQueueItem::PersistenceRetry {
+                            key,
+                            generation,
+                            reason,
+                            operation,
+                        } => {
+                            match persist_exhaustion(
+                                self.source.as_ref(),
+                                self.clock.as_ref(),
+                                phase_deadline(self.clock.as_ref(), self.config.deadline_tick),
+                                &shutdown,
+                                &key,
+                                reason,
+                                generation,
+                                Some(&operation),
+                            )
+                            .await?
+                            {
+                                FailurePersistence::Persisted | FailurePersistence::Skipped => {
+                                    queue.finish(&key)?;
+                                }
+                                FailurePersistence::Uncertain => {
                                     schedule_queue_item(
                                         &mut requeues,
                                         Arc::clone(&self.clock),
                                         ScheduledQueueItem::PersistenceRetry {
-                                            work: retry_work,
-                                            revision,
+                                            key,
+                                            generation,
+                                            reason,
+                                            operation,
                                         },
                                     );
                                 }
-                                Err(error) => return Err(error.into()),
                             }
                         }
                         ScheduledQueueItem::Retry {
@@ -1688,8 +1700,10 @@ enum WorkerOutcome {
 
 enum ScheduledQueueItem {
     PersistenceRetry {
-        work: QueuedWork,
-        revision: ZoneRevision,
+        key: ResourceKey,
+        generation: Option<ResourceGeneration>,
+        reason: ReconcileReason,
+        operation: OperationContext,
     },
     Retry {
         key: ResourceKey,
