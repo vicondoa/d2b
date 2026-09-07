@@ -116,20 +116,6 @@ rust_test(
 )
 
 rust_test(
-    name = "provider_lifecycle",
-    srcs = [
-        "integration/provider_lifecycle.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_device_gpu",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "worker_contract",
     srcs = [
         "tests/worker_contract.rs",

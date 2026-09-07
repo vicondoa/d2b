@@ -16,7 +16,7 @@ use d2b_core::error::{BundleError, Error as CoreError};
 use d2bd_runtime::typed_error::TypedError;
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -45,11 +45,6 @@ fn write_with_mode(path: &std::path::Path, content: &[u8], mode: u32) {
         .expect("create file")
         .write_all(content)
         .expect("write file");
-}
-
-#[allow(dead_code)]
-fn set_mode(path: &std::path::Path, mode: u32) {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set permissions");
 }
 
 /// Minimal bundle JSON without a `bundleHash` field (hash check is secondary

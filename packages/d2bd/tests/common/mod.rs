@@ -257,20 +257,6 @@ impl SpawnedProcess {
         }
     }
 
-    pub fn wait_timeout(mut self, timeout: Duration) -> Option<ExitStatus> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let child = self.child.as_mut().expect("process already consumed");
-            if let Some(status) = child.try_wait().expect("poll process") {
-                self.child.take();
-                return Some(status);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    }
 }
 
 impl Drop for SpawnedProcess {
