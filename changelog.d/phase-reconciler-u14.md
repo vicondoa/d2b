@@ -229,6 +229,8 @@
   under concurrent Rust test load.
 - Relaxed only test-side eventual convergence waits for Resource API and redb
   worker tests; production retry and lifetime budgets remain unchanged.
+- Serialized the Resource API test binary so per-test store/session fixtures
+  cannot race under the aggregate Rust lane.
 
 ### Removed
 
