@@ -2100,6 +2100,25 @@ impl ReadPool {
         completed: oneshot::Sender<()>,
         lifetime: Duration,
     ) -> Result<(), StoreError> {
+        self.expiry_probe_with_lifetime_and_entered(
+            started,
+            release,
+            completed,
+            None,
+            lifetime,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn expiry_probe_with_lifetime_and_entered(
+        &self,
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        completed: oneshot::Sender<()>,
+        entered: Option<Arc<AtomicBool>>,
+        lifetime: Duration,
+    ) -> Result<(), StoreError> {
         self.submit_with_hold_for(
             "scan",
             |response| ReadCommand::NeverRespond { response },
@@ -2107,6 +2126,7 @@ impl ReadPool {
                 started,
                 release,
                 completed,
+                entered,
             }),
             lifetime,
         )
@@ -2165,6 +2185,7 @@ struct ReadHold {
     started: oneshot::Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
     completed: oneshot::Sender<()>,
+    entered: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(not(test))]
@@ -2294,6 +2315,9 @@ fn read_worker(database: Arc<Database>, receiver: std::sync::mpsc::Receiver<Read
             ReadCommand::NeverRespond { response } => {
                 if let Some(hold) = hold {
                     let _ = hold.started.send(());
+                    if let Some(entered) = hold.entered.as_ref() {
+                        entered.store(true, Ordering::Release);
+                    }
                     let _ = hold.release.recv();
                     completed = Some(hold.completed);
                 }

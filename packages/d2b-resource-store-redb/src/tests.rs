@@ -32,7 +32,7 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
 use super::*;
@@ -3216,22 +3216,29 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     let (started, started_receiver) = tokio::sync::oneshot::channel();
     let (release, release_receiver) = std::sync::mpsc::channel();
     let (completed, completed_receiver) = tokio::sync::oneshot::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let entered_probe = Arc::clone(&entered);
     let probe_store = Arc::clone(&store);
     let probe = tokio::spawn(async move {
         probe_store
             .reads
-            .expiry_probe_with_lifetime(
+            .expiry_probe_with_lifetime_and_entered(
                 started,
                 release_receiver,
                 completed,
+                Some(entered_probe),
                 HOLD_PROBE_LIFETIME,
             )
             .await
     });
     started_receiver.await.unwrap();
-    for _ in 0..3 {
+    for _ in 0..100 {
         tokio::task::yield_now().await;
+        if entered.load(Ordering::Acquire) {
+            break;
+        }
     }
+    assert!(entered.load(Ordering::Acquire), "worker hold was not entered");
     tokio::time::advance(HOLD_PROBE_LIFETIME + std::time::Duration::from_millis(25)).await;
     assert!(
         !probe.is_finished(),
