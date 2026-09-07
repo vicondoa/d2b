@@ -236,7 +236,7 @@
 - Gave the redb blocking-worker hold probe a test-only lifetime separate from
   the production read lifetime, preventing hosted-runner scheduling delay from
   bypassing the worker-hold assertion.
-- Capped local Rust-main test concurrency at four jobs on the hosted CI
+- Serialized local Rust-main test execution on the hosted CI
   runner to prevent unrelated redb, Resource API, and runtime tests from
   starving one another.
 - Added a manual dispatch entry point to the fixed Layer-1 workflow so a
