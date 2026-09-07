@@ -3219,7 +3219,12 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     let mut probe = tokio::spawn(async move {
         probe_store
             .reads
-            .expiry_probe(started, release_receiver, completed)
+            .expiry_probe_with_lifetime(
+                started,
+                release_receiver,
+                completed,
+                std::time::Duration::from_secs(5),
+            )
             .await
     });
     started_receiver.await.unwrap();

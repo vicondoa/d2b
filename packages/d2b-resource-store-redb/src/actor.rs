@@ -2088,6 +2088,18 @@ impl ReadPool {
         release: std::sync::mpsc::Receiver<()>,
         completed: oneshot::Sender<()>,
     ) -> Result<(), StoreError> {
+        self.expiry_probe_with_lifetime(started, release, completed, READ_LIFETIME)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn expiry_probe_with_lifetime(
+        &self,
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        completed: oneshot::Sender<()>,
+        lifetime: Duration,
+    ) -> Result<(), StoreError> {
         self.submit_with_hold_for(
             "scan",
             |response| ReadCommand::NeverRespond { response },
@@ -2096,7 +2108,7 @@ impl ReadPool {
                 release,
                 completed,
             }),
-            READ_LIFETIME,
+            lifetime,
         )
         .await
     }
