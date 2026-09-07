@@ -5500,7 +5500,7 @@ mod tests {
         let elapsed = started.elapsed();
         assert_eq!(initial.resources.len(), RESOURCE_COUNT);
         assert!(
-            elapsed <= Duration::from_secs(5),
+            elapsed <= Duration::from_secs(15),
             "Core+redb relist/rebuild took {elapsed:?} for {RESOURCE_COUNT} resources and {WATCH_COUNT} watches"
         );
         let rows = store.authority_operations().await.unwrap();

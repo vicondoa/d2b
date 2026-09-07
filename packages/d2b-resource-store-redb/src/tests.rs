@@ -38,7 +38,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use super::*;
 
 const TEST_EVENTUAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const HOLD_PROBE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
+const HOLD_PROBE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(3600);
 
 #[derive(Default)]
 struct RecordingAudit(Mutex<Vec<AuditRecord>>);

@@ -236,6 +236,8 @@
 - Gave the redb blocking-worker hold probe a test-only lifetime separate from
   the production read lifetime, preventing hosted-runner scheduling delay from
   bypassing the worker-hold assertion.
+- Relaxed the Resource API large-relist test budget for hosted-runner
+  scheduling while retaining a bounded fail-fast performance assertion.
 - Serialized the supervised fd10 Provider test binary because its fixed
   inherited descriptors must not race other test cases in the same process.
 - Serialized local Rust-main test execution on the hosted CI
@@ -243,8 +245,6 @@
   starving one another.
 - Limited total hosted Rust-main Bazel jobs to eight so local compilation
   actions cannot starve the serialized test process.
-- Enabled full test output for the hosted Rust-main lane so any remaining
-  target-local failure names and assertions are preserved in CI logs.
 - Added a manual dispatch entry point to the fixed Layer-1 workflow so a
   reviewed head can recover required checks when a pull-request event is
   not delivered.
