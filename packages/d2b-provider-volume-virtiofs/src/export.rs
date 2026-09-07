@@ -25,6 +25,11 @@ pub const EXPORT_RESOURCE_TYPE: &str = "virtiofs.d2bus.org.Export";
 /// else.
 pub const EXPORT_FINALIZER: &str = "volume-virtiofs.d2bus.org/export";
 
+/// The finalizer volume-virtiofs adds to each VolumeBinding, and to
+/// nothing else.  U3 mints bindings Volume-side; U4 retypes the serving
+/// reconciler onto this finalizer.
+pub const VOLUME_BINDING_FINALIZER: &str = "volume-virtiofs.d2bus.org/volume-binding";
+
 /// The opaque identity of one Export's private listening socket.
 ///
 /// The socket path is a generated implementation detail of this

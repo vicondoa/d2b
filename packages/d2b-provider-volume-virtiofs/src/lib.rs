@@ -41,7 +41,9 @@ pub use controller::{
     VirtiofsExportController, VirtiofsRunnerContract, resolve_view, virtiofs_runner_contract,
 };
 pub use error::VirtiofsExportError;
-pub use export::{EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, ExportSpec, SocketIdentity};
+pub use export::{
+    EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, VOLUME_BINDING_FINALIZER, ExportSpec, SocketIdentity,
+};
 pub use port::{ExportPhase, ExportStatusReport, LaunchedWorker, VirtiofsExportEffectPort};
 pub use readiness::{
     GuestMountObservation, SocketObservation, StoreViewMarkerObservation, classify_readiness,

@@ -30591,7 +30591,7 @@ mod tests {
         runtime.shutdown().await.unwrap();
     }
 
-    async fn open_production_guest_runtime_for_test() -> (
+    pub(crate) async fn open_production_guest_runtime_for_test() -> (
         tempfile::TempDir,
         ZoneResourceRuntime,
         Arc<BrokerEvidenceIndex>,
@@ -30633,7 +30633,7 @@ mod tests {
         (directory, runtime, broker_evidence)
     }
 
-    fn bundle_resource(
+    pub(crate) fn bundle_resource(
         resource_type: &str,
         name: &str,
         zone: &ZoneId,
@@ -30696,7 +30696,7 @@ mod tests {
         serde_json::to_string(&spec).unwrap()
     }
 
-    async fn materialize_test_bundle(
+    pub(crate) async fn materialize_test_bundle(
         runtime: &ZoneResourceRuntime,
         resources: Vec<BundleResource>,
     ) {
