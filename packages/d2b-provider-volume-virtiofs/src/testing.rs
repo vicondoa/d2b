@@ -14,7 +14,7 @@ use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, Z
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 use crate::error::VirtiofsBindingError;
-use crate::export::StoredBinding;
+use crate::bindings::StoredBinding;
 use crate::port::{LaunchedWorker, VirtiofsBindingEffectPort};
 use crate::worker::VirtiofsdWorkerPlan;
 
@@ -256,7 +256,7 @@ pub mod fixtures {
     use d2b_contracts_resource::v3::volume::{ViewSpec, VolumeSpec};
     use serde_json::{Value, json};
 
-    use crate::export::StoredBinding;
+    use crate::bindings::StoredBinding;
 
     /// The Zone every fixture lives in.
     pub fn zone() -> BoundedToken {

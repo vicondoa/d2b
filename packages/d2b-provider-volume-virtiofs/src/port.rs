@@ -15,7 +15,7 @@ use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
 use crate::error::VirtiofsBindingError;
-use crate::export::{SocketIdentity, StoredBinding};
+use crate::bindings::{SocketIdentity, StoredBinding};
 use crate::worker::VirtiofsdWorkerPlan;
 
 /// The worker the effect adapter launched for one binding.

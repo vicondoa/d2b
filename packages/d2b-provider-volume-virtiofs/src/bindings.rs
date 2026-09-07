@@ -42,7 +42,7 @@ impl SocketIdentity {
         execution_ref: &ResourceRef,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"d2b/volume-virtiofs/export-socket/v1");
+        hasher.update(b"d2b/volume-virtiofs/binding-socket/v1");
         hasher.update(zone.as_str().as_bytes());
         hasher.update([0u8]);
         hasher.update(volume_ref.to_canonical_string().as_bytes());
@@ -121,7 +121,7 @@ impl StoredBinding {
     /// The envelope must be a `VolumeBinding` owned by an existing
     /// Volume and served by this Provider, and it must be strictly
     /// neutral: the standard catalog admits no provider extension path
-    /// for the type, so a `spec.provider` block — old Export schema id
+    /// for the type, so a `spec.provider` block — legacy schema id
     /// or otherwise — is rejected, and the envelope never carries
     /// attachment settings (KTD1). The serving posture is the frozen
     /// default declared by the worker plan.

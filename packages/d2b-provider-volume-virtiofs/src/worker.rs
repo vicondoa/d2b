@@ -15,7 +15,7 @@ use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume::{AttachmentAccess, AttachmentCache, ViewRight, ViewSpec};
 
 use crate::error::VirtiofsBindingError;
-use crate::export::StoredBinding;
+use crate::bindings::StoredBinding;
 
 /// The frozen sandbox mode of every virtiofsd worker.
 pub const SANDBOX_MODE: &str = "chroot";
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn the_frozen_default_posture_survives_the_neutral_envelope() {
         // The neutral envelope carries no attachment tuning (KTD1); the
-        // plan keeps the frozen default profile the Export-era default
+        // plan keeps the frozen default profile the pre-cutover default
         // settings produced (KTD9).
         let binding = fixtures::binding("read-only");
         let view = fixtures::read_only_view();

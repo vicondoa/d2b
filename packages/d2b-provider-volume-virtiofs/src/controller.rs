@@ -12,7 +12,7 @@ use d2b_contracts_resource::v3::volume::{AttachmentAccess, ViewSpec, VolumeSpec}
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
 use crate::error::VirtiofsBindingError;
-use crate::export::{VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, StoredBinding};
+use crate::bindings::{VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, StoredBinding};
 use crate::port::{BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort};
 use crate::worker::{VirtiofsdWorkerPlan, WorkerSandbox};
 

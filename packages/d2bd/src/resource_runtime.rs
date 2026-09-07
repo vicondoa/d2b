@@ -23710,19 +23710,52 @@ mod tests {
     }
 
     #[test]
-    fn trusted_provider_catalog_includes_declared_export_only() {
+    fn trusted_provider_catalog_includes_declared_binding() {
         let resource_types = trusted_provider_resource_types().expect("trusted declarations");
-        assert!(resource_types
-            .iter()
-            .any(|resource_type| resource_type.as_str() == "virtiofs.d2bus.org.Export"));
+        // VolumeBinding is admitted through the standard catalog only (KTD8):
+        // it is a standard, unqualified type and never a trusted qualified
+        // extension, and the removed Export type must not re-enter either.
+        let binding = ResourceTypeName::parse(
+            d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE,
+        )
+        .unwrap();
+        assert!(!resource_types.contains(&binding));
         assert!(!resource_types
             .iter()
-            .any(|resource_type| resource_type.as_str() == "untrusted.d2bus.org.Type"));
+            .any(|resource_type| resource_type.as_str() == "virtiofs.d2bus.org.Export"));
+        let standard = d2b_resource_api::authz::ApiCatalog::standard();
+        assert!(
+            d2b_resource_api::authz::PolicyRule::new(
+                &standard,
+                [binding],
+                [d2b_resource_api::authz::ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            )
+            .is_ok(),
+            "VolumeBinding must be installed in the standard catalog"
+        );
+        assert!(d2b_resource_api::authz::PolicyRule::new(
+            &standard,
+            [ResourceTypeName::parse("virtiofs.d2bus.org.Export").unwrap()],
+            [d2b_resource_api::authz::ResourceVerb::Get],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        .is_err());
     }
 
     #[test]
     fn unknown_qualified_bundle_resource_types_fail_closed() {
-        let trusted = ResourceTypeName::parse("virtiofs.d2bus.org.Export").unwrap();
+        let trusted =
+            ResourceTypeName::parse(d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE)
+                .unwrap();
         assert!(trusted_catalog_resource_types([trusted]).is_ok());
         let unknown = ResourceTypeName::parse("untrusted.d2bus.org.Type").unwrap();
         assert_eq!(
@@ -24210,7 +24243,7 @@ mod tests {
                 "Provider/volume-virtiofs" => {
                     assert_eq!(
                         registration.finalizer,
-                        "volume-virtiofs.d2bus.org/export"
+                        d2b_provider_volume_virtiofs::VOLUME_BINDING_FINALIZER
                     );
                 }
                 _ => {}

@@ -27,7 +27,7 @@
 
 mod controller;
 mod error;
-mod export;
+mod bindings;
 mod port;
 mod readiness;
 mod socket_path;
@@ -42,7 +42,7 @@ pub use controller::{
     virtiofs_runner_contract,
 };
 pub use error::VirtiofsBindingError;
-pub use export::{
+pub use bindings::{
     VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, SocketIdentity, StoredBinding,
 };
 pub use port::{

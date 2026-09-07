@@ -4,6 +4,20 @@
 //! VolumeBinding resources and their Process/Endpoint children. The
 //! runtime adapter keeps Resource API fencing in Core and sends host
 //! mutations through the anchored Volume effect adapter.
+//!
+//! # Export cutover order (U6 / KTD10)
+//!
+//! `virtiofs.d2bus.org.Export` is fully deleted in this break; no second
+//! durable owner exists. For stores that still hold persisted Export
+//! instances from before the cutover: Export handling is unregistered
+//! from the shared-Runner waves (only `VolumeBinding` is registered now),
+//! and any surviving Export drains through its existing finalizer /
+//! teardown path — a desired-empty reconcile issues the deletion request,
+//! and the Export finalizer tears down the worker and private endpoint
+//! before the object disappears. Bindings supersede from the declared
+//! Volume attachments on the next reconcile: volume-local mints one
+//! binding per admitted attachment (deterministic identity), and
+//! volume-virtiofs serves it. Nothing recreates an Export.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
