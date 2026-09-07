@@ -245,6 +245,8 @@
   starving one another.
 - Limited total hosted Rust-main Bazel jobs to eight so local compilation
   actions cannot starve the serialized test process.
+- Kept the Make dispatcher contract test aligned with the optional hosted
+  Rust-main test-output diagnostic flag.
 - Added a manual dispatch entry point to the fixed Layer-1 workflow so a
   reviewed head can recover required checks when a pull-request event is
   not delivered.

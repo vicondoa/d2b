@@ -515,8 +515,9 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
         makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\"")
             && !makefile.contains("D2B_BAZEL_TEST_TAG_FILTERS")
             && !makefile.contains("--test_tag_filters")
-            && !makefile.contains("--test_output="),
-        "public Make aliases must preserve the repository-root test environment without adding test selection or output arguments"
+            && makefile.contains("D2B_BAZEL_TEST_OUTPUT")
+            && makefile.contains("--test_output=$(D2B_BAZEL_TEST_OUTPUT)"),
+        "public Make aliases must preserve the repository-root test environment without adding test selection arguments"
     );
     assert!(
         !makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=remote"),
