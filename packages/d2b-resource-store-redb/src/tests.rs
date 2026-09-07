@@ -38,6 +38,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use super::*;
 
 const TEST_EVENTUAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const HOLD_PROBE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Default)]
 struct RecordingAudit(Mutex<Vec<AuditRecord>>);
@@ -3223,12 +3224,12 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
                 started,
                 release_receiver,
                 completed,
-                std::time::Duration::from_secs(5),
+                HOLD_PROBE_LIFETIME,
             )
             .await
     });
     started_receiver.await.unwrap();
-    tokio::time::advance(READ_LIFETIME + std::time::Duration::from_millis(25)).await;
+    tokio::time::advance(HOLD_PROBE_LIFETIME + std::time::Duration::from_millis(25)).await;
     assert!(
         tokio::time::timeout(std::time::Duration::ZERO, &mut probe)
             .await
