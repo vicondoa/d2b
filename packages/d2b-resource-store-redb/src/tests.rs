@@ -3217,7 +3217,7 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     let (release, release_receiver) = std::sync::mpsc::channel();
     let (completed, completed_receiver) = tokio::sync::oneshot::channel();
     let probe_store = Arc::clone(&store);
-    let mut probe = tokio::spawn(async move {
+    let probe = tokio::spawn(async move {
         probe_store
             .reads
             .expiry_probe_with_lifetime(
@@ -3231,9 +3231,7 @@ async fn read_adapter_waits_for_worker_completion_before_releasing_permit() {
     started_receiver.await.unwrap();
     tokio::time::advance(HOLD_PROBE_LIFETIME + std::time::Duration::from_millis(25)).await;
     assert!(
-        tokio::time::timeout(std::time::Duration::ZERO, &mut probe)
-            .await
-            .is_err(),
+        !probe.is_finished(),
         "the adapter must wait for the blocking worker instead of applying an outer timeout"
     );
     assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS - 1);
