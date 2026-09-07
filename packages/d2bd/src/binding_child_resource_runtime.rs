@@ -279,44 +279,20 @@ pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
     resource.readiness_is_current(&child.uid, child.generation, child.revision)
 }
 
-/// Collect the VolumeBinding references that gate one Guest's start.
-///
-/// A binding gates the Guest when its spec targets the Guest as execution
-/// target.  A binding whose spec cannot be parsed is kept so the start
-/// gate fails closed on broken resources.
-pub(crate) fn guest_binding_refs(
-    bindings: &[StoredResource],
-    guest_ref: &ResourceRef,
-) -> Vec<ResourceRef> {
-    bindings
-        .iter()
-        .filter(|binding| {
-            binding.resource_ref.resource_type().as_str()
-                == d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
-        })
-        .filter(|binding| {
-            let spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
-                .ok()
-                .and_then(|value| value.get("spec").cloned())
-                .and_then(|spec| {
-                    let mut object = spec.as_object()?.clone();
-                    for field in ["providerRef", "updatePolicy", "provider"] {
-                        object.remove(field);
-                    }
-                    serde_json::from_value::<VolumeBindingSpec>(
-                        serde_json::Value::Object(object),
-                    )
-                    .ok()
-                });
-            match spec {
-                Some(spec) => spec.execution_ref() == guest_ref,
-                None => true,
-            }
-        })
-        .map(|binding| binding.resource_ref.clone())
-        .collect()
+/// Parse a stored binding envelope to its typed spec, stripping the
+/// reserved envelope fields the minter stores alongside the five typed
+/// ones.  Returns None for genuinely broken resources.
+pub(crate) fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec> {
+    let mut spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
+        .ok()?
+        .get("spec")?
+        .clone();
+    let object = spec.as_object_mut()?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value::<VolumeBindingSpec>(serde_json::Value::Object(object.clone())).ok()
 }
-
 fn owned_child_matches(
     owner: &OwnedChildOwner,
     intent: &OwnedChildIntent,
@@ -1666,7 +1642,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_binding_refs_keep_only_this_guests_bindings_fail_closed() {
+    fn parsed_binding_spec_strips_reserved_fields_and_rejects_broken_specs() {
         let guest_ref = target("Guest", "work-vm");
         let other_guest_ref = target("Guest", "other-vm");
         let binding_spec = |execution_ref: &str| {
@@ -1684,29 +1660,15 @@ mod tests {
             "Pending",
             binding_spec(guest_ref.to_canonical_string().as_str()),
         );
-        let foreign = stored_resource_with_spec(
-            &target("VolumeBinding", "foreign"),
-            Some(&target("Volume", "work-state")),
-            "Pending",
-            binding_spec(other_guest_ref.to_canonical_string().as_str()),
+        assert_eq!(
+            parsed_binding_spec(&own)
+                .expect("clean spec parses")
+                .execution_ref(),
+            &guest_ref
         );
-        // An unparseable spec is a broken resource: it keeps gating the
-        // Guest so observation fails closed.
-        let broken = stored_resource_with_spec(
-            &target("VolumeBinding", "broken"),
-            Some(&target("Volume", "work-state")),
-            "Pending",
-            serde_json::json!({"volumeRef": "Volume/work-state"}),
-        );
-        let unrelated = stored_resource(
-            &target("Process", "worker"),
-            Some(&target("Volume", "work-state")),
-            "Pending",
-        );
-
         // Minted records carry the reserved envelope providerRef alongside
-        // the five typed fields; the filter must attribute them by execution
-        // target instead of keeping everything through the broken-spec path.
+        // the five typed fields; the parse must attribute them instead of
+        // failing closed.
         let minted_spec = |execution_ref: &str| {
             serde_json::json!({
                 "volumeRef": "Volume/work-state",
@@ -1723,23 +1685,31 @@ mod tests {
             "Pending",
             minted_spec(guest_ref.to_canonical_string().as_str()),
         );
+        assert_eq!(
+            parsed_binding_spec(&own_minted)
+                .expect("minted spec parses")
+                .execution_ref(),
+            &guest_ref
+        );
         let foreign_minted = stored_resource_with_spec(
             &target("VolumeBinding", "foreign-minted"),
             Some(&target("Volume", "work-state")),
             "Pending",
             minted_spec(other_guest_ref.to_canonical_string().as_str()),
         );
-        let refs = guest_binding_refs(
-            &[own, foreign, broken, unrelated, own_minted, foreign_minted],
-            &guest_ref,
-        );
         assert_eq!(
-            refs,
-            vec![
-                target("VolumeBinding", "own"),
-                target("VolumeBinding", "broken"),
-                target("VolumeBinding", "own-minted")
-            ]
+            parsed_binding_spec(&foreign_minted)
+                .expect("foreign spec parses")
+                .execution_ref(),
+            &other_guest_ref
         );
+        // An unparseable spec is a broken resource.
+        let broken = stored_resource_with_spec(
+            &target("VolumeBinding", "broken"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            serde_json::json!({"volumeRef": "Volume/work-state"}),
+        );
+        assert!(parsed_binding_spec(&broken).is_none());
     }
 }
