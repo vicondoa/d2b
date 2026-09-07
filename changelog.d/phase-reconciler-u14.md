@@ -224,6 +224,9 @@
   of endlessly deferring endpoint publication.
 - Continued Pending endpoint convergence through a Degraded VMM Process phase
   while keeping Failed and Deleted terminal.
+- Opened the Provider credential-delivery stream before route metadata
+  processing so supervised fd10 Providers cannot race the first key handoff
+  under concurrent Rust test load.
 
 ### Removed
 

@@ -1584,6 +1584,16 @@ where
         )
         .await
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    let delivery_key_stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
+        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    driver
+        .open_named_stream(
+            delivery_key_stream,
+            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+        )
+        .await
+        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     let metadata = ProviderSessionMetadata::decode(&receive_route_metadata(&driver).await?)?;
     if metadata.provider_ref != spec.provider_ref
         || metadata.service.as_str() != spec.service
@@ -1814,14 +1824,6 @@ async fn receive_delivery_key_handoff(
     route: &AuthenticatedSessionRouteBinding,
 ) -> Result<CredentialDeliveryKeyMaterial, ProviderRuntimeError> {
     let stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    driver
-        .open_named_stream(
-            stream,
-            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-        )
-        .await
         .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
     let mut bytes = zeroize::Zeroizing::new(Vec::new());
     loop {
