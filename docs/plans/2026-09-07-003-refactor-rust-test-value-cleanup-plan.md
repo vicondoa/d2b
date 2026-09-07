@@ -33,8 +33,8 @@ The workspace accumulates tests that pin implementation text, re-assert derive-g
 
 ### Key Decisions
 
-- **One PR over stacked slices** (session-settled: user-directed — chosen over per-slice PRs: faster wall-clock for a mechanical, test-only change).
-- **Deletes plus shrinks over deletes-only** (session-settled: user-directed — chosen over deletes-only: lands the full audit value at once).
+- **One PR over stacked slices** (session-settled: user-directed - chosen over per-slice PRs: faster wall-clock for a mechanical, test-only change).
+- **Deletes plus shrinks over deletes-only** (session-settled: user-directed - chosen over deletes-only: lands the full audit value at once).
 - **Disputed-subsumption rule.** If review challenges any deletion's covering test, that test stays. Governs R1, R2, R3, R4, R5.
 - **Replacement tests are out.** Every deletion names kept coverage; no new tests are added. Governs R1, R2, R3, R4.
 
