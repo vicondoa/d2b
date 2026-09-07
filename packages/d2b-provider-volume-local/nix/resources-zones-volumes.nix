@@ -289,7 +289,7 @@ let
           sourceKind = sourceSettings.kind or source.kind or null;
         in [
           {
-            assertion = exactKeys [ "executionRef" "transport" "mountPath" "view" "access" ] attachment;
+            assertion = exactKeys [ "executionRef" "transport" "mountPath" "view" "access" "settings" ] attachment;
             message = "${path} contains an unsupported attachment field.";
           }
           {
