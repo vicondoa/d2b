@@ -2390,8 +2390,6 @@ async fn provider_generations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_broker::broker_wire::OpenZoneStoreResponse;
-    use d2bd_runtime::resource_store_runtime::OpenedZoneStore;
     #[test]
     fn production_child_readiness_port_fails_closed_before_ro_store_launch() {
         let binding = d2b_provider_volume_virtiofs::testing::fixtures::binding("read-only");
@@ -2515,11 +2513,11 @@ mod tests {
         }
     }
 
-    // Convergence is observable on the second pass: the first reconcile mints
-    // the binding child, the second finds no pending mutations and reports converged.
     #[tokio::test]
     async fn volume_with_attachments_converges_volume_owned_children() {
-        let (directory, runtime, _broker) =
+    // Convergence is observable on the second pass: the first reconcile mints
+    // the binding child, the second finds no pending mutations and reports converged.
+        let (_directory, runtime, _broker) =
             crate::resource_runtime::tests::open_production_guest_runtime_for_test().await;
         let zone = runtime.zone.clone();
         let volume_ref = ResourceRef::parse("Volume/store-view-work-vm").expect("volume ref");
