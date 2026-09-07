@@ -863,7 +863,11 @@ let
       in {
         zoneName = row.zoneName;
         name = userName;
-        resource = typedResource "User" userName row.zoneName { } null;
+        resource = typedResource "User" userName row.zoneName {
+          osUsername = userName;
+          displayName = userName;
+          groups = [ ];
+        } null;
       })
     (lib.filter
       (row:
