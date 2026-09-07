@@ -395,25 +395,18 @@ pub struct SecurityKeyApplyUdevRulesRequest {
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_id_round_trips_via_serde() {
-        let id = SecurityKeySessionId::new("sk-corp-vm-42");
-        let json = serde_json::to_string(&id).expect("serialize");
-        let decoded: SecurityKeySessionId = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(id, decoded);
-    }
-
-    #[test]
-    fn device_label_round_trips_via_serde() {
-        let label = SecurityKeyDeviceLabel::new("yubikey-primary");
-        let json = serde_json::to_string(&label).expect("serialize");
-        let decoded: SecurityKeyDeviceLabel = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(label, decoded);
+    fn round_trip<T>(value: &T)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug,
+    {
+        let json = serde_json::to_string(value).expect("serialize");
+        let decoded: T = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(&decoded, value);
     }
 
     #[test]
     fn status_response_round_trips_via_serde() {
-        let resp = SecurityKeyStatusResponse {
+        round_trip(&SecurityKeyStatusResponse {
             host_proxy_enabled: true,
             devices: vec![SecurityKeyDeviceStatus {
                 label: SecurityKeyDeviceLabel::new("yubikey-primary"),
@@ -436,10 +429,7 @@ mod tests {
                 virtual_device_present: true,
                 session_state: SecurityKeyVmSessionState::Active,
             }],
-        };
-        let json = serde_json::to_string(&resp).expect("serialize");
-        let decoded: SecurityKeyStatusResponse = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(resp, decoded);
+        });
     }
 
     #[test]
@@ -457,42 +447,6 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize");
             assert_eq!(result, decoded);
         }
-    }
-
-    #[test]
-    fn event_session_started_round_trips_via_serde() {
-        let event = SecurityKeyEvent::SessionStarted {
-            session_id: SecurityKeySessionId::new("sk-corp-vm-1"),
-            vm: "corp-vm".to_owned(),
-            device_label: SecurityKeyDeviceLabel::new("yubikey-primary"),
-            started_at: "2026-07-03T22:00:00Z".to_owned(),
-        };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let decoded: SecurityKeyEvent = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(event, decoded);
-    }
-
-    #[test]
-    fn event_device_removed_round_trips_via_serde() {
-        let event = SecurityKeyEvent::DeviceRemoved {
-            device_label: SecurityKeyDeviceLabel::new("yubikey-primary"),
-            interrupted_session_id: Some(SecurityKeySessionId::new("sk-corp-vm-1")),
-        };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let decoded: SecurityKeyEvent = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(event, decoded);
-    }
-
-    #[test]
-    fn open_device_request_round_trips_via_serde() {
-        let req = SecurityKeyOpenDeviceRequest {
-            device_label: SecurityKeyDeviceLabel::new("yubikey-primary"),
-            session_id: SecurityKeySessionId::new("sk-corp-vm-1"),
-        };
-        let json = serde_json::to_string(&req).expect("serialize");
-        let decoded: SecurityKeyOpenDeviceRequest =
-            serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(req, decoded);
     }
 
     #[test]

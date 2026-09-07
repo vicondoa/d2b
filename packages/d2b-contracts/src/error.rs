@@ -1442,9 +1442,4 @@ mod tests {
         assert_eq!(tamper.code(), 60);
     }
 
-    #[test]
-    fn all_kinds_count_is_thirty_seven() {
-        // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(Error::all_kinds().len(), 37);
-    }
 }

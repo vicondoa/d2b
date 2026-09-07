@@ -21,8 +21,6 @@
 //! `schemaVersion`/`bundleVersion` bumps. See plan.md §"W3 schema/
 //! version bump rules".
 
-#[cfg(test)]
-use crate::host::TapRole;
 use d2b_contracts_resource::v3::IfName;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -273,12 +271,4 @@ mod tests {
         assert_eq!(decoded, intent);
     }
 
-    /// Suppress dead-code warnings while [`TapRole`] from W2 is only
-    /// referenced via the migration note above. Scope s2 replaces this
-    /// with a real usage of [`TapRole`] in the IfNameMapping migration
-    /// guide tests.
-    #[test]
-    fn legacy_tap_role_w2_still_constructible() {
-        let _ = TapRole::WorkloadLan;
-    }
 }
