@@ -236,6 +236,9 @@
 - Capped local Rust-main test concurrency at eight jobs on the hosted CI
   runner to prevent unrelated redb, Resource API, and runtime tests from
   starving one another.
+- Added a manual dispatch entry point to the fixed Layer-1 workflow so a
+  reviewed head can recover required checks when a pull-request event is
+  not delivered.
 
 ### Removed
 

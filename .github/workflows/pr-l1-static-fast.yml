@@ -1,5 +1,6 @@
 name: pr-l1-static-fast
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, v3]
   push:
