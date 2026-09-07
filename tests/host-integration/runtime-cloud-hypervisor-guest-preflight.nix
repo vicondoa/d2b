@@ -296,6 +296,13 @@ pkgs.testers.runNixOSTest {
                     class = "local-path";
                     volumeKinds = [ "durable" "state" "cache" ];
                   }
+                  # U7: daemon-owned root the unprivileged daemon can
+                  # lock and provision inline (path:daemon-state).
+                  {
+                    id = "daemon-state";
+                    class = "local-path";
+                    volumeKinds = [ "durable" "state" "cache" ];
+                  }
                 ];
               };
             };
@@ -316,14 +323,16 @@ pkgs.testers.runNixOSTest {
                 executionRef = "Host/host-system";
                 settings = {
                   kind = "local-path";
-                  sourcePolicyId = "default-state";
+                  sourcePolicyId = "daemon-state";
                 };
               };
               layout = [{
                 path = "state";
                 type = "directory";
-                ownerRef = "User/alice";
-                groupRef = "User/alice";
+                # U7: daemon-owned so the unprivileged daemon can
+                # provision inline; the guest share stays read-only.
+                ownerRef = "User/d2bd";
+                groupRef = "User/d2bd";
                 mode = "0700";
                 target = null;
                 accessAcl = [ ];
