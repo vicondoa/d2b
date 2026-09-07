@@ -21,8 +21,70 @@ use d2b_provider_network_local::{
     routes::{LinkClass, RoutePreflightError, RouteRow},
 };
 
+use std::collections::BTreeSet;
+
 fn uid(value: &str) -> ResourceUid {
     ResourceUid::parse(value).unwrap()
+}
+
+/// Aggregate every entry's bytes into one synthesized `table inet d2b` block
+/// and collect the declared chain names, refusing duplicates or malformed
+/// structure. Only chain-shaped entries may participate.
+fn parse_aggregate_chain_names(table: &SharedNftTable) -> Result<BTreeSet<String>, String> {
+    let mut aggregate = String::from("table inet d2b {\n");
+    for entry in table.entries() {
+        aggregate.push_str(core::str::from_utf8(entry.bytes()).map_err(|_| "non-UTF-8 entry")?);
+    }
+    aggregate.push_str("}\n");
+
+    let mut lines = aggregate.lines().map(str::trim);
+    if lines.next() != Some("table inet d2b {") {
+        return Err("missing aggregate table header".to_owned());
+    }
+    let mut names = BTreeSet::new();
+    let mut in_chain = false;
+    let mut saw_table_close = false;
+    for line in lines {
+        if saw_table_close {
+            return Err(format!("content after aggregate table close: {line}"));
+        }
+        if in_chain {
+            if line == "}" {
+                in_chain = false;
+            } else if line.starts_with("chain ") {
+                return Err(format!("nested chain declaration: {line}"));
+            }
+            continue;
+        }
+        if line == "}" {
+            saw_table_close = true;
+            continue;
+        }
+        let Some(declaration) = line.strip_prefix("chain ") else {
+            return Err(format!("unexpected aggregate table entry: {line}"));
+        };
+        let Some((name, _)) = declaration.split_once(" { ") else {
+            return Err(format!("malformed chain declaration: {line}"));
+        };
+        let name = if let Some(name) = name
+            .strip_prefix('"')
+            .and_then(|name| name.strip_suffix('"'))
+        {
+            name.to_owned()
+        } else if !name.contains('"') {
+            name.to_owned()
+        } else {
+            return Err(format!("malformed quoted chain name: {name}"));
+        };
+        if !names.insert(name.clone()) {
+            return Err(format!("duplicate chain declaration: {name}"));
+        }
+        in_chain = true;
+    }
+    if in_chain || !saw_table_close {
+        return Err("missing aggregate table close".to_owned());
+    }
+    Ok(names)
 }
 
 
@@ -60,8 +122,10 @@ fn firewall_projection_apply_remove_preserve_sibling_and_foreign_bytes() {
         .entries()[0]
         .clone();
     let sibling_bytes = sibling_entry.bytes().to_vec();
-    let usbip_bytes = b"device-usbip marker bytes".to_vec();
-    let foreign_bytes = b"foreign table bytes".to_vec();
+    let usbip_bytes =
+        b"chain usbip-relay { type filter hook output priority -5; policy accept;\n}\n".to_vec();
+    let foreign_bytes =
+        b"chain foreign { type filter hook input priority 0; policy accept;\n}\n".to_vec();
     let snapshot = SharedNftTable::new(vec![
         sibling_entry,
         SharedTableEntry::foreign(usbip_bytes.clone()),
@@ -77,6 +141,18 @@ fn firewall_projection_apply_remove_preserve_sibling_and_foreign_bytes() {
     assert_eq!(applied.table().entries()[0].bytes(), sibling_bytes);
     assert_eq!(applied.table().entries()[1].bytes(), usbip_bytes);
     assert_eq!(applied.table().entries()[2].bytes(), foreign_bytes);
+    // The applied aggregate declares exactly the four ownership-scoped chains
+    // per managed owner plus each foreign chain, with no duplicates.
+    let mut expected_chain_names = BTreeSet::from(["foreign".to_owned(), "usbip-relay".to_owned()]);
+    for owner_ref in [&owner, &sibling] {
+        for hook in ["prerouting", "forward", "output", "input"] {
+            expected_chain_names.insert(format!("{hook}-{}", owner_ref.as_str()));
+        }
+    }
+    assert_eq!(
+        parse_aggregate_chain_names(applied.table()).unwrap(),
+        expected_chain_names
+    );
 
     let removed = remove_projection(applied.table(), &owner).unwrap();
     assert!(

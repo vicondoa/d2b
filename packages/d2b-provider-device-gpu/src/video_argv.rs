@@ -197,44 +197,56 @@ mod tests {
         assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-video");
     }
 
-    #[test]
-    fn rejects_non_absolute_binary() {
-        let mut input = audit_input();
-        input.crosvm_binary_path = "crosvm".to_owned();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::InvalidCrosvmBinaryPath { .. })
-        ));
+    /// One single-field rejection vector: mutate exactly one valid fixture
+    /// field and pin the typed error.
+    struct VideoRejectVector {
+        name: &'static str,
+        expected: VideoArgvError,
+        mutate: fn(&mut VideoArgvInput),
     }
 
     #[test]
-    fn rejects_empty_binary() {
-        let mut input = audit_input();
-        input.crosvm_binary_path.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::InvalidCrosvmBinaryPath { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_vm_name() {
-        let mut input = audit_input();
-        input.vm_name.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::EmptyVmName)
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_socket_path() {
-        let mut input = audit_input();
-        input.socket_path.clear();
-        assert!(matches!(
-            generate_video_argv(&input),
-            Err(VideoArgvError::EmptySocketPath)
-        ));
+    fn rejects_one_invalid_field_at_a_time() {
+        let vectors = vec![
+            VideoRejectVector {
+                name: "relative crosvm binary path",
+                expected: VideoArgvError::InvalidCrosvmBinaryPath {
+                    path: "crosvm".to_owned(),
+                },
+                mutate: |input| input.crosvm_binary_path = "crosvm".to_owned(),
+            },
+            VideoRejectVector {
+                name: "empty crosvm binary path",
+                expected: VideoArgvError::InvalidCrosvmBinaryPath {
+                    path: String::new(),
+                },
+                mutate: |input| input.crosvm_binary_path.clear(),
+            },
+            VideoRejectVector {
+                name: "empty VM name",
+                expected: VideoArgvError::EmptyVmName,
+                mutate: |input| input.vm_name.clear(),
+            },
+            VideoRejectVector {
+                name: "empty socket path",
+                expected: VideoArgvError::EmptySocketPath,
+                mutate: |input| input.socket_path.clear(),
+            },
+        ];
+        for VideoRejectVector {
+            name,
+            expected,
+            mutate,
+        } in vectors
+        {
+            let mut input = audit_input();
+            mutate(&mut input);
+            assert_eq!(
+                generate_video_argv(&input).unwrap_err(),
+                expected,
+                "rejection vector: {name}"
+            );
+        }
     }
 
     #[test]

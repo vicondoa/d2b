@@ -5,101 +5,81 @@ use d2b_provider_audio_pipewire::{
     parse_audio_state,
 };
 
-// ── LevelPercent ─────────────────────────────────────────────────────────────
+// ── Wire shapes: LevelPercent / AudioGrant ──────────────────────────────────
 
 #[test]
-fn level_percent_accepts_boundary_values() {
-    assert_eq!(LevelPercent::new(0).unwrap().get(), 0);
-    assert_eq!(LevelPercent::new(100).unwrap().get(), 100);
-    assert_eq!(LevelPercent::new(50).unwrap().get(), 50);
-}
-
-#[test]
-fn level_percent_rejects_over_100() {
-    assert!(matches!(
-        LevelPercent::new(101),
-        Err(LevelPercentError::OutOfRange(101))
-    ));
-    assert!(matches!(
-        LevelPercent::new(255),
-        Err(LevelPercentError::OutOfRange(255))
-    ));
-}
-
-
-#[test]
-fn level_percent_rejects_out_of_range_in_json() {
-    assert!(serde_json::from_str::<LevelPercent>("101").is_err());
-}
-
-// ── AudioGrant ───────────────────────────────────────────────────────────────
-
-#[test]
-fn audio_grant_wire_strings() {
-    assert_eq!(AudioGrant::On.as_wire_str(), "on");
-    assert_eq!(AudioGrant::Off.as_wire_str(), "off");
+fn level_and_grant_wire_shapes_are_pinned() {
+    // AudioGrant wire spellings and JSON round trips.
+    for (name, grant, wire) in [("on", AudioGrant::On, "on"), ("off", AudioGrant::Off, "off")] {
+        assert_eq!(grant.as_wire_str(), wire, "row: {name}");
+        assert_eq!(
+            serde_json::to_string(&grant).unwrap(),
+            format!(r#""{wire}""#),
+            "row: {name}"
+        );
+        assert_eq!(
+            serde_json::from_str::<AudioGrant>(&format!(r#""{wire}""#)).unwrap(),
+            grant,
+            "row: {name}"
+        );
+    }
     assert!(AudioGrant::On.is_on());
     assert!(!AudioGrant::Off.is_on());
-}
 
-#[test]
-fn audio_grant_round_trips_json() {
-    let on = serde_json::to_string(&AudioGrant::On).unwrap();
-    let off = serde_json::to_string(&AudioGrant::Off).unwrap();
-    assert_eq!(on, r#""on""#);
-    assert_eq!(off, r#""off""#);
-    assert_eq!(
-        serde_json::from_str::<AudioGrant>(&on).unwrap(),
-        AudioGrant::On
-    );
-    assert_eq!(
-        serde_json::from_str::<AudioGrant>(&off).unwrap(),
-        AudioGrant::Off
-    );
+    // LevelPercent accepts the closed 0..=100 range.
+    for (name, raw) in [("zero", 0_u8), ("mid", 50), ("hundred", 100)] {
+        assert_eq!(LevelPercent::new(raw).unwrap().get(), raw, "row: {name}");
+    }
+    // ...and refuses everything above it, on the wire and in JSON.
+    for (name, raw) in [("one over", 101_u8), ("max", 255)] {
+        assert!(
+            matches!(LevelPercent::new(raw), Err(LevelPercentError::OutOfRange(v)) if v == raw),
+            "row: {name}"
+        );
+        assert!(serde_json::from_str::<LevelPercent>(&raw.to_string()).is_err(), "row: {name}");
+    }
 }
 
 // ── parse_audio_state - v1 ────────────────────────────────────────────────────
 
 #[test]
-fn parse_v1_both_on() {
-    let state = parse_audio_state(br#"{"mic":"on","speaker":"on"}"#).unwrap();
-    assert_eq!(state.mic, AudioGrant::On);
-    assert_eq!(state.speaker, AudioGrant::On);
-    assert_eq!(state.schema_version, "v2");
-    assert!(state.speaker_level.is_none());
-    assert!(state.mic_gain.is_none());
-}
+fn parse_v1_wire_shapes() {
+    // Success rows: a v1 document parses with the v2 schema version and no
+    // levels attached.
+    for (name, doc, mic, speaker) in [
+        ("both on", r#"{"mic":"on","speaker":"on"}"#, AudioGrant::On, AudioGrant::On),
+        (
+            "mic on speaker off",
+            r#"{"mic":"on","speaker":"off"}"#,
+            AudioGrant::On,
+            AudioGrant::Off,
+        ),
+        (
+            "both off",
+            r#"{"mic":"off","speaker":"off"}"#,
+            AudioGrant::Off,
+            AudioGrant::Off,
+        ),
+    ] {
+        let state = parse_audio_state(doc.as_bytes()).unwrap();
+        assert_eq!(state.mic, mic, "row: {name}");
+        assert_eq!(state.speaker, speaker, "row: {name}");
+        assert_eq!(state.schema_version, "v2", "row: {name}");
+        assert!(state.speaker_level.is_none(), "row: {name}");
+        assert!(state.mic_gain.is_none(), "row: {name}");
+    }
 
-#[test]
-fn parse_v1_mic_on_speaker_off() {
-    let state = parse_audio_state(br#"{"mic":"on","speaker":"off"}"#).unwrap();
-    assert_eq!(state.mic, AudioGrant::On);
-    assert_eq!(state.speaker, AudioGrant::Off);
-}
-
-#[test]
-fn parse_v1_both_off() {
-    let state = parse_audio_state(br#"{"mic":"off","speaker":"off"}"#).unwrap();
-    assert_eq!(state.mic, AudioGrant::Off);
-    assert_eq!(state.speaker, AudioGrant::Off);
-}
-
-#[test]
-fn parse_v1_unknown_grant_value_is_error() {
-    let err = parse_audio_state(br#"{"mic":"maybe","speaker":"off"}"#).unwrap_err();
-    assert!(
-        matches!(&err, AudioPolicyError::InvalidField(msg) if msg.contains("mic")),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn parse_v1_missing_speaker_is_error() {
-    let err = parse_audio_state(br#"{"mic":"on"}"#).unwrap_err();
-    assert!(
-        matches!(&err, AudioPolicyError::InvalidField(msg) if msg.contains("speaker")),
-        "unexpected error: {err}"
-    );
+    // Error rows: a malformed grant field is refused with the field named.
+    for (name, doc, field) in [
+        ("unknown grant value", r#"{"mic":"maybe","speaker":"off"}"#, "mic"),
+        ("missing speaker", r#"{"mic":"on"}"#, "speaker"),
+    ] {
+        let err = parse_audio_state(doc.as_bytes()).unwrap_err();
+        assert!(
+            matches!(&err, AudioPolicyError::InvalidField(msg) if msg.contains(field)),
+            "row: {name}, unexpected error: {err}"
+        );
+    }
 }
 
 // ── parse_audio_state - v2 ────────────────────────────────────────────────────

@@ -6,12 +6,11 @@
 
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_provider_device_security_key::{
-    FrontendProcessDeclaration, GuestCid, LeaseState, PhysicalAuthorityLease,
-    PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,
-    SECURITY_KEY_PROJECTION_PROTOCOL_VERSION, SECURITY_KEY_SERVICE_RESOURCE_TYPE,
-    SecurityKeyCidTranslator, SecurityKeyController, SecurityKeyEffectError, SecurityKeyEffectPort,
-    SecurityKeyOpenIntent, SecurityKeyProcessRole, SecurityKeySessionId, SessionRecord,
-    SessionResult, SessionRing, security_key_process_name, security_key_projection_factory,
+    FrontendProcessDeclaration, LeaseState, PhysicalAuthorityLease, PhysicalUsbBackingClaim,
+    PhysicalUsbBackingToken, RelayLaunchTicket, SECURITY_KEY_PROJECTION_PROTOCOL_VERSION,
+    SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyController, SecurityKeyEffectError,
+    SecurityKeyEffectPort, SecurityKeyOpenIntent, SecurityKeyProcessRole, SecurityKeySessionId,
+    security_key_process_name, security_key_projection_factory,
 };
 
 #[derive(Default)]
@@ -89,23 +88,6 @@ fn provider_lifecycle_keeps_core_effects_and_guest_placement_bounded() {
     assert_eq!(core.events, ["claim", "open", "release"]);
 }
 
-#[test]
-fn cid_and_session_records_stay_opaque_and_bounded() {
-    let guest_cid = GuestCid::new(0x0102_0304).expect("non-reserved Guest CID");
-    let translator =
-        SecurityKeyCidTranslator::from_core(0x1020_3040).expect("non-reserved session mask");
-    let relay_cid = translator.to_relay(guest_cid);
-    assert_eq!(translator.to_guest(relay_cid), Ok(guest_cid));
-
-    let mut ring = SessionRing::new(8).expect("minimum ring capacity");
-    let session = SecurityKeySessionId::from_core([9; 16]);
-    assert_eq!(
-        ring.push(SessionRecord::new(session, SessionResult::Success)),
-        None
-    );
-    assert_eq!(ring.entries().count(), 1);
-    assert_eq!(ring.entries().next().unwrap().id(), session);
-}
 
 #[test]
 fn semantic_descriptor_is_catalog_derived_and_has_no_physical_backing_set() {

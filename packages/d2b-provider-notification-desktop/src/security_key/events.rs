@@ -188,33 +188,27 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn started_event_round_trips_without_rp_id() {
-        let event = SecurityKeyEvent::Started {
-            session_id: "abc123".to_owned(),
-            vm_name: "personal-dev".to_owned(),
-            rp_id: None,
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["kind"], "started");
-        assert_eq!(json["sessionId"], "abc123");
-        assert_eq!(json["vmName"], "personal-dev");
-        assert!(json.get("rpId").is_none(), "rpId must be omitted when None");
-
-        let decoded: SecurityKeyEvent = serde_json::from_value(json).unwrap();
-        assert_eq!(decoded, event);
-    }
-
-    #[test]
-    fn started_event_round_trips_with_rp_id() {
-        let event = SecurityKeyEvent::Started {
-            session_id: "abc123".to_owned(),
-            vm_name: "work-aad".to_owned(),
-            rp_id: Some("github.com".to_owned()),
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["rpId"], "github.com");
-        let decoded: SecurityKeyEvent = serde_json::from_value(json).unwrap();
-        assert_eq!(decoded, event);
+    fn started_event_round_trips_with_and_without_rp_id() {
+        for (name, rp_id) in [("without rp_id", None), ("with rp_id", Some("github.com"))] {
+            let event = SecurityKeyEvent::Started {
+                session_id: "abc123".to_owned(),
+                vm_name: "personal-dev".to_owned(),
+                rp_id: rp_id.map(str::to_owned),
+            };
+            let json = serde_json::to_value(&event).unwrap();
+            assert_eq!(json["kind"], "started", "row: {name}");
+            assert_eq!(json["sessionId"], "abc123", "row: {name}");
+            assert_eq!(json["vmName"], "personal-dev", "row: {name}");
+            match rp_id {
+                None => assert!(
+                    json.get("rpId").is_none(),
+                    "rpId must be omitted when None (row: {name})"
+                ),
+                Some(value) => assert_eq!(json["rpId"], value, "row: {name}"),
+            }
+            let decoded: SecurityKeyEvent = serde_json::from_value(json).unwrap();
+            assert_eq!(decoded, event, "row: {name}");
+        }
     }
 
     #[test]

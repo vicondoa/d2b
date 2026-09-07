@@ -63,13 +63,13 @@ fn committed()
 }
 
 #[test]
-fn controller_owned_name_conflict_skips_only_that_item() {
-    assert_conflict(PersistedResourceMetadata::controller());
-}
-
-#[test]
-fn api_owned_name_conflict_skips_only_that_item() {
-    assert_conflict(PersistedResourceMetadata::api());
+fn owned_name_conflict_skips_only_that_item() {
+    for (name, metadata) in [
+        ("controller owned", PersistedResourceMetadata::controller()),
+        ("api owned", PersistedResourceMetadata::api()),
+    ] {
+        assert_conflict(name, metadata);
+    }
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn foreign_same_name_with_different_resource_type_does_not_conflict() {
     );
 }
 
-fn assert_conflict(metadata: PersistedResourceMetadata) {
+fn assert_conflict(row: &str, metadata: PersistedResourceMetadata) {
     let plan = plan_generation_transition(
         &bundle(),
         committed(),
@@ -126,14 +126,23 @@ fn assert_conflict(metadata: PersistedResourceMetadata) {
         &Timestamp::parse("2026-07-31T00:01:00.000Z").unwrap(),
     )
     .unwrap();
-    assert_eq!(plan.name_conflicts().len(), 1);
+    assert_eq!(plan.name_conflicts().len(), 1, "row: {row}");
     assert_eq!(
         plan.name_conflicts()[0].condition(),
-        "Degraded/name-conflict"
+        "Degraded/name-conflict",
+        "row: {row}"
     );
-    assert_eq!(plan.name_conflicts()[0].key(), &key("Volume", "conflict"));
-    assert_eq!(plan.upserts().len(), 1);
-    assert_eq!(plan.upserts()[0].key(), &key("Network", "main"));
+    assert_eq!(
+        plan.name_conflicts()[0].key(),
+        &key("Volume", "conflict"),
+        "row: {row}"
+    );
+    assert_eq!(plan.upserts().len(), 1, "row: {row}");
+    assert_eq!(
+        plan.upserts()[0].key(),
+        &key("Network", "main"),
+        "row: {row}"
+    );
     assert_eq!(
         plan.audits()
             .iter()
@@ -142,6 +151,7 @@ fn assert_conflict(metadata: PersistedResourceMetadata) {
                 d2b_core_controller::configuration::generation_transition::GenerationTransitionAudit::ResourceConflictSkipped
             ))
             .count(),
-        1
+        1,
+        "row: {row}"
     );
 }

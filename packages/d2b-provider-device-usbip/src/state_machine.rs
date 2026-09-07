@@ -523,32 +523,29 @@ mod tests {
         }
     }
 
-    fn synthetic_plan() -> UsbipBusidPlan {
+    /// Synthetic plan varying only its claim source; every other field is a
+    /// fixed valid fixture.
+    fn synthetic_plan(claim_source: UsbipClaimSource) -> UsbipBusidPlan {
         UsbipBusidPlan {
             busid: "1-2".to_owned(),
             env: "work".to_owned(),
             vm: "yk".to_owned(),
             steps: CANONICAL_STEPS.to_vec(),
-            claim_source: UsbipClaimSource::Declared {
-                firewall_ref: "usbip-fw-work-1-2".to_owned(),
-                bind_ref: "usbip-bind-work-yk-1-2".to_owned(),
-            },
+            claim_source,
         }
     }
 
-    fn synthetic_explicit_plan() -> UsbipBusidPlan {
-        UsbipBusidPlan {
-            busid: "1-2".to_owned(),
-            env: "work".to_owned(),
-            vm: "corp-vm".to_owned(),
-            steps: CANONICAL_STEPS.to_vec(),
-            claim_source: UsbipClaimSource::Explicit,
+    /// The Declared claim source matching the synthetic plan's busid/env/vm.
+    fn declared_claim_source() -> UsbipClaimSource {
+        UsbipClaimSource::Declared {
+            firewall_ref: "usbip-fw-work-yk-1-2".to_owned(),
+            bind_ref: "usbip-bind-work-yk-1-2".to_owned(),
         }
     }
 
     #[test]
     fn canonical_order_is_pinned() {
-        let plan = synthetic_plan();
+        let plan = synthetic_plan(declared_claim_source());
         assert_eq!(
             plan.steps,
             vec![
@@ -565,7 +562,7 @@ mod tests {
 
     #[test]
     fn stop_order_preserves_per_env_sidecars() {
-        let plan = synthetic_plan();
+        let plan = synthetic_plan(declared_claim_source());
         let stop = plan.stop_order();
         assert_eq!(
             stop,
@@ -594,7 +591,7 @@ mod tests {
 
     #[test]
     fn bind_failure_rollback_preserves_started_backend() {
-        let plan = synthetic_plan();
+        let plan = synthetic_plan(declared_claim_source());
         let mut exec = FixtureExecutor::failing(UsbipBusidStep::Bind, "bind refused");
         let (report, _) =
             execute_usbip_plan(&plan, &mut exec).expect_err("bind failure should fail plan");
@@ -624,7 +621,7 @@ mod tests {
 
     #[test]
     fn proxy_failure_rollback_preserves_per_env_sidecars() {
-        let plan = synthetic_plan();
+        let plan = synthetic_plan(declared_claim_source());
         let mut exec = FixtureExecutor::failing(UsbipBusidStep::Proxy, "proxy refused");
         let (report, _) =
             execute_usbip_plan(&plan, &mut exec).expect_err("proxy failure should fail plan");
@@ -668,7 +665,7 @@ mod tests {
 
     #[test]
     fn execute_happy_path_calls_every_step_in_order() {
-        let plan = synthetic_plan();
+        let plan = synthetic_plan(declared_claim_source());
         let mut exec = FixtureExecutor::ok();
         let report = execute_usbip_plan(&plan, &mut exec).expect("happy path succeeds");
         assert!(report.is_ok());
@@ -684,7 +681,7 @@ mod tests {
     #[test]
     fn each_step_failure_surfaces_typed_error() {
         for &step in &CANONICAL_STEPS {
-            let plan = synthetic_plan();
+            let plan = synthetic_plan(declared_claim_source());
             let mut exec = FixtureExecutor::failing(step, "fixture: synthetic failure");
             let (report, err) =
                 execute_usbip_plan(&plan, &mut exec).expect_err("failure path should return Err");
@@ -795,42 +792,22 @@ mod tests {
     }
 
     #[test]
-    fn explicit_plan_uses_canonical_step_order() {
-        let plan =
-            build_usbip_explicit_plan("1-2", "work", "corp-vm").expect("explicit plan succeeds");
-        // The step order for explicit attach is the same as for declared;
-        // the difference is in which broker ops the executor dispatches per step.
+    fn explicit_and_declared_plans_differ_only_in_claim_source() {
+        // Canonical step order, stop order, and executor-driven execution are
+        // asserted once on the declared plan above; here the explicit plan is
+        // proven identical except for its claim source (the daemon selects
+        // different broker ops from that field alone).
+        let declared = synthetic_plan(declared_claim_source());
+        let mut explicit = synthetic_plan(UsbipClaimSource::Explicit);
+        assert_eq!(explicit.claim_source, UsbipClaimSource::Explicit);
+        assert!(matches!(
+            declared.claim_source,
+            UsbipClaimSource::Declared { .. }
+        ));
+        explicit.claim_source = declared.claim_source.clone();
         assert_eq!(
-            plan.steps,
-            vec![
-                UsbipBusidStep::Modprobe,
-                UsbipBusidStep::Lock,
-                UsbipBusidStep::Withhold,
-                UsbipBusidStep::Firewall,
-                UsbipBusidStep::Backend,
-                UsbipBusidStep::Bind,
-                UsbipBusidStep::Proxy,
-            ]
+            explicit, declared,
+            "explicit and declared plans differ only in claim_source"
         );
-    }
-
-    #[test]
-    fn explicit_plan_stop_order_preserves_per_env_sidecars() {
-        let plan = synthetic_explicit_plan();
-        let stop = plan.stop_order();
-        assert!(!stop.contains(&UsbipBusidStep::Backend));
-        assert!(!stop.contains(&UsbipBusidStep::Proxy));
-        assert!(stop.contains(&UsbipBusidStep::Bind));
-        assert!(stop.contains(&UsbipBusidStep::Firewall));
-    }
-
-    #[test]
-    fn explicit_plan_can_execute_all_steps_via_fixture_executor() {
-        let plan = synthetic_explicit_plan();
-        let mut exec = FixtureExecutor::ok();
-        let report = execute_usbip_plan(&plan, &mut exec).expect("explicit happy path succeeds");
-        assert!(report.is_ok());
-        assert_eq!(report.completed, CANONICAL_STEPS.to_vec());
-        assert!(report.failed.is_none());
     }
 }

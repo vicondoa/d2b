@@ -134,18 +134,19 @@ impl GpuEffectPort for FakePort {
     }
 }
 
-#[test]
-fn video_starts_only_after_gpu_worker_is_ready() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+/// Fixture admission for one owned GPU: fixed owner proof, backing and
+/// platform tokens, exclusive arbitration. Each test varies exactly one
+/// concern beyond it.
+fn owned_admission() -> GpuAuthorityAdmission {
     let owner = GpuOwnerProof::new(
         ResourceRef::parse("Zone/dev").unwrap(),
         ResourceRef::parse("Guest/workload").unwrap(),
-        uid,
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
         ResourceGeneration::new(1).unwrap(),
     )
     .unwrap();
-    let admission = GpuAuthorityAdmission::new(
+    GpuAuthorityAdmission::new(
         owner,
         GpuBackingToken::from_core([7; 32]),
         GpuPlatformToken::from_core([8; 32]),
@@ -155,8 +156,13 @@ fn video_starts_only_after_gpu_worker_is_ready() {
         GpuPrincipalToken::from_core([9; 32]),
     )
     .unwrap()
-    .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
-    .unwrap();
+}
+
+#[test]
+fn video_starts_only_after_gpu_worker_is_ready() {
+    let admission = owned_admission()
+        .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
+        .unwrap();
     let settings = GpuSettings {
         video_sidecar: true,
         ..GpuSettings::default()
@@ -177,25 +183,7 @@ fn video_starts_only_after_gpu_worker_is_ready() {
 
 #[test]
 fn direct_reconcile_is_fenced_until_authority_is_reserved() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let owner = GpuOwnerProof::new(
-        ResourceRef::parse("Zone/dev").unwrap(),
-        ResourceRef::parse("Guest/workload").unwrap(),
-        uid.clone(),
-        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
-    )
-    .unwrap();
-    let admission = GpuAuthorityAdmission::new(
-        owner,
-        GpuBackingToken::from_core([7; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        DeviceArbitration::Exclusive,
-        1,
-        false,
-        GpuPrincipalToken::from_core([9; 32]),
-    )
-    .unwrap();
+    let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
         GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
@@ -218,34 +206,16 @@ fn direct_reconcile_is_fenced_until_authority_is_reserved() {
 
 #[test]
 fn partial_restart_adoption_restarts_only_the_missing_video_worker() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let owner = GpuOwnerProof::new(
-        ResourceRef::parse("Zone/dev").unwrap(),
-        ResourceRef::parse("Guest/workload").unwrap(),
-        uid,
-        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
-    )
-    .unwrap();
-    let admission = GpuAuthorityAdmission::new(
-        owner,
-        GpuBackingToken::from_core([7; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        DeviceArbitration::Exclusive,
-        1,
-        false,
-        GpuPrincipalToken::from_core([9; 32]),
-    )
-    .unwrap()
-    .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
-    .unwrap();
+    let admission = owned_admission()
+        .with_video_principal(GpuPrincipalToken::from_core([10; 32]))
+        .unwrap();
     let settings = GpuSettings {
         video_sidecar: true,
         ..GpuSettings::default()
     };
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
-        GpuController::new_authorized(admission.clone(), settings, tokens).unwrap();
+        GpuController::new_authorized(admission, settings, tokens).unwrap();
     let gpu = GpuProcessIdentity::from_core(
         [3; 16],
         GpuProcessRole::FullGpu,
@@ -290,25 +260,7 @@ fn partial_restart_adoption_restarts_only_the_missing_video_worker() {
 
 #[test]
 fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let owner = GpuOwnerProof::new(
-        ResourceRef::parse("Zone/dev").unwrap(),
-        ResourceRef::parse("Guest/workload").unwrap(),
-        uid,
-        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
-    )
-    .unwrap();
-    let admission = GpuAuthorityAdmission::new(
-        owner,
-        GpuBackingToken::from_core([7; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        DeviceArbitration::Exclusive,
-        1,
-        false,
-        GpuPrincipalToken::from_core([9; 32]),
-    )
-    .unwrap();
+    let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
         GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
@@ -361,25 +313,7 @@ fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
 
 #[test]
 fn mismatched_matching_observation_is_quarantined() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let owner = GpuOwnerProof::new(
-        ResourceRef::parse("Zone/dev").unwrap(),
-        ResourceRef::parse("Guest/workload").unwrap(),
-        uid,
-        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
-    )
-    .unwrap();
-    let admission = GpuAuthorityAdmission::new(
-        owner,
-        GpuBackingToken::from_core([7; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        DeviceArbitration::Exclusive,
-        1,
-        false,
-        GpuPrincipalToken::from_core([9; 32]),
-    )
-    .unwrap();
+    let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
         GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
@@ -425,25 +359,7 @@ fn mismatched_matching_observation_is_quarantined() {
 
 #[test]
 fn gpu_upgrade_requires_dependents_to_drain_before_replacement() {
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let owner = GpuOwnerProof::new(
-        ResourceRef::parse("Zone/dev").unwrap(),
-        ResourceRef::parse("Guest/workload").unwrap(),
-        uid.clone(),
-        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
-    )
-    .unwrap();
-    let admission = GpuAuthorityAdmission::new(
-        owner,
-        GpuBackingToken::from_core([7; 32]),
-        GpuPlatformToken::from_core([8; 32]),
-        DeviceArbitration::Exclusive,
-        1,
-        false,
-        GpuPrincipalToken::from_core([9; 32]),
-    )
-    .unwrap();
+    let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
         GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
