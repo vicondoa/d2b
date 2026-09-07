@@ -30,7 +30,7 @@ use d2b_core_controller::{
 };
 use d2b_provider_volume_local::{
     VolumeLayoutEffectPort, VolumeLocalController, VolumeLocalProfile, VolumeRunnerContract,
-    VolumeSourceEffectPort, desired_export_intents, marker_path,
+    VolumeSourceEffectPort, desired_binding_intents, marker_path,
 };
 use d2b_provider_volume_virtiofs::{
     ExportSpec, LaunchedWorker, VirtiofsExportController, VirtiofsExportEffectPort,
@@ -636,7 +636,7 @@ impl DaemonVolumeProviderEffects {
         volume_ref: &ResourceRef,
         spec: &VolumeSpec,
     ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, SharedVolumeEffectError> {
-        desired_export_intents(volume_ref.clone(), spec, false)
+        desired_binding_intents(volume_ref.clone(), spec, false)
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?
             .into_iter()
             .map(|intent| {

@@ -266,7 +266,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
                     view: plan.view,
                     access: plan.access,
                     state: AttachmentState::Pending,
-                    export_ready: false,
+                    binding_ready: false,
                     guest_mount_ready: false,
                 })
                 .collect(),

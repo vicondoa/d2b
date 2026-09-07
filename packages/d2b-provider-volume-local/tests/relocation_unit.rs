@@ -31,10 +31,10 @@ fn successful_guest_attached_relocation_repoints_before_source_deletion() {
     );
     assert_eq!(
         relocation.destination_activated().unwrap().action,
-        RelocationAction::RepointAttachments
+        RelocationAction::RepointBindings
     );
     assert_eq!(
-        relocation.attachments_repointed().unwrap().action,
+        relocation.bindings_repointed().unwrap().action,
         RelocationAction::RemoveSourceFinalizer
     );
     assert_eq!(

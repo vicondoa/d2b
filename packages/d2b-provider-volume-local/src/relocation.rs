@@ -2,7 +2,7 @@
 //!
 //! Copying is performed by a signed EphemeralProcess over adapter-routed
 //! anchored views. The source marker, bytes, and finalizer remain authoritative
-//! until destination activation and attachment re-point both succeed.
+//! until destination activation and binding re-point both succeed.
 
 use std::fmt;
 
@@ -31,8 +31,8 @@ pub enum RelocationPhase {
     Copying,
     /// Copy succeeded and destination activation is pending.
     DestinationActivationPending,
-    /// Guest attachment exports must be re-pointed to the destination.
-    AttachmentRepointPending,
+    /// Guest binding children must be re-pointed to the destination.
+    BindingRepointPending,
     /// Destination and attachments are ready for source deletion.
     ReadyToCommit,
     /// Finalizer removal committed and source deletion may complete.
@@ -56,8 +56,8 @@ pub enum RelocationAction {
     DispatchCopyWorker,
     /// Activate the complete destination Volume.
     ActivateDestination,
-    /// Reconcile virtiofs Export children against the destination source.
-    RepointAttachments,
+    /// Reconcile VolumeBinding children against the destination source.
+    RepointBindings,
     /// Remove the source finalizer only after complete relocation.
     RemoveSourceFinalizer,
     /// Delete the unfinalized source Volume.
@@ -109,19 +109,19 @@ impl std::error::Error for RelocationError {}
 /// Relocation state machine for one source and destination pair.
 pub struct RelocationState {
     phase: RelocationPhase,
-    has_guest_attachments: bool,
+    has_guest_bindings: bool,
 }
 
 impl RelocationState {
     /// Construct relocation state only for a verified source root.
     pub fn new(
         source_marker: MarkerDisposition,
-        has_guest_attachments: bool,
+        has_guest_bindings: bool,
     ) -> Result<Self, RelocationError> {
         require_verified(source_marker)?;
         Ok(Self {
             phase: RelocationPhase::Idle,
-            has_guest_attachments,
+            has_guest_bindings,
         })
     }
 
@@ -205,10 +205,10 @@ impl RelocationState {
         if self.phase != RelocationPhase::DestinationActivationPending {
             return Err(RelocationError::InvalidTransition);
         }
-        let (phase, action) = if self.has_guest_attachments {
+        let (phase, action) = if self.has_guest_bindings {
             (
-                RelocationPhase::AttachmentRepointPending,
-                RelocationAction::RepointAttachments,
+                RelocationPhase::BindingRepointPending,
+                RelocationAction::RepointBindings,
             )
         } else {
             (
@@ -224,10 +224,10 @@ impl RelocationState {
         })
     }
 
-    /// Record that every Export child now targets the destination source.
-    pub fn attachments_repointed(&mut self) -> Result<RelocationTransition, RelocationError> {
+    /// Record that every binding child now targets the destination source.
+    pub fn bindings_repointed(&mut self) -> Result<RelocationTransition, RelocationError> {
         self.advance(
-            RelocationPhase::AttachmentRepointPending,
+            RelocationPhase::BindingRepointPending,
             RelocationPhase::ReadyToCommit,
             RelocationAction::RemoveSourceFinalizer,
             None,
@@ -278,7 +278,7 @@ impl fmt::Debug for RelocationState {
         formatter
             .debug_struct("RelocationState")
             .field("phase", &self.phase)
-            .field("has_guest_attachments", &self.has_guest_attachments)
+            .field("has_guest_bindings", &self.has_guest_bindings)
             .finish()
     }
 }

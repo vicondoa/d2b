@@ -49,7 +49,7 @@ fn report() -> VolumeStatusReport {
             view: BoundedToken::parse("main").unwrap(),
             access: AttachmentAccess::ReadWrite,
             state: AttachmentState::Pending,
-            export_ready: false,
+            binding_ready: false,
             guest_mount_ready: false,
         }],
         content: None,

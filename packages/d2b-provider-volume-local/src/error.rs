@@ -46,6 +46,9 @@ pub enum VolumeLocalError {
     /// `shared-write` was requested from a Provider that does not declare
     /// `supportsSharedWrite`.
     SharedWriteUnsupported,
+    /// A second virtiofs attachment named a guest mount path that an
+    /// earlier attachment already claimed.
+    DuplicateMountPath,
     /// Hard quota enforcement was requested and the backing filesystem
     /// cannot enforce it.
     QuotaUnenforceable,
@@ -95,6 +98,7 @@ impl VolumeLocalError {
             Self::ViewRightsInsufficient => "view-rights-insufficient",
             Self::SingleWriterConflict => "single-writer-conflict",
             Self::SharedWriteUnsupported => "shared-write-unsupported",
+            Self::DuplicateMountPath => "volume-attachment-mount-path-duplicate",
             Self::QuotaUnenforceable => "quota-unenforceable",
             Self::QuotaExceeded => "volume-quota-exceeded",
             Self::EffectFailed => "effect-failed",
@@ -111,7 +115,7 @@ impl VolumeLocalError {
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::InvalidSpec,
         Self::ProviderMismatch,
         Self::SourceKindUnsupported,
@@ -127,6 +131,7 @@ impl VolumeLocalError {
         Self::ViewRightsInsufficient,
         Self::SingleWriterConflict,
         Self::SharedWriteUnsupported,
+        Self::DuplicateMountPath,
         Self::QuotaUnenforceable,
         Self::QuotaExceeded,
         Self::EffectFailed,

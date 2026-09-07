@@ -69,7 +69,7 @@ pub use controller::{
     volume_runner_contract,
 };
 pub use error::VolumeLocalError;
-pub use exports::{EXPORT_RESOURCE_TYPE, ExportIntent, desired_export_intents};
+pub use exports::{BindingIntent, desired_binding_intents};
 pub use finalization::{
     FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
 };
