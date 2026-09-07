@@ -220,6 +220,28 @@ mod tests {
         assert!(!json.contains("preview"));
         assert!(!json.contains("payload"));
         assert!(!json.contains("clipboard"));
+        let value = serde_json::to_value(event("vm-a", "r1")).expect("value");
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "attribution",
+                "byte_count",
+                "decision",
+                "destination_realm",
+                "mime_type",
+                "reason",
+                "request_id",
+                "source_realm",
+                "timestamp_unix_ms",
+            ],
+        );
     }
 
     #[test]
