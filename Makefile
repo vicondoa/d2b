@@ -113,8 +113,9 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 ## BuildBuddy `remote`. PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
 D2B_BAZEL_PROFILE ?= remote
 D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
+D2B_BAZEL_LOCAL_TEST_JOBS ?=
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) --test_tag_filters="$(D2B_BAZEL_TEST_TAG_FILTERS)" --test_env=D2B_REPO_ROOT="$(CURDIR)" --test_env=D2B_BAZEL_BIN="$(BAZEL_BIN)" --test_env=D2B_PROJECT_SHELL=d2b --test_env=D2B_SHELLCHECK_BIN="$(D2B_SHELLCHECK_BIN)" --test_env=PATH="$(PATH)" --test_output=errors
+D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) --test_tag_filters="$(D2B_BAZEL_TEST_TAG_FILTERS)" --test_env=D2B_REPO_ROOT="$(CURDIR)" --test_env=D2B_BAZEL_BIN="$(BAZEL_BIN)" --test_env=D2B_PROJECT_SHELL=d2b --test_env=D2B_SHELLCHECK_BIN="$(D2B_SHELLCHECK_BIN)" --test_env=PATH="$(PATH)" --test_output=errors
 export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
