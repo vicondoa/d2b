@@ -222,6 +222,8 @@
   while preserving HandlerExhausted as the terminal reason.
 - Treated failed or deleted VMM Process phases as capability failures instead
   of endlessly deferring endpoint publication.
+- Continued Pending endpoint convergence through a Degraded VMM Process phase
+  while keeping Failed and Deleted terminal.
 
 ### Removed
 

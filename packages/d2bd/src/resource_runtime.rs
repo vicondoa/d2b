@@ -15811,7 +15811,10 @@ impl ZoneResourceRuntime {
                 phase = ?process_phase,
                 "Cloud Hypervisor endpoint publication deferred until VMM Process is Ready",
             );
-            return if matches!(process_phase, ResourcePhase::Pending | ResourcePhase::Unknown) {
+            return if matches!(
+                process_phase,
+                ResourcePhase::Pending | ResourcePhase::Unknown | ResourcePhase::Degraded
+            ) {
                 Ok(CloudHypervisorEndpointOutcome::Pending)
             } else {
                 Err(ResourceRuntimeError::CapabilityUnavailable)
