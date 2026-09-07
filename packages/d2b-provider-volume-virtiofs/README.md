@@ -16,7 +16,7 @@ uniform crate layout, schema links, configuration, and test lanes.
 | Version | tracks the workspace version of this crate |
 | Trust attestation | first-party admission; exact package digest resolved from the offline Nix artifact catalog |
 | Conformance attestation | the hermetic conformance suite under `tests/` |
-| ResourceTypes | `virtiofs.d2bus.org.Export`; read-only watch of `Volume` |
+| ResourceTypes | `VolumeBinding` (fenced serving status projection); `virtiofs.d2bus.org.Export` until the clean break; read-only watch of `Volume` |
 | Attachment transport | `virtiofs` |
 | Worker template | `virtiofsd-worker` |
 | Finalizer | `volume-virtiofs.d2bus.org/export`, on an Export and nothing else |
@@ -40,6 +40,7 @@ path, a socket, or a credential.
 
 | ResourceType | Role |
 | --- | --- |
+| `VolumeBinding` | sole status writer per KTD3: fenced readiness projection on every reconcile; never mints bindings |
 | `virtiofs.d2bus.org.Export` | sole writer: export lifecycle, worker plan, drain |
 | `Volume` | read-only watch; never written |
 
@@ -47,7 +48,7 @@ path, a socket, or a credential.
 
 | Component | Type | Role |
 | --- | --- | --- |
-| `volume-virtiofs` controller | controller | reconciles `virtiofs.d2bus.org.Export` |
+| `volume-virtiofs` controller | controller | reconciles `VolumeBinding` (and `virtiofs.d2bus.org.Export` until the clean break) |
 | `virtiofsd-worker` | worker template | one virtiofsd process per admitted export |
 
 The flag envelope is adapted from the shipped host-side generator, with
@@ -82,10 +83,10 @@ Volume leaves the Export unadmitted rather than degrading the controller.
 
 ## RBAC requirements
 
-The Provider requires a pre-installed Role granting write on
-`virtiofs.d2bus.org.Export` and read on `Volume`, bound to the Provider's own
-service identity. It requires no write grant on `Volume` and no wildcard
-permission.
+The Provider requires a pre-installed Role granting write on `VolumeBinding`
+(status and finalizers only; the Volume side mints bindings) and read on
+`Volume`, bound to the Provider's own service identity. It requires no write
+grant on `Volume` and no wildcard permission.
 
 ## Security posture
 

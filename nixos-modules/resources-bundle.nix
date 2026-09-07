@@ -19,6 +19,7 @@ let
     "Process"
     "EphemeralProcess"
     "Volume"
+    "VolumeBinding"
     "Network"
     "Device"
     "User"

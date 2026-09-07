@@ -57,8 +57,8 @@ to `Provider/volume-local`.
 | Provider resource name | `Provider/volume-virtiofs` |
 | `artifactId` key | `volume-virtiofs-provider` |
 | Package type | `provider` |
-| ResourceTypes declared | `virtiofs.d2bus.org.Export` (full attachment lifecycle owner) |
-| ResourceTypes consumed/managed | `Volume` (read-only; status aggregated from Export), `Process` (create/delete worker), `Endpoint` (create/delete exported endpoint child) |
+| ResourceTypes declared | `VolumeBinding` (fenced serving status projection owner; the Volume side mints bindings), `virtiofs.d2bus.org.Export` (full attachment lifecycle owner until the clean break) |
+| ResourceTypes consumed/managed | `Volume` (read-only; status aggregated from binding readiness), `Process` (create/delete worker), `Endpoint` (create/delete exported endpoint child) |
 | Attachment transports owned | `virtiofs` |
 | Dependencies | `d2b-contracts` (v3 Export/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
 | Prohibited imports | `d2bd`, `d2b-priv-broker` internals, `d2b-provider-volume-local`, any other Provider's implementation |
@@ -846,6 +846,9 @@ controller. Required Role rules:
 ```yaml
 # volume-virtiofs controller
 rules:
+  - resourceTypes: [VolumeBinding]
+    verbs: [get, list, watch, update-status, update-finalizers]
+    zones: [<zone>]                # sole binding status writer per KTD3; never mints bindings
   - resourceTypes: [virtiofs.d2bus.org.Export]
     verbs: [get, list, watch, update-status, update-finalizers]
     zones: [<zone>]
@@ -883,6 +886,8 @@ mounts: []                   # controller mounts no Provider state Volume
 resourceTypes:
   # Volume is intentionally absent: volume-virtiofs-controller does not own or create Volumes.
   # Provider/volume-local is the sole Volume reconciler. Volume appears only in watchSelectors (read-only, below).
+  - type: VolumeBinding
+    verbs: [update-status, update-finalizers, watch]   # sole status writer per KTD3; never mints bindings
   - type: virtiofs.d2bus.org.Export
     verbs: [create, update-spec, update-status, update-finalizers, delete, watch]
   - type: Process
@@ -890,6 +895,8 @@ resourceTypes:
   - type: User
     verbs: [create, watch]
 watchSelectors:
+  - resourceType: VolumeBinding
+    filter: ""                         # all bindings in zone
   - resourceType: virtiofs.d2bus.org.Export
     filter: ""                         # all Exports in zone
   - resourceType: Process

@@ -64,7 +64,7 @@ pub(crate) const UNINTERPRETABLE_REQUEST_DIGEST_REASON: &str =
     "operation-request-digest-uninterpretable";
 
 /// The standard ResourceType catalog bound by a freshly provisioned store.
-pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 19] = STANDARD_RESOURCE_TYPES;
+pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 20] = STANDARD_RESOURCE_TYPES;
 /// Qualified interaction ResourceTypes whose schemas are committed with the
 /// production Resource plane and therefore may be persisted in every Zone
 /// store.
@@ -73,7 +73,7 @@ pub(crate) const QUALIFIED_SCHEMA_CATALOG: [&str; 2] = [
     "display-wayland.d2bus.org.WaylandSession",
 ];
 /// The complete schema catalog installed in a current physical store.
-pub(crate) const INSTALLED_SCHEMA_CATALOG: [&str; 21] = [
+pub(crate) const INSTALLED_SCHEMA_CATALOG: [&str; 22] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -86,6 +86,7 @@ pub(crate) const INSTALLED_SCHEMA_CATALOG: [&str; 21] = [
     PROCESS_RESOURCE_TYPE,
     "EphemeralProcess",
     "Volume",
+    "VolumeBinding",
     "Network",
     "Device",
     "User",
@@ -1953,6 +1954,12 @@ fn validate_standard_base_bytes(resource_type: &str, bytes: &[u8]) -> Result<boo
         .is_ok(),
         "Volume" => {
             serde_json::from_slice::<d2b_contracts_resource::v3::volume::VolumeSpec>(bytes).is_ok()
+        }
+        "VolumeBinding" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec>(
+                bytes,
+            )
+            .is_ok()
         }
         "Network" => {
             serde_json::from_slice::<d2b_contracts_resource::v3::network::NetworkSpec>(bytes)

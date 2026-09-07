@@ -2472,7 +2472,7 @@ pub(crate) fn parse_resource_type(value: &str) -> Result<ResourceTypeName, CliFa
         .map_err(|_| CliFailure::new(2, "ref-invalid: unknown ResourceType"))
 }
 
-pub(crate) fn standard_resource_types() -> &'static [&'static str; 19] {
+pub(crate) fn standard_resource_types() -> &'static [&'static str; 20] {
     &STANDARD_RESOURCE_TYPES
 }
 

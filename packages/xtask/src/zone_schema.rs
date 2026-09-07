@@ -39,10 +39,10 @@ const RESOURCE_REF_PATTERN: &str = "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,
 const API_VERSION: &str = "resources.d2bus.org/v3";
 const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 
-/// The canonical 19-type registry from `ADR-046-resource-object-model`. The
+/// The canonical 20-type registry from `ADR-046-resource-object-model`. The
 /// unit test below pins it against `nixos-modules/resources.nix`, which is the
 /// hand-maintained registry the structural option base already uses.
-pub const STANDARD_RESOURCE_TYPES: [&str; 19] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -55,6 +55,7 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 19] = [
     "Process",
     "EphemeralProcess",
     "Volume",
+    "VolumeBinding",
     "Network",
     "Device",
     "User",
@@ -1091,6 +1092,14 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
             dto_resource_schema::<d2b_contracts_resource::v3::volume::VolumeSpec>(
                 "Volume",
                 "Shareable storage resource with bounded views and attachments.",
+                true,
+            ),
+        ),
+        (
+            "VolumeBinding",
+            dto_resource_schema::<d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec>(
+                "VolumeBinding",
+                "Durable neutral Volume view attachment to one execution target.",
                 true,
             ),
         ),

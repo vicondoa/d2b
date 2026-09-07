@@ -21,6 +21,7 @@ pub mod storage;
 pub mod user;
 pub mod virtiofs_export;
 pub mod volume;
+pub mod volume_binding;
 pub mod volume_state;
 
 pub use activation_nixos::*;
@@ -60,4 +61,5 @@ pub use resource_status::*;
 pub use storage::*;
 pub use user::*;
 pub use virtiofs_export::*;
+pub use volume_binding::*;
 pub use volume_state::*;

@@ -3545,4 +3545,129 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn standard_volume_binding_envelope_admits_through_the_standard_catalog() {
+        let mut value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "VolumeBinding",
+            "metadata": {
+                "name": "work-state-work-vm-ro-store",
+                "zone": "work",
+                "uid": "00000000-0000-4000-8000-000000000000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": "Volume/work-state",
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "controller"
+            },
+            "spec": {
+                "volumeRef": "Volume/work-state",
+                "executionRef": "Guest/work-vm",
+                "view": "ro-store",
+                "access": "read-only",
+                "mountPath": "/nix/.ro-store"
+            },
+            "status": {
+                "observedGeneration": 0,
+                "phase": "Pending",
+                "conditions": [],
+                "lastReconciledAt": null,
+                "startedAt": null,
+                "completedAt": null,
+                "outcome": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                },
+                "resource": {
+                    "ready": false,
+                    "fence": {
+                        "uid": "00000000-0000-4000-8000-000000000000",
+                        "generation": 1,
+                        "revision": 1
+                    }
+                }
+            }
+        });
+        let bytes = serde_json::to_vec(&value).expect("binding envelope serializes");
+        assert!(
+            ResourceEnvelope::from_json(&bytes).is_ok(),
+            "standard VolumeBinding envelope must parse: {value}"
+        );
+        value["metadata"]["uid"] = serde_json::Value::Null;
+        assert!(
+            ResourceEnvelope::from_json(
+                &serde_json::to_vec(&value).expect("UID-less binding envelope serializes")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn standard_catalog_derives_volume_binding_without_an_extension_path() {
+        let catalog = ApiCatalog::standard();
+        let binding = ResourceTypeName::parse("VolumeBinding").unwrap();
+        let volume = ResourceTypeName::parse("Volume").unwrap();
+        // The serving role gains write on bindings and read on Volumes with
+        // no Volume write and no wildcard, derived purely from the standard
+        // catalog: no qualified extension admission is involved.
+        let serving = CompiledRole::new(
+            ResourceRef::parse("Role/volume-virtiofs-serving").unwrap(),
+            vec![
+                PolicyRule::new(
+                    &catalog,
+                    [binding.clone()],
+                    [
+                        ResourceVerb::Get,
+                        ResourceVerb::List,
+                        ResourceVerb::Watch,
+                        ResourceVerb::UpdateStatus,
+                        ResourceVerb::UpdateFinalizers,
+                    ],
+                    [],
+                    ["status".to_owned(), "finalizers".to_owned()],
+                    [],
+                    [ZoneId::parse("work").unwrap()],
+                    [],
+                )
+                .unwrap(),
+                PolicyRule::new(
+                    &catalog,
+                    [volume.clone()],
+                    [ResourceVerb::Get, ResourceVerb::List, ResourceVerb::Watch],
+                    [],
+                    [],
+                    [],
+                    [ZoneId::parse("work").unwrap()],
+                    [],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            serving.role_ref.to_canonical_string(),
+            "Role/volume-virtiofs-serving"
+        );
+        // An extension-only admission path is not required: the standard
+        // catalog already carries the type, so a qualified extension for it
+        // is rejected as a non-qualified duplicate shape.
+        let extension_error = ApiCatalog::with_extensions([binding]).unwrap_err();
+        assert!(matches!(
+            extension_error,
+            crate::authz::AuthorizationPolicyError::CatalogShape
+        ));
+    }
 }
