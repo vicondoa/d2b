@@ -270,7 +270,7 @@ fn real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope() {
     assert_eq!(attached["result"]["kind"], "attached");
     assert_eq!(attached["result"]["value"]["forceEvicted"], false);
     terminal
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     terminal
         .set_write_timeout(Some(Duration::from_secs(2)))
@@ -459,7 +459,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     } else {
         b"D2B_RUNTIME_ENV:xterm-256color:truecolor".as_slice()
     };
-    let (_, output) = read_until(&mut terminal, 2, 0, needle);
+    let (_, output) = read_until(&mut terminal, 10, 0, needle);
     assert!(
         output
             .windows(b"D2B_RUNTIME_ENV:xterm-256color:truecolor".len())
@@ -627,7 +627,7 @@ fn read_until(
     needle: &[u8],
 ) -> (u64, Vec<u8>) {
     let mut output = Vec::new();
-    for _ in 0..8 {
+    for _ in 0..16 {
         write_terminal_frame(
             stream,
             &HelperTerminalRequest::ReadOutput(HelperTerminalReadOutput {

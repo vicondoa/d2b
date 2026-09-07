@@ -280,11 +280,9 @@ let
         };
         vmm = vmm;
       };
-      metadata = builtins.fromJSON
-        (builtins.unsafeDiscardStringContext (builtins.readFile metadataPath));
     in {
-      data = metadata;
-      fixtureData = metadata;
+      data = fixtureData;
+      fixtureData = fixtureData;
       path = metadataPath;
       installFileName = "closures/zones/${row.zoneName}/${row.guestName}.json";
       classification = "contractPrivateNonSecret";

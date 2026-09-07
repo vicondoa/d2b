@@ -181,6 +181,20 @@ impl<S, U> core::fmt::Debug for ResourceService<S, U> {
     }
 }
 
+impl<S, U> ResourceService<S, U> {
+    pub(crate) fn checked_store(&self) -> crate::store::CheckedResourceStore<S> {
+        self.store.clone()
+    }
+
+    pub(crate) fn authorizer_arc(&self) -> Arc<NativeAuthorizer> {
+        Arc::clone(&self.authorizer)
+    }
+
+    pub(crate) fn zone_uid(&self) -> Option<ResourceUid> {
+        self.zone_uid.clone()
+    }
+}
+
 impl<S> ResourceService<S, UnavailableUpgradeDispatcher>
 where
     S: ResourceStoreBackend,
@@ -1950,7 +1964,10 @@ fn parse_create_payload(
         CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
     );
     let envelope = ResourceEnvelope::from_json(&validation_value.to_canonical_bytes())
-        .map_err(|_| schema_error("create resource payload is malformed"))?;
+        .map_err(|error| {
+            eprintln!("resource-api:create-envelope-validation-failed error={error}");
+            schema_error("create resource payload is malformed")
+        })?;
     let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
     Ok((envelope, canonical_resource, payload_digest))
 }
@@ -2625,6 +2642,8 @@ mod tests {
             resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
             zone: ZoneId::parse("dev").unwrap(),
             uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            owner_uid: None,
+            owner_generation: None,
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(9),
             canonical_json: vec![b'x'; bytes],
@@ -3453,6 +3472,77 @@ mod tests {
                 "ParsedMutationRoute {{ identity: {identity_debug}, has_owner: true, \
                  kind: UpdateSpec, authorization_count: 1 }}"
             )
+        );
+    }
+
+    #[test]
+    fn qualified_export_child_envelope_has_a_valid_status_projection() {
+        let mut value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "virtiofs.d2bus.org.Export",
+            "metadata": {
+                "name": "vol-export-test",
+                "zone": "work",
+                "uid": "00000000-0000-4000-8000-000000000000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": "Volume/store-view-work-vm",
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "controller"
+            },
+            "spec": {
+                "providerRef": "Provider/volume-virtiofs",
+                "volumeRef": "Volume/store-view-work-vm",
+                "executionRef": "Guest/work-vm",
+                "view": "ro-store",
+                "access": "read-only",
+                "mountPath": "/nix/.ro-store",
+                "provider": {
+                    "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
+                    "schemaVersion": "1.0",
+                    "settings": {}
+                }
+            },
+            "status": {
+                "observedGeneration": 0,
+                "phase": "Pending",
+                "conditions": [],
+                "lastReconciledAt": null,
+                "startedAt": null,
+                "completedAt": null,
+                "outcome": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                },
+                "resource": {
+                    "exportReady": false,
+                    "guestMountReady": false
+                }
+            }
+        });
+        let bytes = serde_json::to_vec(&value).expect("Export envelope serializes");
+        assert!(
+            ResourceEnvelope::from_json(&bytes).is_ok(),
+            "qualified Export envelope must parse: {value}"
+        );
+        value["metadata"]["uid"] = serde_json::Value::Null;
+        assert!(
+            ResourceEnvelope::from_json(
+                &serde_json::to_vec(&value).expect("UID-less Export envelope serializes")
+            )
+            .is_err()
         );
     }
 }

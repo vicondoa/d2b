@@ -623,7 +623,7 @@ let
         recursive = false;
         sensitivity = "private";
         createPolicy = "create-if-absent";
-        repairPolicy = "exact-owner";
+        repairPolicy = "none";
         cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";

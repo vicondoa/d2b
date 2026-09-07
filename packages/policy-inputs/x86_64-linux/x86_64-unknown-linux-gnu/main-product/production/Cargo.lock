@@ -1087,6 +1087,7 @@ dependencies = [
  "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
@@ -1156,10 +1157,13 @@ dependencies = [
 name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
  "serde_json",
+ "tokio",
 ]
 
 
@@ -1167,10 +1171,13 @@ dependencies = [
 name = "d2b-provider-credential-managed-identity"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
  "serde_json",
+ "tokio",
 ]
 
 
@@ -1178,10 +1185,16 @@ dependencies = [
 name = "d2b-provider-credential-secret-service"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "d2b-session",
+ "d2b-session-unix",
  "serde_json",
+ "tokio",
+ "ttrpc",
 ]
 
 
@@ -1303,6 +1316,7 @@ dependencies = [
  "rustix 0.38.44",
  "serde",
  "serde_json",
+ "zeroize",
 ]
 
 
@@ -1441,9 +1455,22 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-provider-test-controller"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-zone-session",
+ "d2b-core-controller",
+ "d2b-session",
+ "d2b-session-unix",
+ "tokio",
+]
+
+
+[[package]]
 name = "d2b-provider-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1451,9 +1478,12 @@ dependencies = [
  "d2b-session",
  "d2b-session-unix",
  "schemars",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
+ "ttrpc",
+ "zeroize",
 ]
 
 
@@ -1662,6 +1692,7 @@ dependencies = [
  "tokio",
  "tokio-vsock",
  "uapi",
+ "zeroize",
 ]
 
 

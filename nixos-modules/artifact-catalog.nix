@@ -7,6 +7,7 @@
 
 let
   cfg = config.d2b;
+  resourcesBundle = import ./resources-bundle.nix { inherit lib; };
   ids = lib.sort lib.lessThan (lib.attrNames (cfg.artifacts or { }));
   artifactRows = map
     (artifactId:
@@ -45,14 +46,15 @@ let
       privateArtifact = projection.privateArtifact or { };
     in privateArtifact.guestSetupDescriptors or [ ];
   guestClosures = lib.mapAttrsToList
-    (_: artifact:
-      builtins.fromJSON
-        (builtins.unsafeDiscardStringContext (builtins.readFile artifact.path)))
+    (_: artifact: artifact.data)
+    (cfg._guestClosureArtifacts or { });
+  guestClosureInputs = lib.mapAttrsToList
+    (_: artifact: {
+      path = artifact.path;
+    })
     (cfg._guestClosureArtifacts or { });
   descriptorForbiddenRows =
-    let
-      resourceBundle = import ./resources-bundle.nix { inherit lib; };
-    in lib.concatMap resourceBundle.forbiddenRows guestSetupDescriptors;
+    lib.concatMap resourcesBundle.forbiddenRows guestSetupDescriptors;
 
   # Keep the legacy internal projection available to the zone-resources
   # emitter while the installed document uses the v3 artifact rows above.
@@ -90,7 +92,7 @@ let
     {
       buildRowsJson = builtins.toJSON buildRows;
       guestSetupDescriptorsJson = builtins.toJSON guestSetupDescriptors;
-      guestClosuresJson = builtins.toJSON guestClosures;
+      guestClosuresJson = builtins.toJSON guestClosureInputs;
       nativeBuildInputs = [ pkgs.nix pkgs.python3 ];
       passAsFile = [
         "buildRowsJson"
@@ -113,7 +115,11 @@ let
       with open(descriptors_path, encoding="utf-8") as handle:
           guest_setup_descriptors = json.load(handle)
       with open(closures_path, encoding="utf-8") as handle:
-          guest_closures = json.load(handle)
+          guest_closure_inputs = json.load(handle)
+      guest_closures = []
+      for guest_closure_input in guest_closure_inputs:
+          with open(guest_closure_input["path"], encoding="utf-8") as handle:
+              guest_closures.append(json.load(handle))
 
       def digest_path(path):
           digest = hashlib.sha256()
@@ -239,17 +245,27 @@ let
       PY
     '';
 
-  # The installed catalog is the authority for the digest copied into every
-  # Zone bundle. Read that one realised document back into the eval-visible
-  # projection so the bundle's `.data` and its shipped JSON cannot carry
-  # different catalogDigest values.
-  realisedCatalogData = builtins.fromJSON
-    (builtins.unsafeDiscardStringContext (builtins.readFile catalogPath));
-  preimage = builtins.removeAttrs realisedCatalogData [ "catalogDigest" ];
-  preimageJson = builtins.toJSON preimage;
-  catalogDigest = realisedCatalogData.catalogDigest;
-  catalogData = realisedCatalogData;
-  catalogJson = builtins.toJSON catalogData;
+  evalCatalogPreimage = {
+    entries = artifactRows;
+    guestClosures = guestClosures;
+    guestSetupDescriptors = guestSetupDescriptors;
+    schemaVersion = 3;
+  };
+  evalCatalogPreimageJson = builtins.toJSON evalCatalogPreimage;
+  evalCatalogData = evalCatalogPreimage // {
+    catalogDigest = "sha256:${resourcesBundle.framedDigest
+      "d2b:v3:artifact-catalog"
+      evalCatalogPreimageJson}";
+  };
+  evalCatalogJson = builtins.toJSON evalCatalogData;
+  # The installed catalog path is the build-time authority. These eval-visible
+  # values are deterministic projections so `--no-build` checks do not force
+  # the catalog derivation through import-from-derivation.
+  preimage = evalCatalogPreimage;
+  preimageJson = evalCatalogPreimageJson;
+  catalogDigest = evalCatalogData.catalogDigest;
+  catalogData = evalCatalogData;
+  catalogJson = evalCatalogJson;
 in
 {
   options.d2b._artifactCatalogV3 = lib.mkOption {

@@ -112,9 +112,12 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 ## Public Bazel aliases invoke `bazel test` directly. The .bazelrc default is
 ## BuildBuddy `remote`; PR/CI sets D2B_BAZEL_PROFILE=local (no wrapper).
 D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))
+D2B_BAZEL_LOCAL_TEST_JOBS ?=
+D2B_BAZEL_JOBS ?=
+D2B_BAZEL_TEST_OUTPUT ?=
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) --test_env=D2B_REPO_ROOT="$(CURDIR)"
-export D2B_BAZEL_PROFILE
+D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) $(if $(strip $(D2B_BAZEL_JOBS)),--jobs=$(D2B_BAZEL_JOBS)) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) $(if $(strip $(D2B_BAZEL_TEST_OUTPUT)),--test_output=$(D2B_BAZEL_TEST_OUTPUT)) --test_env=D2B_REPO_ROOT="$(CURDIR)"
+export D2B_BAZEL_PROFILE D2B_BAZEL_LOCAL_TEST_JOBS D2B_BAZEL_JOBS D2B_BAZEL_TEST_OUTPUT
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
 check-ci:
@@ -234,6 +237,7 @@ test-host-integration:
 	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
 	//packages/d2b-provider-display-wayland:d2b-wayland-proxy \
+	//packages/d2b-provider-test-controller:d2b-provider-test-controller \
 	//packages/d2b-provider-runtime-cloud-hypervisor:d2b-cloud-hypervisor-controller; \
 	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
 	stage="$$run_dir/bundle"; \
@@ -249,6 +253,7 @@ test-host-integration:
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
+	stage_tool packages/d2b-provider-test-controller/d2b-provider-test-controller d2b-provider-test-controller; \
 	source="$$(realpath -e "$$bazel_bin/packages/d2b-provider-runtime-cloud-hypervisor/d2b-cloud-hypervisor-controller")"; \
 	case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Cloud Hypervisor controller escaped bazel-bin" >&2; exit 1;; esac; \
 	[ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel Cloud Hypervisor controller" >&2; exit 1; }; \
