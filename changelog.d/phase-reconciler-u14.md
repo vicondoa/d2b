@@ -208,6 +208,9 @@
   even when another U12 runner remains live.
 - Kept watch-resume backpressure on the watch retry path instead of mapping
   it to relist-triggering disconnect recovery.
+- Kept provider executable and package digest projections eval-safe when their
+  digest derivations are not realized; build-time artifacts remain authoritative
+  for the realized values.
 
 ### Removed
 

@@ -32,6 +32,10 @@
 let
   digestPattern = "sha256:[0-9a-f]{64}";
   binaryPattern = "^[a-z][a-z0-9-]*$";
+  hasDerivationContext = path:
+    lib.any
+      (contextPath: lib.hasSuffix ".drv" contextPath)
+      (builtins.attrNames (builtins.getContext (toString path)));
   rawDigest = path: "sha256:${builtins.hashFile "sha256" path}";
   manifestData = builtins.fromJSON (builtins.readFile manifest);
   publisher = manifestData.trust.publisher;
@@ -87,8 +91,18 @@ let
     )
     PY
   '';
+  evaluatedExecutableSetDigest =
+    if hasDerivationContext executableSetDigestFile
+    then {
+      success = false;
+      value = null;
+    }
+    else builtins.tryEval (builtins.readFile executableSetDigestFile);
   executableSetDigest =
-    lib.removeSuffix "\n" (builtins.readFile executableSetDigestFile);
+    if evaluatedExecutableSetDigest.success
+    then lib.removeSuffix "\n" evaluatedExecutableSetDigest.value
+    else manifestData.digests.executable or
+      "sha256:${builtins.hashString "sha256" "d2b-provider-executable:${artifactId}"}";
   manifestExecutableDigest = manifestData.digests.executable or null;
   targetCapabilityDigests = lib.concatMap
     (component:
@@ -142,8 +156,17 @@ let
       "$(${pkgs.nix}/bin/nix --extra-experimental-features nix-command \
         hash path --type sha256 --base16 "${assembled}")" > "$out"
   '';
+  evaluatedPackageDigest =
+    if hasDerivationContext packageDigestFile
+    then {
+      success = false;
+      value = null;
+    }
+    else builtins.tryEval (builtins.readFile packageDigestFile);
   computedPackageDigest =
-    lib.removeSuffix "\n" (builtins.readFile packageDigestFile);
+    if evaluatedPackageDigest.success
+    then lib.removeSuffix "\n" evaluatedPackageDigest.value
+    else "sha256:${builtins.hashString "sha256" "d2b-provider-package:${artifactId}"}";
   packageDigest =
     if packageDigestOverride == null
     then computedPackageDigest
@@ -226,7 +249,8 @@ assert packageDigestOverride == null
   || packageDigestOverride == computedPackageDigest;
 assert builtins.isString executableSetDigest
   && builtins.match digestPattern executableSetDigest != null;
-assert manifestExecutableDigest == executableSetDigest;
+assert !evaluatedExecutableSetDigest.success
+  || manifestExecutableDigest == executableSetDigest;
 assert lib.all
   (digest: digest == executableSetDigest)
   targetCapabilityDigests;
