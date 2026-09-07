@@ -231,6 +231,8 @@
   worker tests; production retry and lifetime budgets remain unchanged.
 - Serialized the Resource API test binary so per-test store/session fixtures
   cannot race under the aggregate Rust lane.
+- Serialized the broker fake-backend test binary so shared fake host state
+  cannot race with concurrent test cases.
 
 ### Removed
 

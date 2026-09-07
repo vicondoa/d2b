@@ -420,6 +420,7 @@ rust_test(
     name = "d2b_broker_fake_backends_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_fake_backends_test_support",
+    args = ["--test-threads=1"],
     data = [":d2b-broker"],
     env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath :d2b-broker)"},
     rustc_env = {
