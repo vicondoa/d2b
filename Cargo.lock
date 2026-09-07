@@ -1103,6 +1103,7 @@ name = "d2b-host-activation-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
  "libc",
+ "tempfile",
 ]
 
 [[package]]
