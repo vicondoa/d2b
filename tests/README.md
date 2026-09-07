@@ -63,21 +63,28 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-flake` | Bazel Nix evaluation suite | local + CI |
 | `make test-nix-unit` | Bazel Nix-unit surface suite | local + CI |
 | `make test-drift` | native generated-artifact and parity checks | local + CI |
+| `make generate` | regenerate committed schemas, docs, bindings, completions, and policy inputs with local Bazel | local only |
 | `make test-policy` | composed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; locally builds eight host tools with Bazel, injects them into the checks, and optionally uploads their built dependency closures to Attic | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
-| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
+| `make bazel-check` | Bazel aggregate suite used by `make check`. Developer Bazel and public Make aliases default to BuildBuddy remote through `.bazelrc`; CI sets `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
 suite graph through one public facade label. Public Make aliases run
-`bazel test --config=$(D2B_BAZEL_PROFILE)` directly. Bazel owns Layer-1
-scheduling; Make and CI are thin aliases over one suite label per public
-target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
-while standalone crate Cargo commands are not documented or required gate
-evidence.
+`bazel test` directly, passing `--config=$(D2B_BAZEL_PROFILE)` only when that
+variable is set; otherwise `.bazelrc` supplies the BuildBuddy `remote` default.
+Bazel owns Layer-1 scheduling; Make and CI are thin aliases over one suite
+label per public target. Cargo manifests and `Cargo.lock` remain rules_rs
+metadata authority, while standalone crate Cargo commands are not documented
+or required gate evidence.
+
+`make generate` invokes the single `//packages/xtask:generate` aggregate with
+`bazel run --config=local`. It writes the committed schemas, documentation,
+completions, protocol bindings, Nix outputs, and policy inputs in the checkout;
+it does not alter the repository-default remote profile used by `make check`.
 
 `make test-host-integration` first builds the fixed eight host tools with local
 Bazel, injects the staged bundle into the selected NixOS `vmChecks`, and then

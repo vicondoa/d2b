@@ -3,9 +3,9 @@ package(default_visibility = ["//visibility:public"])
 # The package-level suites are the fixed authority for the package-wide
 # graph. An empty native test_suite includes every non-manual test in its
 # package, while its negative tags remove local-only leaves from the main
-# suite. Make's tag filters keep the remaining excluded lanes out of the
-# remote main run. Broker and guest-shell-runner stay in their dedicated suites
-# below.
+# suite. Public Make aliases forward only an optional profile override; the
+# nested suite graph owns the remaining target selection. Broker and
+# guest-shell-runner stay in their dedicated suites below.
 test_suite(
     name = "rust-main-packages",
     tests = [

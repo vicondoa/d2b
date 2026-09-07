@@ -140,7 +140,8 @@ settings or claim atomic base binding.
   the required gates when the owning workflow calls for them. Read
   [`tests/AGENTS.md`](./tests/AGENTS.md) before changing test coverage.
 - Use the top-level Makefile and existing gates: `make check` is the aggregate,
-  `make test-unit` is the Layer-1 development umbrella, and
+  `make test-unit` is the Layer-1 development umbrella, and `make generate`
+  regenerates committed artifacts through the local Bazel profile.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
 - U20 final acceptance must run both `make test-integration` and
@@ -166,12 +167,18 @@ settings or claim atomic base binding.
 ## Critical subsystem index
 
 `make check` invokes the public Bazel suite facade and its nested Layer-1
-component and package suites. Bare local runs use the BuildBuddy profile for
-eligible actions and automatically fall back to local execution when no
-credential is available; CI runs the same suite graph through the local profile
-with no BuildBuddy credential. Make aliases are thin facade entry points,
-while Cargo manifests and lockfiles remain rules_rs metadata authority rather
-than contributor workflow entry points.
+component and package suites. Bare developer Bazel commands and Make aliases
+use the `.bazelrc` BuildBuddy `remote` default for eligible actions and
+automatically fall back to local execution when no credential is available; CI
+runs the same suite graph through the explicit local profile with no BuildBuddy
+credential. Make aliases are thin facade entry points, while Cargo manifests
+and lockfiles remain rules_rs metadata authority rather than contributor
+workflow entry points.
+
+`make generate` is the sole aggregate entrypoint for committed schemas, docs,
+completions, protocol bindings, Nix resource outputs, and policy inputs. It
+invokes `//packages/xtask:generate` with `--config=local`; ordinary `make check`
+and `make test-*` aliases retain the repository-default remote profile.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

@@ -12,6 +12,17 @@ The normal entry point is:
 make check
 ```
 
+To update committed generated artifacts, use the local-only aggregate:
+
+```bash
+make generate
+```
+
+This runs `bazel run --config=local //packages/xtask:generate` for schemas,
+docs, completions, protocol bindings, Nix resource outputs, and policy inputs.
+It is intentionally separate from `make check`, whose default profile remains
+the BuildBuddy `remote` profile.
+
 Run any public `make check*` or `make test*` alias directly from a
 Nix-enabled host. The Makefile detects the pinned d2b shell contract and
 re-enters `nix develop --no-write-lock-file .#bazel` exactly once when the
@@ -85,6 +96,12 @@ The committed `.bazelrc` defines:
 | `local` | Local execution with no remote executor, cache, or BES |
 | `remote` | Developer BuildBuddy execution and cache |
 | `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
+
+Bare Bazel build and test commands, along with public Make aliases, select the
+`remote` profile by default through `.bazelrc`. Set
+`D2B_BAZEL_PROFILE=local` to opt into local execution; Make passes an explicit
+profile only when that variable is set. GitHub Layer-1 jobs set the local
+profile themselves.
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote

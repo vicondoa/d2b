@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `make generate`, a local Bazel aggregate for regenerating committed
+  schemas, docs, completions, protocol bindings, Nix resource outputs, and
+  policy inputs without changing the remote-default `make check` profile.
 - Added `labs/d2b-agentterm`, an experimental crate exploring a terminal that a
   human and an AI agent can drive at the same time. It wraps a program in a
   pseudoterminal and passes it through unchanged, so a person interacts with the

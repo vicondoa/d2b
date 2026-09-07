@@ -1,5 +1,5 @@
 <!-- d2b PR template. Record validation evidence for the changed surface.
-     `make check` is an available aggregate, not a prerequisite for review.
+     The exact make check item below must be replaced with truthful evidence.
 
      Do not include AI agent, assistant, or model metadata in this PR body. -->
 
@@ -9,6 +9,7 @@
 
 ## Validation evidence
 
+- [ ] **Exact `make check`:** result=`passed`; evidence=`<truthful workflow URL or concise local run summary>`.
 - [ ] **Focused tests for the changed components** were run; list exact
       commands and results.
 - [ ] **Wider lanes are conditional.** Run the applicable public lane when the

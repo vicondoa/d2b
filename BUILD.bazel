@@ -89,6 +89,7 @@ exports_files([
     "tests/tools/scrub-shell-environment",
     "tests/tools/bazel-check",
     "tests/tools/generated-artifact-check.sh",
+    "tests/tools/generate-artifacts.sh",
     "nix/bazel-worker-image.nix",
     "nix/test-support/eval-surface.nix",
     "tests/README.md",
