@@ -114,9 +114,9 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 D2B_BAZEL_PROFILE_ARG = $(if $(strip $(D2B_BAZEL_PROFILE)),--config=$(D2B_BAZEL_PROFILE))
 D2B_BAZEL_LOCAL_TEST_JOBS ?=
 D2B_BAZEL_JOBS ?=
-D2B_BAZEL_TEST_OUTPUT ?= errors
+D2B_BAZEL_TEST_OUTPUT ?=
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) $(if $(strip $(D2B_BAZEL_JOBS)),--jobs=$(D2B_BAZEL_JOBS)) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) --test_env=D2B_REPO_ROOT="$(CURDIR)" --test_output=$(D2B_BAZEL_TEST_OUTPUT)
+D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) $(if $(strip $(D2B_BAZEL_JOBS)),--jobs=$(D2B_BAZEL_JOBS)) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) $(if $(strip $(D2B_BAZEL_TEST_OUTPUT)),--test_output=$(D2B_BAZEL_TEST_OUTPUT)) --test_env=D2B_REPO_ROOT="$(CURDIR)"
 export D2B_BAZEL_PROFILE D2B_BAZEL_LOCAL_TEST_JOBS D2B_BAZEL_JOBS D2B_BAZEL_TEST_OUTPUT
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
