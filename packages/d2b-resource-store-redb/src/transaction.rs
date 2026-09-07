@@ -65,14 +65,9 @@ pub(crate) const UNINTERPRETABLE_REQUEST_DIGEST_REASON: &str =
 
 /// The standard ResourceType catalog bound by a freshly provisioned store.
 pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 20] = STANDARD_RESOURCE_TYPES;
-/// Qualified interaction ResourceTypes whose schemas are committed with the
-/// production Resource plane and therefore may be persisted in every Zone
-/// store.
-pub(crate) const QUALIFIED_SCHEMA_CATALOG: [&str; 2] = [
-    "display-wayland.d2bus.org.WaylandPolicy",
-    "display-wayland.d2bus.org.WaylandSession",
-];
-/// The complete schema catalog installed in a current physical store.
+/// The complete schema catalog installed in a current physical store.  The
+/// last two rows are qualified interaction ResourceTypes committed with the
+/// production Resource plane.
 pub(crate) const INSTALLED_SCHEMA_CATALOG: [&str; 22] = [
     "Zone",
     "ZoneLink",
@@ -1037,9 +1032,11 @@ pub(crate) fn initialize(
 /// physical-v1 store.
 ///
 /// The first v1 stores predate the catalog rows and therefore have an empty
-/// `api_schemas` table.  Only that exact legacy shape is backfilled.  A
-/// partial or otherwise populated table is never rewritten because doing so
-/// could hide catalog corruption or discard a Provider-owned row.
+/// `api_schemas` table.  Stores provisioned by the previous binary hold 19
+/// standard rows (predating the VolumeBinding type) plus the qualified
+/// rows.  Only those exact legacy shapes are backfilled.  Any other
+/// partial or populated table is never rewritten because doing so could
+/// hide catalog corruption or discard a Provider-owned row.
 pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreError> {
     {
         let read = database.begin_read().map_err(integrity)?;
@@ -1053,23 +1050,34 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
         if count == INSTALLED_SCHEMA_CATALOG.len() as u64 {
             return Ok(());
         }
-        if count != 0 && count != STANDARD_SCHEMA_CATALOG.len() as u64 {
-            return Err(integrity("api-schema-catalog-migration-ambiguous"));
-        }
-        if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+        if count != 0 {
+            // Exact legacy shapes only: the current standard set, or the
+            // predecessor set holding every installed row except
+            // VolumeBinding.  Anything else partial is corruption, not a
+            // known upgrade.
             let mut types = std::collections::BTreeSet::new();
             for row in table.iter().map_err(integrity)? {
                 let (_key, value) = row.map_err(integrity)?;
                 let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
                 types.insert(schema.resource_type);
             }
-            if types.len() != STANDARD_SCHEMA_CATALOG.len()
-                || STANDARD_SCHEMA_CATALOG.iter().any(|resource_type| {
-                    !types.contains(
-                        &ResourceTypeName::parse(*resource_type).expect("standard catalog type"),
-                    )
+            let installed: std::collections::BTreeSet<_> = INSTALLED_SCHEMA_CATALOG
+                .iter()
+                .map(|resource_type| {
+                    ResourceTypeName::parse(*resource_type).expect("installed catalog type")
                 })
-            {
+                .collect();
+            let standard: std::collections::BTreeSet<_> = STANDARD_SCHEMA_CATALOG
+                .iter()
+                .map(|resource_type| {
+                    ResourceTypeName::parse(*resource_type).expect("standard catalog type")
+                })
+                .collect();
+            let mut predecessor = installed.clone();
+            predecessor.remove(
+                &ResourceTypeName::parse("VolumeBinding").expect("binding type"),
+            );
+            if types != standard && types != predecessor {
                 return Err(integrity("api-schema-catalog-migration-ambiguous"));
             }
         }
@@ -1089,15 +1097,21 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
         write.abort().map_err(integrity)?;
         return Ok(());
     }
-    if count != 0 && count != STANDARD_SCHEMA_CATALOG.len() as u64 {
-        return Err(integrity("api-schema-catalog-migration-ambiguous"));
+    let mut present = std::collections::BTreeSet::new();
+    for row in schemas.iter().map_err(integrity)? {
+        let (_key, value) = row.map_err(integrity)?;
+        let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
+        present.insert(schema.resource_type);
     }
-    let resource_types = if count == 0 {
-        &INSTALLED_SCHEMA_CATALOG[..]
-    } else {
-        &QUALIFIED_SCHEMA_CATALOG[..]
-    };
-    for resource_type in resource_types {
+    // Install exactly the missing rows.  The read phase above already
+    // rejected every shape except empty, current-standard, and the
+    // predecessor set, so the missing set is all rows, the qualified
+    // rows, or just VolumeBinding.
+    for resource_type in INSTALLED_SCHEMA_CATALOG {
+        let name = ResourceTypeName::parse(resource_type).expect("installed catalog type");
+        if present.contains(&name) {
+            continue;
+        }
         let schema = api_schema_record(resource_type)?;
         let key = api_schema_key(resource_type)?;
         let value = encode(ValueKind::ApiSchemaRecord, &schema)?;
