@@ -233,8 +233,9 @@
   cannot race under the aggregate Rust lane.
 - Serialized the broker fake-backend test binary so shared fake host state
   cannot race with concurrent test cases.
-- Capped local Rust-main test concurrency on the hosted CI runner to prevent
-  unrelated redb, Resource API, and runtime tests from starving one another.
+- Capped local Rust-main test concurrency at eight jobs on the hosted CI
+  runner to prevent unrelated redb, Resource API, and runtime tests from
+  starving one another.
 
 ### Removed
 
