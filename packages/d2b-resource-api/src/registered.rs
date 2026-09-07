@@ -5303,7 +5303,7 @@ mod tests {
         .await
         .unwrap();
         source.close_watch().unwrap();
-        let report = tokio::time::timeout(Duration::from_secs(2), runner_task)
+        let report = tokio::time::timeout(TEST_EVENTUAL_TIMEOUT, runner_task)
             .await
             .unwrap()
             .unwrap()
