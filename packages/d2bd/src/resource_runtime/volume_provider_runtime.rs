@@ -1668,11 +1668,33 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
         }
         let file = open_anchored_directory(path)
             .map_err(|_| self.source_unresolved("storage-path-open"))?;
+        // One volume owns one directory under the policy root.  Sibling
+        // volumes and unrelated daemon state never trip the unmarked-content
+        // guard, and serving scopes to this volume's tree.  The policy root
+        // itself must be daemon-writable; a read-only root fails closed here.
+        let name = self.volume_ref.name().as_str();
+        crate::resource_runtime::volume_effect_adapter::validate_component(name)
+            .map_err(|_| self.source_unresolved("storage-subdir-name"))?;
+        match rustix::fs::mkdirat(&file, name, Mode::from_raw_mode(0o700)) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::EXIST => {}
+            Err(_) => return Err(self.source_unresolved("storage-subdir-create")),
+        }
+        let file = openat2(
+            &file,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+            ResolveFlags::BENEATH
+                | ResolveFlags::NO_SYMLINKS
+                | ResolveFlags::NO_MAGICLINKS
+                | ResolveFlags::NO_XDEV,
+        )
+        .map_err(|_| self.source_unresolved("storage-subdir-open"))?;
         let marker_file = self.marker_root()?;
         ResolvedVolumeRoot::new(file.into(), volume_uid.clone())?
             .with_marker_root(marker_file.into())
     }
-
     fn resolve_principal(
         &self,
         reference: &ResourceRef,

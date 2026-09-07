@@ -11,6 +11,10 @@
   (and wait for a present guest mount to clear) under the
   `volume-virtiofs.d2bus.org/volume-binding` finalizer, so no serving effects
   are orphaned.
+- Changed policy-rooted Volume resolution to provision one subdirectory per
+  Volume under the policy root, so sibling volumes and unrelated daemon state
+  never trip the unmarked-content guard and serving scopes to the Volume's
+  own tree. The policy root itself must be daemon-writable.
 
 ### Removed
 
