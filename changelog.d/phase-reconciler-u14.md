@@ -236,6 +236,8 @@
 - Gave the redb blocking-worker hold probe a test-only lifetime separate from
   the production read lifetime, preventing hosted-runner scheduling delay from
   bypassing the worker-hold assertion.
+- Yielded before advancing the paused redb hold test and extended the
+  shell-supervisor output wait so hosted scheduling cannot race test evidence.
 - Relaxed the Resource API large-relist test budget for hosted-runner
   scheduling while retaining a bounded fail-fast performance assertion.
 - Serialized the supervised fd10 Provider test binary because its fixed

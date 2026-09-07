@@ -459,7 +459,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     } else {
         b"D2B_RUNTIME_ENV:xterm-256color:truecolor".as_slice()
     };
-    let (_, output) = read_until(&mut terminal, 2, 0, needle);
+    let (_, output) = read_until(&mut terminal, 10, 0, needle);
     assert!(
         output
             .windows(b"D2B_RUNTIME_ENV:xterm-256color:truecolor".len())
