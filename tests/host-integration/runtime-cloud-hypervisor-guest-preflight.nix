@@ -325,7 +325,20 @@ pkgs.testers.runNixOSTest {
                 ownerRef = "User/alice";
                 groupRef = "User/alice";
                 mode = "0700";
+                target = null;
+                accessAcl = [ ];
+                defaultAcl = [ ];
+                foreignChildPolicy = "preserve";
                 noFollow = true;
+                recursive = false;
+                sensitivity = "private";
+                createPolicy = "create-if-never-provisioned";
+                repairPolicy = "fail-closed";
+                cleanupPolicy = "never";
+                adoptionPolicy = "quarantine-on-ambiguity";
+                restartPolicy = "preserve-across-controller-restart";
+                leaseClass = "none";
+                invariants = [ "no-symlink" ];
               }];
               views.controller = {
                 path = "";
