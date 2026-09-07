@@ -1097,24 +1097,58 @@ where
                                         );
                                     }
                                     FailurePersistence::Uncertain => {
-                                        queue.finish(&key)?;
-                                        if reason != ReconcileReason::SourceBackpressure {
-                                            report.handler_failures += 1;
-                                        }
                                         report.persistence_uncertain += 1;
-                                        observe_counter(
-                                            self.observer.as_ref(),
-                                            RunnerCounter::Exhaustion,
-                                            Some(completion.work.lane()),
-                                            RunnerOutcome::Exhausted,
-                                            if reason == ReconcileReason::SourceBackpressure {
-                                                RunnerObservationReason::Backpressure
-                                            } else {
-                                                RunnerObservationReason::Conflict
-                                            },
-                                            queue.resource_count(),
-                                            workers.len(),
-                                        );
+                                        if let Some(persistence_operation) =
+                                            completion.persistence_operation
+                                        {
+                                            let lane = completion.work.lane();
+                                            let recovery_revision =
+                                                completion.work.high_water_revision();
+                                            let work = completion
+                                                .work
+                                                .with_persistence_operation(Some(
+                                                    persistence_operation,
+                                                ));
+                                            schedule_queue_item(
+                                                &mut requeues,
+                                                Arc::clone(&self.clock),
+                                                ScheduledQueueItem::PersistenceRetry {
+                                                    work,
+                                                    revision: recovery_revision,
+                                                },
+                                            );
+                                            observe_counter(
+                                                self.observer.as_ref(),
+                                                RunnerCounter::Retry,
+                                                Some(lane),
+                                                RunnerOutcome::Retrying,
+                                                if reason == ReconcileReason::SourceBackpressure {
+                                                    RunnerObservationReason::Backpressure
+                                                } else {
+                                                    RunnerObservationReason::Conflict
+                                                },
+                                                queue.resource_count(),
+                                                workers.len(),
+                                            );
+                                        } else {
+                                            queue.finish(&key)?;
+                                            if reason != ReconcileReason::SourceBackpressure {
+                                                report.handler_failures += 1;
+                                            }
+                                            observe_counter(
+                                                self.observer.as_ref(),
+                                                RunnerCounter::Exhaustion,
+                                                Some(completion.work.lane()),
+                                                RunnerOutcome::Exhausted,
+                                                if reason == ReconcileReason::SourceBackpressure {
+                                                    RunnerObservationReason::Backpressure
+                                                } else {
+                                                    RunnerObservationReason::Conflict
+                                                },
+                                                queue.resource_count(),
+                                                workers.len(),
+                                            );
+                                        }
                                     }
                                 }
                             } else {
@@ -1222,6 +1256,24 @@ where
                         .ok_or(RunnerError::TaskFailed)?
                         .map_err(|_| RunnerError::TaskFailed)?;
                     match scheduled {
+                        ScheduledQueueItem::PersistenceRetry { work, revision } => {
+                            let retry_work = work.clone();
+                            match queue.retry_persistence(work, revision) {
+                                Ok(()) => {}
+                                Err(QueueError::Backpressure
+                                | QueueError::ExpeditedBackpressure) => {
+                                    schedule_queue_item(
+                                        &mut requeues,
+                                        Arc::clone(&self.clock),
+                                        ScheduledQueueItem::PersistenceRetry {
+                                            work: retry_work,
+                                            revision,
+                                        },
+                                    );
+                                }
+                                Err(error) => return Err(error.into()),
+                            }
+                        }
                         ScheduledQueueItem::Retry {
                             key,
                             revision,
@@ -1634,8 +1686,11 @@ enum WorkerOutcome {
     },
 }
 
-#[derive(Clone)]
 enum ScheduledQueueItem {
+    PersistenceRetry {
+        work: QueuedWork,
+        revision: ZoneRevision,
+    },
     Retry {
         key: ResourceKey,
         revision: ZoneRevision,
@@ -2819,6 +2874,19 @@ fn persistence_exhausted(
     WorkerOutcome::PersistenceExhausted
 }
 
+fn post_commit_source_failure(
+    context: &ReconcileContext,
+    clock: &dyn MonotonicClock,
+    error: SourceError,
+    operation: &'static str,
+) -> WorkerOutcome {
+    if matches!(&error, SourceError::Timeout | SourceError::Backpressure) {
+        persistence_exhausted(context, clock)
+    } else {
+        WorkerOutcome::SourceFailed { error, operation }
+    }
+}
+
 async fn persist_result<S>(
     source: &S,
     context: &ReconcileContext,
@@ -2941,17 +3009,21 @@ where
                 }
                 if !context.is_expedited() {
                     if let Err(error) = source.complete_effect(context, &result).await {
-                        return WorkerOutcome::SourceFailed {
+                        return post_commit_source_failure(
+                            context,
+                            clock,
                             error,
-                            operation: "complete_effect_after_commit",
-                        };
+                            "complete_effect_after_commit",
+                        );
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
-                    return WorkerOutcome::SourceFailed {
+                    return post_commit_source_failure(
+                        context,
+                        clock,
                         error,
-                        operation: "checkpoint_after_commit",
-                    };
+                        "checkpoint_after_commit",
+                    );
                 }
                 return WorkerOutcome::Done {
                     checkpointed: true,
@@ -2984,17 +3056,21 @@ where
                 }
                 if !context.is_expedited() {
                     if let Err(error) = source.complete_effect(context, &result).await {
-                        return WorkerOutcome::SourceFailed {
+                        return post_commit_source_failure(
+                            context,
+                            clock,
                             error,
-                            operation: "complete_effect_after_pending_commit",
-                        };
+                            "complete_effect_after_pending_commit",
+                        );
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
-                    return WorkerOutcome::SourceFailed {
+                    return post_commit_source_failure(
+                        context,
+                        clock,
                         error,
-                        operation: "checkpoint_after_pending_commit",
-                    };
+                        "checkpoint_after_pending_commit",
+                    );
                 }
                 return WorkerOutcome::Done {
                     checkpointed: true,
@@ -3062,10 +3138,7 @@ where
     }
     if !context.is_expedited() {
         if let Err(error) = source.complete_effect(context, &result).await {
-            return WorkerOutcome::SourceFailed {
-                error,
-                operation: "complete_effect",
-            };
+            return post_commit_source_failure(context, clock, error, "complete_effect");
         }
     }
     if result.disposition().is_terminal()
@@ -3076,10 +3149,7 @@ where
             .checkpoint(context, result.processed_revision())
             .await
         {
-            return WorkerOutcome::SourceFailed {
-                error,
-                operation: "checkpoint",
-            };
+            return post_commit_source_failure(context, clock, error, "checkpoint");
         }
         return WorkerOutcome::Done {
             checkpointed: true,
@@ -4625,16 +4695,9 @@ mod tests {
         let runner = run_in_thread(Arc::clone(&reconciler), Arc::clone(&source));
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
-        let failure = runner.join().unwrap().unwrap_err();
-        assert_eq!(
-            failure.error(),
-            RunnerError::Source(SourceError::Backpressure)
-        );
-        assert_eq!(
-            failure.failed_operation(),
-            Some("complete_effect_after_pending_commit")
-        );
-        assert_eq!(failure.report().dispatched, 1);
+        let report = runner.join().unwrap().unwrap();
+        assert_eq!(report.dispatched, 1);
+        assert_eq!(report.persistence_uncertain, 1);
         assert_eq!(reconciler.execute_effect_calls.load(Ordering::SeqCst), 1);
         assert_eq!(source.effect_acceptances.load(Ordering::SeqCst), 1);
     }

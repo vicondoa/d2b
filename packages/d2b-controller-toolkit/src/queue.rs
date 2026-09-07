@@ -76,6 +76,7 @@ impl core::fmt::Debug for QueueHint {
 }
 
 /// Work removed from the pending lane and marked running.
+#[derive(Clone)]
 pub struct QueuedWork {
     key: ResourceKey,
     high_water_revision: ZoneRevision,
@@ -393,6 +394,25 @@ impl PendingQueue {
 
     /// Requeue a stale/conflicted pass with an incremented attempt.
     pub fn retry(&self, work: QueuedWork, revision: ZoneRevision) -> Result<(), QueueError> {
+        let attempt = work.attempt.saturating_add(1);
+        self.retry_with_attempt(work, revision, attempt)
+    }
+
+    /// Requeue persistence recovery without consuming another handler attempt.
+    pub fn retry_persistence(
+        &self,
+        work: QueuedWork,
+        revision: ZoneRevision,
+    ) -> Result<(), QueueError> {
+        self.retry_with_attempt(work, revision, 1)
+    }
+
+    fn retry_with_attempt(
+        &self,
+        work: QueuedWork,
+        revision: ZoneRevision,
+        attempt: u32,
+    ) -> Result<(), QueueError> {
         let key = work.key.clone();
         let operation_id = work.operation.operation_id().to_owned();
         let persistence_operation = work.persistence_operation.clone();
@@ -407,6 +427,9 @@ impl PendingQueue {
             && let Some(pending) = entry.ordinary.as_mut()
         {
             if pending.operation != work.operation {
+                if pending.persistence_operation.is_none() {
+                    pending.persistence_operation = persistence_operation;
+                }
                 return Ok(());
             }
             if retry_revision > pending.high_water_revision {
@@ -414,8 +437,10 @@ impl PendingQueue {
             }
             pending.reasons.union_with(&work.reasons);
             pending.reasons.insert(TriggerReason::RetryDue);
-            pending.persistence_operation = persistence_operation;
-            pending.attempt = work.attempt.saturating_add(1);
+            if persistence_operation.is_some() {
+                pending.persistence_operation = persistence_operation;
+            }
+            pending.attempt = attempt;
             return Ok(());
         }
         let mut hint =
@@ -439,8 +464,10 @@ impl PendingQueue {
                 .find(|pending| pending.operation.operation_id() == operation_id),
         }
         .expect("retried work is pending");
-        pending.persistence_operation = persistence_operation;
-        pending.attempt = work.attempt.saturating_add(1);
+        if persistence_operation.is_some() {
+            pending.persistence_operation = persistence_operation;
+        }
+        pending.attempt = attempt;
         let _ = outcome;
         Ok(())
     }
@@ -869,6 +896,31 @@ mod tests {
     }
 
     #[test]
+    fn persistence_retry_resets_handler_attempt() {
+        let queue = PendingQueue::new(2, 1);
+        let target = key("app", 0);
+        queue
+            .push(hint(
+                target.clone(),
+                2,
+                TriggerReason::ManualReconcile,
+                PriorityLane::Ordinary,
+                "ordinary",
+            ))
+            .unwrap();
+        let first = queue.pop_ready().unwrap();
+        queue.retry(first, ZoneRevision::new(3)).unwrap();
+        let second = queue.pop_ready().unwrap();
+        assert_eq!(second.attempt(), 2);
+        queue
+            .retry_persistence(second, ZoneRevision::new(4))
+            .unwrap();
+        let recovery = queue.pop_ready().unwrap();
+        assert_eq!(recovery.attempt(), 1);
+        assert!(recovery.reasons().contains(TriggerReason::RetryDue));
+    }
+
+    #[test]
     fn retry_carries_only_the_accepted_persistence_operation() {
         let queue = PendingQueue::new(2, 1);
         let target = key("app", 0);
@@ -923,7 +975,15 @@ mod tests {
                 "op-a",
             ))
             .unwrap();
-        let running = queue.pop_ready().unwrap();
+        let running = queue.pop_ready().unwrap().with_persistence_operation(Some(
+            OperationContext::new(
+                "effect:accepted",
+                "effect:accepted",
+                "effect:accepted",
+                None,
+            )
+            .unwrap(),
+        ));
         queue
             .push(hint(
                 target.clone(),
@@ -940,6 +1000,12 @@ mod tests {
         assert_eq!(successor.operation().operation_id(), "op-b");
         assert_eq!(successor.high_water_revision(), ZoneRevision::new(6));
         assert_eq!(successor.attempt(), 1);
+        assert_eq!(
+            successor
+                .persistence_operation()
+                .map(OperationContext::operation_id),
+            Some("effect:accepted")
+        );
         assert!(
             successor
                 .reasons()

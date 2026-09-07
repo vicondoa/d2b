@@ -3748,7 +3748,7 @@ impl DaemonSharedProviderEffects {
         match kind {
             SharedProviderResourceKind::CloudHypervisorGuest => {
                 let runtime = self.runtime()?;
-                runtime
+                let endpoint_outcome = runtime
                     .reconcile_cloud_hypervisor_guest(
                         Arc::clone(&self.state),
                         resource.key().resource_ref(),
@@ -3769,7 +3769,15 @@ impl DaemonSharedProviderEffects {
                     )
                     .await
                     .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                Ok(SharedProviderEffectResult::phase(Self::guest_phase(&fresh)))
+                Ok(SharedProviderEffectResult {
+                    phase: if endpoint_outcome == CloudHypervisorReconcileOutcome::Ready {
+                        Self::guest_phase(&fresh)
+                    } else {
+                        SharedProviderEffectPhase::Pending
+                    },
+                    child_mutated: false,
+                    resource_projection: None,
+                })
             }
             SharedProviderResourceKind::QemuMediaGuest => {
                 let phase = self
@@ -10769,6 +10777,12 @@ impl core::fmt::Debug for ZoneResourceRuntime {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloudHypervisorReconcileOutcome {
+    Ready,
+    Pending,
+}
+
 impl ZoneResourceRuntime {
     /// Install the daemon-owned typed effect executor used by U8 Provider
     /// runners. The binding is replaced only during trusted composition.
@@ -14510,7 +14524,7 @@ impl ZoneResourceRuntime {
                 .u12_runner_tasks
                 .lock()
                 .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-            if tasks.iter().any(|task| !task.is_finished()) {
+            if !tasks.is_empty() && tasks.iter().all(|task| !task.is_finished()) {
                 return Ok(());
             }
         }
@@ -14746,7 +14760,13 @@ impl ZoneResourceRuntime {
                         },
                     );
                     tokio::spawn(async move {
-                        let _ = runner.run().await;
+                        if let Err(error) = runner.run().await {
+                            tracing::error!(
+                                controller = "observability-otel",
+                                error = ?error,
+                                "U12 controller runner stopped",
+                            );
+                        }
                     })
                 } else {
                     let reconciler = Arc::new(ActivationResourceReconciler::new(
@@ -14769,7 +14789,13 @@ impl ZoneResourceRuntime {
                         },
                     );
                     tokio::spawn(async move {
-                        let _ = runner.run().await;
+                        if let Err(error) = runner.run().await {
+                            tracing::error!(
+                                controller = "activation-nixos",
+                                error = ?error,
+                                "U12 controller runner stopped",
+                            );
+                        }
                     })
                 };
                 new_tasks.push(task);
@@ -15396,7 +15422,9 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
     ) -> Result<(), ResourceRuntimeError> {
-        self.reconcile_cloud_hypervisor_guests_inner(state, None).await
+        self.reconcile_cloud_hypervisor_guests_inner(state, None)
+            .await
+            .map(|_| ())
     }
 
     /// Reconcile one Cloud Hypervisor Guest selected by the shared Runner.
@@ -15407,7 +15435,7 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         guest_ref: &ResourceRef,
-    ) -> Result<(), ResourceRuntimeError> {
+    ) -> Result<CloudHypervisorReconcileOutcome, ResourceRuntimeError> {
         self.reconcile_cloud_hypervisor_guests_inner(state, Some(guest_ref))
             .await
     }
@@ -15416,9 +15444,9 @@ impl ZoneResourceRuntime {
         &self,
         state: Arc<crate::ServerState>,
         selected_guest: Option<&ResourceRef>,
-    ) -> Result<(), ResourceRuntimeError> {
+    ) -> Result<CloudHypervisorReconcileOutcome, ResourceRuntimeError> {
         if !self.readiness.resource_api_ready {
-            return Ok(());
+            return Ok(CloudHypervisorReconcileOutcome::Pending);
         }
         let _guard = self.cloud_hypervisor_reconcile_lock.lock().await;
         let client = self.cloud_hypervisor_resource_client().inspect_err(|error| {
@@ -15431,6 +15459,7 @@ impl ZoneResourceRuntime {
                 .await
                 .map_err(|_| ResourceRuntimeError::StoreReadFailed)?,
         };
+        let mut overall_outcome = CloudHypervisorReconcileOutcome::Ready;
         for guest_ref in guests {
             if selected_guest.is_some_and(|selected| selected != &guest_ref) {
                 continue;
@@ -15456,6 +15485,7 @@ impl ZoneResourceRuntime {
                 );
                 continue;
             };
+            let mut guest_outcome = CloudHypervisorReconcileOutcome::Ready;
             let descriptor = GuestSetupDescriptor::from_canonical_bytes(descriptor_bytes)
                 .map_err(|_| {
                     tracing::warn!("Cloud Hypervisor reconcile stage failed: descriptor-decode");
@@ -15679,9 +15709,19 @@ impl ZoneResourceRuntime {
                     "Cloud Hypervisor dependent Process reconciliation degraded",
                 );
             }
-            self.reconcile_cloud_hypervisor_endpoints(&guest_ref)
-                .await
-                .inspect_err(|error| {
+            match self.reconcile_cloud_hypervisor_endpoints(&guest_ref).await {
+                Ok(()) => {}
+                Err(ResourceRuntimeError::CapabilityUnavailable) => {
+                    guest_outcome = CloudHypervisorReconcileOutcome::Pending;
+                    overall_outcome = CloudHypervisorReconcileOutcome::Pending;
+                    tracing::debug!(
+                        zone = %self.zone.as_str(),
+                        guest = %guest_ref.name().as_str(),
+                        stage = "endpoint-publication",
+                        "Cloud Hypervisor endpoint publication remains pending",
+                    );
+                }
+                Err(error) => {
                     tracing::warn!(
                         zone = %self.zone.as_str(),
                         guest = %guest_ref.name().as_str(),
@@ -15689,7 +15729,12 @@ impl ZoneResourceRuntime {
                         error = ?error,
                         "Cloud Hypervisor reconcile stage failed",
                     );
-                })?;
+                    return Err(error);
+                }
+            }
+            if guest_outcome == CloudHypervisorReconcileOutcome::Pending {
+                continue;
+            }
             match crate::resolve_committed_guest_session_target(self, &guest_ref).await {
                 Ok(target) => {
                     if let Err(error) =
@@ -15719,7 +15764,7 @@ impl ZoneResourceRuntime {
                 ResourceRuntimeError::CapabilityUnavailable
             })?;
         }
-        Ok(())
+        Ok(overall_outcome)
     }
 
     async fn reconcile_cloud_hypervisor_endpoints(

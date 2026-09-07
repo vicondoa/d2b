@@ -1776,7 +1776,7 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                             ) =>
                         {
                             self.watch_open.store(false, Ordering::Release);
-                            return Err(WatchFailure::Disconnected);
+                            return Err(WatchFailure::Backpressure);
                         }
                         Err(_) => {
                             self.watch_open.store(false, Ordering::Release);

@@ -197,6 +197,17 @@
   finish draining, and counted reconciliation attempts before guard
   acquisition for contention coverage.
 - Removed UID-bearing debug formatting from a redb test failure diagnostic.
+- Requeued Cloud Hypervisor endpoint convergence as Pending until the
+  controller-owned VMM Process is Ready instead of exhausting Guest handler
+  retries.
+- Preserved accepted effect persistence identities across newer queued
+  operations and retried uncertain failure persistence without consuming
+  another handler attempt.
+- Isolated transient post-commit checkpoint and effect persistence pressure
+  from unrelated controller identities, and restarted a dead U12 sibling
+  even when another U12 runner remains live.
+- Kept watch-resume backpressure on the watch retry path instead of mapping
+  it to relist-triggering disconnect recovery.
 
 ### Removed
 
