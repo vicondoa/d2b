@@ -96,6 +96,7 @@ fn graph() -> BootstrapGraph {
         vec![ResourceRef::parse("Device/kvm").unwrap()],
         vec![ResourceRef::parse("Network/work").unwrap()],
         vec![ResourceRef::parse("Volume/store").unwrap()],
+        vec![ResourceRef::parse("VolumeBinding/store-share").unwrap()],
         vec![],
     )
     .unwrap()
@@ -176,7 +177,7 @@ fn dependencies(
     devices_ready: bool,
     networks_ready: bool,
     volumes_ready: bool,
-    exports_ready: bool,
+    bindings_ready: bool,
     setup_ready: bool,
 ) -> GuestDependencySnapshot {
     GuestDependencySnapshot::new(
@@ -204,7 +205,10 @@ fn dependencies(
                 ResourcePhase::Pending
             },
         )],
-        exports_ready,
+        vec![(
+            ResourceRef::parse("VolumeBinding/store-share").unwrap(),
+            bindings_ready,
+        )],
         setup_ready,
     )
     .unwrap()
@@ -512,6 +516,68 @@ async fn dependency_gate_keeps_process_stopped_until_every_dependency_is_ready()
     let process_payload: serde_json::Value = serde_json::from_slice(&process_payload).unwrap();
     assert_eq!(process_payload["spec"]["desiredLifecycle"], "stopped");
     assert!(state.statuses.is_empty());
+}
+
+#[tokio::test]
+async fn non_ready_binding_keeps_the_gate_closed_and_reports_the_binding_condition() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, false, true));
+    let state = Arc::clone(&api.state);
+    let mut controller = make_controller(api.clone());
+    controller.register().await.unwrap();
+
+    // First reconcile mints the deterministic children; the VMM is created
+    // stopped because the binding is not current.
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    let batch = state.lock().unwrap().commits[0].clone();
+    state.lock().unwrap().children = matching_children(&guest, &batch);
+
+    // Second reconcile with every child present but the binding not Ready
+    // under a current fence: the VMM is driven back to stopped and the
+    // renamed binding condition appears in status.
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(outcome.status().has_condition(
+        d2b_provider_runtime_cloud_hypervisor::GuestCondition::BindingDependencyNotReady
+    ));
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.commits.len(), 1);
+    let process_target = batch
+        .mutations()
+        .iter()
+        .map(|mutation| mutation.target().clone())
+        .find(|target| target.resource_type().as_str() == "Process")
+        .unwrap();
+    let stop = state
+        .updates
+        .iter()
+        .find(|update| *update.target() == process_target)
+        .expect("VMM stop update");
+    assert_eq!(stop.desired_lifecycle(), Some(DesiredLifecycle::Stopped));
+}
+
+#[tokio::test]
+async fn current_binding_readiness_leaves_the_vmm_running() {
+    let guest = guest("gateway", "work", GUEST_UID, ZONE_UID);
+    let api = FakeApi::new(guest.clone(), dependencies(true, true, true, true, true));
+    let state = Arc::clone(&api.state);
+    let mut controller = make_controller(api.clone());
+    controller.register().await.unwrap();
+
+    controller.reconcile(guest.resource_ref()).await.unwrap();
+    let batch = state.lock().unwrap().commits[0].clone();
+    state.lock().unwrap().children = matching_children(&guest, &batch);
+
+    // With the binding Ready under its current fence the VMM stays running
+    // and no binding condition is reported.
+    let outcome = controller.reconcile(guest.resource_ref()).await.unwrap();
+    assert!(!outcome.status().has_condition(
+        d2b_provider_runtime_cloud_hypervisor::GuestCondition::BindingDependencyNotReady
+    ));
+    assert!(!outcome
+        .status()
+        .has_condition(d2b_provider_runtime_cloud_hypervisor::GuestCondition::ProcessStopped));
+    assert!(state.lock().unwrap().updates.is_empty());
 }
 
 #[tokio::test]

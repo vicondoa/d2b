@@ -9877,9 +9877,19 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         .unwrap_or(ResourcePhase::Pending);
                     volumes.push((resource_ref.clone(), phase));
                 }
-                let exports_ready = volumes
-                    .iter()
-                    .all(|(_, phase)| *phase == ResourcePhase::Ready);
+                let mut bindings = Vec::new();
+                for resource_ref in &graph.bindings {
+                    let current = self
+                        .get_stored(resource_ref, "cloud-hypervisor-binding-dependency")
+                        .await
+                        .map(|binding| {
+                            crate::binding_child_resource_runtime::binding_readiness_current(
+                                &binding,
+                            )
+                        })
+                        .unwrap_or(false);
+                    bindings.push((resource_ref.clone(), current));
+                }
                 let setup_volume_ref = deterministic_child_ref(&guest_ref, ChildRole::SystemVolume)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                 let setup_ready = self
@@ -9896,7 +9906,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     devices,
                     networks,
                     volumes,
-                    exports_ready,
+                    bindings,
                     setup_ready,
                 )
                 .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
@@ -16492,6 +16502,42 @@ impl ZoneResourceRuntime {
                 volumes.push(reference);
             }
         }
+        let mut binding_refs = Vec::new();
+        let mut cursor = None;
+        loop {
+            let request = StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "cloud-hypervisor-binding-inputs".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "cloud-hypervisor-binding-inputs".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: vec![ResourceTypeName::parse(
+                        d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE,
+                    )
+                    .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?],
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 256,
+                    cursor: cursor.clone(),
+                    projection: StoreProjection::Full,
+                };
+            let page = self
+                .store
+                .list(request)
+                .await
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            binding_refs.extend(crate::binding_child_resource_runtime::guest_binding_refs(
+                &page.resources,
+                guest_ref,
+            ));
+            if page.next_cursor.is_none() {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
         let graph = BootstrapGraph::new(
             guest_spec
                 .policy()
@@ -16506,6 +16552,7 @@ impl ZoneResourceRuntime {
                 .map(|attachment| attachment.network_ref().clone())
                 .collect(),
             volumes,
+            binding_refs,
             Vec::new(),
         )
         .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;

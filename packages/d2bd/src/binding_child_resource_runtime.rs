@@ -13,7 +13,7 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::{
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId, canonical_digest,
-    volume_binding::VolumeBindingStatusResource,
+    volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource},
 };
 use d2b_core_controller::{
     BindingChildMaterializationError, BindingChildReconciler, HintTarget, OwnedChildIntent,
@@ -262,7 +262,7 @@ pub(crate) fn owned_children_ready(owner: &OwnedChildOwner, children: &[StoredRe
 
 /// Whether one stored VolumeBinding carries a current fenced readiness
 /// projection.  Unparseable or unfenced projections fail closed.
-fn binding_readiness_current(child: &StoredResource) -> bool {
+pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
         return false;
     };
@@ -277,6 +277,36 @@ fn binding_readiness_current(child: &StoredResource) -> bool {
         return false;
     };
     resource.readiness_is_current(&child.uid, child.generation, child.revision)
+}
+
+/// Collect the VolumeBinding references that gate one Guest's start.
+///
+/// A binding gates the Guest when its spec targets the Guest as execution
+/// target.  A binding whose spec cannot be parsed is kept so the start
+/// gate fails closed on broken resources.
+pub(crate) fn guest_binding_refs(
+    bindings: &[StoredResource],
+    guest_ref: &ResourceRef,
+) -> Vec<ResourceRef> {
+    bindings
+        .iter()
+        .filter(|binding| {
+            binding.resource_ref.resource_type().as_str()
+                == d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
+        })
+        .filter(|binding| {
+            let spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
+                .ok()
+                .and_then(|value| {
+                    serde_json::from_value::<VolumeBindingSpec>(value["spec"].clone()).ok()
+                });
+            match spec {
+                Some(spec) => spec.execution_ref() == guest_ref,
+                None => true,
+            }
+        })
+        .map(|binding| binding.resource_ref.clone())
+        .collect()
 }
 
 fn owned_child_matches(
@@ -1625,5 +1655,54 @@ mod tests {
             }),
         );
         assert!(owned_children_ready(&make_owner(&current), &[current]));
+    }
+
+    #[test]
+    fn guest_binding_refs_keep_only_this_guests_bindings_fail_closed() {
+        let guest_ref = target("Guest", "work-vm");
+        let other_guest_ref = target("Guest", "other-vm");
+        let binding_spec = |execution_ref: &str| {
+            serde_json::json!({
+                "volumeRef": "Volume/work-state",
+                "executionRef": execution_ref,
+                "view": "controller",
+                "access": "read-only",
+                "mountPath": "/state",
+            })
+        };
+        let own = stored_resource_with_spec(
+            &target("VolumeBinding", "own"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            binding_spec(guest_ref.to_canonical_string().as_str()),
+        );
+        let foreign = stored_resource_with_spec(
+            &target("VolumeBinding", "foreign"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            binding_spec(other_guest_ref.to_canonical_string().as_str()),
+        );
+        // An unparseable spec is a broken resource: it keeps gating the
+        // Guest so observation fails closed.
+        let broken = stored_resource_with_spec(
+            &target("VolumeBinding", "broken"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            serde_json::json!({"volumeRef": "Volume/work-state"}),
+        );
+        let unrelated = stored_resource(
+            &target("Process", "worker"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+        );
+
+        let refs = guest_binding_refs(&[own, foreign, broken, unrelated], &guest_ref);
+        assert_eq!(
+            refs,
+            vec![
+                target("VolumeBinding", "own"),
+                target("VolumeBinding", "broken")
+            ]
+        );
     }
 }

@@ -62,6 +62,8 @@ pub struct BootstrapGraph {
     pub networks: Vec<ResourceRef>,
     /// Virtiofs volume references.
     pub volumes: Vec<ResourceRef>,
+    /// VolumeBinding references whose fenced readiness gates VMM start.
+    pub bindings: Vec<ResourceRef>,
     /// Opaque attachment tickets resolved by Core.
     pub attachments: Vec<AttachmentRef>,
 }
@@ -82,12 +84,14 @@ impl BootstrapGraph {
         devices: Vec<ResourceRef>,
         networks: Vec<ResourceRef>,
         volumes: Vec<ResourceRef>,
+        bindings: Vec<ResourceRef>,
         attachments: Vec<AttachmentRef>,
     ) -> Result<Self, BootstrapGraphError> {
         if devices
             .iter()
             .chain(networks.iter())
             .chain(volumes.iter())
+            .chain(bindings.iter())
             .any(|reference| reference.resource_type().as_str() == "Host")
         {
             return Err(BootstrapGraphError::InvalidReference);
@@ -96,6 +100,7 @@ impl BootstrapGraph {
             devices,
             networks,
             volumes,
+            bindings,
             attachments,
         })
     }
@@ -116,10 +121,10 @@ impl BootstrapGraph {
         devices_ready: bool,
         networks_ready: bool,
         volumes_ready: bool,
-        exports_ready: bool,
+        bindings_ready: bool,
         setup_ready: bool,
     ) -> DependencyReadiness {
-        if devices_ready && networks_ready && volumes_ready && exports_ready && setup_ready {
+        if devices_ready && networks_ready && volumes_ready && bindings_ready && setup_ready {
             DependencyReadiness::Ready
         } else {
             DependencyReadiness::Pending
@@ -132,14 +137,14 @@ impl BootstrapGraph {
         devices_ready: bool,
         networks_ready: bool,
         volumes_ready: bool,
-        exports_ready: bool,
+        bindings_ready: bool,
         setup_ready: bool,
     ) -> VmmLifecycleEligibility {
         match self.vmm_readiness(
             devices_ready,
             networks_ready,
             volumes_ready,
-            exports_ready,
+            bindings_ready,
             setup_ready,
         ) {
             DependencyReadiness::Ready => VmmLifecycleEligibility::Running,
@@ -338,6 +343,7 @@ mod tests {
             vec![ResourceRef::parse("Device/kvm").unwrap()],
             vec![ResourceRef::parse("Network/cloud").unwrap()],
             vec![ResourceRef::parse("Volume/state").unwrap()],
+            vec![ResourceRef::parse("VolumeBinding/state-share").unwrap()],
             vec![AttachmentRef::new("launch-ticket").unwrap()],
         )
         .unwrap();
@@ -389,7 +395,8 @@ mod tests {
 
     #[test]
     fn legacy_three_dependency_readiness_remains_a_strict_subset() {
-        let graph = BootstrapGraph::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
+        let graph = BootstrapGraph::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            .unwrap();
         assert_eq!(
             graph.readiness(true, true, true),
             DependencyReadiness::Ready
