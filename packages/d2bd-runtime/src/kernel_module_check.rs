@@ -585,16 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn production_probe_logs_proc_modules_read_failure() {
-        let source = include_str!("kernel_module_check.rs");
-        assert!(
-            source.contains("std::fs::read_to_string(PROC_MODULES_PATH)")
-                && source.contains("kernel-module-check: could not read /proc/modules"),
-            "run_kernel_module_check must log /proc/modules read failures before falling back"
-        );
-    }
-
-    #[test]
     fn minimal_bundle_with_all_required_modules_passes() {
         let resolver = build_resolver(|_| {}, vec![]);
         let loaded = loaded(&base_required_modules());

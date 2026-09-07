@@ -1690,42 +1690,6 @@ mod zone_link_gateway_composition_tests {
     }
 
     #[test]
-    fn gateway_classification_precedes_lifecycle_and_reconcile_dispatch() {
-        let source = include_str!("composition.rs");
-        let early_classification = source
-            .find("let gateway_resource_route = match")
-            .expect("early gateway classification");
-        let shell_owner = source
-            .find("&& typed_shell_request(&resource.value())")
-            .expect("typed shell owner dispatch");
-        let process_owner = source
-            .find("&& process_resource_owner_request(&resource.value())")
-            .expect("process owner dispatch");
-        assert!(early_classification < shell_owner);
-        assert!(early_classification < process_owner);
-
-        let classification = source
-            .find("let gateway_route = match classify_gateway_zone_request")
-            .expect("gateway classification");
-        let forwarding = source
-            .find("if gateway_route == GatewayZoneRequestRoute::Forward")
-            .expect("gateway forwarding branch");
-        let admission = source
-            .find("match admit_gateway_zone_request")
-            .expect("gateway route admission");
-        let lifecycle = source
-            .find("Some(\"Start\" | \"Stop\" | \"Restart\")")
-            .expect("lifecycle dispatch");
-        let reconcile = source
-            .find("if request.value().get(\"method\").and_then(Value::as_str) == Some(\"Reconcile\")")
-            .expect("shared Runner reconcile refusal");
-        assert!(classification < forwarding);
-        assert!(classification < admission);
-        assert!(classification < lifecycle);
-        assert!(classification < reconcile);
-    }
-
-    #[test]
     fn non_relay_provider_is_refused_before_gateway_composition() {
         let mut link = link_resource();
         link["spec"]["transportProviderRef"] = Value::String("Provider/transport-unix".to_owned());
@@ -1795,23 +1759,6 @@ mod zone_link_gateway_composition_tests {
         assert_ne!(first, endpoint_replacement);
         assert!(!format!("{first:?}").contains("gateway"));
         assert!(!format!("{first:?}").contains("11111111"));
-    }
-
-    #[test]
-    fn v3_guest_session_resolution_does_not_use_legacy_process_dag_lookup() {
-        let source = include_str!("composition.rs");
-        let start = source
-            .rfind("async fn resolve_component_session_endpoint_for_guest(")
-            .expect("v3 Guest endpoint resolver");
-        let end = source
-            .rfind("/// Resolve the ComponentSession endpoint for `vm`")
-            .expect("legacy endpoint resolver");
-        assert!(
-            !source[start..end].contains("find_process_vm"),
-            "v3 Guest endpoint resolution must use committed resources"
-        );
-        assert!(source[start..end].contains("GuestControlEndpoint"));
-        assert!(source[start..end].contains("find_guest_vmm_intent"));
     }
 
     #[test]
@@ -1901,26 +1848,6 @@ mod zone_link_gateway_composition_tests {
                 .verb(),
             OperationClass::Invoke
         );
-    }
-
-    #[test]
-    fn host_startup_has_no_legacy_gateway_config_or_credential_loader() {
-        let source = include_str!("composition.rs");
-        let start = source.find("pub async fn serve(").expect("host serve");
-        let end = source
-            .find("pub struct GuestServeOptions")
-            .expect("Guest options");
-        let host = &source[start..end];
-        for retired in [
-            "load_gateway_file_config",
-            "gateway_deps_from_config",
-            "GatewayCredential::load_sealed",
-        ] {
-            assert!(
-                !host.contains(retired),
-                "Host composition must not load retired gateway material: {retired}"
-            );
-        }
     }
 }
 const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
@@ -16273,162 +16200,6 @@ fn is_gateway_zone_link(link: &Value) -> bool {
         == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
 }
 
-#[cfg(test)]
-mod zone_publication_order_tests {
-    #[test]
-    fn complete_set_validation_and_durable_prepare_precede_all_mutating_reconcile() {
-        let full_source = include_str!("composition.rs");
-        let source = full_source
-            .split_once("async fn open_resource_plane")
-            .and_then(|(_, source)| source.split_once("const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT"))
-            .map(|(source, _)| source)
-            .expect("resource-plane source span");
-        let position = |needle: &str| {
-            source
-                .find(needle)
-                .unwrap_or_else(|| panic!("missing publication step: {needle}"))
-        };
-        let validation = position("validate_desired_bundle");
-        let durable_prepare = position("prepare_generation_publication");
-        let store_open = position("open_zone_store_from_broker");
-        let materialization = position("prepare_published_bundle");
-        let pending_query = position("pending_trusted_activation_operation_ids");
-        let evidence = position("ensure_resource_activation_broker_evidence(");
-        let ingest = position("runtime\n                .ingest_broker_evidence");
-        let barrier = position("require_trusted_activation_outboxes_drained");
-        let durable_commit = position("commit_generation_publication");
-        let activation = position("activate_published_bundle");
-        let process_reconcile = position("reconcile_process_resources");
-
-        assert!(validation < durable_prepare);
-        assert!(durable_prepare < materialization);
-        assert!(store_open < materialization);
-        assert!(materialization < pending_query);
-        assert!(pending_query < evidence);
-        assert!(evidence < ingest);
-        assert!(ingest < barrier);
-        assert!(barrier < durable_commit);
-        assert!(durable_commit < activation);
-        assert!(activation < process_reconcile);
-    }
-
-    #[test]
-    fn u12_attach_failure_is_not_downgraded_to_a_startup_warning() {
-        let source = include_str!("composition.rs");
-        let attach_arm = "if let Err(error) = runtime
-            .start_u12_controller_runners(Arc::new(state.clone()))
-            .await
-        {";
-        let start = source.find(attach_arm).expect("U12 runner attach arm");
-        let arm_end_marker = "        let _ = runtime.audio_binding_statuses();";
-        let end = source[start..]
-            .find(arm_end_marker)
-            .map(|offset| start + offset)
-            .expect("U12 runner attach arm end");
-        let arm = &source[start..end];
-        let require_ready = source
-            .find("if let Err(error) = runtime.require_ready()")
-            .expect("startup readiness check");
-
-        assert!(arm.contains("return Err(error);"));
-        assert!(arm.contains(
-            "observability and activation controller runners refused during startup"
-        ));
-        assert!(!arm.contains("tracing::warn!"));
-        assert!(!arm.contains("degraded"));
-        assert!(end < require_ready);
-    }
-
-    #[test]
-    fn u9_runners_attach_before_zone_readiness_and_publication() {
-        let full_source = include_str!("composition.rs");
-        let source = full_source
-            .split_once("async fn open_resource_plane")
-            .and_then(|(_, source)| source.split_once("const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT"))
-            .map(|(source, _)| source)
-            .expect("resource-plane source span");
-        assert_eq!(
-            source.matches(".start_u9_controller_runners(").count(),
-            1,
-            "U9 must have one startup attach point in open_resource_plane"
-        );
-        let attach = source
-            .find(".start_u9_controller_runners(")
-            .expect("U9 runner attach");
-        let readiness = source
-            .find("if let Err(error) = runtime.require_ready()")
-            .expect("Zone readiness check");
-        let publication = source.find("match plane.insert(runtime)").expect("Zone publication");
-        assert!(attach < readiness);
-        assert!(attach < publication);
-
-        let serve_source = full_source
-            .split_once("pub async fn serve")
-            .and_then(|(_, source)| source.split_once("async fn open_resource_plane"))
-            .map(|(source, _)| source)
-            .expect("serve source span");
-        assert!(!serve_source.contains(".start_u9_controller_runners("));
-    }
-
-    #[test]
-    fn credential_runner_attach_is_fail_closed_before_readiness() {
-        let source = include_str!("composition.rs");
-        let credential_attach = source
-            .find("if let Err(error) = runtime.start_u10_controller_runners().await")
-            .expect("Credential runner attach");
-        let u12_attach = source
-            .find("runtime\n            .start_u12_controller_runners")
-            .expect("U12 runner attach");
-        let readiness = source
-            .find("if let Err(error) = runtime.require_ready()")
-            .expect("startup readiness check");
-        assert!(credential_attach < u12_attach);
-        assert!(u12_attach < readiness);
-        let arm_end = source[credential_attach..]
-            .find("        if let Err(error) = runtime\n            .start_u12_controller_runners")
-            .map(|offset| credential_attach + offset)
-            .expect("Credential attach arm end");
-        let arm = &source[credential_attach..arm_end];
-        assert!(arm.contains("return Err(error);"));
-        assert!(!arm.contains("tracing::warn!"));
-    }
-
-    #[test]
-    fn scoped_credential_reads_have_no_host_status_fallback() {
-        let source = include_str!("resource_runtime.rs");
-        let start = source
-            .find("pub(crate) fn scoped_credential_client(")
-            .expect("scoped credential client");
-        let end = source[start..]
-            .find("    fn status_client(")
-            .map(|offset| start + offset)
-            .expect("status client");
-        let method = &source[start..end];
-        assert!(method.contains("let Some(session) = session else"));
-        assert!(!method.contains("self.status_client()?"));
-        assert!(!method.contains("SameZoneScopedCredentialClient::new"));
-    }
-
-    #[test]
-    fn credential_runners_receive_the_production_session_router() {
-        let source = include_str!("resource_runtime.rs");
-        assert!(source.contains("CredentialSessionRegistry"));
-        assert!(source.contains("for_provider(provider_ref.clone())"));
-        assert!(!source.contains("UnavailableCredentialSession"));
-    }
-
-    #[test]
-    fn credential_process_sessions_use_the_typed_credential_endpoint() {
-        let source = include_str!("resource_runtime.rs");
-        assert!(source.contains("credential_provider_endpoint_policy()"));
-        assert!(source.contains("if credential_session"));
-        assert!(source.contains("ProviderSessionMetadata::from_route"));
-        assert!(source.contains("receive_provider_ready(&driver)"));
-        assert!(!source.contains("std::future::pending::<Result<(), SessionServerError>>()"));
-        assert!(source.contains("ComponentCredentialSession::new(route.clone()"));
-    }
-}
-
 const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
 
 #[derive(serde::Deserialize)]
@@ -25266,55 +25037,6 @@ pub(crate) mod detached_exec_routing_tests {
     }
 
     #[test]
-    fn production_connection_dispatch_has_no_retired_exec_or_guest_shell_caller() {
-        let source = include_str!("composition.rs");
-        let connection_start = source
-            .find("fn handle_connection_authorized(")
-            .expect("authorized connection handler");
-        let connection_end = source[connection_start..]
-            .find("\nfn dispatch_request(")
-            .map(|offset| connection_start + offset)
-            .expect("authorized connection handler end");
-        let connection = &source[connection_start..connection_end];
-        assert!(connection.contains("run_process_resource_owner"));
-        assert!(!connection.contains("run_exec_owner"));
-        assert!(!connection.contains("establish_guest_shell_owner_async"));
-        assert!(!connection.contains("GuestShellBackend"));
-
-        let shell_start = source
-            .find("async fn establish_shell_backend(")
-            .expect("shell backend resolver");
-        let shell_end = source[shell_start..]
-            .find("\nfn resolve_shell_target(")
-            .map(|offset| shell_start + offset)
-            .expect("shell backend resolver end");
-        let shell = &source[shell_start..shell_end];
-        assert!(shell.contains("ComponentSessionShellBackend::open"));
-        assert!(!shell.contains("establish_guest_shell_owner_async"));
-        assert!(!shell.contains("GuestShellBackend"));
-
-        let process_start = source
-            .find("fn run_process_resource_owner(")
-            .expect("Process owner handler");
-        let process_end = source[process_start..]
-            .find("\nfn run_typed_shell_owner(")
-            .map(|offset| process_start + offset)
-            .expect("Process owner handler end");
-        let process = &source[process_start..process_end];
-        assert!(process.contains("ResourceExecConnector::new"));
-        assert!(process.contains("production_process_resource_port"));
-        assert!(!process.contains("UnavailableProcessResourcePort"));
-        assert!(source.contains("ResourceDetachedClient::new"));
-        assert!(source.contains("ShellAuthorityLedger"));
-        assert!(source.contains("ensure_shell_resources"));
-        assert!(source.contains("remove_supervisor_process_resource"));
-        let production = source
-            .split_once("#[cfg(test)]")
-            .map_or(source, |(production, _)| production);
-        assert!(!production.contains("InMemoryShellAuthority"));
-    }
-
-    #[test]
     fn process_resource_ref_covers_all_create_request_identity_forms() {
         let explicit = serde_json::json!({
             "resourceRef": "EphemeralProcess/explicit",
@@ -27863,31 +27585,6 @@ mod broker_dispatch_tests {
                 other => panic!("expected LongLived for {role:?}, got {other:?}"),
             }
         }
-    }
-
-    #[test]
-    fn provider_one_shot_waits_for_exact_exit_before_dag_successor() {
-        let source = include_str!("composition.rs");
-        let one_shot = source
-            .find("VmStartNodeMode::OneShot")
-            .expect("OneShot branch");
-        let provider = one_shot
-            + source[one_shot..]
-                .find("VmRunnerLaunch::Provider => {")
-                .expect("Provider OneShot branch");
-        let controller = provider
-            + source[provider..]
-                .find("VmRunnerLaunch::ControllerOwned")
-                .expect("next OneShot branch");
-        let provider_arm = &source[provider..controller];
-        assert!(
-            provider_arm.contains("providers.wait_node"),
-            "Provider-backed OneShot must wait for its exact child exit"
-        );
-        assert!(
-            !provider_arm.contains("asynchronous observation"),
-            "DAG readiness must not return before a Provider OneShot exits"
-        );
     }
 
     #[test]

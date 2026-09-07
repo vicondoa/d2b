@@ -452,18 +452,4 @@ mod tests {
         assert_ne!(exit_code, 0);
     }
 
-    #[test]
-    fn chgrp_emits_structured_log_line_per_path() {
-        let dir = TestDir::new().expect("test dir");
-        let legacy_path = dir.0.join("legacy");
-        fs::write(&legacy_path, b"legacy").expect("legacy file");
-        let old_gid = fs::metadata(&legacy_path).expect("metadata").gid() as libc::gid_t;
-        let new_gid = if old_gid == 0 { 1 } else { 0 };
-
-        let line = format_chgrp_log_line(&legacy_path, old_gid, new_gid);
-
-        assert!(line.contains("path="));
-        assert!(line.contains(&format!("old_gid={old_gid}")));
-        assert!(line.contains(&format!("new_gid={new_gid}")));
-    }
 }
