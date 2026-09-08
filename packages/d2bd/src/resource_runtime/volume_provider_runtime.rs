@@ -783,8 +783,23 @@ impl DaemonVolumeProviderEffects {
         volume_ref: &ResourceRef,
         spec: &VolumeSpec,
     ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, SharedVolumeEffectError> {
-        desired_binding_intents(volume_ref.clone(), spec, false)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?
+        let intents = desired_binding_intents(volume_ref.clone(), spec, false)
+            .map_err(|error| {
+                tracing::warn!(
+                    volume = %volume_ref.to_canonical_string(),
+                    error = ?error,
+                    "volume binding intents rejected",
+                );
+                SharedVolumeEffectError::InvalidResource
+            })?;
+        // Attachment minting is infrequent; log the derived count so a
+        // silent zero-intent derivation is diagnosable from the journal.
+        tracing::warn!(
+            volume = %volume_ref.to_canonical_string(),
+            intents = intents.len(),
+            "volume binding intents derived",
+        );
+        intents
             .into_iter()
             .map(|intent| {
                 // Neutral binding payload only (KTD1): access mode and
