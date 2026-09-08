@@ -8358,6 +8358,29 @@ pub(super) struct CoreAssignmentAuthority {
     epoch: u64,
 }
 
+/// Whether a stored assignment fence conflicts with the current authority.
+///
+/// Identity drift (uid, role, target) or a strictly newer fence always
+/// conflicts: a concurrent or future writer is active. A stored fence that
+/// is older-or-equal on every version axis is a predecessor from a
+/// superseded authority (for example across a session reconnect that kept
+/// the epoch): the successor adopts it by proceeding, and re-fences on
+/// write, instead of dying and wedging the runner forever.
+pub(super) fn assignment_fence_conflict(
+    stored: &ResourceAssignmentFence,
+    uid: &ResourceUid,
+    authority: &CoreAssignmentAuthority,
+) -> bool {
+    stored.resource_uid != *uid
+        || stored.epoch > authority.epoch
+        || (stored.epoch == authority.epoch
+            && (stored.provider_generation > authority.provider_generation
+                || stored.controller_generation > authority.controller_generation
+                || stored.controller_role != authority.controller_role
+                || stored.target != authority.target
+                || stored.session_generation > authority.session_generation))
+}
+
 async fn abort_controller_runner_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
     for task in tasks.drain(..) {
         task.abort();
@@ -13407,16 +13430,7 @@ impl ZoneResourceRuntime {
                             _ => SourceError::Unavailable,
                         })?
                     {
-                        if stored.resource_uid != uid
-                            || stored.epoch > authority.epoch
-                            || (stored.epoch == authority.epoch
-                                && (stored.provider_generation != authority.provider_generation
-                                    || stored.controller_generation
-                                        != authority.controller_generation
-                                    || stored.controller_role != authority.controller_role
-                                    || stored.target != authority.target
-                                    || stored.session_generation != authority.session_generation))
-                        {
+                        if assignment_fence_conflict(&stored, &uid, &authority) {
                             return Err(SourceError::Integrity);
                         }
                         if stored.epoch == authority.epoch
@@ -13578,16 +13592,7 @@ impl ZoneResourceRuntime {
                             _ => SourceError::Unavailable,
                         })?
                     {
-                        if stored.resource_uid != uid
-                            || stored.epoch > authority.epoch
-                            || (stored.epoch == authority.epoch
-                                && (stored.provider_generation != authority.provider_generation
-                                    || stored.controller_generation
-                                        != authority.controller_generation
-                                    || stored.controller_role != authority.controller_role
-                                    || stored.target != authority.target
-                                    || stored.session_generation != authority.session_generation))
-                        {
+                        if assignment_fence_conflict(&stored, &uid, &authority) {
                             return Err(SourceError::Integrity);
                         }
                         if stored.epoch == authority.epoch
@@ -13930,16 +13935,7 @@ impl ZoneResourceRuntime {
                                 _ => SourceError::Unavailable,
                             })?
                         {
-                            if stored.resource_uid != uid
-                                || stored.epoch > authority.epoch
-                                || (stored.epoch == authority.epoch
-                                    && (stored.provider_generation != authority.provider_generation
-                                        || stored.controller_generation
-                                            != authority.controller_generation
-                                        || stored.controller_role != authority.controller_role
-                                        || stored.target != authority.target
-                                        || stored.session_generation != authority.session_generation))
-                            {
+                            if assignment_fence_conflict(&stored, &uid, &authority) {
                                 return Err(SourceError::Integrity);
                             }
                             if stored.epoch == authority.epoch
@@ -14354,19 +14350,7 @@ impl ZoneResourceRuntime {
                                     _ => SourceError::Unavailable,
                                 })?
                             {
-                                if stored.resource_uid != uid
-                                    || stored.epoch > authority.epoch
-                                    || (stored.epoch == authority.epoch
-                                        && (stored.provider_generation
-                                            != authority.provider_generation
-                                            || stored.controller_generation
-                                                != authority.controller_generation
-                                            || stored.controller_role
-                                                != authority.controller_role
-                                            || stored.target != authority.target
-                                            || stored.session_generation
-                                                != authority.session_generation))
-                                {
+                                if assignment_fence_conflict(&stored, &uid, &authority) {
                                     return Err(SourceError::Integrity);
                                 }
                                 if stored.epoch == authority.epoch
@@ -22151,15 +22135,7 @@ pub(super) fn shared_provider_assignment_fence_resolver(
                     _ => SourceError::Unavailable,
                 })?
             {
-                if stored.resource_uid != uid
-                    || stored.epoch > authority.epoch
-                    || (stored.epoch == authority.epoch
-                        && (stored.provider_generation != authority.provider_generation
-                            || stored.controller_generation != authority.controller_generation
-                            || stored.controller_role != authority.controller_role
-                            || stored.target != authority.target
-                            || stored.session_generation != authority.session_generation))
-                {
+                if assignment_fence_conflict(&stored, &uid, &authority) {
                     return Err(SourceError::Integrity);
                 }
                 if stored.epoch == authority.epoch && stored.resource_revision != revision {
@@ -23809,6 +23785,68 @@ mod tests {
             result,
             Err(ResourceRuntimeError::AuthorizationUnavailable)
         );
+    }
+    fn test_authority(
+        provider_generation: u64,
+        controller_generation: u64,
+        session_generation: u64,
+        epoch: u64,
+    ) -> CoreAssignmentAuthority {
+        CoreAssignmentAuthority {
+            provider_generation: ResourceGeneration::new(provider_generation).unwrap(),
+            controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
+            session_generation: ReconnectGeneration::new(session_generation).unwrap(),
+            controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
+            target: ResourceRef::parse("Zone/work").unwrap(),
+            epoch,
+        }
+    }
+
+    fn test_fence(
+        provider_generation: u64,
+        controller_generation: u64,
+        session_generation: u64,
+        epoch: u64,
+    ) -> ResourceAssignmentFence {
+        ResourceAssignmentFence {
+            resource_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            resource_revision: ZoneRevision::new(1),
+            provider_generation: ResourceGeneration::new(provider_generation).unwrap(),
+            controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
+            controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
+            target: ResourceRef::parse("Zone/work").unwrap(),
+            session_generation: ReconnectGeneration::new(session_generation).unwrap(),
+            epoch,
+            scope: ResourceAssignmentScope::Primary,
+        }
+    }
+
+    #[test]
+    fn fence_conflict_adopts_pure_predecessors_and_rejects_the_rest() {
+        let uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let authority = test_authority(3, 5, 7, 2);
+        // Identical: no conflict.
+        assert!(!assignment_fence_conflict(&test_fence(3, 5, 7, 2), &uid, &authority));
+        // Pure predecessor on every axis: adopt (session reconnect kept epoch).
+        assert!(!assignment_fence_conflict(&test_fence(2, 4, 6, 2), &uid, &authority));
+        assert!(!assignment_fence_conflict(&test_fence(3, 5, 6, 2), &uid, &authority));
+        // Older epoch: adopt regardless of generations.
+        assert!(!assignment_fence_conflict(&test_fence(9, 9, 9, 1), &uid, &authority));
+        // Strictly newer on any axis: conflict.
+        assert!(assignment_fence_conflict(&test_fence(3, 5, 8, 2), &uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(3, 6, 7, 2), &uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(4, 5, 7, 2), &uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(3, 5, 7, 3), &uid, &authority));
+        // Mixed drift is not pure staleness: conflict.
+        assert!(assignment_fence_conflict(&test_fence(2, 6, 6, 2), &uid, &authority));
+        // Identity drift always conflicts.
+        let mut foreign = test_fence(3, 5, 7, 2);
+        foreign.controller_role = ResourceRef::parse("Process/other").unwrap();
+        assert!(assignment_fence_conflict(&foreign, &uid, &authority));
+        let other_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        assert!(assignment_fence_conflict(&test_fence(3, 5, 7, 2), &other_uid, &authority));
     }
 
     #[test]

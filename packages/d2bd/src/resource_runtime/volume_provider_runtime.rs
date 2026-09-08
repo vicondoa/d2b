@@ -777,6 +777,12 @@ impl DaemonVolumeProviderEffects {
             }
         };
         let desired = Self::volume_children(&self.zone, resource.key().resource_ref(), &spec)?;
+        // XXX-host-bringup: temporary intent visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            desired = desired.len(),
+            "u7 volume desired children",
+        );
         let owner = self.stored(&runtime, resource).await?;
         let client = runtime
             .status_client()
@@ -2362,15 +2368,11 @@ pub(crate) async fn start(
                         _ => SourceError::Unavailable,
                     },
                 )? {
-                    if stored.resource_uid != uid
-                        || stored.epoch > authority.epoch
-                        || (stored.epoch == authority.epoch
-                            && (stored.provider_generation != authority.provider_generation
-                                || stored.controller_generation != authority.controller_generation
-                                || stored.controller_role != authority.controller_role
-                                || stored.target != authority.target
-                                || stored.session_generation != authority.session_generation))
-                    {
+                    if crate::resource_runtime::assignment_fence_conflict(
+                        &stored,
+                        &uid,
+                        &authority,
+                    ) {
                         return Err(SourceError::Integrity);
                     }
                     if stored.epoch == authority.epoch && stored.resource_revision != revision {
@@ -2405,7 +2407,10 @@ pub(crate) async fn start(
                 max_attempts: 3,
             },
         );
+        let span_kind = kind;
         tasks.push(tokio::spawn(async move {
+            // XXX-host-bringup: temporary spawn visibility; remove once green.
+            tracing::warn!(kind = ?span_kind, "u7 runner task started");
             if let Err(error) = runner.run().await {
                 tracing::warn!(
                     error = %error,
@@ -2625,6 +2630,61 @@ mod tests {
         let projection: VolumeBindingStatusResource =
             serde_json::from_value(value["status"]["resource"].clone()).expect("projection");
         assert!(!projection.ready);
+    }
+    #[test]
+    fn minted_binding_child_parses_under_strict_serving_contract() {
+        use d2b_provider_volume_local::testing::fixtures;
+        let zone = ZoneId::parse("work").expect("Zone");
+        let volume_ref = ResourceRef::parse("Volume/work-state").expect("volume ref");
+        let volume = fixtures::store_view_volume();
+        let intent = d2b_provider_volume_local::desired_binding_intents(
+            volume_ref.clone(),
+            &volume,
+            false,
+        )
+        .expect("admitted intents")
+        .into_iter()
+        .next()
+        .expect("store-view fixture declares one attachment");
+        // Mirror volume_children: neutral spec plus the serving providerRef.
+        let binding = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
+            intent.volume_ref().clone(),
+            intent.execution_ref().clone(),
+            intent.view().as_str(),
+            intent.access(),
+            intent.mount_path(),
+        )
+        .expect("binding spec");
+        let target = ResourceRef::new(
+            ResourceTypeName::parse(
+                d2b_provider_volume_virtiofs::VOLUME_BINDING_RESOURCE_TYPE.to_owned(),
+            )
+            .expect("binding type"),
+            ResourceName::parse(intent.name().as_str()).expect("binding name"),
+        );
+        let mut binding_spec = serde_json::to_value(&binding).expect("spec json");
+        binding_spec
+            .as_object_mut()
+            .expect("spec object")
+            .insert(
+                "providerRef".to_owned(),
+                Value::String("Provider/volume-virtiofs".to_owned()),
+            );
+        let canonical = DaemonVolumeProviderEffects::child_resource(
+            &zone,
+            &target,
+            &volume_ref,
+            binding_spec,
+        )
+        .expect("binding child payload");
+        let mut value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
+        // The store assigns the UID at mint; the serving parser requires it.
+        value["metadata"]["uid"] =
+            Value::String("123e4567-e89b-42d3-a456-426614174000".to_owned());
+        let stored = d2b_provider_volume_virtiofs::StoredBinding::from_resource_spec(&value)
+            .expect("minted binding parses under the strict contract");
+        assert_eq!(stored.spec().volume_ref(), &volume_ref);
+        assert_eq!(stored.uid().to_canonical_string(), "123e4567-e89b-42d3-a456-426614174000");
     }
 
     fn test_stored_resource(zone: &ZoneId, resource_ref: &ResourceRef) -> StoredResource {
