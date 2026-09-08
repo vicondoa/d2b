@@ -388,7 +388,10 @@ impl DaemonVolumeProviderEffects {
                     resource_types: vec![ResourceTypeName::parse("Process".to_owned())
                         .expect("process type")],
                     resource_names: Vec::new(),
-                    filters: Vec::new(),
+                    filters: vec![d2b_resource_store::StoreFilter {
+                        field: "owner.resourceRef".to_owned(),
+                        values: vec![provider.to_owned()],
+                    }],
                     page_size: 256,
                     cursor: cursor.take(),
                     projection: StoreProjection::Full,
