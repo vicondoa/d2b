@@ -833,6 +833,11 @@ impl DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
+        // XXX-host-bringup: temporary dispatch visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            "u7 binding reconcile entered",
+        );
         let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
         // U4: the reconciler input is the stored binding envelope
         // itself, parsed strictly against the neutral binding contract.
