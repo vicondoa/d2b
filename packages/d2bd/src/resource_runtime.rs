@@ -19189,23 +19189,18 @@ impl ZoneResourceRuntime {
                             }
                         })
                         .await;
-                    let transient = matches!(
-                        &outcome,
-                        Err(failure) if matches!(
-                            failure.error(),
-                            RunnerError::Source(
-                                SourceError::Timeout
-                                    | SourceError::Unavailable
-                                    | SourceError::Backpressure
-                            )
-                        )
-                    );
                     startup_attempt.store(
                         attempt + 1,
                         std::sync::atomic::Ordering::SeqCst,
                     );
                     let backoff_ms = std::cmp::min(1_000u64 << attempt, 5_000);
-                    if !transient {
+                    if !matches!(
+                        &outcome,
+                        Err(failure) if matches!(
+                            failure.error(),
+                            RunnerError::Source(_)
+                        )
+                    ) {
                         break outcome;
                     }
                     attempt += 1;
