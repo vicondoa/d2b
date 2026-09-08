@@ -17564,9 +17564,17 @@ impl ControllerSessionCoordinator {
                 }
                 continue;
             }
+            // XXX-host-bringup: temporary timing visibility; remove once green.
+            let establish_started = std::time::Instant::now();
             let setup = self
                 .establish_controller_session(&providers, endpoint, &mut registrar)
                 .await;
+            tracing::warn!(
+                provider = %context.provider_owner_ref().to_canonical_string(),
+                elapsed_ms = establish_started.elapsed().as_millis(),
+                ok = setup.is_ok(),
+                "controller session establish timing",
+            );
             let mut registrar = Some(registrar);
             let restored = match self.registrar.lock() {
                 Ok(mut slot) => {
