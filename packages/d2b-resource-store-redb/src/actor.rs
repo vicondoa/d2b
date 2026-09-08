@@ -535,16 +535,31 @@ impl WriterHandle {
                 }
             });
         }
-        match receiver.await {
+        let write_submitted = std::time::Instant::now();
+        let queued_depth = self.signals.writer_queue_depth.load(Ordering::Relaxed);
+        let result = match receiver.await {
             Ok(result) => result,
             Err(_) => {
                 let _ = self
                     .audit_intents
                     .lock()
                     .map(|mut intents| intents.remove(&sequence));
-                Err(crate::transaction::integrity("writer-response-closed"))
+                return Err(crate::transaction::integrity("writer-response-closed"));
             }
+        };
+        // Caller-observed write latency. redb writes are serialized on
+        // the single writer thread; a slow commit starves every runner's
+        // status writes and is worth seeing in the journal.
+        let elapsed_ms = write_submitted.elapsed().as_millis();
+        if elapsed_ms > 500 {
+            tracing::warn!(
+                sequence,
+                elapsed_ms = elapsed_ms as u64,
+                queued_depth = queued_depth as u64,
+                "slow store write",
+            );
         }
+        result
     }
 
     pub(crate) async fn authority_prepare(
@@ -2001,6 +2016,18 @@ impl ReadPool {
                 .map_err(|_| crate::transaction::integrity("read-response-closed"))?
         };
         let outcome = if result.is_ok() { "ok" } else { "error" };
+        // Caller-observed latency: the store is expected to answer reads
+        // in single-digit milliseconds; anything slower starves the
+        // runners' startup deadlines and is worth seeing in the journal.
+        let elapsed_ms = started.elapsed().as_millis();
+        if elapsed_ms > 500 {
+            tracing::warn!(
+                operation,
+                elapsed_ms = elapsed_ms as u64,
+                outcome,
+                "slow store read",
+            );
+        }
         self.telemetry.metric(
             StoreMetric::ReadDuration,
             BTreeMap::from([("operation".to_owned(), operation.to_owned())]),
