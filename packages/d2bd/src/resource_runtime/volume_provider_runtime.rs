@@ -807,6 +807,13 @@ impl DaemonVolumeProviderEffects {
         } else {
             SharedVolumeEffectPhase::Pending
         };
+        // XXX-host-bringup: temporary outcome visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            layout_phase = ?report.layout_phase,
+            phase = ?phase,
+            "u7 volume reconcile outcome",
+        );
         let resource_projection =
             serde_json::to_value(&report).map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         Ok(SharedVolumeEffectResult {
@@ -2274,6 +2281,12 @@ pub(crate) async fn start(
         .ok_or(super::ResourceRuntimeError::HandlerNotReady)?;
     let session_generation = subject_context.reconnect_generation();
     let (active_registrations, provider_generations) = provider_generations(runtime).await?;
+    // XXX-host-bringup: temporary start visibility; remove once green.
+    tracing::warn!(
+        zone = %runtime.zone.as_str(),
+        active = active_registrations.len(),
+        "u7 volume runner start decision",
+    );
     if active_registrations.is_empty() {
         return Ok(false);
     }
