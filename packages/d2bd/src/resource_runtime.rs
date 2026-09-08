@@ -8371,16 +8371,32 @@ pub(super) fn assignment_fence_conflict(
     uid: &ResourceUid,
     authority: &CoreAssignmentAuthority,
 ) -> bool {
-    stored.resource_uid != *uid
+    let conflict = stored.resource_uid != *uid
         || stored.epoch > authority.epoch
         || (stored.epoch == authority.epoch
             && (stored.provider_generation > authority.provider_generation
                 || stored.controller_generation > authority.controller_generation
                 || stored.controller_role != authority.controller_role
                 || stored.target != authority.target
-                || stored.session_generation > authority.session_generation))
+                || stored.session_generation > authority.session_generation));
+    // XXX-host-bringup: temporary conflict visibility; remove once green.
+    if conflict {
+        tracing::warn!(
+            stored_epoch = stored.epoch,
+            stored_provider_generation = stored.provider_generation.get(),
+            stored_controller_generation = stored.controller_generation.get(),
+            stored_session_generation = stored.session_generation.get(),
+            authority_epoch = authority.epoch,
+            authority_provider_generation = authority.provider_generation.get(),
+            authority_controller_generation = authority.controller_generation.get(),
+            authority_session_generation = authority.session_generation.get(),
+            same_role = stored.controller_role == authority.controller_role,
+            same_target = stored.target == authority.target,
+            "assignment fence conflict",
+        );
+    }
+    conflict
 }
-
 async fn abort_controller_runner_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
     for task in tasks.drain(..) {
         task.abort();
