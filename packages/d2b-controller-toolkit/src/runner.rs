@@ -3241,6 +3241,11 @@ where
             }
         }
     } else if context.is_expedited() {
+        tracing::warn!(
+            key = %context.target().resource_ref().to_canonical_string(),
+            key_zone = %context.target().zone().as_str(),
+            "expedited reconcile produced no status projection",
+        );
         Err(SourceError::Integrity)
     } else {
         Ok(())
