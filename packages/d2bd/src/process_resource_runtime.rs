@@ -2131,6 +2131,12 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 .await?
                 .is_some_and(|record| !controller_provider_identity_available(&record))
             {
+                // Bring-up observability: controllers hold until their
+                // Provider's owner identity is refreshed into this runner.
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    "controller provider identity unavailable; requeue",
+                );
                 return ReconcileResult::new(
                     resource.revision(),
                     resource.generation(),
@@ -2144,11 +2150,6 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 .map_err(|_| ProcessResourceRuntimeError::InvalidResource);
             }
             if matches!(process, DesiredProcess::Ephemeral(_))
-                && matches!(
-                    status_phase(&stored),
-                    Some(ResourcePhase::Succeeded | ResourcePhase::Failed)
-                )
-                && ephemeral_status_ttl_elapsed(&stored, &process)
             {
                 let mutation = d2b_core_controller::MutationIntent::new(
                     resource.key().resource_ref().clone(),
