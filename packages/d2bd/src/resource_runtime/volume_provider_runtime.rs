@@ -56,7 +56,7 @@ use d2b_provider_volume_virtiofs::{
 use d2b_resource_api::registered::RedbRegisteredControllerApi;
 use d2b_resource_store::{
     ResourceAssignmentFence, ResourceAssignmentScope, StoreErrorKind, StoreGetRequest,
-    StoreOperationContext, StoreProjection, StoredResource,
+    StoreListRequest, StoreOperationContext, StoreProjection, StoredResource,
 };
 use d2bd_runtime::resource_runtime_support::retry_transient_store_read;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
@@ -353,6 +353,78 @@ impl DaemonVolumeProviderEffects {
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(SharedVolumeEffectError::Unavailable)
+    }
+
+    /// Whether the serving provider's controller process is Ready.
+    ///
+    /// Effects hold while the controller is still starting so reconcile
+    /// work is never thrown at a half-started provider. A controller that
+    /// never appears reads as unhealthy; the caller retries.
+    async fn provider_controller_healthy(&self, kind: SharedVolumeResourceKind) -> bool {
+        let runtime = match self.runtime() {
+            Ok(runtime) => runtime,
+            Err(_) => return false,
+        };
+        let provider = kind.provider_ref();
+        let mut cursor = None;
+        loop {
+            let page = match runtime
+                .store
+                .list(StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "u7-controller-health".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "u7-controller-health".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: vec![ResourceTypeName::parse("Process".to_owned())
+                        .expect("process type")],
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 256,
+                    cursor: cursor.take(),
+                    projection: StoreProjection::Full,
+                })
+                .await
+            {
+                Ok(page) => page,
+                Err(_) => return false,
+            };
+            for resource in &page.resources {
+                let value = match serde_json::from_slice::<Value>(&resource.canonical_json) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let owner = value
+                    .pointer("/metadata/ownerRef")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let class = value
+                    .pointer("/spec/processClass")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let phase = value
+                    .pointer("/status/phase")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let observed = value.pointer("/status/observedGeneration").and_then(Value::as_u64);
+                let generation = value.pointer("/metadata/generation").and_then(Value::as_u64);
+                if owner == provider
+                    && class == "controller"
+                    && phase == "Ready"
+                    && observed == generation
+                {
+                    return true;
+                }
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        false
     }
 
     fn validate(
@@ -777,12 +849,6 @@ impl DaemonVolumeProviderEffects {
             }
         };
         let desired = Self::volume_children(&self.zone, resource.key().resource_ref(), &spec)?;
-        // XXX-host-bringup: temporary intent visibility; remove once green.
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            desired = desired.len(),
-            "u7 volume desired children",
-        );
         let owner = self.stored(&runtime, resource).await?;
         let client = runtime
             .status_client()
@@ -813,13 +879,6 @@ impl DaemonVolumeProviderEffects {
         } else {
             SharedVolumeEffectPhase::Pending
         };
-        // XXX-host-bringup: temporary outcome visibility; remove once green.
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            layout_phase = ?report.layout_phase,
-            phase = ?phase,
-            "u7 volume reconcile outcome",
-        );
         let resource_projection =
             serde_json::to_value(&report).map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         Ok(SharedVolumeEffectResult {
@@ -833,11 +892,6 @@ impl DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
-        // XXX-host-bringup: temporary dispatch visibility; remove once green.
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            "u7 binding reconcile entered",
-        );
         let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
         // U4: the reconciler input is the stored binding envelope
         // itself, parsed strictly against the neutral binding contract.
@@ -1013,12 +1067,6 @@ impl DaemonVolumeProviderEffects {
             );
             SharedVolumeEffectError::Unavailable
         })?;
-        // XXX-host-bringup: temporary state visibility; remove once green.
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            converged = converged.contains(context.target.resource_ref()),
-            "u7 binding children convergence",
-        );
         if !converged.contains(context.target.resource_ref()) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
@@ -1036,24 +1084,12 @@ impl DaemonVolumeProviderEffects {
             desired: Some(desired),
             fenced: false,
         };
-        // XXX-host-bringup: temporary state visibility; remove once green.
         let process_ref = binding
             .worker_process_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let endpoint_ref = binding
             .endpoint_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let process_phase = child_phase(&children, &process_ref);
-        let endpoint_phase = child_phase(&children, &endpoint_ref);
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            ready = crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children),
-            worker_phase = ?process_phase,
-            endpoint_phase = ?endpoint_phase,
-            worker_conditions = ?child_conditions(&children, &process_ref),
-            endpoint_conditions = ?child_conditions(&children, &endpoint_ref),
-            "u7 binding children readiness",
-        );
         if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
@@ -1081,16 +1117,6 @@ impl DaemonVolumeProviderEffects {
             d2b_provider_volume_virtiofs::BindingPhase::Failed => SharedVolumeEffectPhase::Failed,
             _ => SharedVolumeEffectPhase::Pending,
         };
-        // XXX-host-bringup: temporary outcome visibility; remove once green.
-        tracing::warn!(
-            resource = %resource.key().resource_ref().to_canonical_string(),
-            binding_phase = ?report.phase,
-            phase = ?phase,
-            worker = ?report.worker_process_ref,
-            socket = ?report.socket,
-            reason = ?report.reason,
-            "u7 binding reconcile outcome",
-        );
         // KTD3: the typed fenced projection travels with every
         // reconcile so the binding status carries it.
         let projection = serde_json::to_value(&report.projection)
@@ -1334,6 +1360,16 @@ impl SharedVolumeEffectExecutor for DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
+        // Startup health gate: hold effects Pending until the serving
+        // provider's controller is Ready, instead of throwing reconciles
+        // at a controller that is still starting. Finalize stays ungated
+        // so deletion always drains.
+        if !self.provider_controller_healthy(kind).await {
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
+        }
         match kind {
             SharedVolumeResourceKind::Volume => self.reconcile_volume(context, resource).await,
             SharedVolumeResourceKind::Binding => self.reconcile_binding(context, resource).await,
@@ -1433,45 +1469,6 @@ fn child_phase(children: &[StoredResource], target: &ResourceRef) -> Option<Stri
                         .pointer("/status/phase")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned)
-                })
-        })
-}
-
-fn child_conditions(children: &[StoredResource], target: &ResourceRef) -> Option<String> {
-    children
-        .iter()
-        .find(|child| child.resource_ref == *target)
-        .and_then(|child| {
-            serde_json::from_slice::<Value>(&child.canonical_json)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/status/conditions")
-                        .map(|conditions| {
-                            conditions
-                                .as_array()
-                                .map(|items| {
-                                    items
-                                        .iter()
-                                        .map(|item| {
-                                            format!(
-                                                "{}={}:{}",
-                                                item.pointer("/type")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or("?"),
-                                                item.pointer("/status")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or("?"),
-                                                item.pointer("/reason")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or("?")
-                                            )
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join(",")
-                                })
-                                .unwrap_or_default()
-                        })
                 })
         })
 }
@@ -2372,12 +2369,6 @@ pub(crate) async fn start(
         .ok_or(super::ResourceRuntimeError::HandlerNotReady)?;
     let session_generation = subject_context.reconnect_generation();
     let (active_registrations, provider_generations) = provider_generations(runtime).await?;
-    // XXX-host-bringup: temporary start visibility; remove once green.
-    tracing::warn!(
-        zone = %runtime.zone.as_str(),
-        active = active_registrations.len(),
-        "u7 volume runner start decision",
-    );
     if active_registrations.is_empty() {
         return Ok(false);
     }
@@ -2482,10 +2473,7 @@ pub(crate) async fn start(
                 max_attempts: 3,
             },
         );
-        let span_kind = kind;
         tasks.push(tokio::spawn(async move {
-            // XXX-host-bringup: temporary spawn visibility; remove once green.
-            tracing::warn!(kind = ?span_kind, "u7 runner task started");
             if let Err(error) = runner.run().await {
                 tracing::warn!(
                     error = %error,
