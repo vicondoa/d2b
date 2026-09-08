@@ -41,7 +41,7 @@ use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate
 use d2b_provider_system_systemd::SystemdProcessProvider;
 use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
-use d2b_session_unix::{PeerCredentials, prearmed_seqpacket_pair};
+use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
 use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
 use d2bd_runtime::vm_start_support::{
     is_durable_wayland_process_node, is_guest_owned_process_node,
@@ -661,25 +661,37 @@ pub(crate) struct ControllerBootstrapEndpoint {
 }
 
 impl ControllerBootstrapEndpoint {
-    pub(crate) fn into_parts(
-        self,
+    /// Duplicate the pre-armed bootstrap socket so each establish attempt
+    /// wraps its own descriptor while the marker keeps the original open.
+    pub(crate) fn daemon_socket(
+        &self,
+    ) -> Result<SeqpacketSocket, &'static str> {
+        let dup = self
+            .daemon_endpoint
+            .try_clone()
+            .map_err(|_| "provider-controller-bootstrap-dup")?;
+        SeqpacketSocket::from_parent_prearmed(dup)
+            .map_err(|_| "provider-controller-bootstrap-wrap")
+    }
+
+    /// Borrow the optional credential handoff and backend lease carried
+    /// beside the bootstrap socket.
+    pub(crate) fn handles(
+        &self,
     ) -> (
-        OwnedFd,
         Option<CredentialDeliveryKeyHandoff>,
         Option<Arc<dyn GuestCredentialBackendLease>>,
-        ControllerBootstrapContext,
     ) {
         (
-            self.daemon_endpoint,
-            self.delivery_key_handoff,
-            self.backend_lease,
-            self.context,
+            self.delivery_key_handoff.clone(),
+            self.backend_lease.clone(),
         )
     }
 
     pub(crate) fn context(&self) -> &ControllerBootstrapContext {
         &self.context
     }
+
 }
 
 enum ControllerBootstrapMarker {
@@ -1230,7 +1242,7 @@ impl ProductionProcessProviders {
                     return Err(error);
                 }
             };
-            if let Err(error) = self.remember_controller_bootstrap(ControllerBootstrapEndpoint {
+                if let Err(error) = self.remember_controller_bootstrap(ControllerBootstrapEndpoint {
                 daemon_endpoint,
                 delivery_key_handoff,
                 backend_lease,
@@ -2178,6 +2190,33 @@ impl ProductionProcessProviders {
             ControllerBootstrapMarker::Active(context.clone()),
         );
         true
+    }
+
+    /// Return a bootstrap whose establishment failed transiently to the
+    /// Pending state, so the next reconcile pass retries with the same
+    /// pre-armed socket. The controller retries its send for as long as
+    /// it lives; without this, one failed receive orphans it forever.
+    pub(crate) fn rearm_controller_bootstrap(
+        &self,
+        endpoint: ControllerBootstrapEndpoint,
+    ) -> bool {
+        let Ok(mut markers) = self.controller_bootstrap.lock() else {
+            return false;
+        };
+        let key = (
+            endpoint.context().zone().clone(),
+            endpoint.context().process_ref().clone(),
+        );
+        if matches!(
+            markers.get(&key),
+            Some(ControllerBootstrapMarker::Establishing(current))
+                if *current == *endpoint.context()
+        ) {
+            markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn fail_controller_bootstrap(&self, context: &ControllerBootstrapContext) -> bool {

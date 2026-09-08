@@ -295,6 +295,7 @@ const PROVIDER_DELIVERY_KEY_PROTOCOL: &str = "d2b-provider-delivery-key-v1";
 ///
 /// The private key is held only in a zeroizing owner until the Provider
 /// consumes this value to establish its delivery session.
+#[derive(Clone)]
 pub struct CredentialDeliveryKeyHandoff {
     provider_private: zeroize::Zeroizing<[u8; 32]>,
     provider_public: [u8; 32],

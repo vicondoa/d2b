@@ -17594,10 +17594,16 @@ impl ControllerSessionCoordinator {
                 }
                 continue;
             }
-            // XXX-host-bringup: temporary timing visibility; remove once green.
+            // A transient bootstrap failure re-arms the endpoint (the
+            // establish attempt dups the pre-armed socket) instead of
+            // orphaning the retrying controller.
             let establish_started = std::time::Instant::now();
             let setup = self
-                .establish_controller_session(&providers, endpoint, &mut registrar)
+                .establish_controller_session(
+                    &providers,
+                    &endpoint,
+                    &mut registrar,
+                )
                 .await;
             tracing::warn!(
                 provider = %context.provider_owner_ref().to_canonical_string(),
@@ -17638,7 +17644,10 @@ impl ControllerSessionCoordinator {
                     let _ = service_task.await;
                     drop(ingress);
                 }
-                providers.fail_controller_bootstrap(&context);
+                // Re-arm instead of dropping: the controller retries its
+                // bootstrap send for as long as it lives, and one failed
+                // receive must not orphan it.
+                providers.rearm_controller_bootstrap(endpoint);
                 return Err(ResourceRuntimeError::AuthenticationUnavailable);
             }
             match setup.expect("controller setup result present") {
@@ -18493,10 +18502,11 @@ impl ControllerSessionCoordinator {
         result.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
     }
 
+    #[allow(clippy::type_complexity)]
     async fn establish_controller_session(
         &self,
         providers: &crate::process_provider_runtime::ProductionProcessProviders,
-        endpoint: crate::process_provider_runtime::ControllerBootstrapEndpoint,
+        endpoint: &crate::process_provider_runtime::ControllerBootstrapEndpoint,
         registrar: &mut ZoneRegistrar,
     ) -> Result<
         (
@@ -18510,7 +18520,6 @@ impl ControllerSessionCoordinator {
         ),
         ResourceRuntimeError,
     > {
-        let (daemon_endpoint, delivery_key_handoff, backend_lease, context) = endpoint.into_parts();
         let authentication_error = |stage: &'static str| {
             tracing::warn!(
                 zone = %self.zone.as_str(),
@@ -18530,7 +18539,10 @@ impl ControllerSessionCoordinator {
             );
             ResourceRuntimeError::AuthenticationUnavailable
         };
-        let daemon_socket = SeqpacketSocket::from_parent_prearmed(daemon_endpoint)
+        let context = endpoint.context().clone();
+        let (delivery_key_handoff, backend_lease) = endpoint.handles();
+        let daemon_socket = endpoint
+            .daemon_socket()
             .map_err(|_| authentication_error("bootstrap-socket"))?;
         let (resource_socket, credentials) = receive_controller_bootstrap(&daemon_socket)
             .await
