@@ -1045,6 +1045,16 @@ impl DaemonVolumeProviderEffects {
             d2b_provider_volume_virtiofs::BindingPhase::Failed => SharedVolumeEffectPhase::Failed,
             _ => SharedVolumeEffectPhase::Pending,
         };
+        // XXX-host-bringup: temporary outcome visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            binding_phase = ?report.phase,
+            phase = ?phase,
+            worker = ?report.worker_process_ref,
+            socket = ?report.socket,
+            reason = ?report.reason,
+            "u7 binding reconcile outcome",
+        );
         // KTD3: the typed fenced projection travels with every
         // reconcile so the binding status carries it.
         let projection = serde_json::to_value(&report.projection)
