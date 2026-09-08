@@ -1013,6 +1013,12 @@ impl DaemonVolumeProviderEffects {
             );
             SharedVolumeEffectError::Unavailable
         })?;
+        // XXX-host-bringup: temporary state visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            converged = converged.contains(context.target.resource_ref()),
+            "u7 binding children convergence",
+        );
         if !converged.contains(context.target.resource_ref()) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
@@ -1030,6 +1036,12 @@ impl DaemonVolumeProviderEffects {
             desired: Some(desired),
             fenced: false,
         };
+        // XXX-host-bringup: temporary state visibility; remove once green.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            ready = crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children),
+            "u7 binding children readiness",
+        );
         if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
