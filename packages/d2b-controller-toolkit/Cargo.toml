@@ -15,6 +15,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 schemars.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
 
 [dev-dependencies]
 d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap", features = ["production-rss-fixture"] }

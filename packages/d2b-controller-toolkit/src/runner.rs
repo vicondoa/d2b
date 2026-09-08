@@ -1367,6 +1367,12 @@ where
                     match watched {
                 Ok(WatchEvent::Hint(hint)) => {
                     if !descriptor_owns_key(&descriptor, &hint.key) {
+                        tracing::warn!(
+                            key = %hint.key.resource_ref().to_canonical_string(),
+                            key_zone = %hint.key.zone().as_str(),
+                            watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                            "runner dropped watch hint outside its descriptor",
+                        );
                         return Err(RunnerError::Source(SourceError::Integrity));
                     }
                     let lane = hint.lane;
@@ -1571,6 +1577,10 @@ where
                         queue.resource_count(),
                         workers.len(),
                     );
+                    tracing::warn!(
+                        watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                        "runner watch failed fatally",
+                    );
                     return Err(RunnerError::Source(SourceError::Integrity));
                 }
                     }
@@ -1641,6 +1651,12 @@ fn initial_hints(
         .into_iter()
         .map(|resource| {
             if !descriptor_owns_key(descriptor, &resource.key) {
+                tracing::warn!(
+                    key = %resource.key.resource_ref().to_canonical_string(),
+                    key_zone = %resource.key.zone().as_str(),
+                    watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                    "runner dropped relist snapshot outside its descriptor",
+                );
                 return Err(RunnerError::Source(SourceError::Integrity));
             }
             let canonical = resource.key.resource_ref().to_canonical_string();
