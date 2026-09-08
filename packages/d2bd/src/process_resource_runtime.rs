@@ -2100,6 +2100,22 @@ impl ResourceReconciler for ProcessResourceReconciler {
                     resource.generation(),
                 ));
             };
+            // Bring-up observability: one warn per controller reconcile pass
+            // naming the arm taken, so stalls are attributable.
+            if matches!(&process, DesiredProcess::Process(spec) if spec.execution().process_class() == d2b_contracts_resource::v3::process::ProcessClass::Controller)
+            {
+                let arm = if active_process_finalizer_for_values(&stored, &provider_ref).is_none() {
+                    "finalizer-add"
+                } else {
+                    "pass"
+                };
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    arm,
+                    phase = ?status_phase(&stored),
+                    "controller reconcile arm",
+                );
+            }
             if active_process_finalizer_for_values(&stored, &provider_ref).is_none() {
                 let finalizer =
                     process_finalizer(&provider_ref).unwrap_or(PROCESS_RUNTIME_FINALIZER);
