@@ -45,9 +45,18 @@ async fn run() -> Result<(), ()> {
     let bootstrap = SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD).map_err(|_| ())?;
     let expected_peer = bootstrap.acceptor_peer_credentials().map_err(|_| ())?;
     loop {
-        match run_session(&bootstrap, expected_peer).await? {
-            SessionDisposition::Reconnect => tokio::time::sleep(Duration::from_millis(100)).await,
-            SessionDisposition::Shutdown => return Ok(()),
+        // A well-behaved controller rides out transient daemon stalls:
+        // setup failures retry like reconnects instead of exiting and
+        // orphaning the control plane until an operator intervenes.
+        match run_session(&bootstrap, expected_peer).await {
+            Ok(SessionDisposition::Reconnect) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Ok(SessionDisposition::Shutdown) => return Ok(()),
+            Err(()) => {
+                eprintln!("acceptance-controller: session setup failed, retrying");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
         }
     }
 }
