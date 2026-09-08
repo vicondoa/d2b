@@ -15870,6 +15870,11 @@ async fn open_resource_plane(
             }
             return Err(error);
         }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if let Err(error) = runtime.start_u10_controller_runners().await {
             tracing::error!(
                 zone = %runtime.zone().as_str(),
@@ -15881,6 +15886,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15897,6 +15907,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15913,6 +15928,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15929,6 +15949,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
