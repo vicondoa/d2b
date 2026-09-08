@@ -4285,7 +4285,7 @@ impl RegisteredControllerApi for GuestProcessSource {
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
         let descriptor = descriptor.clone();
         async move {
-            if self.descriptor().map_err(|_| SourceError::Integrity)? != descriptor {
+            if !descriptor.same_routing(&self.descriptor().map_err(|_| SourceError::Integrity)?) {
                 // A stale descriptor here means a rebind raced this watch open.
                 tracing::warn!("process runner descriptor changed under active watch");
                 return Err(SourceError::Integrity);

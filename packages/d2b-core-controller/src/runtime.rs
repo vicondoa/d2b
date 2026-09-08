@@ -418,7 +418,7 @@ where
         &self,
         descriptor: &ControllerDescriptor,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        let valid = descriptor == &self.descriptor && validate_watch_plan(descriptor);
+        let valid = descriptor.same_routing(&self.descriptor) && validate_watch_plan(descriptor);
         async move {
             if !valid {
                 return Err(SourceError::Integrity);
@@ -431,7 +431,7 @@ where
         &self,
         descriptor: &ControllerDescriptor,
     ) -> impl Future<Output = Result<InitialList, SourceError>> + Send {
-        let valid = descriptor == &self.descriptor && validate_watch_plan(descriptor);
+        let valid = descriptor.same_routing(&self.descriptor) && validate_watch_plan(descriptor);
         let future = self.api.list_initial(descriptor);
         async move {
             if !valid {
@@ -446,7 +446,7 @@ where
         descriptor: &ControllerDescriptor,
         after_revision: ZoneRevision,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        let valid = descriptor == &self.descriptor && validate_watch_plan(descriptor);
+        let valid = descriptor.same_routing(&self.descriptor) && validate_watch_plan(descriptor);
         let future = self.api.open_watch(descriptor, after_revision);
         async move {
             if !valid {

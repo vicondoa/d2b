@@ -247,8 +247,35 @@ impl ControllerIdentity {
     pub const fn provider_ref(&self) -> &ResourceRef {
         &self.provider_ref
     }
-}
 
+    /// Borrow the process reference this controller session runs as.
+    pub const fn process_ref(&self) -> &ResourceRef {
+        &self.process_ref
+    }
+
+    /// Borrow the host reference this controller session runs on.
+    pub const fn host_ref(&self) -> &ResourceRef {
+        &self.host_ref
+    }
+
+    /// Borrow the guest reference this controller session serves, if any.
+    pub const fn guest_ref(&self) -> Option<&ResourceRef> {
+        self.guest_ref.as_ref()
+    }
+
+    /// Whether two identities route to the same controller, ignoring
+    /// version drift. Generations advance on reconnects and snapshots
+    /// while the controller stays the same; only a changed ref means a
+    /// different controller.
+    pub fn same_routing(&self, other: &Self) -> bool {
+        self.zone == other.zone
+            && self.controller_ref == other.controller_ref
+            && self.provider_ref == other.provider_ref
+            && self.process_ref == other.process_ref
+            && self.host_ref == other.host_ref
+            && self.guest_ref == other.guest_ref
+    }
+}
 impl core::fmt::Debug for ControllerIdentity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ControllerIdentity")
@@ -592,6 +619,24 @@ impl ControllerDescriptor {
     /// Borrow the registered identity.
     pub const fn identity(&self) -> &ControllerIdentity {
         &self.identity
+    }
+
+    /// Whether two descriptors route to the same controller, ignoring
+    /// version drift in generations. Structural drift (refs, types,
+    /// selectors, rights, fingerprints, execution policy) still differs.
+    pub fn same_routing(&self, other: &Self) -> bool {
+        self.identity.same_routing(&other.identity)
+            && self.resources == other.resources
+            && self.provider_capabilities == other.provider_capabilities
+            && self.process_domains == other.process_domains
+            && self.verbs == other.verbs
+            && self.watch_selectors == other.watch_selectors
+            && self.dependency_selectors == other.dependency_selectors
+            && self.consumes_owner_triggers == other.consumes_owner_triggers
+            && self.finalizers == other.finalizers
+            && self.service_fingerprints == other.service_fingerprints
+            && self.schema_fingerprints == other.schema_fingerprints
+            && self.execution == other.execution
     }
 
     /// Borrow ResourceType/version/retry declarations.

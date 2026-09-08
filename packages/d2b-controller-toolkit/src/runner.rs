@@ -900,67 +900,44 @@ where
         failed_operation: &mut Option<&'static str>,
     ) -> Result<(), RunnerError> {
         let startup_deadline = phase_deadline(self.clock.as_ref(), self.config.deadline_tick);
+        let descriptor = bounded_phase(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.reconciler.describe(),
+        )
+        .await
+        .map_err(phase_runner_error)?
+        .map_err(|_| RunnerError::Controller)?;
         if self.config.max_attempts == 0 {
             return Err(RunnerError::InvalidDescriptor);
         }
-        // Generations can advance between source construction and runner
-        // start (sessions landing, policy snapshots). A describe made
-        // against the fresh state then mismatches the registered
-        // descriptor; re-describe and restart startup instead of dying on
-        // the first stale epoch. Persistent mismatch still fails loudly
-        // once the budget is spent.
-        let mut startup_attempts = 0;
-        let (descriptor, initial) = loop {
-            let descriptor = bounded_phase(
-                self.clock.as_ref(),
-                startup_deadline,
-                &shutdown,
-                self.reconciler.describe(),
-            )
-            .await
-            .map_err(phase_runner_error)?
-            .map_err(|_| RunnerError::Controller)?;
-            let attempt = async {
-                bounded_source(
-                    self.clock.as_ref(),
-                    startup_deadline,
-                    &shutdown,
-                    self.source.register(&descriptor),
-                )
-                .await?;
-                let initial = retry_source_phase(
-                    self.clock.as_ref(),
-                    startup_deadline,
-                    &shutdown,
-                    self.config.max_attempts,
-                    || self.source.list_initial(&descriptor),
-                )
-                .await?;
-                retry_source_phase(
-                    self.clock.as_ref(),
-                    startup_deadline,
-                    &shutdown,
-                    self.config.max_attempts,
-                    || {
-                        self.source
-                            .open_watch(&descriptor, initial.snapshot_revision)
-                    },
-                )
-                .await?;
-                Ok(initial)
-            }
-            .await;
-            match attempt {
-                Ok(initial) => break (descriptor, initial),
-                Err(RunnerError::Source(SourceError::Integrity))
-                    if startup_attempts < self.config.max_attempts =>
-                {
-                    startup_attempts += 1;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-        };
+        bounded_source(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.source.register(&descriptor),
+        )
+        .await?;
+        let initial = retry_source_phase(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.config.max_attempts,
+            || self.source.list_initial(&descriptor),
+        )
+        .await?;
+        retry_source_phase(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.config.max_attempts,
+            || {
+                self.source
+                    .open_watch(&descriptor, initial.snapshot_revision)
+            },
+        )
+        .await?;
         if let Some(startup) = startup.take() {
             startup(Ok(()));
         }
@@ -3392,7 +3369,6 @@ mod tests {
         list_initial_backpressure_remaining: AtomicUsize,
         watch_open_conflicts_remaining: AtomicUsize,
         watch_open_backpressure_remaining: AtomicUsize,
-        register_integrity_remaining: AtomicUsize,
     }
 
     impl FakeSource {
@@ -3444,7 +3420,6 @@ mod tests {
                     list_initial_backpressure_remaining: AtomicUsize::new(0),
                     watch_open_conflicts_remaining: AtomicUsize::new(0),
                     watch_open_backpressure_remaining: AtomicUsize::new(0),
-                    register_integrity_remaining: AtomicUsize::new(0),
                 }),
                 watch_tx,
             )
@@ -3528,19 +3503,6 @@ mod tests {
             &self,
             _descriptor: &ControllerDescriptor,
         ) -> impl Future<Output = Result<(), SourceError>> + Send {
-            if self
-                .register_integrity_remaining
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    if remaining > 0 {
-                        Some(remaining - 1)
-                    } else {
-                        None
-                    }
-                })
-                .is_ok()
-            {
-                return std::future::ready(Err(SourceError::Integrity));
-            }
             std::future::ready(Ok(()))
         }
 
@@ -4896,44 +4858,6 @@ mod tests {
         );
     }
     #[test]
-    fn startup_retries_past_transient_descriptor_drift() {
-        let (reconciler, _entered, source, _watch_tx) = harness(Vec::new(), 1);
-        source
-            .register_integrity_remaining
-            .store(1, Ordering::Release);
-        source
-            .initial
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        let startup = Arc::new(Mutex::new(None));
-        let startup_result = Arc::clone(&startup);
-        let result = block_on(Runner::new(reconciler, source, config()).run_with_startup(
-            move |result| {
-                *startup_result
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
-            },
-        ));
-        // The first register hit descriptor drift; startup re-described and
-        // continued to the list phase, which fails Unavailable on the
-        // cleared initial snapshot. Without the retry the error would be
-        // Integrity from register.
-        assert_eq!(
-            startup
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_ref()
-                .copied(),
-            Some(Err(RunnerError::Source(SourceError::Unavailable)))
-        );
-        assert_eq!(
-            result.unwrap_err().error(),
-            RunnerError::Source(SourceError::Unavailable)
-        );
-    }
-
-    #[test]
     fn observer_retains_watch_failure_signal_when_runner_returns_error() {
         let (reconciler, _entered, source, watch_tx) = harness(Vec::new(), 1);
         let observer = Arc::new(RecordingObserver::default());
@@ -4962,6 +4886,62 @@ mod tests {
         assert!(observations.iter().any(|observation| {
             observation.counter.is_none() && observation.outcome == RunnerOutcome::Failed
         }));
+    }
+    #[test]
+    fn same_routing_ignores_generation_drift_only() {
+        let base = descriptor(
+            identity(),
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(base.same_routing(&base.clone()));
+        let drifted_identity = ControllerIdentity::new(
+            ZoneId::parse("work").unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ControllerGeneration::new(4).unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            ResourceGeneration::new(9).unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ResourceRef::parse("Host/system").unwrap(),
+            None,
+        )
+        .unwrap();
+        let drifted = descriptor(
+            drifted_identity,
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(base.same_routing(&drifted));
+        assert!(drifted.same_routing(&base));
+        let other_zone = ControllerIdentity::new(
+            ZoneId::parse("other").unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ControllerGeneration::new(1).unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ResourceRef::parse("Host/system").unwrap(),
+            None,
+        )
+        .unwrap();
+        let zoned = descriptor(
+            other_zone,
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(!base.same_routing(&zoned));
     }
 
     #[test]
