@@ -8379,7 +8379,8 @@ pub(super) fn assignment_fence_conflict(
                 || stored.controller_role != authority.controller_role
                 || stored.target != authority.target
                 || stored.session_generation > authority.session_generation));
-    // XXX-host-bringup: temporary conflict visibility; remove once green.
+    // A conflict kills the reconciling runner; log both sides so the
+    // succession that produced it is diagnosable from the journal alone.
     if conflict {
         tracing::warn!(
             stored_epoch = stored.epoch,
@@ -18480,7 +18481,8 @@ impl ControllerSessionCoordinator {
             );
             ResourceRuntimeError::AuthenticationUnavailable
         };
-        // XXX-host-bringup: capture swallowed handshake causes; keep if valuable.
+        // Capture the underlying handshake cause alongside the stage; a
+        // bare stage cannot distinguish load flakes from real breakage.
         let authentication_error_caused = |stage: &'static str, error: &dyn core::fmt::Debug| {
             tracing::warn!(
                 zone = %self.zone.as_str(),

@@ -1332,7 +1332,7 @@ impl ProductionProcessProviders {
         target_readiness_digest: ConfigurationDigest,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        // XXX-host-bringup: temporary spawn visibility; remove once green.
+        // Spawn attempts are rare; log each with its target for startup tracing.
         tracing::warn!(
             process = %resource.process_ref().to_canonical_string(),
             provider = %resource.process_provider_ref().to_canonical_string(),

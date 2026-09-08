@@ -4286,7 +4286,7 @@ impl RegisteredControllerApi for GuestProcessSource {
         let descriptor = descriptor.clone();
         async move {
             if self.descriptor().map_err(|_| SourceError::Integrity)? != descriptor {
-                // XXX-host-bringup: temporary mismatch visibility; remove once green.
+                // A stale descriptor here means a rebind raced this watch open.
                 tracing::warn!("process runner descriptor changed under active watch");
                 return Err(SourceError::Integrity);
             }
