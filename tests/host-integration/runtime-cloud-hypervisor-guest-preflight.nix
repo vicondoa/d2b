@@ -512,11 +512,10 @@ pkgs.testers.runNixOSTest {
         "timeout 10s runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process 2>/dev/null | "
-        "jq -c '.resources[] | {name: .metadata.name, ownerRef: .metadata.ownerRef, "
-        "class: .spec.processClass, phase: .status.phase, "
+        "jq -c '.resources[] | select(.name | startswith(\"vol-vfd\")) | "
+        "{name: .metadata.name, phase: .status.phase, "
         "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
-        "outcome: .status.outcome, update: .status.update} | "
-        "select(.name | startswith(\"vol-vfd\"))}' >&2 || true; "
+        "outcome: .status.outcome, update: .status.update}' >&2 || true; "
         "exit 1"
     )
     machine.wait_until_succeeds(
