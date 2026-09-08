@@ -1037,9 +1037,19 @@ impl DaemonVolumeProviderEffects {
             fenced: false,
         };
         // XXX-host-bringup: temporary state visibility; remove once green.
+        let process_ref = binding
+            .worker_process_ref()
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let endpoint_ref = binding
+            .endpoint_ref()
+            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let process_phase = child_phase(&children, &process_ref);
+        let endpoint_phase = child_phase(&children, &endpoint_ref);
         tracing::warn!(
             resource = %resource.key().resource_ref().to_canonical_string(),
             ready = crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children),
+            worker_phase = ?process_phase,
+            endpoint_phase = ?endpoint_phase,
             "u7 binding children readiness",
         );
         if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
@@ -1048,12 +1058,6 @@ impl DaemonVolumeProviderEffects {
                 resource_projection: None,
             });
         }
-        let process_ref = binding
-            .worker_process_ref()
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
-        let endpoint_ref = binding
-            .endpoint_ref()
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let process_ready = child_phase(&children, &process_ref).as_deref() == Some("Ready");
         let endpoint_ready = child_phase(&children, &endpoint_ref).as_deref() == Some("Ready");
         let zone_token = BoundedToken::parse(self.zone.as_str().to_owned())
