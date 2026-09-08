@@ -2253,6 +2253,22 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 StatusPersistence::Pending,
             )
             .map_err(|_| ProcessResourceRuntimeError::InvalidResource)
+            .inspect(|result| {
+                // Bring-up observability: which phase did the reconcile
+                // compute for this process?
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    phase = ?result.status_candidate().and_then(|status| {
+                        serde_json::from_slice::<serde_json::Value>(status)
+                            .ok()
+                            .and_then(|value| {
+                                value.pointer("/status/phase").cloned()
+                            })
+                    }),
+                    persisted = ?result.status_persistence(),
+                    "process reconcile effect outcome",
+                );
+            })
         };
         result
     }
