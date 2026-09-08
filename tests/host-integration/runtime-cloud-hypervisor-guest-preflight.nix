@@ -514,7 +514,9 @@ pkgs.testers.runNixOSTest {
         "d2b --zone work --json list Process 2>/dev/null | "
         "jq -c '.resources[] | {name: .metadata.name, ownerRef: .metadata.ownerRef, "
         "class: .spec.processClass, phase: .status.phase, "
-        "conditions: [.status.conditions[]? | {type: .type, reason: .reason}]}' >&2 || true; "
+        "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
+        "outcome: .status.outcome, update: .status.update} | "
+        "select(.name | startswith(\"vol-vfd\"))}' >&2 || true; "
         "exit 1"
     )
     machine.wait_until_succeeds(
