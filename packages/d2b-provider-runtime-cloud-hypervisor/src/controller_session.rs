@@ -59,21 +59,33 @@ pub(crate) fn run_from_fd10() -> i32 {
         Ok(runtime) => runtime,
         Err(_) => return crate::RUNTIME_UNAVAILABLE_EXIT,
     };
-    match runtime.block_on(async {
-        let bootstrap = SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD)
-            .map_err(|_| ControllerSessionError::Bootstrap)?;
-        run_controller_session(bootstrap).await
-    }) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("{error}");
-            crate::RUNTIME_UNAVAILABLE_EXIT
+    runtime.block_on(async {
+        let bootstrap = match SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD) {
+            Ok(bootstrap) => bootstrap,
+            Err(_) => return crate::RUNTIME_UNAVAILABLE_EXIT,
+        };
+        // A dead controller wedges the whole guest chain until an operator
+        // intervenes; transient daemon stalls and session resets retry
+        // instead of exiting.
+        let mut backoff_ms = 500u64;
+        loop {
+            match run_controller_session(&bootstrap).await {
+                Ok(()) => return 0,
+                Err(ControllerSessionError::Assignment) => {
+                    eprintln!("cloud-hypervisor-controller: assignment stream failed, retrying");
+                }
+                Err(error) => {
+                    eprintln!("cloud-hypervisor-controller: {error}, retrying");
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms = (backoff_ms * 2).min(5_000);
         }
-    }
+    })
 }
 
 pub(crate) async fn run_controller_session(
-    bootstrap: SeqpacketSocket,
+    bootstrap: &SeqpacketSocket,
 ) -> Result<(), ControllerSessionError> {
     let expected_peer = bootstrap
         .acceptor_peer_credentials()
@@ -297,7 +309,7 @@ mod tests {
         let (controller_fd, daemon_fd) = prearmed_seqpacket_pair().unwrap();
         let controller_socket = SeqpacketSocket::from_parent_prearmed(controller_fd).unwrap();
         let daemon_socket = SeqpacketSocket::from_parent_prearmed(daemon_fd).unwrap();
-        let controller_task = tokio::spawn(run_controller_session(controller_socket));
+        let controller_task = tokio::spawn(async move { run_controller_session(&controller_socket).await });
 
         let (resource_socket, credentials) = match receive_bootstrap(&daemon_socket).await {
             Ok(value) => value,
@@ -398,7 +410,7 @@ mod tests {
         let (controller_fd, daemon_fd) = prearmed_seqpacket_pair().unwrap();
         let controller_socket = SeqpacketSocket::from_parent_prearmed(controller_fd).unwrap();
         let daemon_socket = SeqpacketSocket::from_parent_prearmed(daemon_fd).unwrap();
-        let controller_task = tokio::spawn(run_controller_session(controller_socket));
+        let controller_task = tokio::spawn(async move { run_controller_session(&controller_socket).await });
 
         let (resource_socket, credentials) = receive_bootstrap(&daemon_socket).await.unwrap();
         let policy = controller_resource_endpoint_policy();
