@@ -996,7 +996,7 @@ impl DaemonVolumeProviderEffects {
             .map_err(|_| SharedVolumeEffectError::Unavailable)?;
         let converged = crate::binding_child_resource_runtime::reconcile_owned_children(
             &runtime.store,
-            &client,
+            client.as_ref(),
             &self.zone,
             &[crate::binding_child_resource_runtime::OwnedChildOwner {
                 resource: owner.clone(),
@@ -1005,7 +1005,14 @@ impl DaemonVolumeProviderEffects {
             }],
         )
         .await
-        .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = %resource.key().resource_ref().to_canonical_string(),
+                error = ?error,
+                "U7 binding child reconciliation failed",
+            );
+            SharedVolumeEffectError::Unavailable
+        })?;
         if !converged.contains(context.target.resource_ref()) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
