@@ -1050,6 +1050,11 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        // XXX-host-bringup: temporary spawn visibility; remove once green.
+        tracing::warn!(
+            template = %spec.execution().template().as_str(),
+            "resource launch started",
+        );
         let context = context
             .with_execution_ref(spec.execution().execution_ref())
             .with_user_ref(spec.execution().user_ref());
