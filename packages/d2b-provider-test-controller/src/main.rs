@@ -72,11 +72,17 @@ async fn run_session(
             .keepalive_interval_ms
             .min(policy.limits.keepalive_timeout_ms),
     ));
-    let (daemon_endpoint, controller_endpoint) = prearmed_seqpacket_pair().map_err(|_| ())?;
+    let (daemon_endpoint, controller_endpoint) =
+        prearmed_seqpacket_pair().map_err(|_| ())?;
     let controller_socket =
         SeqpacketSocket::from_parent_prearmed(controller_endpoint).map_err(|_| ())?;
-    send_bootstrap(&bootstrap, daemon_endpoint).await?;
-    let transport = controller_transport(controller_socket, &policy, expected_peer)?;
+    if let Err(()) = send_bootstrap(&bootstrap, daemon_endpoint).await {
+        eprintln!("acceptance-controller: bootstrap send failed, retrying");
+        return Err(());
+    }
+    let transport = controller_transport(controller_socket, &policy, expected_peer).map_err(|_| {
+        eprintln!("acceptance-controller: transport build failed, retrying");
+    })?;
     let mut session = match SessionEngine::establish_initiator(
         transport,
         policy,
@@ -86,7 +92,10 @@ async fn run_session(
     .await
     {
         Ok(session) => session,
-        Err(_) => return Err(()),
+        Err(_) => {
+            eprintln!("acceptance-controller: handshake failed, retrying");
+            return Err(());
+        }
     };
     let assignment_stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|_| ())?;
     session
@@ -95,7 +104,9 @@ async fn run_session(
             CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
             CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
         )
-        .map_err(|_| ())?;
+        .map_err(|_| {
+            eprintln!("acceptance-controller: assignment stream open failed, retrying");
+        })?;
 
     loop {
         match tokio::time::timeout(poll_interval, session.receive()).await {
