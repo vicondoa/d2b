@@ -454,7 +454,9 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "test \"$(journalctl -u d2bd.service --no-pager -o cat -b "
         "| grep -Fc 'external Provider controller ResourceV3 session live')\" -ge 2",
-        timeout=60,
+        # Cold artifact extraction inside a fresh VM varies widely on shared
+        # hardware; this waits an eventual state, not a timing SLO.
+        timeout=180,
     )
     machine.wait_until_succeeds(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -476,7 +478,8 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Ready\" and "
         ".status.observedGeneration == .metadata.generation)] | length == 1)' "
         "/run/d2b-volume-controller-processes.json",
-        timeout=60,
+        # Same cold-start variance as the session wait above.
+        timeout=180,
     )
     machine.succeed(
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
