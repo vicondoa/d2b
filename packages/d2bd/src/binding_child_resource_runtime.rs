@@ -664,6 +664,23 @@ async fn apply_mutation_batch(
     if mutations.is_empty() {
         return Ok(());
     }
+    // Child commits are rare; log every batch with its targets so a
+    // silently missing serving child is diagnosable from the journal.
+    tracing::warn!(
+        owner = %owner.resource_ref.to_canonical_string(),
+        targets = ?mutations
+            .iter()
+            .map(|mutation| match mutation {
+                OwnerMutation::Create { target, .. }
+                | OwnerMutation::Repair { target, .. }
+                | OwnerMutation::RequestDeletion { target, .. }
+                | OwnerMutation::Delete { target, .. } => {
+                    target.to_canonical_string()
+                }
+            })
+            .collect::<Vec<_>>(),
+        "binding child commit batch",
+    );
     let mut request = wire::CommitBatchRequest::new();
     let operation = crate::resource_runtime::bounded_operation_id(&format!(
         "binding-child-batch-{}-{}",

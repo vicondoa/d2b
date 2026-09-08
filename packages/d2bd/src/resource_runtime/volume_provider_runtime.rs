@@ -2457,10 +2457,23 @@ pub(crate) async fn start(
             .api
             .registered_controller_api(subject, authorization_state.clone(), assignments)
             .map_err(|_| super::ResourceRuntimeError::ResourceApiBindFailed)?;
-        let allowed_types = descriptor
+        let mut allowed_types = descriptor
             .resource_types()
             .cloned()
             .collect::<BTreeSet<_>>();
+        if kind == SharedVolumeResourceKind::Binding {
+            // The binding runner commits its own serving children
+            // (virtiofsd worker Process + private Endpoint) as owner-child
+            // mutations; their targets must pass the same fence gate.
+            allowed_types.insert(
+                ResourceTypeName::parse("Process".to_owned())
+                    .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?,
+            );
+            allowed_types.insert(
+                ResourceTypeName::parse("Endpoint".to_owned())
+                    .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?,
+            );
+        }
         let resolver_store = Arc::clone(&runtime.store);
         let resolver_zone = runtime.zone.clone();
         let resolver_authority = Arc::clone(&authority);
