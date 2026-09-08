@@ -1,23 +1,27 @@
-//! The volume-virtiofs Export controller.
+//! The volume-virtiofs VolumeBinding controller.
 //!
-//! It reconciles `virtiofs.d2bus.org.Export` resources and never writes a
-//! Volume row: it reads the referenced Volume only to resolve the named
-//! view and the target Guest's vcpu count.
+//! It reconciles `VolumeBinding` resources and never writes a Volume
+//! row: it reads the referenced Volume only to resolve the named view
+//! and the target Guest's vcpu count. It is the sole author of the
+//! binding status projection (KTD3) and writes the fenced projection on
+//! every reconcile.
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::volume::{ViewSpec, VolumeSpec};
+use d2b_contracts_resource::v3::resource_status::{ResourcePhase, StatusCode};
+use d2b_contracts_resource::v3::volume::{AttachmentAccess, ViewSpec, VolumeSpec};
+use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
-use crate::error::VirtiofsExportError;
-use crate::export::{EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, ExportSpec};
-use crate::port::{ExportPhase, ExportStatusReport, LaunchedWorker, VirtiofsExportEffectPort};
+use crate::error::VirtiofsBindingError;
+use crate::bindings::{VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, StoredBinding};
+use crate::port::{BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort};
 use crate::worker::{VirtiofsdWorkerPlan, WorkerSandbox};
 
 /// The exact shared-Runner contract for `volume-virtiofs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VirtiofsRunnerContract {
-    /// The qualified Export ResourceType owned by this Provider.
+    /// The standard ResourceType served by this Provider.
     pub resource_type: &'static str,
-    /// The finalizer installed on Export resources.
+    /// The finalizer installed on VolumeBinding resources.
     pub finalizer: &'static str,
     /// Bounded repair interval in seconds.
     pub repair_interval_secs: u64,
@@ -28,32 +32,42 @@ pub struct VirtiofsRunnerContract {
 /// Return the production volume-virtiofs Runner contract.
 pub const fn virtiofs_runner_contract() -> VirtiofsRunnerContract {
     VirtiofsRunnerContract {
-        resource_type: EXPORT_RESOURCE_TYPE,
-        finalizer: EXPORT_FINALIZER,
+        resource_type: VOLUME_BINDING_RESOURCE_TYPE,
+        finalizer: VOLUME_BINDING_FINALIZER,
         repair_interval_secs: 30,
         watched_configuration_is_dependency: true,
     }
 }
 
-/// Resolve the named view an Export selects, read-only.
+/// Resolve the named view a binding selects, read-only.
 pub fn resolve_view<'spec>(
     volume: &'spec VolumeSpec,
-    export: &ExportSpec,
-) -> Result<&'spec ViewSpec, VirtiofsExportError> {
+    binding: &StoredBinding,
+) -> Result<&'spec ViewSpec, VirtiofsBindingError> {
     volume
         .views()
-        .get(export.view().as_str())
-        .ok_or(VirtiofsExportError::ViewNotFound)
+        .get(binding.spec().view().as_str())
+        .ok_or(VirtiofsBindingError::ViewNotFound)
+}
+
+/// Map a coarse serving phase onto the universal lifecycle phase.
+pub const fn binding_phase(phase: BindingPhase) -> ResourcePhase {
+    match phase {
+        BindingPhase::Pending => ResourcePhase::Pending,
+        BindingPhase::Ready => ResourcePhase::Ready,
+        BindingPhase::Degraded => ResourcePhase::Degraded,
+        BindingPhase::Failed => ResourcePhase::Failed,
+    }
 }
 
 /// The volume-virtiofs controller over its injected effect port.
 #[derive(Debug)]
-pub struct VirtiofsExportController<P> {
+pub struct VirtiofsBindingController<P> {
     provider: BoundedToken,
     port: P,
 }
 
-impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
+impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
     /// Build a controller over the injected port.
     pub fn new(port: P) -> Self {
         Self {
@@ -67,98 +81,146 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
         &self.provider
     }
 
-    /// The finalizer this controller adds, and only to an Export.
+    /// The finalizer this controller adds, and only to a VolumeBinding.
     pub const fn finalizer(&self) -> &'static str {
-        EXPORT_FINALIZER
+        VOLUME_BINDING_FINALIZER
     }
 
-    /// Reconcile one Export to a serving worker and report its status.
+    /// Reconcile one binding to a serving worker and report its status.
+    ///
+    /// Terminal failures surface a Failed phase with a stable reason
+    /// instead of collapsing to Pending (KTD5). Every reconcile whose
+    /// verdict could be computed writes the fenced public status
+    /// projection through the effect port under the virtiofs controller
+    /// identity (KTD3); a rejected write fails the reconcile closed.
     pub async fn reconcile(
         &self,
-        export: &ExportSpec,
+        binding: &StoredBinding,
         volume: &VolumeSpec,
         vcpu_count: u32,
         principal: BoundedToken,
-    ) -> Result<ExportStatusReport, VirtiofsExportError> {
-        let failed = |reason: VirtiofsExportError| ExportStatusReport {
+    ) -> Result<BindingStatusReport, VirtiofsBindingError> {
+        let report = self
+            .compute_report(binding, volume, vcpu_count, principal)
+            .await?;
+        self.port
+            .write_binding_status(&self.provider, binding, &report.projection)
+            .await?;
+        Ok(report)
+    }
+
+    /// Compute one reconcile verdict without writing status.
+    async fn compute_report(
+        &self,
+        binding: &StoredBinding,
+        volume: &VolumeSpec,
+        vcpu_count: u32,
+        principal: BoundedToken,
+    ) -> Result<BindingStatusReport, VirtiofsBindingError> {
+        let failed = |reason: VirtiofsBindingError| BindingStatusReport {
             provider: self.provider.clone(),
-            phase: ExportPhase::Failed,
-            export_ready: false,
+            phase: BindingPhase::Failed,
+            binding_ready: false,
             guest_mount_ready: false,
             worker_process_ref: None,
             socket: None,
             reason: Some(reason),
+            projection: Self::projection(binding, false, Some(reason)),
         };
 
-        if export.access() == d2b_contracts_resource::v3::volume::AttachmentAccess::SharedWrite {
-            return Ok(failed(VirtiofsExportError::SharedWriteUnsupported));
+        if binding.spec().access() == AttachmentAccess::SharedWrite {
+            return Ok(failed(VirtiofsBindingError::SharedWriteUnsupported));
         }
         WorkerSandbox::conformant().assert_conformant()?;
-        let view = resolve_view(volume, export)?;
-        let plan = match VirtiofsdWorkerPlan::for_export(export, view, vcpu_count, principal) {
+        let view = match resolve_view(volume, binding) {
+            Ok(view) => view,
+            Err(reason) => return Ok(failed(reason)),
+        };
+        let plan = match VirtiofsdWorkerPlan::for_binding(binding, view, vcpu_count, principal) {
             Ok(plan) => plan,
             Err(error) => return Ok(failed(error)),
         };
-        if export.view().as_str() == "ro-store"
-            && !self.port.observe_store_view_marker(export).await?
+        if binding.spec().view().as_str() == "ro-store"
+            && !self.port.observe_store_view_marker(binding).await?
         {
-            return Ok(ExportStatusReport {
+            return Ok(BindingStatusReport {
                 provider: self.provider.clone(),
-                phase: ExportPhase::Pending,
-                export_ready: false,
+                phase: BindingPhase::Pending,
+                binding_ready: false,
                 guest_mount_ready: false,
                 worker_process_ref: None,
                 socket: None,
-                reason: Some(VirtiofsExportError::StoreViewMarkerMissing),
+                reason: Some(VirtiofsBindingError::StoreViewMarkerMissing),
+                projection: Self::projection(
+                    binding,
+                    false,
+                    Some(VirtiofsBindingError::StoreViewMarkerMissing),
+                ),
             });
         }
 
-        let worker = match self.port.launch_worker(export, &plan).await {
+        let worker = match self.port.launch_worker(binding, &plan).await {
             Ok(worker) => worker,
             Err(error) => return Ok(failed(error)),
         };
-        let export_ready = self.port.observe_socket(&worker).await?;
-        let guest_mount_ready = if export_ready {
-            self.port.observe_guest_mount(export).await?
+        let binding_ready = self.port.observe_socket(&worker).await?;
+        let guest_mount_ready = if binding_ready {
+            self.port.observe_guest_mount(binding).await?
         } else {
             false
         };
 
-        let (phase, reason) = match (export_ready, guest_mount_ready) {
-            (true, true) => (ExportPhase::Ready, None),
+        let (phase, reason) = match (binding_ready, guest_mount_ready) {
+            (true, true) => (BindingPhase::Ready, None),
             (true, false) => (
-                ExportPhase::Degraded,
-                Some(VirtiofsExportError::GuestMountNotReady),
+                BindingPhase::Degraded,
+                Some(VirtiofsBindingError::GuestMountNotReady),
             ),
             (false, _) => (
-                ExportPhase::Pending,
-                Some(VirtiofsExportError::ExportNotReady),
+                BindingPhase::Pending,
+                Some(VirtiofsBindingError::BindingNotReady),
             ),
         };
-        Ok(ExportStatusReport {
+        Ok(BindingStatusReport {
             provider: self.provider.clone(),
             phase,
-            export_ready,
+            binding_ready,
             guest_mount_ready,
             worker_process_ref: Some(worker.process_ref),
             socket: Some(worker.socket),
             reason,
+            projection: Self::projection(binding, phase == BindingPhase::Ready, reason),
         })
     }
 
-    /// Drain one Export before its finalizer is cleared.
+    /// Build the fenced public projection for one reconcile.
+    fn projection(
+        binding: &StoredBinding,
+        ready: bool,
+        reason: Option<VirtiofsBindingError>,
+    ) -> VolumeBindingStatusResource {
+        VolumeBindingStatusResource {
+            ready,
+            fence: binding.fence(),
+            reason: reason.map(|reason| reason.code()).map(|code| {
+                StatusCode::parse(code).expect("frozen error codes are valid status codes")
+            }),
+        }
+    }
+
+    /// Drain one binding before its finalizer is cleared.
     ///
     /// The owned worker and Endpoint are deleted first, then the guest
     /// mount is confirmed absent. A mount that is still present blocks
-    /// the drain rather than being force-cleared.
+    /// the drain rather than being force-cleared (KTD6).
     pub async fn drain(
         &self,
-        export: &ExportSpec,
+        binding: &StoredBinding,
         worker: &LaunchedWorker,
-    ) -> Result<(), VirtiofsExportError> {
+    ) -> Result<(), VirtiofsBindingError> {
         self.port.delete_worker(worker).await?;
-        if self.port.observe_guest_mount(export).await? {
-            return Err(VirtiofsExportError::DrainIncomplete);
+        if self.port.observe_guest_mount(binding).await? {
+            return Err(VirtiofsBindingError::DrainIncomplete);
         }
         Ok(())
     }

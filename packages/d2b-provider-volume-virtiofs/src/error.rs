@@ -6,14 +6,14 @@ use std::fmt;
 /// report.
 ///
 /// The set is closed and each variant renders one stable
-/// `^[a-z][a-z0-9-]*$` code. A code never echoes an export socket path,
+/// `^[a-z][a-z0-9-]*$` code. A code never echoes a binding socket path,
 /// a shared directory, a unit name, argv, or a numeric identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
-pub enum VirtiofsExportError {
-    /// The Export does not satisfy a frozen conformance bound.
-    InvalidExport,
-    /// The Export names a Volume view the referenced Volume does not
+pub enum VirtiofsBindingError {
+    /// The binding does not satisfy a frozen conformance bound.
+    InvalidBinding,
+    /// The binding names a Volume view the referenced Volume does not
     /// declare.
     ViewNotFound,
     /// The requested access exceeds the rights the selected view grants.
@@ -23,57 +23,67 @@ pub enum VirtiofsExportError {
     SandboxInvariantViolated,
     /// The worker could not be launched through the effect port.
     WorkerLaunchFailed,
-    /// The export socket did not become ready inside the deadline.
-    ExportNotReady,
+    /// The binding socket did not become ready inside the deadline.
+    BindingNotReady,
     /// The guest did not report the mount present inside the deadline.
     GuestMountNotReady,
-    /// The Export could not drain because a child is still present.
+    /// The binding could not drain because a child is still present.
     DrainIncomplete,
     /// A store-view readiness marker is absent or non-empty.
     StoreViewMarkerMissing,
-    /// Shared-write is not a supported Export access mode.
+    /// Shared-write is not a supported binding access mode.
     SharedWriteUnsupported,
+    /// A status projection was rejected because its fence no longer
+    /// matches the stored binding (KTD3 server-side fence validation).
+    StaleFence,
+    /// A status or finalizer mutation was rejected because the writer is
+    /// not the virtiofs controller identity (KTD3).
+    UnauthorizedWriter,
 }
 
-impl VirtiofsExportError {
+impl VirtiofsBindingError {
     /// Return the stable lower-kebab code for this failure.
     pub const fn code(self) -> &'static str {
         match self {
-            Self::InvalidExport => "invalid-export",
+            Self::InvalidBinding => "invalid-binding",
             Self::ViewNotFound => "view-not-found",
             Self::ViewRightsInsufficient => "view-rights-insufficient",
             Self::SandboxInvariantViolated => "sandbox-invariant-violated",
             Self::WorkerLaunchFailed => "worker-launch-failed",
-            Self::ExportNotReady => "export-not-ready",
+            Self::BindingNotReady => "binding-not-ready",
             Self::GuestMountNotReady => "guest-mount-not-ready",
             Self::DrainIncomplete => "drain-incomplete",
             Self::StoreViewMarkerMissing => "store-view-marker-missing",
             Self::SharedWriteUnsupported => "shared-write-unsupported",
+            Self::StaleFence => "stale-fence",
+            Self::UnauthorizedWriter => "unauthorized-writer",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 10] = [
-        Self::InvalidExport,
+    pub const ALL: [Self; 12] = [
+        Self::InvalidBinding,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
         Self::SandboxInvariantViolated,
         Self::WorkerLaunchFailed,
-        Self::ExportNotReady,
+        Self::BindingNotReady,
         Self::GuestMountNotReady,
         Self::DrainIncomplete,
         Self::StoreViewMarkerMissing,
         Self::SharedWriteUnsupported,
+        Self::StaleFence,
+        Self::UnauthorizedWriter,
     ];
 }
 
-impl fmt::Display for VirtiofsExportError {
+impl fmt::Display for VirtiofsBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.code())
     }
 }
 
-impl std::error::Error for VirtiofsExportError {}
+impl std::error::Error for VirtiofsBindingError {}
 
 #[cfg(test)]
 mod tests {
@@ -81,7 +91,7 @@ mod tests {
 
     #[test]
     fn every_code_is_unique_and_matches_the_frozen_grammar() {
-        let mut codes: Vec<&str> = VirtiofsExportError::ALL
+        let mut codes: Vec<&str> = VirtiofsBindingError::ALL
             .iter()
             .map(|error| error.code())
             .collect();

@@ -903,6 +903,7 @@ fn cloud_graph() -> BootstrapGraph {
         vec![ResourceRef::parse("Network/work").unwrap()],
         vec![ResourceRef::parse("Volume/store").unwrap()],
         vec![],
+        vec![],
     )
     .unwrap()
 }
@@ -1126,7 +1127,12 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                             .cloned()
                             .map(|resource_ref| (resource_ref, ResourcePhase::Pending))
                             .collect(),
-                        false,
+                        graph
+                            .bindings
+                            .iter()
+                            .cloned()
+                            .map(|resource_ref| (resource_ref, false))
+                            .collect(),
                         false,
                     )
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?

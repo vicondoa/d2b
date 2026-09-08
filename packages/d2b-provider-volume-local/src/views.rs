@@ -3,7 +3,7 @@
 //! A mount or attachment always selects a named view; it never names a
 //! Volume subtree directly. volume-local is the sole Volume writer and
 //! the sole admitter of attachments, so the single-writer and
-//! shared-write rules are enforced here before any Export is requested.
+//! shared-write rules are enforced here before any binding is minted.
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
@@ -46,10 +46,10 @@ pub fn admit_access(view: &ViewSpec, access: AttachmentAccess) -> Result<(), Vol
     }
 }
 
-/// One admitted virtiofs attachment, ready to become one owned Export.
+/// One admitted virtiofs attachment, ready to become one owned VolumeBinding.
 ///
 /// It carries only typed references and the selected view name. The
-/// resolved host path, the export socket path, and the numeric socket
+/// resolved host path, the serving socket path, and the numeric socket
 /// group never appear here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentPlan {
@@ -65,17 +65,18 @@ pub struct AttachmentPlan {
     pub settings: AttachmentSettings,
 }
 
-/// Admit every declared attachment of a Volume.
-///
 /// Rejects a view that does not exist, an access level the view's rights
-/// do not cover, a second simultaneous writer, and `shared-write` when
-/// the selected attachment Provider does not declare it.
+/// do not cover, a second simultaneous writer, `shared-write` when
+/// the selected attachment Provider does not declare it, serving settings
+/// outside the frozen serving default, and a second virtiofs attachment
+/// naming a (guest, mount path) pair that an earlier attachment already
+/// claimed (AE5).
 pub fn admit_attachments(
     spec: &VolumeSpec,
     supports_shared_write: bool,
 ) -> Result<Vec<AttachmentPlan>, VolumeLocalError> {
     let mut writers = 0usize;
-    let mut plans = Vec::with_capacity(spec.attachments().len());
+    let mut plans: Vec<AttachmentPlan> = Vec::with_capacity(spec.attachments().len());
     for attachment in spec.attachments() {
         let view = resolve_view(spec, attachment.view())?;
         admit_access(view, attachment.access())?;
@@ -90,6 +91,15 @@ pub fn admit_attachments(
             return Err(VolumeLocalError::SingleWriterConflict);
         }
         if attachment.transport() == AttachmentTransport::Virtiofs {
+            if attachment.settings() != &AttachmentSettings::default() {
+                return Err(VolumeLocalError::AttachmentSettingsUnsupported);
+            }
+            if plans.iter().any(|plan| {
+                plan.execution_ref == *attachment.execution_ref()
+                    && plan.mount_path == attachment.mount_path()
+            }) {
+                return Err(VolumeLocalError::DuplicateMountPath);
+            }
             plans.push(AttachmentPlan {
                 execution_ref: attachment.execution_ref().clone(),
                 view: attachment.view().clone(),

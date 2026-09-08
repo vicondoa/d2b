@@ -127,6 +127,92 @@ let
     };
   };
 
+  # Self-contained eval for the U7 binding-chain cases. The storage-volume
+  # surface imports only the volume-local modules, so this module mirrors the
+  # umbrella d2b options they read or write (same pattern as the
+  # bundle-artifacts-compiler case fixtures) and declares the full resource
+  # set in one module: merging partial overrides against the base would
+  # shadow sibling resources under these scoped declarations.
+  bindingVolume = (mkEval [({ lib, ... }: {
+    options.d2b = {
+      zones = lib.mkOption { type = lib.types.anything; default = { }; };
+      artifacts = lib.mkOption { type = lib.types.anything; default = { }; };
+      site = lib.mkOption { type = lib.types.anything; default = { }; };
+      daemonExperimental.enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+      };
+      daemonExperimental.defaultFlipEvidenceDir = lib.mkOption {
+        type = lib.types.str;
+        default = "/var/lib/d2b/validated";
+      };
+      _resourceCompiler = lib.mkOption {
+        type = lib.types.anything;
+        default = { };
+        internal = true;
+        visible = false;
+      };
+      _bundle = lib.mkOption {
+        type = lib.types.anything;
+        default = { };
+        internal = true;
+        visible = false;
+      };
+      _zoneCompiler = lib.mkOption {
+        type = lib.types.anything;
+        default = { };
+        internal = true;
+        visible = false;
+      };
+    };
+    config = {
+      d2b.artifacts.volume-local = {
+        package = volumeArtifact;
+        type = "provider";
+      };
+      d2b.artifacts.volume-virtiofs = {
+        package = volumeArtifact;
+        type = "provider";
+      };
+      d2b.zones.local-root.resources = {
+        alice.type = "User";
+        volume-local = {
+          type = "Provider";
+          spec = {
+            artifactId = "volume-local";
+            config.controllerExecutionRef = "Host/host-system";
+          };
+        };
+        volume-virtiofs = {
+          type = "Provider";
+          spec = {
+            artifactId = "volume-virtiofs";
+            config.controllerExecutionRef = "Host/host-system";
+          };
+        };
+        host-system = {
+          type = "Host";
+          spec.providerRef = "Provider/volume-local";
+        };
+        guest = {
+          type = "Guest";
+          spec = { };
+        };
+        state = volumeResource // {
+          spec = volumeResource.spec // {
+            attachments = [{
+              executionRef = "Guest/guest";
+              transport = "virtiofs";
+              view = "controller";
+              access = "read-only";
+              mountPath = "/state";
+            }];
+          };
+        };
+      };
+    };
+  })]).config;
+
   validVolume = (mkEval [ volumeBase ]).config;
   nixClosureVolume = (mkEval [
     volumeBase
@@ -689,5 +775,48 @@ in
         }];
       });
     expected = true;
+  };
+
+
+  # --- U7 binding-chain emission cases ---
+  # KTD1 keeps attachments as declared input: the compiled Volume carries the
+  # attachment verbatim, the compiler synthesizes only the per-Volume serving
+  # principal, and Nix never mints the durable VolumeBinding itself. The
+  # binding is minted at runtime by the Volume side alone (R5).
+  "volume-mounts/v3-attachment-stays-declared-binding-input" = {
+    expr =
+      let
+        state = bindingVolume.d2b._resourceCompiler.volumes.byZone.local-root.state;
+        attachment = builtins.head state.spec.attachments;
+      in {
+        inherit (attachment) executionRef transport view access mountPath;
+      };
+    expected = {
+      executionRef = "Guest/guest";
+      transport = "virtiofs";
+      view = "controller";
+      access = "read-only";
+      mountPath = "/state";
+    };
+  };
+  "volume-mounts/v3-attachment-emits-no-durable-binding-resource" = {
+    expr = builtins.all
+      (resource: resource.type == "Volume" || resource.type == "User")
+      (lib.attrValues
+        bindingVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root);
+    expected = true;
+  };
+  "volume-mounts/v3-attachment-emits-binding-worker-principal" = {
+    expr = builtins.any
+      (user: user.name == "vol-state-vfd" && user.zoneName == "local-root"
+        && user.resource.type == "User")
+      bindingVolume.d2b._resourceCompiler.volumeGenerated.users;
+    expected = true;
+  };
+  "volume-mounts/v3-binding-worker-principal-follows-attachment" = {
+    expr = map (user: user.name)
+      (lib.filter (user: user.zoneName == "local-root")
+        bindingVolume.d2b._resourceCompiler.volumeGenerated.users);
+    expected = [ "vol-state-vfd" ];
   };
 }

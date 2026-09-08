@@ -9877,9 +9877,19 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         .unwrap_or(ResourcePhase::Pending);
                     volumes.push((resource_ref.clone(), phase));
                 }
-                let exports_ready = volumes
-                    .iter()
-                    .all(|(_, phase)| *phase == ResourcePhase::Ready);
+                let mut bindings = Vec::new();
+                for resource_ref in &graph.bindings {
+                    let current = self
+                        .get_stored(resource_ref, "cloud-hypervisor-binding-dependency")
+                        .await
+                        .map(|binding| {
+                            crate::binding_child_resource_runtime::binding_readiness_current(
+                                &binding,
+                            )
+                        })
+                        .unwrap_or(false);
+                    bindings.push((resource_ref.clone(), current));
+                }
                 let setup_volume_ref = deterministic_child_ref(&guest_ref, ChildRole::SystemVolume)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                 let setup_ready = self
@@ -9896,7 +9906,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     devices,
                     networks,
                     volumes,
-                    exports_ready,
+                    bindings,
                     setup_ready,
                 )
                 .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
@@ -16426,6 +16436,108 @@ impl ZoneResourceRuntime {
         Ok(guests)
     }
 
+    /// VolumeBinding references that gate one Guest's start: bindings
+    /// targeting the Guest AND admitted by their referenced Volume.
+    /// Bindings whose Volume cannot be read or parsed stay gating
+    /// (fail-closed); pairs admitted by no Volume are excluded so forged
+    /// bindings cannot wedge the gate.
+    async fn admitted_guest_binding_refs(
+        &self,
+        bindings: &[StoredResource],
+        guest_ref: &ResourceRef,
+    ) -> Vec<ResourceRef> {
+        let mut kept = Vec::new();
+        for binding in bindings {
+            if binding.resource_ref.resource_type().as_str()
+                != d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
+            {
+                continue;
+            }
+            let Some(spec) =
+                crate::binding_child_resource_runtime::parsed_binding_spec(binding)
+            else {
+                kept.push(binding.resource_ref.clone());
+                continue;
+            };
+            if spec.execution_ref() != guest_ref {
+                continue;
+            }
+            match self.volume_admits_binding(&spec, &binding.resource_ref).await {
+                Ok(true) => kept.push(binding.resource_ref.clone()),
+                Ok(false) => {}
+                Err(_) => kept.push(binding.resource_ref.clone()),
+            }
+        }
+        kept
+    }
+
+    /// Whether the referenced Volume admits a binding of this identity:
+    /// the binding name must be among the intents the Volume's declared
+    /// attachments mint.  Unreadable or unparseable Volumes fail closed
+    /// to the caller.
+    async fn volume_admits_binding(
+        &self,
+        spec: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+        binding_name: &ResourceRef,
+    ) -> Result<bool, ResourceRuntimeError> {
+        let volume = self
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: "cloud-hypervisor-binding-admission".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "cloud-hypervisor-binding-admission".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: spec.volume_ref().clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let volume_value = serde_json::from_slice::<serde_json::Value>(&volume.canonical_json)
+            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
+        let volume_spec = volume_value
+            .get("spec")
+            .cloned()
+            .and_then(|spec| {
+                let mut object = spec.as_object()?.clone();
+                object.remove("providerRef");
+                object.remove("updatePolicy");
+                object.remove("provider");
+                serde_json::from_value::<VolumeSpec>(serde_json::Value::Object(object)).ok()
+            })
+            .ok_or(ResourceRuntimeError::ResponseInvalid)?;
+        Ok(Self::binding_admitted_by_volume_spec(
+            spec,
+            binding_name.name().as_str(),
+            &volume_spec,
+        ))
+    }
+
+    /// Whether the referenced Volume admits a binding of this identity:
+    /// the binding name must be among the intents the Volume's declared
+    /// attachments mint.  Computation failures fail closed to the caller.
+    fn binding_admitted_by_volume_spec(
+        spec: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+        binding_name: &str,
+        volume_spec: &VolumeSpec,
+    ) -> bool {
+        d2b_provider_volume_local::desired_binding_intents(
+            spec.volume_ref().clone(),
+            volume_spec,
+            false,
+        )
+        .map(|intents| {
+            intents
+                .iter()
+                .any(|intent| intent.name().as_str() == binding_name)
+        })
+        .unwrap_or(true)
+    }
+
     async fn cloud_hypervisor_inputs(
         &self,
         guest_ref: &ResourceRef,
@@ -16492,6 +16604,42 @@ impl ZoneResourceRuntime {
                 volumes.push(reference);
             }
         }
+        let mut binding_refs = Vec::new();
+        let mut cursor = None;
+        loop {
+            let request = StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "cloud-hypervisor-binding-inputs".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "cloud-hypervisor-binding-inputs".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: vec![ResourceTypeName::parse(
+                        d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE,
+                    )
+                    .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?],
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 256,
+                    cursor: cursor.clone(),
+                    projection: StoreProjection::Full,
+                };
+            let page = self
+                .store
+                .list(request)
+                .await
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            binding_refs.extend(
+                self.admitted_guest_binding_refs(&page.resources, guest_ref)
+                    .await,
+            );
+            if page.next_cursor.is_none() {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
         let graph = BootstrapGraph::new(
             guest_spec
                 .policy()
@@ -16506,6 +16654,7 @@ impl ZoneResourceRuntime {
                 .map(|attachment| attachment.network_ref().clone())
                 .collect(),
             volumes,
+            binding_refs,
             Vec::new(),
         )
         .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
@@ -23663,19 +23812,52 @@ mod tests {
     }
 
     #[test]
-    fn trusted_provider_catalog_includes_declared_export_only() {
+    fn trusted_provider_catalog_includes_declared_binding() {
         let resource_types = trusted_provider_resource_types().expect("trusted declarations");
-        assert!(resource_types
-            .iter()
-            .any(|resource_type| resource_type.as_str() == "virtiofs.d2bus.org.Export"));
+        // VolumeBinding is admitted through the standard catalog only (KTD8):
+        // it is a standard, unqualified type and never a trusted qualified
+        // extension, and the removed Export type must not re-enter either.
+        let binding = ResourceTypeName::parse(
+            d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE,
+        )
+        .unwrap();
+        assert!(!resource_types.contains(&binding));
         assert!(!resource_types
             .iter()
-            .any(|resource_type| resource_type.as_str() == "untrusted.d2bus.org.Type"));
+            .any(|resource_type| resource_type.as_str() == "virtiofs.d2bus.org.Export"));
+        let standard = d2b_resource_api::authz::ApiCatalog::standard();
+        assert!(
+            d2b_resource_api::authz::PolicyRule::new(
+                &standard,
+                [binding],
+                [d2b_resource_api::authz::ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            )
+            .is_ok(),
+            "VolumeBinding must be installed in the standard catalog"
+        );
+        assert!(d2b_resource_api::authz::PolicyRule::new(
+            &standard,
+            [ResourceTypeName::parse("virtiofs.d2bus.org.Export").unwrap()],
+            [d2b_resource_api::authz::ResourceVerb::Get],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        .is_err());
     }
 
     #[test]
     fn unknown_qualified_bundle_resource_types_fail_closed() {
-        let trusted = ResourceTypeName::parse("virtiofs.d2bus.org.Export").unwrap();
+        let trusted =
+            ResourceTypeName::parse(d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE)
+                .unwrap();
         assert!(trusted_catalog_resource_types([trusted]).is_ok());
         let unknown = ResourceTypeName::parse("untrusted.d2bus.org.Type").unwrap();
         assert_eq!(
@@ -24163,7 +24345,7 @@ mod tests {
                 "Provider/volume-virtiofs" => {
                     assert_eq!(
                         registration.finalizer,
-                        "volume-virtiofs.d2bus.org/export"
+                        d2b_provider_volume_virtiofs::VOLUME_BINDING_FINALIZER
                     );
                 }
                 _ => {}
@@ -30591,7 +30773,7 @@ mod tests {
         runtime.shutdown().await.unwrap();
     }
 
-    async fn open_production_guest_runtime_for_test() -> (
+    pub(crate) async fn open_production_guest_runtime_for_test() -> (
         tempfile::TempDir,
         ZoneResourceRuntime,
         Arc<BrokerEvidenceIndex>,
@@ -30633,7 +30815,7 @@ mod tests {
         (directory, runtime, broker_evidence)
     }
 
-    fn bundle_resource(
+    pub(crate) fn bundle_resource(
         resource_type: &str,
         name: &str,
         zone: &ZoneId,
@@ -30696,7 +30878,7 @@ mod tests {
         serde_json::to_string(&spec).unwrap()
     }
 
-    async fn materialize_test_bundle(
+    pub(crate) async fn materialize_test_bundle(
         runtime: &ZoneResourceRuntime,
         resources: Vec<BundleResource>,
     ) {
@@ -31674,5 +31856,47 @@ mod tests {
         wait_for_test_resource_gone(&runtime, &delete_guest_ref).await;
         drop(runtime);
         close_production_guest_runtime_fixture(state, plane).await;
+    }
+    #[test]
+    fn gate_keeps_only_bindings_admitted_by_their_volume() {
+        use d2b_provider_volume_local::testing::fixtures;
+        let volume = fixtures::store_view_volume();
+        let volume_ref = ResourceRef::parse("Volume/store-view-work-vm")
+            .expect("volume ref");
+        let intents = d2b_provider_volume_local::desired_binding_intents(
+            volume_ref.clone(),
+            &volume,
+            false,
+        )
+        .expect("admitted intents");
+        let intent = intents
+            .first()
+            .expect("store-view fixture declares one attachment");
+        let admitted = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
+            intent.volume_ref().clone(),
+            intent.execution_ref().clone(),
+            intent.view().as_str(),
+            intent.access(),
+            intent.mount_path(),
+        )
+        .expect("admitted spec");
+        assert!(ZoneResourceRuntime::binding_admitted_by_volume_spec(
+            &admitted,
+            intent.name().as_str(),
+            &volume
+        ));
+        let forged = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
+            intent.volume_ref().clone(),
+            ResourceRef::parse("Guest/victim-vm").expect("guest ref"),
+            intent.view().as_str(),
+            intent.access(),
+            intent.mount_path(),
+        )
+        .expect("forged spec");
+        assert!(!ZoneResourceRuntime::binding_admitted_by_volume_spec(
+            &forged,
+            "VolumeBinding/forged",
+            &volume
+        ));
     }
 }

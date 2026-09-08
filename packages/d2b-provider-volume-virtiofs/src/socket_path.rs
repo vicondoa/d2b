@@ -1,4 +1,4 @@
-//! Private per-Export virtiofs socket identity and path derivation.
+//! Private per-binding virtiofs socket identity and path derivation.
 //!
 //! The path is created only at the effect boundary.  The controller and
 //! status projections carry an opaque identity instead of this value.

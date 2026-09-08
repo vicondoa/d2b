@@ -27,7 +27,7 @@ const SHA256_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 19] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -40,6 +40,7 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 19] = [
     "Process",
     "EphemeralProcess",
     "Volume",
+    "VolumeBinding",
     "Network",
     "Device",
     "User",

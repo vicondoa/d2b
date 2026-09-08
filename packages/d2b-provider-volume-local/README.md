@@ -73,7 +73,7 @@ status-safe readback proof; it carries no file bytes or host paths.
 
 The controller is Host-placed: every effect it requests resolves against a
 host filesystem root. It declares no synchronous Provider dependency. The
-`volume-virtiofs` Provider watches `Volume` read-only to serve an export;
+`volume-virtiofs` Provider watches `Volume` read-only to serve a binding;
 that direction is one-way and this crate does not depend on it.
 
 ## RBAC requirements
@@ -141,7 +141,7 @@ a bootstrap storage cycle.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | controller, source/quota/ACL admission, Export intents, layout engine, views, store-view mode, storage lifecycle diagnostics, TPM state mode, effect ports, colocated unit tests |
+| `src/` | controller, source/quota/ACL admission, binding intents, layout engine, views, store-view mode, storage lifecycle diagnostics, TPM state mode, effect ports, colocated unit tests |
 | `tests/` | hermetic layout, view, sharing, store-view, TPM, and status-redaction conformance |
 | `integration/` | heavier Host-path and store-view filesystem fixtures |
 

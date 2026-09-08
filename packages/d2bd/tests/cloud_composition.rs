@@ -294,6 +294,7 @@ fn cloud_graph() -> BootstrapGraph {
         vec![ResourceRef::parse("Network/cloud").unwrap()],
         vec![ResourceRef::parse("Volume/state").unwrap()],
         vec![],
+        vec![],
     )
     .unwrap()
 }

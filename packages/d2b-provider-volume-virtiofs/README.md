@@ -1,7 +1,7 @@
 # `d2b-provider-volume-virtiofs`
 
 `Provider/volume-virtiofs` serves a Volume view to a Host or Guest over
-virtiofs. It reconciles `virtiofs.d2bus.org.Export` resources and never
+virtiofs. It reconciles `VolumeBinding` resources and never
 writes a Volume row.
 
 See [Create a Provider](../../docs/how-to/create-provider.md) for the
@@ -16,14 +16,14 @@ uniform crate layout, schema links, configuration, and test lanes.
 | Version | tracks the workspace version of this crate |
 | Trust attestation | first-party admission; exact package digest resolved from the offline Nix artifact catalog |
 | Conformance attestation | the hermetic conformance suite under `tests/` |
-| ResourceTypes | `virtiofs.d2bus.org.Export`; read-only watch of `Volume` |
+| ResourceTypes | `VolumeBinding` (fenced serving status projection); read-only watch of `Volume` |
 | Attachment transport | `virtiofs` |
 | Worker template | `virtiofsd-worker` |
-| Finalizer | `volume-virtiofs.d2bus.org/export`, on an Export and nothing else |
+| Finalizer | `volume-virtiofs.d2bus.org/volume-binding`, on a VolumeBinding and nothing else |
 
 The production controller is attached to the shared Core Runner with an
-event-driven Export watch and a bounded 30-second repair interval. Its only
-owned children are the Export's virtiofsd Process and private Endpoint;
+event-driven VolumeBinding watch and a bounded 30-second repair interval. Its only
+owned children are the binding's virtiofsd Process and private Endpoint;
 volume-local remains the sole Volume owner.
 
 ## Config schema
@@ -40,15 +40,16 @@ path, a socket, or a credential.
 
 | ResourceType | Role |
 | --- | --- |
-| `virtiofs.d2bus.org.Export` | sole writer: export lifecycle, worker plan, drain |
+| `VolumeBinding` | sole status writer per KTD3: fenced readiness projection on every reconcile; never mints bindings |
+| `virtiofs.d2bus.org.Export` | removed: superseded by `VolumeBinding` (clean break, KTD10) |
 | `Volume` | read-only watch; never written |
 
 ## Controllers / services / workers / binaries
 
 | Component | Type | Role |
 | --- | --- | --- |
-| `volume-virtiofs` controller | controller | reconciles `virtiofs.d2bus.org.Export` |
-| `virtiofsd-worker` | worker template | one virtiofsd process per admitted export |
+| `volume-virtiofs` controller | controller | reconciles `VolumeBinding` |
+| `virtiofsd-worker` | worker template | one virtiofsd process per admitted binding |
 
 The flag envelope is adapted from the shipped host-side generator, with
 three differences the Volume spec freezes:
@@ -78,14 +79,14 @@ descriptor number; the renderer emits `/proc/self/fd/<N>` and never accepts
 The controller and every worker are Host-placed: virtiofsd runs beside the
 Volume root it serves. The Provider depends on `volume-local` only through
 the read-only `Volume` watch; that dependency is asynchronous and a missing
-Volume leaves the Export unadmitted rather than degrading the controller.
+Volume leaves the binding unadmitted rather than degrading the controller.
 
 ## RBAC requirements
 
-The Provider requires a pre-installed Role granting write on
-`virtiofs.d2bus.org.Export` and read on `Volume`, bound to the Provider's own
-service identity. It requires no write grant on `Volume` and no wildcard
-permission.
+The Provider requires a pre-installed Role granting write on `VolumeBinding`
+(status and finalizers only; the Volume side mints bindings) and read on
+`Volume`, bound to the Provider's own service identity. It requires no write
+grant on `Volume` and no wildcard permission.
 
 ## Security posture
 
@@ -97,18 +98,18 @@ root start, `--sandbox=namespace`, or a writable root is rejected before
 any launch is requested. This is the ADR 0021 invariant, and it is asserted
 rather than assumed.
 
-The export socket path is generated and private. Only its opaque
+The binding socket path is generated and private. Only its opaque
 `SocketIdentity` is public. The path never appears in a spec field, a
-status field, an audit record, or CLI output, and two Exports of one
+status field, an audit record, or CLI output, and two bindings of one
 Volume have distinct identities. Launch is gated by the store-view marker,
 and the user-namespace conformance kit checks the ADR 0021 map-write order
 without carrying host UID or GID values.
 
 ## State and telemetry
 
-Export state is held in the Export resource and its status; the controller
-keeps no durable state of its own. Status, audit, and telemetry name an
-export by its opaque `SocketIdentity` and a closed outcome token. No socket
+Binding state is held in the VolumeBinding resource and its status; the controller
+keeps no durable state of its own. Status, audit, and telemetry name a
+binding by its opaque `SocketIdentity` and a closed outcome token. No socket
 path, shared directory, resolved Volume root, argv, or numeric identifier is
 emitted.
 
@@ -116,8 +117,8 @@ emitted.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | Export controller, worker plan, FD-based argv renderer, private socket derivation, readiness and ADR 0021 checks, effect port, colocated unit tests |
-| `tests/` | hermetic Export lifecycle, sandbox, drain, and privacy conformance |
+| `src/` | binding controller, worker plan, FD-based argv renderer, private socket derivation, readiness and ADR 0021 checks, effect port, colocated unit tests |
+| `tests/` | hermetic binding lifecycle, sandbox, drain, and privacy conformance |
 | `integration/` | virtiofsd launch and guest-mount fixtures |
 
 ## Build and test

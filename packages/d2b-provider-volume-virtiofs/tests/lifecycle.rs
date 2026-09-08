@@ -1,36 +1,48 @@
-//! Hermetic Export lifecycle, sandbox, and privacy conformance.
+//! Hermetic VolumeBinding lifecycle, sandbox, and privacy conformance.
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    ResourceUid,
+    volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
+};
 use d2b_provider_volume_virtiofs::testing::{PortCall, ScriptedPort, block_on, fixtures};
 use d2b_provider_volume_virtiofs::{
-    EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, ExportPhase, ExportSpec, LaunchedWorker,
-    VirtiofsExportController, VirtiofsExportEffectPort, VirtiofsExportError, VirtiofsdWorkerPlan,
+    LaunchedWorker, StoredBinding, VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE,
+    VirtiofsBindingController, VirtiofsBindingEffectPort, VirtiofsBindingError, VirtiofsdWorkerPlan,
     virtiofs_runner_contract,
 };
 
-struct DefaultMarkerPort {
+use d2b_provider_volume_virtiofs::BindingPhase;
+
+/// A port that exercises the trait defaults: the store-view marker probe
+/// and the status write both fail closed when an adapter does not
+/// implement them.
+struct DefaultProbePort {
     inner: ScriptedPort,
 }
 
-impl VirtiofsExportEffectPort for &DefaultMarkerPort {
+impl VirtiofsBindingEffectPort for &DefaultProbePort {
     async fn launch_worker(
         &self,
-        export: &ExportSpec,
+        binding: &StoredBinding,
         plan: &VirtiofsdWorkerPlan,
-    ) -> Result<LaunchedWorker, VirtiofsExportError> {
-        (&self.inner).launch_worker(export, plan).await
+    ) -> Result<LaunchedWorker, VirtiofsBindingError> {
+        (&self.inner).launch_worker(binding, plan).await
     }
 
-    async fn observe_socket(&self, worker: &LaunchedWorker) -> Result<bool, VirtiofsExportError> {
+    async fn observe_socket(&self, worker: &LaunchedWorker) -> Result<bool, VirtiofsBindingError> {
         (&self.inner).observe_socket(worker).await
     }
 
-    async fn observe_guest_mount(&self, export: &ExportSpec) -> Result<bool, VirtiofsExportError> {
-        (&self.inner).observe_guest_mount(export).await
+    async fn observe_guest_mount(
+        &self,
+        binding: &StoredBinding,
+    ) -> Result<bool, VirtiofsBindingError> {
+        (&self.inner).observe_guest_mount(binding).await
     }
 
-    async fn delete_worker(&self, worker: &LaunchedWorker) -> Result<(), VirtiofsExportError> {
+    async fn delete_worker(&self, worker: &LaunchedWorker) -> Result<(), VirtiofsBindingError> {
         (&self.inner).delete_worker(worker).await
     }
 }
@@ -38,10 +50,10 @@ impl VirtiofsExportEffectPort for &DefaultMarkerPort {
 fn reconcile(
     port: &ScriptedPort,
     access: &str,
-) -> d2b_provider_volume_virtiofs::ExportStatusReport {
-    let controller = VirtiofsExportController::new(port);
+) -> d2b_provider_volume_virtiofs::BindingStatusReport {
+    let controller = VirtiofsBindingController::new(port);
     block_on(controller.reconcile(
-        &fixtures::export(access),
+        &fixtures::binding(access),
         &fixtures::store_view_volume(),
         4,
         fixtures::principal(),
@@ -50,31 +62,34 @@ fn reconcile(
 }
 
 #[test]
-fn the_default_marker_probe_fails_closed_before_a_store_view_launch() {
-    let port = DefaultMarkerPort {
+fn the_default_marker_and_status_probes_fail_closed() {
+    let port = DefaultProbePort {
         inner: ScriptedPort::serving(),
     };
-    let controller = VirtiofsExportController::new(&port);
-    let report = block_on(controller.reconcile(
-        &fixtures::export("read-only"),
+    let controller = VirtiofsBindingController::new(&port);
+    // The default status write fails closed, so the reconcile itself
+    // fails closed instead of reporting readiness without a validated
+    // projection (KTD3).
+    let error = block_on(controller.reconcile(
+        &fixtures::binding("read-only"),
         &fixtures::store_view_volume(),
         4,
         fixtures::principal(),
     ))
-    .expect("reconcile reports");
-    assert_eq!(report.phase, ExportPhase::Pending);
-    assert!(report.worker_process_ref.is_none());
+    .expect_err("default write rejected");
+    assert_eq!(error, VirtiofsBindingError::UnauthorizedWriter);
     assert!(!port.inner.calls().contains(&PortCall::LaunchWorker));
 }
 
 #[test]
-fn an_export_reaches_ready_only_when_the_host_serves_and_the_guest_mounts() {
+fn a_binding_reaches_ready_only_when_the_host_serves_and_the_guest_mounts() {
     let port = ScriptedPort::serving();
     let report = reconcile(&port, "read-only");
-    assert_eq!(report.phase, ExportPhase::Ready);
-    assert!(report.export_ready);
+    assert_eq!(report.phase, BindingPhase::Ready);
+    assert!(report.binding_ready);
     assert!(report.guest_mount_ready);
     assert!(report.reason.is_none());
+    // KTD3: the fenced projection is written on every reconcile.
     assert_eq!(
         port.calls(),
         vec![
@@ -82,45 +97,66 @@ fn an_export_reaches_ready_only_when_the_host_serves_and_the_guest_mounts() {
             PortCall::LaunchWorker,
             PortCall::ObserveSocket,
             PortCall::ObserveGuestMount,
+            PortCall::WriteStatus,
         ]
     );
+    let writes = port.status_writes();
+    assert_eq!(writes.len(), 1);
+    let binding = fixtures::binding("read-only");
+    assert!(writes[0].ready);
+    assert!(writes[0].readiness_is_current(
+        binding.uid(),
+        binding.generation(),
+        binding.revision()
+    ));
+    assert_eq!(writes[0].fence, binding.fence());
+    assert_eq!(writes[0].reason, None);
 }
 
 #[test]
-fn a_socket_that_never_listens_holds_the_export_pending() {
+fn a_socket_that_never_listens_holds_the_binding_pending() {
     let port = ScriptedPort::serving().socket_never_ready();
     let report = reconcile(&port, "read-only");
-    assert_eq!(report.phase, ExportPhase::Pending);
-    assert!(!report.export_ready);
-    assert_eq!(report.reason, Some(VirtiofsExportError::ExportNotReady));
+    assert_eq!(report.phase, BindingPhase::Pending);
+    assert!(!report.binding_ready);
+    assert_eq!(report.reason, Some(VirtiofsBindingError::BindingNotReady));
     // The guest is never probed while the host side is not serving.
     assert!(!port.calls().contains(&PortCall::ObserveGuestMount));
+    // Even a pending reconcile writes its fail-closed projection (KTD3).
+    assert_eq!(port.status_writes().len(), 1);
+    assert!(!port.status_writes()[0].ready);
 }
 
 #[test]
 fn a_store_view_waits_for_its_zero_length_marker_before_launch() {
     let port = ScriptedPort::serving().store_view_marker_missing();
     let report = reconcile(&port, "read-only");
-    assert_eq!(report.phase, ExportPhase::Pending);
+    assert_eq!(report.phase, BindingPhase::Pending);
     assert_eq!(
         report.reason,
-        Some(VirtiofsExportError::StoreViewMarkerMissing)
+        Some(VirtiofsBindingError::StoreViewMarkerMissing)
     );
-    assert_eq!(port.calls(), vec![PortCall::ObserveStoreViewMarker]);
+    assert_eq!(
+        port.calls(),
+        vec![PortCall::ObserveStoreViewMarker, PortCall::WriteStatus]
+    );
+    // Even the pending marker report writes its fail-closed projection.
+    assert_eq!(port.status_writes().len(), 1);
+    assert!(!port.status_writes()[0].ready);
 }
 
 #[test]
 fn a_serving_host_whose_guest_does_not_mount_is_degraded() {
     let port = ScriptedPort::serving().guest_never_mounts();
     let report = reconcile(&port, "read-only");
-    assert_eq!(report.phase, ExportPhase::Degraded);
-    assert!(report.export_ready);
+    assert_eq!(report.phase, BindingPhase::Degraded);
+    assert!(report.binding_ready);
     assert!(!report.guest_mount_ready);
-    assert_eq!(report.reason, Some(VirtiofsExportError::GuestMountNotReady));
+    assert_eq!(report.reason, Some(VirtiofsBindingError::GuestMountNotReady));
 }
 
 #[test]
-fn a_read_only_export_launches_a_read_only_worker() {
+fn a_read_only_binding_launches_a_read_only_worker() {
     let port = ScriptedPort::serving();
     reconcile(&port, "read-only");
     let plans = port.launched_plans();
@@ -130,76 +166,171 @@ fn a_read_only_export_launches_a_read_only_worker() {
 }
 
 #[test]
-fn a_write_export_over_a_read_only_view_never_launches_a_worker() {
+fn a_write_binding_over_a_read_only_view_reports_failed_with_a_reason() {
     let port = ScriptedPort::serving();
     let report = reconcile(&port, "read-write");
-    assert_eq!(report.phase, ExportPhase::Failed);
+    // KTD5: terminal admission failures surface Failed, not Pending.
+    assert_eq!(report.phase, BindingPhase::Failed);
     assert_eq!(
         report.reason,
-        Some(VirtiofsExportError::ViewRightsInsufficient)
+        Some(VirtiofsBindingError::ViewRightsInsufficient)
     );
-    assert!(port.calls().is_empty());
+    assert!(port.calls().contains(&PortCall::WriteStatus));
     assert!(report.worker_process_ref.is_none());
-}
-
-#[test]
-fn an_export_naming_an_undeclared_view_is_rejected() {
-    let export = ExportSpec::new(
-        fixtures::volume_ref(),
-        ResourceRef::parse("Guest/work-vm").expect("valid ref"),
-        BoundedToken::parse("absent").expect("valid token"),
-        d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
-        d2b_contracts_resource::v3::volume::AttachmentSettings::default(),
-    )
-    .expect("conformant Export");
-    let port = ScriptedPort::serving();
-    let controller = VirtiofsExportController::new(&port);
+    assert!(!report.projection.ready);
     assert_eq!(
-        block_on(controller.reconcile(
-            &export,
-            &fixtures::store_view_volume(),
-            4,
-            fixtures::principal(),
-        ))
-        .unwrap_err(),
-        VirtiofsExportError::ViewNotFound
+        report
+            .projection
+            .reason
+            .as_ref()
+            .map(d2b_contracts_resource::v3::resource_status::StatusCode::as_str),
+        Some("view-rights-insufficient")
     );
-    assert!(port.calls().is_empty());
 }
 
 #[test]
-fn two_exports_of_one_volume_have_distinct_socket_identities() {
-    let work = fixtures::export("read-only");
-    let other = ExportSpec::new(
-        fixtures::volume_ref(),
-        ResourceRef::parse("Guest/personal-vm").expect("valid ref"),
-        BoundedToken::parse("ro-store").expect("valid token"),
-        d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
-        d2b_contracts_resource::v3::volume::AttachmentSettings::default(),
-    )
-    .expect("conformant Export");
-    let zone = fixtures::zone();
-    assert_ne!(work.socket_identity(&zone), other.socket_identity(&zone));
-    assert_eq!(work.socket_identity(&zone), work.socket_identity(&zone));
-}
-
-#[test]
-fn a_drain_deletes_the_worker_before_confirming_the_mount_is_gone() {
+fn a_binding_naming_an_undeclared_view_reports_failed_with_a_reason() {
+    let mut envelope = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    envelope["spec"]["view"] = serde_json::json!("absent");
+    let binding = StoredBinding::from_resource_spec(&envelope).expect("conformant binding");
     let port = ScriptedPort::serving();
-    let export = fixtures::export("read-only");
-    let controller = VirtiofsExportController::new(&port);
+    let controller = VirtiofsBindingController::new(&port);
     let report = block_on(controller.reconcile(
-        &export,
+        &binding,
         &fixtures::store_view_volume(),
         4,
         fixtures::principal(),
     ))
     .expect("reconcile reports");
-    let worker = d2b_provider_volume_virtiofs::LaunchedWorker {
+    // KTD5: the rejection is visible as a Failed phase with a reason.
+    assert_eq!(report.phase, BindingPhase::Failed);
+    assert_eq!(report.reason, Some(VirtiofsBindingError::ViewNotFound));
+    assert!(report.worker_process_ref.is_none());
+    assert!(!report.projection.ready);
+}
+
+#[test]
+fn a_shared_write_binding_is_never_served() {
+    let port = ScriptedPort::serving();
+    let report = reconcile(&port, "shared-write");
+    assert_eq!(report.phase, BindingPhase::Failed);
+    assert_eq!(
+        report.reason,
+        Some(VirtiofsBindingError::SharedWriteUnsupported)
+    );
+    assert!(port.launched_plans().is_empty());
+}
+
+#[test]
+fn a_stale_fence_report_is_never_accepted_as_ready() {
+    let port = ScriptedPort::serving();
+    let binding = fixtures::binding("read-only");
+    let first = reconcile(&port, "read-only");
+    assert!(first.projection.ready);
+    assert_eq!(port.status_writes().len(), 1);
+
+    // The binding is superseded by a newer generation (AE1): the same
+    // readiness evidence now arrives under the old fence.
+    port.advance_generation();
+    let controller = VirtiofsBindingController::new(&port);
+    let error = block_on(controller.reconcile(
+        &binding,
+        &fixtures::store_view_volume(),
+        4,
+        fixtures::principal(),
+    ))
+    .expect_err("stale write rejected");
+    assert_eq!(error, VirtiofsBindingError::StaleFence);
+    // The stale report never became a second accepted write.
+    assert_eq!(port.status_writes().len(), 1);
+    // And the accepted evidence no longer counts as current readiness.
+    assert!(!first.projection.readiness_is_current(
+        binding.uid(),
+        d2b_contracts_resource::v3::ResourceGeneration::new(2).expect("generation"),
+        binding.revision(),
+    ));
+}
+
+#[test]
+fn volume_reads_are_dependency_only_and_the_volume_is_never_written() {
+    let volume_before =
+        serde_json::to_value(fixtures::store_view_volume()).expect("Volume fixture serializes");
+    let port = ScriptedPort::serving();
+    reconcile(&port, "read-only");
+    let volume_after =
+        serde_json::to_value(fixtures::store_view_volume()).expect("Volume fixture serializes");
+    assert_eq!(volume_before, volume_after);
+    // Every recorded effect is a read or a serving effect on the
+    // binding's own children; the port surface has no Volume mutation
+    // method at all (AE2).
+    for call in port.calls() {
+        assert!(
+            matches!(
+                call,
+                PortCall::ObserveStoreViewMarker
+                    | PortCall::LaunchWorker
+                    | PortCall::ObserveSocket
+                    | PortCall::ObserveGuestMount
+                    | PortCall::WriteStatus
+                    | PortCall::DeleteWorker
+            ),
+            "unexpected effect {call:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unauthorized_ready_update_cannot_release_the_gate() {
+    let port = ScriptedPort::serving();
+    let binding = fixtures::binding("read-only");
+    let ready = VolumeBindingStatusResource {
+        ready: true,
+        fence: binding.fence(),
+        reason: None,
+    };
+    // A writer that is not the virtiofs controller identity is rejected
+    // by the server-side identity check (KTD3).
+    let foreign_writer = BoundedToken::parse("volume-local").expect("valid token");
+    let error = block_on((&port).write_binding_status(&foreign_writer, &binding, &ready))
+        .expect_err("foreign write rejected");
+    assert_eq!(error, VirtiofsBindingError::UnauthorizedWriter);
+    assert!(port.status_writes().is_empty());
+    // A Ready claim whose fence does not match the binding never counts
+    // as current readiness, so the Guest start gate stays closed: the
+    // zero UID never matches a live binding (fail-closed, KTD3).
+    let forged = VolumeBindingStatusResource {
+        ready: true,
+        fence: VolumeBindingReadinessFence {
+            uid: ResourceUid::parse("00000000-0000-4000-8000-000000000000").expect("zero uid"),
+            generation: binding.generation(),
+            revision: binding.revision(),
+        },
+        reason: None,
+    };
+    assert!(!forged.readiness_is_current(
+        binding.uid(),
+        binding.generation(),
+        binding.revision()
+    ));
+}
+
+#[test]
+fn a_drain_deletes_the_worker_before_confirming_the_mount_is_gone() {
+    let port = ScriptedPort::serving();
+    let binding = fixtures::binding("read-only");
+    let controller = VirtiofsBindingController::new(&port);
+    let report = block_on(controller.reconcile(
+        &binding,
+        &fixtures::store_view_volume(),
+        4,
+        fixtures::principal(),
+    ))
+    .expect("reconcile reports");
+    let worker = LaunchedWorker {
         process_ref: report.worker_process_ref.expect("worker exists"),
         socket: report.socket.expect("socket exists"),
     };
-    assert!(block_on(controller.drain(&export, &worker)).is_ok());
+    assert!(block_on(controller.drain(&binding, &worker)).is_ok());
     let calls = port.calls();
     let deleted = calls
         .iter()
@@ -215,33 +346,36 @@ fn a_drain_deletes_the_worker_before_confirming_the_mount_is_gone() {
 #[test]
 fn a_mount_that_survives_deletion_blocks_the_drain() {
     let port = ScriptedPort::serving().mount_survives_delete();
-    let export = fixtures::export("read-only");
-    let controller = VirtiofsExportController::new(&port);
-    let worker = d2b_provider_volume_virtiofs::LaunchedWorker {
+    let binding = fixtures::binding("read-only");
+    let controller = VirtiofsBindingController::new(&port);
+    let worker = LaunchedWorker {
         process_ref: ResourceRef::parse("Process/vol-work-state-virtiofsd-work-vm")
             .expect("valid ref"),
-        socket: export.socket_identity(&fixtures::zone()),
+        socket: binding.socket_identity(&fixtures::zone()),
     };
     assert_eq!(
-        block_on(controller.drain(&export, &worker)).unwrap_err(),
-        VirtiofsExportError::DrainIncomplete
+        block_on(controller.drain(&binding, &worker)).unwrap_err(),
+        VirtiofsBindingError::DrainIncomplete
     );
 }
 
-/// Fragments that must never appear in a public Export status document.
-const FORBIDDEN_STATUS_FRAGMENTS: [&str; 8] = [
+/// Fragments that must never appear in a public binding status document.
+///
+/// The fence UID is part of the neutral binding contract (KTD3), so the
+/// prohibited fragments target resolved paths, sockets, and provider
+/// tuning rather than identity digests.
+const FORBIDDEN_STATUS_FRAGMENTS: [&str; 7] = [
     "/run",
     "/nix",
     ".sock",
     "shared-dir",
     "socket-path",
     "socket-group",
-    "uid",
     "gid",
 ];
 
 #[test]
-fn public_export_status_carries_no_socket_path_shared_dir_or_argv() {
+fn public_binding_status_carries_no_socket_path_shared_dir_or_argv() {
     let port = ScriptedPort::serving();
     let report = reconcile(&port, "read-only");
     let rendered = serde_json::to_string(&report)
@@ -258,61 +392,68 @@ fn public_export_status_carries_no_socket_path_shared_dir_or_argv() {
         format!("{:?}", report.socket.expect("socket")),
         "SocketIdentity(<redacted>)"
     );
+    assert_eq!(format!("{:?}", report.projection.reason), "None");
 }
 
 #[test]
-fn the_provider_owns_only_the_export_resource_type_and_finalizer() {
-    assert_eq!(EXPORT_RESOURCE_TYPE, "virtiofs.d2bus.org.Export");
-    assert_eq!(EXPORT_FINALIZER, "volume-virtiofs.d2bus.org/export");
-    let port = ScriptedPort::serving();
-    let controller = VirtiofsExportController::new(&port);
-    assert_eq!(controller.finalizer(), EXPORT_FINALIZER);
-    assert_eq!(controller.provider().as_str(), "volume-virtiofs");
+fn two_bindings_of_one_volume_have_distinct_socket_identities() {
+    let work = fixtures::binding("read-only");
+    let other = fixtures::binding_for("read-only", "personal-vm", "ro-store");
+    let zone = fixtures::zone();
+    assert_ne!(work.socket_identity(&zone), other.socket_identity(&zone));
+    assert_eq!(work.socket_identity(&zone), work.socket_identity(&zone));
 }
 
 #[test]
-fn a_virtio_blk_attachment_is_not_translated_into_an_export() {
-    let attachment: d2b_contracts_resource::v3::volume::VolumeAttachment =
-        serde_json::from_value(serde_json::json!({
-            "executionRef": "Guest/work-vm",
-            "transport": "virtio-blk",
-            "view": "ro-store",
-            "access": "read-only",
-            "mountPath": "/state",
-        }))
-        .expect("conformant attachment");
+fn the_provider_owns_only_the_binding_resource_type_and_finalizer() {
+    // Ownership pin (KTD3, R6): the serving side owns the neutral
+    // VolumeBinding type, its finalizer, and nothing else.
+    assert_eq!(VOLUME_BINDING_RESOURCE_TYPE, "VolumeBinding");
     assert_eq!(
-        ExportSpec::from_attachment(fixtures::volume_ref(), &attachment).unwrap_err(),
-        VirtiofsExportError::InvalidExport
+        VOLUME_BINDING_FINALIZER,
+        "volume-virtiofs.d2bus.org/volume-binding"
     );
+    let port = ScriptedPort::serving();
+    let controller = VirtiofsBindingController::new(&port);
+    assert_eq!(controller.finalizer(), VOLUME_BINDING_FINALIZER);
+    assert_eq!(controller.provider().as_str(), "volume-virtiofs");
+    let contract = virtiofs_runner_contract();
+    assert_eq!(contract.resource_type, VOLUME_BINDING_RESOURCE_TYPE);
+    assert_eq!(contract.finalizer, VOLUME_BINDING_FINALIZER);
+    assert!(contract.watched_configuration_is_dependency);
 }
 
 #[test]
-fn resource_export_spec_and_children_keep_one_qualified_owner() {
-    let spec = serde_json::json!({
-        "providerRef": "Provider/volume-virtiofs",
-        "volumeRef": "Volume/work-state",
-        "executionRef": "Guest/work-vm",
-        "view": "ro-store",
-        "access": "read-only",
-        "mountPath": "/nix/.ro-store",
-        "provider": {
-            "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
-            "schemaVersion": "1.0",
-            "settings": {}
-        }
-    });
-    let export = ExportSpec::from_resource_spec(&spec).expect("resource Export spec");
+fn resource_binding_spec_keeps_one_strict_owner() {
+    // The strictly neutral stored envelope parses, and foreign types,
+    // any provider extension, non-Volume owners, and provider tuning
+    // are all rejected.
+    let binding = fixtures::binding("read-only");
     assert_eq!(
-        export.provider_ref().to_canonical_string(),
-        "Provider/volume-virtiofs"
+        binding.spec().volume_ref().to_canonical_string(),
+        "Volume/work-state"
     );
     assert_ne!(
-        export.worker_process_ref().unwrap(),
-        export.endpoint_ref().unwrap()
+        binding.worker_process_ref().unwrap(),
+        binding.endpoint_ref().unwrap()
     );
-    let contract = virtiofs_runner_contract();
-    assert_eq!(contract.resource_type, EXPORT_RESOURCE_TYPE);
-    assert_eq!(contract.finalizer, EXPORT_FINALIZER);
-    assert!(contract.watched_configuration_is_dependency);
+
+    let mut foreign_type = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    foreign_type["type"] = serde_json::json!("virtiofs.d2bus.org.Export");
+    assert!(StoredBinding::from_resource_spec(&foreign_type).is_err());
+
+    let mut foreign_schema = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    foreign_schema["spec"]["provider"] =
+        serde_json::json!({ "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec" });
+    assert!(StoredBinding::from_resource_spec(&foreign_schema).is_err());
+
+    let mut foreign_owner = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    foreign_owner["metadata"]["ownerRef"] = serde_json::json!("Guest/work-vm");
+    let mut mismatched_owner = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    mismatched_owner["metadata"]["ownerRef"] = serde_json::json!("Volume/other");
+    assert!(StoredBinding::from_resource_spec(&mismatched_owner).is_err());
+
+    let mut tuned = fixtures::binding_envelope("read-only", "work-vm", "ro-store");
+    tuned["spec"]["threadPoolSize"] = serde_json::json!(2);
+    assert!(StoredBinding::from_resource_spec(&tuned).is_err());
 }

@@ -1820,6 +1820,34 @@ fn parse_mutation<T>(
         {
             return Err(schema_error("typed owner does not match resource metadata"));
         }
+        if envelope.resource_type().as_str() == "VolumeBinding"
+            && matches!(
+                kind,
+                ResourceMutationKind::Create
+                    | ResourceMutationKind::UpdateSpec
+                    | ResourceMutationKind::UpdateMetadata
+            )
+        {
+            // A binding is servable only for the Volume that owns it:
+            // ownerRef must be present, Volume-typed, and equal to the
+            // spec volumeRef.  The store revalidates the typed spec.
+            let body_value = serde_json::from_slice::<serde_json::Value>(&body.canonical_json)
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            let owner = envelope
+                .metadata()
+                .owner_ref()
+                .ok_or_else(|| ref_error("binding owner is required"))?;
+            if owner.resource_type().as_str() != "Volume" {
+                return Err(ref_error("binding owner must reference a Volume"));
+            }
+            let volume_ref = body_value
+                .pointer("/spec/volumeRef")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ref_error("binding volumeRef is required"))?;
+            if volume_ref != owner.to_canonical_string() {
+                return Err(ref_error("binding owner must equal its volumeRef"));
+            }
+        }
         Some(canonical_resource)
     } else {
         None
@@ -3476,17 +3504,17 @@ mod tests {
     }
 
     #[test]
-    fn qualified_export_child_envelope_has_a_valid_status_projection() {
+    fn standard_volume_binding_envelope_admits_through_the_standard_catalog() {
         let mut value = serde_json::json!({
             "apiVersion": "resources.d2bus.org/v3",
-            "type": "virtiofs.d2bus.org.Export",
+            "type": "VolumeBinding",
             "metadata": {
-                "name": "vol-export-test",
+                "name": "work-state-work-vm-ro-store",
                 "zone": "work",
                 "uid": "00000000-0000-4000-8000-000000000000",
                 "generation": 1,
                 "revision": 1,
-                "ownerRef": "Volume/store-view-work-vm",
+                "ownerRef": "Volume/work-state",
                 "finalizers": [],
                 "deletionRequestedAt": null,
                 "createdAt": "2026-07-22T00:00:00.000Z",
@@ -3494,17 +3522,11 @@ mod tests {
                 "managedBy": "controller"
             },
             "spec": {
-                "providerRef": "Provider/volume-virtiofs",
-                "volumeRef": "Volume/store-view-work-vm",
+                "volumeRef": "Volume/work-state",
                 "executionRef": "Guest/work-vm",
                 "view": "ro-store",
                 "access": "read-only",
-                "mountPath": "/nix/.ro-store",
-                "provider": {
-                    "schemaId": "volume-virtiofs.d2bus.org/virtiofs.d2bus.org.Export/spec",
-                    "schemaVersion": "1.0",
-                    "settings": {}
-                }
+                "mountPath": "/nix/.ro-store"
             },
             "status": {
                 "observedGeneration": 0,
@@ -3527,22 +3549,190 @@ mod tests {
                     "targetGeneration": 1
                 },
                 "resource": {
-                    "exportReady": false,
-                    "guestMountReady": false
+                    "ready": false,
+                    "fence": {
+                        "uid": "00000000-0000-4000-8000-000000000000",
+                        "generation": 1,
+                        "revision": 1
+                    }
                 }
             }
         });
-        let bytes = serde_json::to_vec(&value).expect("Export envelope serializes");
+        let bytes = serde_json::to_vec(&value).expect("binding envelope serializes");
         assert!(
             ResourceEnvelope::from_json(&bytes).is_ok(),
-            "qualified Export envelope must parse: {value}"
+            "standard VolumeBinding envelope must parse: {value}"
         );
         value["metadata"]["uid"] = serde_json::Value::Null;
         assert!(
             ResourceEnvelope::from_json(
-                &serde_json::to_vec(&value).expect("UID-less Export envelope serializes")
+                &serde_json::to_vec(&value).expect("UID-less binding envelope serializes")
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn standard_catalog_derives_volume_binding_without_an_extension_path() {
+        let catalog = ApiCatalog::standard();
+        let binding = ResourceTypeName::parse("VolumeBinding").unwrap();
+        let volume = ResourceTypeName::parse("Volume").unwrap();
+        // The serving role gains write on bindings and read on Volumes with
+        // no Volume write and no wildcard, derived purely from the standard
+        // catalog: no qualified extension admission is involved.
+        let serving = CompiledRole::new(
+            ResourceRef::parse("Role/volume-virtiofs-serving").unwrap(),
+            vec![
+                PolicyRule::new(
+                    &catalog,
+                    [binding.clone()],
+                    [
+                        ResourceVerb::Get,
+                        ResourceVerb::List,
+                        ResourceVerb::Watch,
+                        ResourceVerb::UpdateStatus,
+                        ResourceVerb::UpdateFinalizers,
+                    ],
+                    [],
+                    ["status".to_owned(), "finalizers".to_owned()],
+                    [],
+                    [ZoneId::parse("work").unwrap()],
+                    [],
+                )
+                .unwrap(),
+                PolicyRule::new(
+                    &catalog,
+                    [volume.clone()],
+                    [ResourceVerb::Get, ResourceVerb::List, ResourceVerb::Watch],
+                    [],
+                    [],
+                    [],
+                    [ZoneId::parse("work").unwrap()],
+                    [],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            serving.role_ref.to_canonical_string(),
+            "Role/volume-virtiofs-serving"
+        );
+        // An extension-only admission path is not required: the standard
+        // catalog already carries the type, so a qualified extension for it
+        // is rejected as a non-qualified duplicate shape.
+        let extension_error = ApiCatalog::with_extensions([binding]).unwrap_err();
+        assert!(matches!(
+            extension_error,
+            crate::authz::AuthorizationPolicyError::CatalogShape
+        ));
+    }
+    #[test]
+    fn binding_create_rejects_owner_mismatch_and_missing_owner() {
+        fn binding_mutation(owner: Option<&str>, volume: &str) -> (wire::Mutation, ParsedMutationRoute, TrustedRequest<()>) {
+            let mut value = serde_json::json!({
+                "apiVersion": "resources.d2bus.org/v3",
+                "type": "VolumeBinding",
+                "metadata": {
+                    "name": "work-state-work-vm",
+                    "zone": "dev",
+                    "generation": 1,
+                    "revision": 1,
+                    "finalizers": [],
+                    "deletionRequestedAt": null,
+                    "createdAt": "2026-07-22T00:00:00.000Z",
+                    "updatedAt": "2026-07-22T00:00:00.000Z",
+                    "managedBy": "controller"
+                },
+                "spec": {
+                    "volumeRef": volume,
+                    "executionRef": "Guest/work-vm",
+                    "view": "ro-store",
+                    "access": "read-only",
+                    "mountPath": "/nix/.ro-store"
+                },
+                "status": {
+                    "observedGeneration": 0,
+                    "phase": "Pending",
+                    "conditions": [],
+                    "lastReconciledAt": null,
+                    "startedAt": null,
+                    "completedAt": null,
+                    "outcome": null,
+                    "update": {
+                        "dependencies": {"count": 0, "refs": []},
+                        "disruption": "None",
+                        "lastAssessedAt": null,
+                        "observedGeneration": 0,
+                        "operationId": null,
+                        "owned": {"count": 0, "refs": []},
+                        "preserveState": true,
+                        "reasons": [],
+                        "state": "Unknown",
+                        "targetGeneration": 1
+                    },
+                    "resource": {
+                        "ready": false,
+                        "fence": {
+                            "uid": "00000000-0000-4000-8000-000000000000",
+                            "generation": 1,
+                            "revision": 1
+                        }
+                    }
+                }
+            });
+            if let Some(owner) = owner {
+                value["metadata"]["ownerRef"] = serde_json::json!(owner);
+            }
+            let bytes = serde_json::to_vec(&value).expect("binding envelope serializes");
+            let mut mutation = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+            let mut target = wire::ResourceIdentity::new();
+            target.zone = "dev".to_owned();
+            target.resource_type = "VolumeBinding".to_owned();
+            target.name = "work-state-work-vm".to_owned();
+            mutation.target = MessageField::some(target);
+            if let Some(owner) = owner {
+                let (owner_type, owner_name) = owner
+                    .split_once('/')
+                    .expect("owner ref shape");
+                let mut owner_identity = wire::ResourceIdentity::new();
+                owner_identity.zone = "dev".to_owned();
+                owner_identity.resource_type = owner_type.to_owned();
+                owner_identity.name = owner_name.to_owned();
+                mutation.owner = MessageField::some(owner_identity);
+            }
+            mutation.resource = create_body(bytes);
+            let mut binding_identity = wire::ResourceIdentity::new();
+            binding_identity.zone = "dev".to_owned();
+            binding_identity.resource_type = "VolumeBinding".to_owned();
+            binding_identity.name = "work-state-work-vm".to_owned();
+            mutation.resource.as_mut().expect("body").identity =
+                MessageField::some(binding_identity);
+            let authorization_state = state(None);
+            let trusted =
+                TrustedRequest::from_session_capability(subject(None), authorization_state, ());
+            let route =
+                parse_mutation_route(&mutation, Some(ResourceMutationKind::Create), &trusted)
+                    .expect("binding route parses");
+            (mutation, route, trusted)
+        }
+        let (mutation, route, trusted) =
+            binding_mutation(Some("Volume/work-state"), "Volume/work-state");
+        assert!(parse_mutation(&mutation, &route, &trusted).is_ok());
+        // Owner names another Volume: rejected.
+        let (mutation, route, trusted) =
+            binding_mutation(Some("Volume/other"), "Volume/work-state");
+        let error = parse_mutation(&mutation, &route, &trusted).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            ResourceErrorKind::ResourceRefInvalid
+        );
+        // Owner missing: rejected.
+        let (mutation, route, trusted) = binding_mutation(None, "Volume/work-state");
+        let error = parse_mutation(&mutation, &route, &trusted).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            ResourceErrorKind::ResourceRefInvalid
         );
     }
 }

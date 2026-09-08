@@ -37,9 +37,9 @@ fn migration_ready_to_commit() -> MigrationState {
     migration
 }
 
-fn relocation_at_copy(has_guest_attachments: bool) -> RelocationState {
+fn relocation_at_copy(has_guest_bindings: bool) -> RelocationState {
     let mut relocation =
-        RelocationState::new(MarkerDisposition::Verified, has_guest_attachments).unwrap();
+        RelocationState::new(MarkerDisposition::Verified, has_guest_bindings).unwrap();
     assert_eq!(
         relocation.begin().unwrap().action,
         RelocationAction::AddSourceFinalizer
@@ -124,15 +124,15 @@ fn precommit_worker_failure_preserves_installed_schema_and_rolls_back_staging() 
 }
 
 #[test]
-fn guest_relocation_repoints_attachments_before_finalizer_or_source_removal() {
+fn guest_relocation_repoints_bindings_before_finalizer_or_source_removal() {
     let mut relocation = relocation_at_copy(true);
     assert_eq!(
         relocation.copy_succeeded().unwrap().action,
         RelocationAction::ActivateDestination
     );
     let activated = relocation.destination_activated().unwrap();
-    assert_eq!(activated.phase, RelocationPhase::AttachmentRepointPending);
-    assert_eq!(activated.action, RelocationAction::RepointAttachments);
+    assert_eq!(activated.phase, RelocationPhase::BindingRepointPending);
+    assert_eq!(activated.action, RelocationAction::RepointBindings);
     assert_eq!(
         relocation.finalizer_removed(),
         Err(RelocationError::InvalidTransition)
@@ -142,7 +142,7 @@ fn guest_relocation_repoints_attachments_before_finalizer_or_source_removal() {
         Err(RelocationError::InvalidTransition)
     );
 
-    let repointed = relocation.attachments_repointed().unwrap();
+    let repointed = relocation.bindings_repointed().unwrap();
     assert_eq!(repointed.action, RelocationAction::RemoveSourceFinalizer);
     assert_eq!(
         relocation.source_deleted(),

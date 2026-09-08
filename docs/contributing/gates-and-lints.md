@@ -217,7 +217,9 @@ Attic is optional for this lane. When the Attic client or its configuration is
 unavailable, the lane reports an explicit skip and continues with the Bazel
 and VM work. A present configuration that is invalid, ambiguous, inaccessible,
 or otherwise unusable fails closed before the expensive work; an upload failure
-also fails the lane. Use `D2B_VM_CHECK=<name>` to select one named VM check.
+also fails the lane. `D2B_VM_CHECK=<name>` selects one named `vmChecks` entry
+to build; `D2B_HOST_VM_CHECK=<name>` designates the validated selected check
+for the run and fails closed on an unknown name.
 
 For cold and unchanged warm evidence, run the same command twice:
 

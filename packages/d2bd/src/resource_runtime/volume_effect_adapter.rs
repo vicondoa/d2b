@@ -955,7 +955,7 @@ fn parse_mode(mode: &str) -> Result<u32, VolumeLocalError> {
     u32::from_str_radix(&mode[1..], 8).map_err(|_| VolumeLocalError::InvalidSpec)
 }
 
-fn validate_component(value: &str) -> Result<(), VolumeLocalError> {
+pub(crate) fn validate_component(value: &str) -> Result<(), VolumeLocalError> {
     if value.is_empty()
         || value == "."
         || value == ".."
@@ -1495,5 +1495,17 @@ mod tests {
             .expect("stat marker root");
         assert_eq!(root.marker_owner_uid, marker_stat.st_uid);
         assert_eq!(root.marker_group_gid, marker_stat.st_gid);
+    }
+
+    #[test]
+    fn component_validation_rejects_traversal_names() {
+        assert!(validate_component("state").is_ok());
+        assert!(validate_component("vol-state-vfd-0123456789abcdef").is_ok());
+        for bad in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(
+                validate_component(bad).is_err(),
+                "{bad:?} must not become a volume subdirectory"
+            );
+        }
     }
 }

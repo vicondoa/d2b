@@ -26,13 +26,13 @@ fn spec_with_attachments(attachments: serde_json::Value) -> VolumeSpec {
     .expect("conformant fixture Volume spec")
 }
 
-fn attachment(execution_ref: &str, view: &str, access: &str) -> serde_json::Value {
+fn attachment(mount_path: &str, execution_ref: &str, view: &str, access: &str) -> serde_json::Value {
     serde_json::json!({
         "executionRef": execution_ref,
         "transport": "virtiofs",
         "view": view,
         "access": access,
-        "mountPath": "/state",
+        "mountPath": mount_path,
     })
 }
 
@@ -62,9 +62,9 @@ fn write_access_requires_the_view_to_grant_the_write_right() {
 #[test]
 fn many_readers_share_one_volume() {
     let spec = spec_with_attachments(serde_json::json!([
-        attachment("Guest/work-vm", "reader", "read-only"),
-        attachment("Guest/personal-vm", "reader", "read-only"),
-        attachment("Host/host-system", "controller", "read-write"),
+        attachment("/state", "Guest/work-vm", "reader", "read-only"),
+        attachment("/docs", "Guest/personal-vm", "reader", "read-only"),
+        attachment("/export", "Host/host-system", "controller", "read-write"),
     ]));
     let plans = admit_attachments(&spec, false).expect("admitted");
     assert_eq!(plans.len(), 3);
@@ -80,6 +80,7 @@ fn many_readers_share_one_volume() {
 #[test]
 fn a_second_simultaneous_writer_is_rejected() {
     let spec = spec_with_attachments(serde_json::json!([attachment(
+        "/state",
         "Guest/work-vm",
         "controller",
         "read-write"
@@ -89,14 +90,53 @@ fn a_second_simultaneous_writer_is_rejected() {
     // The base contract rejects two `read-write` attachments outright, so
     // the second-writer case reaches the Provider only as `shared-write`.
     let shared = spec_with_attachments(serde_json::json!([
-        attachment("Guest/work-vm", "controller", "read-write"),
-        attachment("Guest/personal-vm", "controller", "shared-write"),
+        attachment("/state", "Guest/work-vm", "controller", "read-write"),
+        attachment("/docs", "Guest/personal-vm", "controller", "shared-write"),
     ]));
     assert_eq!(
         admit_attachments(&shared, false).unwrap_err(),
         VolumeLocalError::SharedWriteUnsupported
     );
     assert!(admit_attachments(&shared, true).is_ok());
+}
+
+#[test]
+fn guest_mount_paths_collide_only_within_a_guest() {
+    // The base contract already rejects duplicate execution targets, so two
+    // attachments from one guest never reach admission through valid specs;
+    // the DuplicateMountPath rule below guards the (guest, path) pair for
+    // specs arriving through schema-only paths. The same path on different
+    // guests stays admitted: mount points live per guest (AE5).
+    let cross_guest = spec_with_attachments(serde_json::json!([
+        attachment("/state", "Guest/work-vm", "controller", "read-only"),
+        attachment("/state", "Guest/personal-vm", "reader", "read-only"),
+    ]));
+    assert!(admit_attachments(&cross_guest, false).is_ok());
+
+    // Distinct guest mount paths stay admitted.
+    let distinct = spec_with_attachments(serde_json::json!([
+        attachment("/state", "Guest/work-vm", "controller", "read-write"),
+        attachment("/docs", "Guest/personal-vm", "reader", "read-only"),
+    ]));
+    assert!(admit_attachments(&distinct, false).is_ok());
+}
+#[test]
+fn non_frozen_serving_settings_are_rejected_instead_of_silently_ignored() {
+    // Bindings serve the frozen default only: a virtiofs attachment
+    // declaring live tuning is rejected with a visible reason.
+    let mut tuned = attachment("/state", "Guest/work-vm", "controller", "read-only");
+    tuned["settings"] = serde_json::json!({
+        "posixAcl": false,
+        "xattr": false,
+        "cache": "always",
+        "inodeFileHandles": "never",
+        "threadPoolSize": null,
+        "socketGroup": null,
+    });
+    let spec = spec_with_attachments(serde_json::json!([tuned]));
+    let error = admit_attachments(&spec, false).unwrap_err();
+    assert_eq!(error, VolumeLocalError::AttachmentSettingsUnsupported);
+    assert_eq!(error.code(), "volume-attachment-settings-unsupported");
 }
 
 #[test]

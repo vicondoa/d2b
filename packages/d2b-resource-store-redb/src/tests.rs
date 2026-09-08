@@ -2982,6 +2982,63 @@ async fn legacy_v1_reopen_backfills_qualified_schema_rows() {
     }
 }
 #[tokio::test]
+async fn predecessor_store_missing_only_volume_binding_backfills() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let store = provision_store(file, marker, store_identity.clone())
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    // The previous binary provisioned every installed row except
+    // VolumeBinding.  Simulate that shape by removing just its row.
+    let binding = ResourceTypeName::parse("VolumeBinding").unwrap();
+    let key = crate::transaction::api_schema_key_for_type(&binding).unwrap();
+    let legacy_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(legacy_file).unwrap())
+        .unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    let mut schemas = write.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    schemas.remove(key.as_slice()).unwrap();
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len() as u64 - 1
+    );
+    drop(schemas);
+    write.commit().unwrap();
+    drop(database);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = open_store(file, store_identity).await.unwrap();
+    reopened.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    let read = database.begin_read().unwrap();
+    let schemas = read.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len() as u64
+    );
+    assert!(schemas.get(key.as_slice()).unwrap().is_some());
+}
+#[tokio::test]
 async fn empty_existing_store_is_quarantined_without_publication_marker() {
     let (_directory, file) = owned_file();
     let error = open_store(file, identity()).await.unwrap_err();

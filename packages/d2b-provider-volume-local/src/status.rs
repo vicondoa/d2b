@@ -1,7 +1,7 @@
 //! Public Volume status projection.
 //!
 //! No host path, source policy ID, anchored entry path, ACL value,
-//! numeric identity, export socket path, or raw adapter diagnostic is
+//! numeric identity, serving socket path, or raw adapter diagnostic is
 //! public status. An entry appears only as its digest, and every reason
 //! is one member of the closed error set.
 
@@ -39,15 +39,15 @@ impl LayoutPhase {
     }
 }
 
-/// Lifecycle state of one attachment, aggregated from its Export.
+/// Lifecycle state of one attachment, aggregated from its VolumeBinding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AttachmentState {
-    /// The Export has been requested but is not serving yet.
+    /// The binding has been minted but is not serving yet.
     Pending,
-    /// The Export is serving and the guest mount is observed ready.
+    /// The binding is serving and the guest mount is observed ready.
     Attached,
-    /// The Export is draining before the attachment is removed.
+    /// The binding is draining before the attachment is removed.
     Detaching,
 }
 
@@ -63,8 +63,8 @@ pub struct AttachmentStatus {
     pub access: AttachmentAccess,
     /// The attachment lifecycle state.
     pub state: AttachmentState,
-    /// Whether the owning Export reports itself serving.
-    pub export_ready: bool,
+    /// Whether the owning binding reports itself serving.
+    pub binding_ready: bool,
     /// Whether the guest reports the mount present.
     pub guest_mount_ready: bool,
 }

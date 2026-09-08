@@ -591,13 +591,17 @@ impl fmt::Debug for OwnedChildSnapshot {
     }
 }
 
-/// Bounded Device, Network, and Volume dependency status.
+/// Bounded Device, Network, Volume, and VolumeBinding dependency status.
+///
+/// Binding rows carry fenced readiness: the flag is true only when the
+/// observed binding reports Ready under its current UID / generation /
+/// revision fence (fail-closed otherwise).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestDependencySnapshot {
     devices: Vec<(ResourceRef, ResourcePhase)>,
     networks: Vec<(ResourceRef, ResourcePhase)>,
     volumes: Vec<(ResourceRef, ResourcePhase)>,
-    exports_ready: bool,
+    bindings: Vec<(ResourceRef, bool)>,
     setup_ready: bool,
 }
 
@@ -607,14 +611,20 @@ impl GuestDependencySnapshot {
         devices: Vec<(ResourceRef, ResourcePhase)>,
         networks: Vec<(ResourceRef, ResourcePhase)>,
         volumes: Vec<(ResourceRef, ResourcePhase)>,
-        exports_ready: bool,
+        bindings: Vec<(ResourceRef, bool)>,
         setup_ready: bool,
     ) -> Result<Self, CloudHypervisorError> {
         validate_dependency_family(&devices, "Device")?;
         validate_dependency_family(&networks, "Network")?;
         validate_dependency_family(&volumes, "Volume")?;
+        validate_binding_family(&bindings)?;
         let mut refs = BTreeSet::new();
         for (reference, _) in devices.iter().chain(&networks).chain(&volumes) {
+            if !refs.insert(reference.clone()) {
+                return Err(CloudHypervisorError::InvalidGuest);
+            }
+        }
+        for (reference, _) in &bindings {
             if !refs.insert(reference.clone()) {
                 return Err(CloudHypervisorError::InvalidGuest);
             }
@@ -623,7 +633,7 @@ impl GuestDependencySnapshot {
             devices,
             networks,
             volumes,
-            exports_ready,
+            bindings,
             setup_ready,
         })
     }
@@ -646,7 +656,11 @@ impl GuestDependencySnapshot {
                 .into_iter()
                 .map(|reference| (reference, ResourcePhase::Ready))
                 .collect(),
-            exports_ready: true,
+            bindings: graph
+                .bindings
+                .into_iter()
+                .map(|reference| (reference, true))
+                .collect(),
             setup_ready: true,
         }
     }
@@ -666,9 +680,15 @@ impl GuestDependencySnapshot {
         all_family_ready(&graph.volumes, &self.volumes)
     }
 
-    /// Return whether all required Volume Exports are Ready.
-    pub const fn exports_ready(&self) -> bool {
-        self.exports_ready
+    /// Return whether every required VolumeBinding is Ready under a
+    /// current fence.
+    pub fn bindings_ready(&self, graph: &BootstrapGraph) -> bool {
+        graph.bindings.iter().all(|reference| {
+            self.bindings
+                .iter()
+                .find(|(observed_ref, _)| observed_ref == reference)
+                .is_some_and(|(_, current)| *current)
+        })
     }
 
     /// Return whether all descriptor-declared setup Volumes are Ready.
@@ -684,7 +704,7 @@ impl GuestDependencySnapshot {
             devices_ready,
             networks_ready,
             volumes_ready,
-            self.exports_ready,
+            self.bindings_ready(graph),
             self.setup_ready,
         );
         let mut conditions = Vec::new();
@@ -697,8 +717,8 @@ impl GuestDependencySnapshot {
         if !volumes_ready {
             conditions.push(GuestCondition::VolumeDependencyNotReady);
         }
-        if !self.exports_ready {
-            conditions.push(GuestCondition::ExportDependencyNotReady);
+        if !self.bindings_ready(graph) {
+            conditions.push(GuestCondition::BindingDependencyNotReady);
         }
         if !self.setup_ready {
             conditions.push(GuestCondition::SetupVolumeNotReady);
@@ -721,6 +741,18 @@ fn validate_dependency_family(
     let mut refs = BTreeSet::new();
     if rows.iter().any(|(reference, _)| {
         reference.resource_type().as_str() != expected_type || !refs.insert(reference.clone())
+    }) {
+        return Err(CloudHypervisorError::InvalidGuest);
+    }
+    Ok(())
+}
+
+fn validate_binding_family(rows: &[(ResourceRef, bool)]) -> Result<(), CloudHypervisorError> {
+    let mut refs = BTreeSet::new();
+    if rows.iter().any(|(reference, _)| {
+        reference.resource_type().as_str()
+            != d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
+            || !refs.insert(reference.clone())
     }) {
         return Err(CloudHypervisorError::InvalidGuest);
     }
@@ -946,8 +978,8 @@ pub enum GuestCondition {
     NetworkDependencyNotReady,
     /// The backing Volume dependency family is not Ready.
     VolumeDependencyNotReady,
-    /// A required Volume Export is not Ready.
-    ExportDependencyNotReady,
+    /// A required VolumeBinding is not Ready under a current fence.
+    BindingDependencyNotReady,
     /// A descriptor-declared setup Volume is not Ready.
     SetupVolumeNotReady,
     /// The VMM desired lifecycle is still stopped.

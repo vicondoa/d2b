@@ -79,6 +79,7 @@ fn graph() -> BootstrapGraph {
         vec![ResourceRef::parse("Network/work").unwrap()],
         vec![ResourceRef::parse("Volume/store").unwrap()],
         vec![],
+        vec![],
     )
     .unwrap()
 }

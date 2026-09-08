@@ -13,6 +13,7 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::{
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId, canonical_digest,
+    volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource},
 };
 use d2b_core_controller::{
     BindingChildMaterializationError, BindingChildReconciler, HintTarget, OwnedChildIntent,
@@ -28,14 +29,14 @@ const CHILD_TYPES: [&str; 4] = [
     "Process",
     "EphemeralProcess",
     "Endpoint",
-    "virtiofs.d2bus.org.Export",
+    "VolumeBinding",
 ];
 const GUEST_CHILD_TYPES: [&str; 5] = [
     "Process",
     "EphemeralProcess",
     "Endpoint",
     "Volume",
-    "virtiofs.d2bus.org.Export",
+    "VolumeBinding",
 ];
 const OWNER_INDEX_MAX_DEPTH: usize = 8;
 const OWNER_INDEX_MAX_WORK_ITEMS: usize = 64;
@@ -231,6 +232,10 @@ pub(crate) async fn reconcile_owned_children(
 }
 
 /// Check whether every desired generic child is current and Ready.
+///
+/// VolumeBinding children are Ready only behind the typed fenced status
+/// projection (KTD3): readiness whose UID / generation / revision fence
+/// does not match the stored binding is never current.
 pub(crate) fn owned_children_ready(owner: &OwnedChildOwner, children: &[StoredResource]) -> bool {
     let Some(desired) = owner.desired.as_ref() else {
         return false;
@@ -241,14 +246,53 @@ pub(crate) fn owned_children_ready(owner: &OwnedChildOwner, children: &[StoredRe
                 .iter()
                 .find(|child| owned_child_matches(owner, intent, child))
                 .is_some_and(|child| {
-                    matches!(
-                        child_status_phase(child).as_deref(),
-                        Some("Ready" | "Succeeded")
-                    )
+                    if child.resource_ref.resource_type().as_str()
+                        == d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
+                    {
+                        binding_readiness_current(child)
+                    } else {
+                        matches!(
+                            child_status_phase(child).as_deref(),
+                            Some("Ready" | "Succeeded")
+                        )
+                    }
                 })
         })
 }
 
+/// Whether one stored VolumeBinding carries a current fenced readiness
+/// projection.  Unparseable or unfenced projections fail closed.
+pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
+        return false;
+    };
+    let Some(resource) = value
+        .pointer("/status/resource")
+        .cloned()
+        .map(|resource| serde_json::from_value::<VolumeBindingStatusResource>(resource))
+        .transpose()
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    resource.readiness_is_current(&child.uid, child.generation, child.revision)
+}
+
+/// Parse a stored binding envelope to its typed spec, stripping the
+/// reserved envelope fields the minter stores alongside the five typed
+/// ones.  Returns None for genuinely broken resources.
+pub(crate) fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec> {
+    let mut spec = serde_json::from_slice::<serde_json::Value>(&binding.canonical_json)
+        .ok()?
+        .get("spec")?
+        .clone();
+    let object = spec.as_object_mut()?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value::<VolumeBindingSpec>(serde_json::Value::Object(object.clone())).ok()
+}
 fn owned_child_matches(
     owner: &OwnedChildOwner,
     intent: &OwnedChildIntent,
@@ -1470,7 +1514,7 @@ mod tests {
 
     #[test]
     fn generic_child_readiness_requires_owner_spec_and_ready_status() {
-        let owner_ref = target("virtiofs.d2bus.org.Export", "export");
+        let owner_ref = target("VolumeBinding", "binding");
         let child_ref = target("Process", "worker");
         let spec = serde_json::json!({
             "providerRef": "Provider/system-minijail",
@@ -1494,10 +1538,178 @@ mod tests {
 
         let foreign = stored_resource_with_spec(
             &child_ref,
-            Some(&target("virtiofs.d2bus.org.Export", "other")),
+            Some(&target("VolumeBinding", "other")),
             "Ready",
             spec,
         );
         assert!(!owned_children_ready(&owner, &[foreign]));
+    }
+
+    fn binding_child_with_fence(
+        binding_ref: &ResourceRef,
+        owner_ref: &ResourceRef,
+        fence: serde_json::Value,
+    ) -> StoredResource {
+        let mut binding = stored_resource_with_spec(
+            binding_ref,
+            Some(owner_ref),
+            "Ready",
+            serde_json::json!({"volumeRef": "Volume/volume"}),
+        );
+        let mut value =
+            serde_json::from_slice::<serde_json::Value>(&binding.canonical_json).unwrap();
+        value["status"]["resource"] = serde_json::json!({
+            "ready": true,
+            "fence": fence,
+        });
+        binding.canonical_json = CanonicalJsonValue::parse(
+            &serde_json::to_vec(&value).expect("binding serialization"),
+        )
+        .expect("canonical binding")
+        .to_canonical_bytes();
+        binding
+    }
+
+    #[test]
+    fn binding_child_readiness_requires_current_fenced_projection() {
+        let owner_ref = target("Volume", "volume");
+        let binding_ref = target("VolumeBinding", "binding");
+        let current_uid = "123e4567-e89b-42d3-a456-426614174000";
+        let make_owner = |child: &StoredResource| {
+            let intent = OwnedChildIntent::new(
+                child.resource_ref.clone(),
+                child.canonical_json.clone(),
+                "sha256:binding",
+            )
+            .expect("binding intent");
+            OwnedChildOwner {
+                resource: stored_resource(&owner_ref, None, "Pending"),
+                desired: Some(vec![intent]),
+                fenced: false,
+            }
+        };
+
+        // Phase Ready alone never satisfies a binding child: the typed
+        // fenced projection is required (KTD3).
+        let unfenced = stored_resource_with_spec(
+            &binding_ref,
+            Some(&owner_ref),
+            "Ready",
+            serde_json::json!({"volumeRef": "Volume/volume"}),
+        );
+        assert!(!owned_children_ready(&make_owner(&unfenced), &[unfenced]));
+
+        // A fence under another binding UID is stale.
+        let foreign_uid = binding_child_with_fence(
+            &binding_ref,
+            &owner_ref,
+            serde_json::json!({
+                "uid": "223e4567-e89b-42d3-a456-426614174000",
+                "generation": 1,
+                "revision": 1
+            }),
+        );
+        assert!(!owned_children_ready(&make_owner(&foreign_uid), &[foreign_uid]));
+
+        // A fence under an older generation is stale: the stored binding
+        // is at generation 1, the projection reports generation 2.
+        let stale_generation = binding_child_with_fence(
+            &binding_ref,
+            &owner_ref,
+            serde_json::json!({
+                "uid": current_uid,
+                "generation": 2,
+                "revision": 1
+            }),
+        );
+        assert!(!owned_children_ready(
+            &make_owner(&stale_generation),
+            &[stale_generation]
+        ));
+
+        // A fence matching the binding's UID, generation, and revision is
+        // current.
+        let current = binding_child_with_fence(
+            &binding_ref,
+            &owner_ref,
+            serde_json::json!({
+                "uid": current_uid,
+                "generation": 1,
+                "revision": 1
+            }),
+        );
+        assert!(owned_children_ready(&make_owner(&current), &[current]));
+    }
+
+    #[test]
+    fn parsed_binding_spec_strips_reserved_fields_and_rejects_broken_specs() {
+        let guest_ref = target("Guest", "work-vm");
+        let other_guest_ref = target("Guest", "other-vm");
+        let binding_spec = |execution_ref: &str| {
+            serde_json::json!({
+                "volumeRef": "Volume/work-state",
+                "executionRef": execution_ref,
+                "view": "controller",
+                "access": "read-only",
+                "mountPath": "/state",
+            })
+        };
+        let own = stored_resource_with_spec(
+            &target("VolumeBinding", "own"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            binding_spec(guest_ref.to_canonical_string().as_str()),
+        );
+        assert_eq!(
+            parsed_binding_spec(&own)
+                .expect("clean spec parses")
+                .execution_ref(),
+            &guest_ref
+        );
+        // Minted records carry the reserved envelope providerRef alongside
+        // the five typed fields; the parse must attribute them instead of
+        // failing closed.
+        let minted_spec = |execution_ref: &str| {
+            serde_json::json!({
+                "volumeRef": "Volume/work-state",
+                "executionRef": execution_ref,
+                "view": "controller",
+                "access": "read-only",
+                "mountPath": "/state",
+                "providerRef": "Provider/volume-virtiofs",
+            })
+        };
+        let own_minted = stored_resource_with_spec(
+            &target("VolumeBinding", "own-minted"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            minted_spec(guest_ref.to_canonical_string().as_str()),
+        );
+        assert_eq!(
+            parsed_binding_spec(&own_minted)
+                .expect("minted spec parses")
+                .execution_ref(),
+            &guest_ref
+        );
+        let foreign_minted = stored_resource_with_spec(
+            &target("VolumeBinding", "foreign-minted"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            minted_spec(other_guest_ref.to_canonical_string().as_str()),
+        );
+        assert_eq!(
+            parsed_binding_spec(&foreign_minted)
+                .expect("foreign spec parses")
+                .execution_ref(),
+            &other_guest_ref
+        );
+        // An unparseable spec is a broken resource.
+        let broken = stored_resource_with_spec(
+            &target("VolumeBinding", "broken"),
+            Some(&target("Volume", "work-state")),
+            "Pending",
+            serde_json::json!({"volumeRef": "Volume/work-state"}),
+        );
+        assert!(parsed_binding_spec(&broken).is_none());
     }
 }

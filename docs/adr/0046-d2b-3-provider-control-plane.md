@@ -196,9 +196,12 @@ revisioned API/status churn. Stateless and status-sufficient components declare
 no state Volume. When one is declared it is `Provider/volume-local`-backed,
 `persistent`, carries a nonzero quota and identity marker, and is `Ready` before
 the component Process starts. `Provider/volume-local` is the sole `Volume`
-reconciler and owns Host source-side storage; `Provider/volume-virtiofs` owns
-the virtiofsd Process and the qualified `virtiofs.d2bus.org.Export` attachment
-and never adds `Volume` to its exported ResourceTypes.
+reconciler, owns Host source-side storage, and owns attachment admission - it
+mints one durable, provider-neutral `VolumeBinding` per Volume /
+execution-target / named-view relationship. `Provider/volume-virtiofs` never
+mints bindings - it owns the virtiofsd Process, reconciles `VolumeBinding`, and
+is the sole author of the fenced binding status projection, never adding
+`Volume` to its exported ResourceTypes.
 
 Semantic Provider controllers compose behavior by creating owned primitive
 resources and by calling typed `EffectPort` interfaces whose host-mutating

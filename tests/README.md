@@ -93,9 +93,11 @@ The `vmCheck` result paths are excluded so capability skips are never cached as
 passing test results.
 If Attic or its configuration is unavailable, the lane reports an explicit
 skip and continues. If present configuration is invalid or unusable, the lane
-fails closed; an upload failure is also fatal. Set `D2B_VM_CHECK=<name>` for
-one named check. Repeating the same command without source changes is the warm
-run and should execute zero Rust compilation actions.
+fails closed; an upload failure is also fatal. `D2B_VM_CHECK=<name>` builds one
+named `vmChecks` entry; `D2B_HOST_VM_CHECK=<name>` designates the validated
+selected check for the run and fails closed on an unknown name. Repeating the
+same command without source changes is the warm run and should execute zero
+Rust compilation actions.
 
 Run these aliases directly from a normal Nix-enabled checkout. Make enters
 the pinned `.#bazel` shell automatically when the explicit d2b shell contract

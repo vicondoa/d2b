@@ -1683,7 +1683,7 @@ Provider-specific implementation extension uses the optional `status.provider`
 ### Ownership, resolution, and references
 
 - `metadata.ownerRef` gives the Endpoint its lifecycle and child-first deletion
-  (the owning component/Process/Device/Guest/Volume-`Export`). Core creates
+  (the owning component/Process/Device/Guest/Volume-`VolumeBinding`). Core creates
   static component Endpoints from the signed manifest's Endpoint templates;
   dynamic controllers create their owned Endpoints. Static Endpoints may be
   Nix/API-authored only where the ResourceType schema permits.
@@ -1697,7 +1697,7 @@ Provider-specific implementation extension uses the optional `status.provider`
   allowlist. It authenticates the subject and signed Provider component rather
   than accepting either identity from the request body. A mismatch at any
   layer returns `endpoint-resolve-denied`.
-- The virtiofs `Export` resource remains the attachment lifecycle owner and
+- The `core.d2bus.org/VolumeBinding` resource is the attachment lifecycle owner and
   references its `Endpoint` where the exported endpoint is independently
   consumed (`ADR-046-resources-volume`).
 
@@ -1807,7 +1807,7 @@ is integrated and all tests pass.
 | `StoreVirtiofsPreflight` | Controller observation, not a Process | - | `volume-virtiofs` or `volume-local` Volume controller | Delete after Volume Provider parity (ADR046-primitives-003) |
 | `SwtpmPreStartFlush` | `EphemeralProcess` | EphemeralProcess | `device-tpm` Provider | Delete after device-tpm EphemeralProcess integration |
 | `Swtpm` | `Process` | Process | `device-tpm` Provider; owned by Guest | Delete after device-tpm Process integration |
-| `Virtiofsd` | `Process` | Process | `volume-virtiofs` Provider; owned by `virtiofs.d2bus.org.Export` | Delete after volume-virtiofs Process integration |
+| `Virtiofsd` | `Process` | Process | `volume-virtiofs` Provider; owned by `core.d2bus.org/VolumeBinding` | Delete after volume-virtiofs Process integration |
 | `Video` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |
 | `Gpu` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |
 | `GpuRenderNode` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |

@@ -26,7 +26,7 @@ mod acl;
 mod content;
 mod controller;
 mod error;
-mod exports;
+mod bindings;
 mod finalization;
 mod identity;
 mod layout;
@@ -69,7 +69,7 @@ pub use controller::{
     volume_runner_contract,
 };
 pub use error::VolumeLocalError;
-pub use exports::{EXPORT_RESOURCE_TYPE, ExportIntent, desired_export_intents};
+pub use bindings::{BindingIntent, desired_binding_intents};
 pub use finalization::{
     FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
 };
