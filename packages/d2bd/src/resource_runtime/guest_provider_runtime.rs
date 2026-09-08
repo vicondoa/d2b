@@ -14,7 +14,8 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ZoneId, identity::ReconnectGeneration,
 };
 use d2b_core_controller::{
-    ControllerDescriptor, CoreControllerSource, Runner, RunnerConfig,
+    ControllerDescriptor, CoreControllerSource, Runner, RunnerConfig, RunnerError,
+    SourceError,
 };
 use d2b_resource_store::{
     StoreErrorKind, StoreGetRequest, StoreOperationContext, StoreProjection,
@@ -183,8 +184,33 @@ pub(crate) async fn start(
             },
         );
         tasks.push(tokio::spawn(async move {
-            if let Err(error) = runner.run().await {
-                tracing::warn!(error = %error, "U6 Guest runtime shared Runner stopped");
+            // Respawn on transient source failures with capped backoff:
+            // a dead guest runner wedges guest reconciliation forever.
+            let mut backoff_ms = 500u64;
+            loop {
+                match runner.run().await {
+                    Ok(_) => break,
+                    Err(error) if matches!(
+                        error.error(),
+                        RunnerError::Source(
+                            SourceError::Timeout
+                                | SourceError::Unavailable
+                                | SourceError::Backpressure
+                        )
+                    ) => {
+                        tracing::warn!(
+                            error = %error,
+                            backoff_ms,
+                            "U6 Guest runtime shared Runner retrying after transient failure",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        backoff_ms = (backoff_ms * 2).min(5_000);
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "U6 Guest runtime shared Runner stopped");
+                        break;
+                    }
+                }
             }
         }));
     }

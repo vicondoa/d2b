@@ -13726,7 +13726,9 @@ impl ZoneResourceRuntime {
                                         | SourceError::Backpressure
                                 )
                             );
-                            if !transient || attempt >= 3 {
+                            let backoff_ms =
+                                std::cmp::min(1_000u64 << attempt, 5_000);
+                            if !transient {
                                 tracing::warn!(
                                     error = %error,
                                     "system-core Host/User shared runner failed",
@@ -13736,10 +13738,11 @@ impl ZoneResourceRuntime {
                             attempt += 1;
                             tracing::warn!(
                                 attempt,
+                                backoff_ms,
                                 "system-core Host/User shared runner retrying after transient failure",
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(
-                                1_000u64 << attempt,
+                                backoff_ms,
                             ))
                             .await;
                         }
@@ -14445,26 +14448,69 @@ impl ZoneResourceRuntime {
                 let diagnostic_resource_type = ResourceTypeName::parse(resource_type)
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
                 let (startup_tx, startup_rx) = tokio::sync::oneshot::channel();
+                let startup_tx = Arc::new(tokio::sync::Mutex::new(Some(startup_tx)));
                 let failure_slot = Arc::clone(&self.u9_runner_failures);
                 let startup_failure_slot = Arc::clone(&failure_slot);
                 let callback_controller = diagnostic_controller.clone();
                 let callback_resource_type = diagnostic_resource_type.clone();
                 let task = tokio::spawn(async move {
-                    let result = runner
-                        .run_with_startup(move |startup| {
-                            if let Err(error) = startup {
-                                push_runner_failure(
-                                    &startup_failure_slot,
-                                    ControllerRunnerFailure::new(
-                                        callback_controller,
-                                        [callback_resource_type],
-                                        error,
-                                    ),
-                                );
-                            }
-                            let _ = startup_tx.send(startup);
-                        })
+                    // Respawn on transient source failures with capped
+                    // backoff: a dead interaction runner wedges clipboard,
+                    // notification, and audio reconciliation forever.
+                    let mut backoff_ms = 500u64;
+                    let result = loop {
+                        let outcome = runner
+                            .run_with_startup({
+                                let startup_failure_slot =
+                                    Arc::clone(&startup_failure_slot);
+                                let callback_controller =
+                                    callback_controller.clone();
+                                let callback_resource_type =
+                                    callback_resource_type.clone();
+                                let startup_tx = Arc::clone(&startup_tx);
+                                move |startup| {
+                                    if let Err(error) = startup {
+                                        push_runner_failure(
+                                            &startup_failure_slot,
+                                            ControllerRunnerFailure::new(
+                                                callback_controller,
+                                                [callback_resource_type],
+                                                error,
+                                            ),
+                                        );
+                                    }
+                                    if let Ok(mut slot) = startup_tx.try_lock() {
+                                        if let Some(sender) = slot.take() {
+                                            let _ = sender.send(startup);
+                                        }
+                                    }
+                                }
+                            })
+                            .await;
+                        let transient = matches!(
+                            &outcome,
+                            Err(failure) if matches!(
+                                failure.error(),
+                                RunnerError::Source(
+                                    SourceError::Timeout
+                                        | SourceError::Unavailable
+                                        | SourceError::Backpressure
+                                )
+                            )
+                        );
+                        if !transient {
+                            break outcome;
+                        }
+                        tracing::warn!(
+                            backoff_ms,
+                            "U9 interaction shared Runner retrying after transient failure",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            backoff_ms,
+                        ))
                         .await;
+                        backoff_ms = (backoff_ms * 2).min(5_000);
+                    };
                     match result {
                         Ok(report) => tracing::debug!(
                             controller,
@@ -19155,18 +19201,17 @@ impl ZoneResourceRuntime {
                         attempt + 1,
                         std::sync::atomic::Ordering::SeqCst,
                     );
-                    if !transient || attempt >= 3 {
+                    let backoff_ms = std::cmp::min(1_000u64 << attempt, 5_000);
+                    if !transient {
                         break outcome;
                     }
                     attempt += 1;
                     tracing::warn!(
                         attempt,
+                        backoff_ms,
                         "Process Provider shared runner retrying after transient source failure",
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        1_000u64 << attempt,
-                    ))
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 };
                 match result {
                     Ok(report) => tracing::debug!(

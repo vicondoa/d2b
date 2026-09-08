@@ -41,8 +41,8 @@ use d2b_core_controller::{
     FinalizeResult, HandlerFailure, ObservationResult, ReconcileContext, ReconcileDisposition,
     ReconcilePlan, ReconcileReason, ReconcileResult, ResourceKey, ResourceMutationBatch,
     ResourceReconciler, ResourceRegistration, ResourceSnapshot, ResyncPolicy, Runner, RunnerConfig,
-    SelectorField, SourceError, StatusPersistence, UpdateAssessment, UpdateAssessmentState,
-    UpgradePlan, UpgradeStage, ValidationResult,
+    RunnerError, SelectorField, SourceError, StatusPersistence, UpdateAssessment,
+    UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
 };
 use d2b_provider_volume_local::{
     ConditionSeverity, EntryCondition, EntryDigest, LayoutPhase, VolumeLayoutEffectPort,
@@ -2510,14 +2510,42 @@ pub(crate) async fn start(
                 kind = ?kind,
                 "u7 shared volume runner task started",
             );
-            if let Err(error) = runner.run().await {
-                tracing::warn!(
-                    error = %error,
-                    failed_resource = ?error.failed_key()
-                        .map(|key| key.resource_ref().to_canonical_string()),
-                    failed_operation = ?error.failed_operation(),
-                    "U7 shared Volume Runner stopped",
-                );
+            let mut backoff_ms = 500u64;
+            loop {
+                match runner.run().await {
+                    Ok(_) => break,
+                    Err(error) if matches!(
+                        error.error(),
+                        RunnerError::Source(
+                            SourceError::Timeout
+                                | SourceError::Unavailable
+                                | SourceError::Backpressure
+                        )
+                    ) => {
+                        tracing::warn!(
+                            error = %error,
+                            backoff_ms,
+                            kind = ?kind,
+                            "U7 shared Volume Runner retrying after transient failure",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            backoff_ms,
+                        ))
+                        .await;
+                        backoff_ms = (backoff_ms * 2).min(5_000);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            failed_resource = ?error.failed_key()
+                                .map(|key| key.resource_ref().to_canonical_string()),
+                            failed_operation = ?error.failed_operation(),
+                            kind = ?kind,
+                            "U7 shared Volume Runner stopped",
+                        );
+                        break;
+                    }
+                }
             }
         }));
     }
