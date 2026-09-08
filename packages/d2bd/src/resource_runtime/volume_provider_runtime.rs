@@ -1050,6 +1050,8 @@ impl DaemonVolumeProviderEffects {
             ready = crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children),
             worker_phase = ?process_phase,
             endpoint_phase = ?endpoint_phase,
+            worker_conditions = ?child_conditions(&children, &process_ref),
+            endpoint_conditions = ?child_conditions(&children, &endpoint_ref),
             "u7 binding children readiness",
         );
         if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
@@ -1431,6 +1433,45 @@ fn child_phase(children: &[StoredResource], target: &ResourceRef) -> Option<Stri
                         .pointer("/status/phase")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned)
+                })
+        })
+}
+
+fn child_conditions(children: &[StoredResource], target: &ResourceRef) -> Option<String> {
+    children
+        .iter()
+        .find(|child| child.resource_ref == *target)
+        .and_then(|child| {
+            serde_json::from_slice::<Value>(&child.canonical_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .pointer("/status/conditions")
+                        .map(|conditions| {
+                            conditions
+                                .as_array()
+                                .map(|items| {
+                                    items
+                                        .iter()
+                                        .map(|item| {
+                                            format!(
+                                                "{}={}:{}",
+                                                item.pointer("/type")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("?"),
+                                                item.pointer("/status")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("?"),
+                                                item.pointer("/reason")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("?")
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(",")
+                                })
+                                .unwrap_or_default()
+                        })
                 })
         })
 }
