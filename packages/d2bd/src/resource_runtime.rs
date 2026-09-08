@@ -13704,16 +13704,46 @@ impl ZoneResourceRuntime {
             .any(|present| present == &system_core_runner_identity)
         {
             let handle = tokio::spawn(async move {
-                match system_core_runner.run().await {
-                    Ok(report) => tracing::debug!(
-                        dispatched = report.dispatched,
-                        relists = report.relists,
-                        "system-core Host/User shared runner stopped",
-                    ),
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "system-core Host/User shared runner failed",
-                    ),
+                // A transient store timeout must not wedge Host/User
+                // reconciliation; retry before surfacing the failure.
+                let mut attempt = 0usize;
+                loop {
+                    match system_core_runner.run().await {
+                        Ok(report) => {
+                            tracing::debug!(
+                                dispatched = report.dispatched,
+                                relists = report.relists,
+                                "system-core Host/User shared runner stopped",
+                            );
+                            break;
+                        }
+                        Err(error) => {
+                            let transient = matches!(
+                                error.error(),
+                                RunnerError::Source(
+                                    SourceError::Timeout
+                                        | SourceError::Unavailable
+                                        | SourceError::Backpressure
+                                )
+                            );
+                            if !transient || attempt >= 3 {
+                                tracing::warn!(
+                                    error = %error,
+                                    "system-core Host/User shared runner failed",
+                                );
+                                break;
+                            }
+                            attempt += 1;
+                            tracing::warn!(
+                                attempt,
+                                "system-core Host/User shared runner retrying after transient failure",
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                1_000u64 << attempt,
+                            ))
+                            .await;
+                        }
+                    }
                 }
             });
             new_tasks.push(CoreRunnerTask {
@@ -19053,27 +19083,79 @@ impl ZoneResourceRuntime {
                     max_attempts: 3,
                 },
             );
-            let (startup_tx, startup_rx) = tokio::sync::oneshot::channel();
             let failure_slot = Arc::clone(&self.process_runner_failure);
             let startup_failure_slot = Arc::clone(&failure_slot);
             let callback_controller = diagnostic_controller.clone();
             let callback_resource_types = diagnostic_resource_types.clone();
+            let (startup_tx, startup_rx) = tokio::sync::oneshot::channel();
+            let startup_tx = Arc::new(tokio::sync::Mutex::new(Some(startup_tx)));
+            let startup_attempt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let task = tokio::spawn(async move {
-                let result = runner
-                    .run_with_startup(move |startup| {
-                        if let Err(error) = startup {
-                            store_runner_failure(
-                                &startup_failure_slot,
-                                ControllerRunnerFailure::new(
-                                    callback_controller,
-                                    callback_resource_types,
-                                    error,
-                                ),
-                            );
-                        }
-                        let _ = startup_tx.send(startup);
-                    })
+                // A transient store timeout during startup must not wedge
+                // the daemon: retry the runner before recording a failure.
+                let mut attempt = 0usize;
+                let result = loop {
+                    let outcome = runner
+                        .run_with_startup({
+                            let startup_tx = Arc::clone(&startup_tx);
+                            let startup_attempt = Arc::clone(&startup_attempt);
+                            let startup_failure_slot = Arc::clone(&startup_failure_slot);
+                            let callback_controller = callback_controller.clone();
+                            let callback_resource_types = callback_resource_types.clone();
+                            move |startup| {
+                                let attempt = startup_attempt.load(
+                                    std::sync::atomic::Ordering::SeqCst,
+                                );
+                                if let Err(error) = startup {
+                                    store_runner_failure(
+                                        &startup_failure_slot,
+                                        ControllerRunnerFailure::new(
+                                            callback_controller.clone(),
+                                            callback_resource_types.clone(),
+                                            error,
+                                        ),
+                                    );
+                                    // Only the final attempt aborts startup.
+                                    if attempt < 3 {
+                                        return;
+                                    }
+                                }
+                                if let Ok(mut slot) = startup_tx.try_lock() {
+                                    if let Some(sender) = slot.take() {
+                                        let _ = sender.send(startup);
+                                    }
+                                }
+                            }
+                        })
+                        .await;
+                    let transient = matches!(
+                        &outcome,
+                        Err(failure) if matches!(
+                            failure.error(),
+                            RunnerError::Source(
+                                SourceError::Timeout
+                                    | SourceError::Unavailable
+                                    | SourceError::Backpressure
+                            )
+                        )
+                    );
+                    startup_attempt.store(
+                        attempt + 1,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    if !transient || attempt >= 3 {
+                        break outcome;
+                    }
+                    attempt += 1;
+                    tracing::warn!(
+                        attempt,
+                        "Process Provider shared runner retrying after transient source failure",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        1_000u64 << attempt,
+                    ))
                     .await;
+                };
                 match result {
                     Ok(report) => tracing::debug!(
                         dispatched = report.dispatched,
