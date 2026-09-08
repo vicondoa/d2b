@@ -727,7 +727,7 @@ impl DaemonVolumeProviderEffects {
     fn worker_child_specs(
         binding: &StoredBinding,
         _plan: &VirtiofsdWorkerPlan,
-        principal: &BoundedToken,
+        _principal: &BoundedToken,
     ) -> Result<(ResourceRef, Value, ResourceRef, Value), SharedVolumeEffectError> {
         let process_ref = binding
             .worker_process_ref()
@@ -741,7 +741,6 @@ impl DaemonVolumeProviderEffects {
             "domain": "system",
             "processClass": "worker",
             "template": d2b_provider_volume_virtiofs::WORKER_TEMPLATE,
-            "userRef": format!("User/{}", principal.as_str()),
             "desiredLifecycle": "running",
             "sandbox": {
                 "capabilityClasses": [],
