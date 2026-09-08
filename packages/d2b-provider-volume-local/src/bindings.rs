@@ -75,7 +75,7 @@ impl core::fmt::Debug for BindingIntent {
 /// Translate every virtiofs attachment into one deterministic binding.
 ///
 /// The binding name derives from the Volume, execution target, named view,
-/// and guest mount path — never from the attachment index — so reordering
+/// and guest mount path -- never from the attachment index -- so reordering
 /// declared attachments never churns identities.
 pub fn desired_binding_intents(
     volume_ref: ResourceRef,

@@ -63,8 +63,8 @@ impl VirtiofsdWorkerPlan {
     /// view grants no write right, so a view that never granted write
     /// cannot be widened by a binding. The neutral binding envelope
     /// carries no attachment tuning (KTD1): the serving posture is the
-    /// frozen default profile — no POSIX ACLs, no xattrs, `auto` page
-    /// cache, and `never` inode file handles — so the ADR 0021 sandbox
+    /// frozen default profile -- no POSIX ACLs, no xattrs, `auto` page
+    /// cache, and `never` inode file handles -- so the ADR 0021 sandbox
     /// invariant holds by construction.
     pub fn for_binding(
         binding: &StoredBinding,

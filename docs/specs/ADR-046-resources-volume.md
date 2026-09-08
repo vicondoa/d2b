@@ -637,8 +637,8 @@ access to the referenced Volume for view and Guest-vCPU resolution.
 
 The virtiofsd export socket path is an internal implementation detail of
 volume-virtiofs and is never exposed as a status field, spec field, or API surface.
-Binding readiness is fenced by UID, generation, and revision — stale reports
-are never accepted as ready — and is detected by the Unix socket listener check
+Binding readiness is fenced by UID, generation, and revision -- stale reports
+are never accepted as ready -- and is detected by the Unix socket listener check
 (current: `unix-socket-exists` readiness kind). Guest mount readiness is observed via the
 guest-control health protocol.
 

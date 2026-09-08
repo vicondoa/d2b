@@ -35,9 +35,9 @@ Execution attachments live in `Volume.spec.attachments` and materialize as `virt
 ### Key Decisions
 
 - **Neutral binding over Export repair.** The relationship becomes a first-class neutral resource instead of rehabilitating provider serving state. Governs R1, R9, R11.
-- **Clean single-owner break.** Attachments never get two durable owners at once (session-settled: user-approved — chosen over a transitional dual-owner period: a second durable owner re-creates the split this work removes). Governs R5, R8, R12.
+- **Clean single-owner break.** Attachments never get two durable owners at once (session-settled: user-approved -- chosen over a transitional dual-owner period: a second durable owner re-creates the split this work removes). Governs R5, R8, R12.
 - **Strict controller ownership.** Every controller owns its resource and private state. Cross-controller access goes through resource reads only, never direct durable writes. Governs R4, R6, R7, R8.
-- **Volume-side binding ownership with dependency-only virtiofs.** The Volume side owns attachment admission and deterministic binding identity; virtiofs observes bindings and reads Volumes without writing them (session-settled: user-approved — chosen over a dedicated binding owner: admission already lives Volume-side and a third owner adds a new authority without a consumer). Governs R5, R6.
+- **Volume-side binding ownership with dependency-only virtiofs.** The Volume side owns attachment admission and deterministic binding identity; virtiofs observes bindings and reads Volumes without writing them (session-settled: user-approved -- chosen over a dedicated binding owner: admission already lives Volume-side and a third owner adds a new authority without a consumer). Governs R5, R6.
 - **Preserve the hardening already earned.** StoreView, sandbox, traversal, lock, adoption, and fail-closed behavior survive unchanged. Governs R13.
 
 ```mermaid
@@ -150,7 +150,7 @@ None blocking. OQ1 and OQ2 from the requirements pass were resolved during plann
 
 ### Key Technical Decisions
 
-- KTD1. Attachments stay as input-only declaration; bindings are the sole durable relationship (session-settled: user-approved — chosen over deleting the attachments field: strict wire parsing would break every stored Volume, while input-only keeps a single durable owner). Translation happens exclusively Volume-side at reconcile. Governs R1, R5, R8.
+- KTD1. Attachments stay as input-only declaration; bindings are the sole durable relationship (session-settled: user-approved -- chosen over deleting the attachments field: strict wire parsing would break every stored Volume, while input-only keeps a single durable owner). Translation happens exclusively Volume-side at reconcile. Governs R1, R5, R8.
 - KTD2. Binding identity derives from volume, execution target, view, and mount path with no attachment index, and admission rejects duplicate guest mount paths. Reorders stop churning identities, and one guest path never gets two servers. Governs R1, R2.
 - KTD3. Virtiofs is the sole authorized status-subresource writer and writes the fenced status projection on every reconcile; status and finalizer mutation is restricted to the virtiofs controller identity with server-side fence validation, and the Volume side never writes binding status. The existing projection path gains a writer, which makes stale-fence rejection testable. Governs R2, R6, R7.
 - KTD4. The Guest VMM gate observes binding readiness, and the export-named dependency condition is renamed to binding semantics. Without a binding-observing consumer the fenced-readiness outcome has no effect on boot order. Governs R2, R10, R15.
@@ -159,7 +159,7 @@ None blocking. OQ1 and OQ2 from the requirements pass were resolved during plann
 - KTD7. The read-only store marker and closure-identity branch stays virtiofs-side as dependency-only reads. Placement follows the existing fail-closed posture with no ownership change. Governs R6, R13.
 - KTD8. Registration cutover moves every site atomically: contract const in both copies, both schema generators with committed outputs, Nix type lists, standard catalog derivation, child-type arrays, runner kinds, trusted-catalog pins, bundle wiring, schema-emission gates, committed store catalog, and provider RBAC descriptors. Missing any one reproduces the Export admission rejection. Governs R9, R12.
 - KTD9. Worker argv and sandbox posture carry over byte-for-behavior, and the seccomp posture is verified against the rendered argv at implementation rather than assumed. Access keeps its three layers: served view, binding access mode, deprivileged worker. Governs R6, R13.
-- KTD10. Export dies by full deletion in the same break (session-settled: user-directed — chosen over a provider-private projection: no consumer needs Export once children are binding-owned, and a private copy keeps a second owner). Contract, intents, status paths, watches, pins, and tests go together. Governs R11, R12.
+- KTD10. Export dies by full deletion in the same break (session-settled: user-directed -- chosen over a provider-private projection: no consumer needs Export once children are binding-owned, and a private copy keeps a second owner). Contract, intents, status paths, watches, pins, and tests go together. Governs R11, R12.
 
 ### High-Level Technical Design
 
@@ -192,7 +192,7 @@ Sequencing: contract and catalog first so admission accepts bindings (U1), then 
 
 ## Implementation Units
 
-**Phase A — Contract and Volume side**
+**Phase A -- Contract and Volume side**
 
 ### U1. Binding contract and catalog registration
 
@@ -261,7 +261,7 @@ Sequencing: contract and catalog first so admission accepts bindings (U1), then 
   - Stale-fence binding update is not accepted as converged.
 - **Verification:** U7 inline tests green; existing fencing tests unmodified and passing.
 
-**Phase B — Serving and Guest gate**
+**Phase B -- Serving and Guest gate**
 
 ### U4. Virtiofs reconciles bindings
 
@@ -306,7 +306,7 @@ Sequencing: contract and catalog first so admission accepts bindings (U1), then 
   - Renamed condition appears in status where the old one did.
 - **Verification:** Guest controller unit tests green; no references to Export readiness remain in the gate.
 
-**Phase C — Cutover and acceptance**
+**Phase C -- Cutover and acceptance**
 
 ### U6. Export deletion cutover
 
@@ -399,14 +399,14 @@ Research trail: repo pattern scout mapped the registration chain, controller con
 
 ### From 2026-09-07 review
 
-- **Persisted old-type resources lack a drain path** — Implementation Units U2-U6; Acceptance Example AE3 (P1, whole-doc-codex, confidence 75)
+- **Persisted old-type resources lack a drain path** -- Implementation Units U2-U6; Acceptance Example AE3 (P1, whole-doc-codex, confidence 75)
 
   Existing active attachments can retain durable old-type instances, finalizers, or serving effects after old-type handling is removed, so the settled-state assertion stays unproven without an explicit enumerate, drain, and remove sequence.
 
-- **Persisted old-type cutover is unspecified** — Planning Contract KTD10; Implementation Unit U6 (P1, adversarial-codex, confidence 75)
+- **Persisted old-type cutover is unspecified** -- Planning Contract KTD10; Implementation Unit U6 (P1, adversarial-codex, confidence 75)
 
   An upgrade with already-persisted old-type resources can leave unregistered durable objects behind or briefly create both durable relationship types, defeating the single-owner break without an explicit runtime cutover proof before unregistration.
 
-- **Replacement semantics are unspecified** — Planning Contract KTD2; Implementation Units U2-U5 (P2, adversarial-codex, confidence 75)
+- **Replacement semantics are unspecified** -- Planning Contract KTD2; Implementation Units U2-U5 (P2, adversarial-codex, confidence 75)
 
   Changing a binding view while retaining its guest mount path produces a new identity, but the plan does not say whether the old binding drains before the replacement is created or how the guest gate follows that handoff.

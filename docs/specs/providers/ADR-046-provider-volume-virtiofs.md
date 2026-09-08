@@ -72,7 +72,7 @@ to `Provider/volume-local`.
 Volume side. The standard catalog admits no provider extension path for the type: the
 binding spec is strictly neutral, `deny-unknown`, and legacy provider-qualified schema ids
 (the pre-cutover Export spec id and the transitional `volume-virtiofs.d2bus.org/VolumeBinding/spec`)
-are rejected at admission — the structural gap the removed Export type hit. The Provider
+are rejected at admission -- the structural gap the removed Export type hit. The Provider
 implements the exact signed binding status projection schema
 (`core.d2bus.org/VolumeBinding/status`), is the sole writer of that status (KTD3), passes
 base conformance, and rejects an unsupported optional base capability only via its signed
@@ -256,7 +256,7 @@ virtiofsd worker Process for each binding, writes the fenced binding status proj
 it only consumes the fenced `bindingReady` and `guestMountReady` readiness and the
 `workerProcessRef` for diagnostic linking. Guest start is gated on current binding readiness
 (R15): a readiness report is current only when its UID, generation, and revision fence
-matches the stored binding — stale reports are never accepted as ready and fail closed.
+matches the stored binding -- stale reports are never accepted as ready and fail closed.
 
 ### 4.2 VolumeBinding ResourceSpec
 
@@ -317,7 +317,7 @@ status:
 ```
 
 The spec is strictly neutral (KTD1): `volumeRef`, `executionRef`, `view`, `access`, and
-`mountPath` only. There is no `spec.providerRef` and no `spec.provider` extension — the
+`mountPath` only. There is no `spec.providerRef` and no `spec.provider` extension -- the
 standard catalog admits no provider extension path for the type, and a `spec.provider`
 block under any schema id is rejected at admission.
 
@@ -333,8 +333,8 @@ Every binding mutation must be owned by an existing Volume: a create or update w
 Volume owner reference is a direct external create and is rejected. The binding references
 its visible endpoint through `status.resource.endpointRef` after the Endpoint child exists.
 volume-virtiofs is the sole author of the binding status projection (KTD3): readiness is
-fenced by the binding's UID, generation, and revision — a stale report is never accepted
-as ready and fails closed — and consumers that need the stable endpoint use the
+fenced by the binding's UID, generation, and revision -- a stale report is never accepted
+as ready and fails closed -- and consumers that need the stable endpoint use the
 `Endpoint/<name>` ref, while lifecycle, deletion, and guest-mount readiness stay
 on the binding.
 
@@ -488,8 +488,8 @@ On deletionRequestedAt set on the binding:
   → Two-phase binding teardown (§6.2)
 ```
 
-Every readiness write carries the fence observed at reconcile time — the binding's UID,
-spec generation, and Zone-store revision — and the server side rejects a write whose fence
+Every readiness write carries the fence observed at reconcile time -- the binding's UID,
+spec generation, and Zone-store revision -- and the server side rejects a write whose fence
 no longer matches the stored binding or whose writer is not the virtiofs controller
 identity (KTD3). Terminal admission and reconcile failures surface a `Failed` phase with a
 stable reason instead of collapsing to `Pending` (KTD5).

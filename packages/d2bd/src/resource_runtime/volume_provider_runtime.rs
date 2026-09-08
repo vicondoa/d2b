@@ -12,7 +12,7 @@
 //! instances from before the cutover: Export handling is unregistered
 //! from the shared-Runner waves (only `VolumeBinding` is registered now),
 //! and any surviving Export drains through its existing finalizer /
-//! teardown path — a desired-empty reconcile issues the deletion request,
+//! teardown path -- a desired-empty reconcile issues the deletion request,
 //! and the Export finalizer tears down the worker and private endpoint
 //! before the object disappears. Bindings supersede from the declared
 //! Volume attachments on the next reconcile: volume-local mints one
@@ -2569,6 +2569,7 @@ mod tests {
             Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter)
         ));
     }
+    #[test]
     fn binding_child_payload_starts_with_typed_status_projection() {
         let zone = ZoneId::parse("work").expect("Zone");
         let target = ResourceRef::parse("VolumeBinding/vol-binding-test").expect("binding ref");
