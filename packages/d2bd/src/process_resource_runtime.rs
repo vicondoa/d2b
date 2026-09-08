@@ -1910,10 +1910,31 @@ impl ProcessResourceReconciler {
         let mut runtime = self.runtime.for_pass();
         runtime.without_status_client();
         match runtime.probe_record(&record).await? {
-            ProviderLiveness::Alive => Ok(ReconcileResult::converged(
-                resource.revision(),
-                resource.generation(),
-            )),
+            ProviderLiveness::Alive => {
+                // The controller is alive; make that observable. The
+                // status must reflect liveness even when launch happened
+                // on the startup adoption path (which never writes
+                // Ready), or the guest dependency gate holds the VMM
+                // forever while observe keeps short-circuiting.
+                let canonical = status_payload(
+                    &record,
+                    ResourcePhase::Ready,
+                    persisted_restart_count(&record.resource, &record.process),
+                    Some(OutcomeState::ready(false)),
+                )?;
+                let status = status_candidate_from_resource(&canonical)?;
+                ReconcileResult::new(
+                    resource.revision(),
+                    resource.generation(),
+                    None,
+                    Some(status),
+                    ReconcileDisposition::Pending,
+                    None,
+                    None,
+                    StatusPersistence::Pending,
+                )
+                .map_err(|_| ProcessResourceRuntimeError::InvalidResource)
+            }
             ProviderLiveness::Unknown => {
                 let canonical = status_payload(
                     &record,
