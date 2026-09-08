@@ -363,10 +363,16 @@ impl DaemonVolumeProviderEffects {
     async fn provider_controller_healthy(&self, kind: SharedVolumeResourceKind) -> bool {
         let runtime = match self.runtime() {
             Ok(runtime) => runtime,
-            Err(_) => return false,
+            Err(_) => {
+                // XXX-host-bringup: temporary; remove once green.
+                tracing::warn!(provider = kind.provider_ref(), "u7 health: no runtime");
+                return false;
+            }
         };
         let provider = kind.provider_ref();
         let mut cursor = None;
+        let mut scanned = 0usize;
+        let mut candidates = Vec::new();
         loop {
             let page = match runtime
                 .store
@@ -390,9 +396,18 @@ impl DaemonVolumeProviderEffects {
                 .await
             {
                 Ok(page) => page,
-                Err(_) => return false,
+                Err(error) => {
+                    // XXX-host-bringup: temporary; remove once green.
+                    tracing::warn!(
+                        provider = kind.provider_ref(),
+                        error = ?error,
+                        "u7 health: store list failed",
+                    );
+                    return false;
+                }
             };
             for resource in &page.resources {
+                scanned += 1;
                 let value = match serde_json::from_slice::<Value>(&resource.canonical_json) {
                     Ok(value) => value,
                     Err(_) => continue,
@@ -411,6 +426,12 @@ impl DaemonVolumeProviderEffects {
                     .unwrap_or_default();
                 let observed = value.pointer("/status/observedGeneration").and_then(Value::as_u64);
                 let generation = value.pointer("/metadata/generation").and_then(Value::as_u64);
+                if class == "controller" {
+                    candidates.push(format!(
+                        "{}:{}:{}:{:?}:{:?}",
+                        owner, phase, class, observed, generation
+                    ));
+                }
                 if owner == provider
                     && class == "controller"
                     && phase == "Ready"
@@ -424,6 +445,13 @@ impl DaemonVolumeProviderEffects {
                 break;
             }
         }
+        // XXX-host-bringup: temporary; remove once green.
+        tracing::warn!(
+            provider = kind.provider_ref(),
+            scanned,
+            candidates = ?candidates,
+            "u7 health: no healthy controller",
+        );
         false
     }
 
@@ -1360,11 +1388,14 @@ impl SharedVolumeEffectExecutor for DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
-        // Startup health gate: hold effects Pending until the serving
-        // provider's controller is Ready, instead of throwing reconciles
-        // at a controller that is still starting. Finalize stays ungated
-        // so deletion always drains.
-        if !self.provider_controller_healthy(kind).await {
+        // XXX-host-bringup: temporary gate visibility; remove once green.
+        let healthy = self.provider_controller_healthy(kind).await;
+        tracing::warn!(
+            provider = kind.provider_ref(),
+            healthy,
+            "u7 controller health gate",
+        );
+        if !healthy {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
                 resource_projection: None,
