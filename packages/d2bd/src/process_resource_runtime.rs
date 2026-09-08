@@ -1429,6 +1429,35 @@ impl ProcessResourceRuntime {
         phase: ResourcePhase,
         outcome: Option<OutcomeState>,
     ) -> Result<DesiredRecord, ProcessResourceRuntimeError> {
+        // A controller flipping back off Ready is the signature of the
+        // bring-up regressions; log every such write with its reason.
+        let controller_class = match &record.process {
+            DesiredProcess::Process(spec) => {
+                spec.execution().process_class()
+                    == d2b_contracts_resource::v3::process::ProcessClass::Controller
+            }
+            DesiredProcess::Ephemeral(_) => false,
+        };
+        let ready_before = serde_json::from_slice::<serde_json::Value>(
+            &record.resource.canonical_json,
+        )
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/status/phase")
+                .and_then(serde_json::Value::as_str)
+                .map(|phase| phase == "Ready")
+        })
+        .unwrap_or(false);
+        if controller_class && ready_before && phase != ResourcePhase::Ready {
+            tracing::warn!(
+                resource = %record.resource.resource_ref.to_canonical_string(),
+                from = "Ready",
+                to = ?phase,
+                outcome = ?outcome,
+                "controller Process status regression",
+            );
+        }
         let Some(client) = &self.status_client else {
             return Ok(record.clone());
         };
