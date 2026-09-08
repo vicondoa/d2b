@@ -1332,7 +1332,12 @@ impl ProductionProcessProviders {
         target_readiness_digest: ConfigurationDigest,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        self.validate_controller_target(resource)?;
+        // XXX-host-bringup: temporary spawn visibility; remove once green.
+        tracing::warn!(
+            process = %resource.process_ref().to_canonical_string(),
+            provider = %resource.process_provider_ref().to_canonical_string(),
+            "controller launch started",
+        );
         let provider = managed_provider_from_ref(resource.process_provider_ref())?;
         let zone_uid = self
             .bundle

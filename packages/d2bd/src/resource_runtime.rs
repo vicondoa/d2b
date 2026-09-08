@@ -18480,15 +18480,25 @@ impl ControllerSessionCoordinator {
             );
             ResourceRuntimeError::AuthenticationUnavailable
         };
+        // XXX-host-bringup: capture swallowed handshake causes; keep if valuable.
+        let authentication_error_caused = |stage: &'static str, error: &dyn core::fmt::Debug| {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                stage,
+                error = ?error,
+                "external Provider controller authentication failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        };
         let daemon_socket = SeqpacketSocket::from_parent_prearmed(daemon_endpoint)
             .map_err(|_| authentication_error("bootstrap-socket"))?;
         let (resource_socket, credentials) = receive_controller_bootstrap(&daemon_socket)
             .await
-            .map_err(|_| authentication_error("bootstrap-receive"))?;
+            .map_err(|error| authentication_error_caused("bootstrap-receive", &error))?;
         let peer_pid = credentials.pid().as_raw_nonzero().get();
         if !providers
             .controller_peer_matches(&context, peer_pid)
-            .map_err(|_| authentication_error("peer-process-observation"))?
+            .map_err(|error| authentication_error_caused("peer-process-observation", &error))?
         {
             return Err(authentication_error("peer-process-mismatch"));
         }
