@@ -184,12 +184,17 @@ pub(crate) async fn start(
             },
         );
         tasks.push(tokio::spawn(async move {
+            // Bring-up observability: prove the guest runner lifecycle.
+            tracing::warn!(kind = ?kind, "u6 shared guest runner task started");
             // Respawn on transient source failures with capped backoff:
             // a dead guest runner wedges guest reconciliation forever.
             let mut backoff_ms = 500u64;
             loop {
                 match runner.run().await {
-                    Ok(_) => break,
+                    Ok(_) => {
+                        tracing::warn!(kind = ?kind, "u6 shared guest runner stopped cleanly");
+                        break;
+                    }
                     Err(error) if matches!(
                         error.error(),
                         RunnerError::Source(
