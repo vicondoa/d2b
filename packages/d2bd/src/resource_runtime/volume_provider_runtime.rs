@@ -1083,6 +1083,12 @@ impl DaemonVolumeProviderEffects {
         resource: &ResourceSnapshot,
         reason: d2b_provider_volume_virtiofs::VirtiofsBindingError,
     ) -> SharedVolumeEffectResult {
+        // KTD5: rejections stay visible in logs as well as status.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            reason = reason.code(),
+            "u7 binding terminal failure",
+        );
         let projection = VolumeBindingStatusResource {
             ready: false,
             fence: VolumeBindingReadinessFence {
