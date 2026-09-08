@@ -3427,6 +3427,25 @@ fn resource_ticket(
             execution.template().as_str(),
             Some("Provider/credential-managed-identity"),
         )
+    } else if context
+        .owner_ref
+        .as_ref()
+        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
+    {
+        // Binding-owned serving workers resolve through the owning
+        // Provider's signed serving template, not the guest VMM chain.
+        if execution.template().as_str()
+            != d2b_provider_volume_virtiofs::WORKER_TEMPLATE
+        {
+            return Err("provider-ticket:template-not-found".to_owned());
+        }
+        bundle.find_provider_component_intent_for_template(
+            &execution_ref,
+            execution_domain,
+            user_ref.as_deref(),
+            execution.template().as_str(),
+            Some("Provider/volume-virtiofs"),
+        )
     } else if let Some(owner) = context
         .owner_ref
         .as_ref()

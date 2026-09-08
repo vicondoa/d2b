@@ -363,6 +363,10 @@ let
         mkdir -p "$out/bin"
         cp "${controller}" "$out/bin/acceptance-controller"
         chmod 0755 "$out/bin/acceptance-controller"
+        # The binding-owned virtiofsd worker launches from this signed
+        # artifact; the digest-pinned binary rides in the executable set.
+        cp "${pkgs.virtiofsd}/bin/virtiofsd" "$out/bin/virtiofsd"
+        chmod 0755 "$out/bin/virtiofsd"
         ${signer}/bin/python3 - "${manifest}" "$out" <<'PY'
         import hashlib
         import json
@@ -378,8 +382,13 @@ let
         manifest = json.loads(pathlib.Path(manifest_path).read_text())
         binary = (output / "bin/acceptance-controller").read_bytes()
         raw_digest = "sha256:" + hashlib.sha256(binary).hexdigest()
+        virtiofsd = (output / "bin/virtiofsd").read_bytes()
+        virtiofsd_digest = "sha256:" + hashlib.sha256(virtiofsd).hexdigest()
         executable_map = json.dumps(
-            {"acceptance-controller": raw_digest},
+            {
+                "acceptance-controller": raw_digest,
+                "virtiofsd": virtiofsd_digest,
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

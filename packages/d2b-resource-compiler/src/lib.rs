@@ -682,6 +682,14 @@ where
         &mut templates,
     )?;
 
+    append_virtiofsd_worker_templates(
+        &zone_id,
+        resources,
+        &artifacts,
+        &mut generated_identities,
+        &mut templates,
+    )?;
+
     projected_resources
         .sort_by(|left, right| resource_sort_key(left).cmp(&resource_sort_key(right)));
     templates.sort_by(|left, right| {
@@ -812,6 +820,93 @@ fn resource_identity(resource: &serde_json::Value) -> Option<(String, String)> {
         resource.get("type")?.as_str()?.to_owned(),
         resource.get("metadata")?.get("name")?.as_str()?.to_owned(),
     ))
+}
+
+/// Emit the signed `virtiofsd-worker` serving template when the Zone
+/// carries a volume-virtiofs Provider whose artifact contains the
+/// `virtiofsd` binary. The binding runner mints binding-owned worker
+/// Processes declaring this template; the launch path resolves them to
+/// this digest-pinned binary through the Provider component lookup.
+fn append_virtiofsd_worker_templates<'a>(
+    zone: &ZoneId,
+    resources: &[serde_json::Value],
+    artifacts: &BTreeMap<String, &'a VerifiedProviderArtifact>,
+    generated_identities: &mut BTreeSet<(String, String)>,
+    templates: &mut Vec<ProcessTemplateBinding>,
+) -> Result<(), StaticControllerProjectionError> {
+    let Some(provider) = resources.iter().find(|resource| {
+        resource.get("type").and_then(Value::as_str) == Some("Provider")
+            && resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("zone"))
+                .and_then(Value::as_str)
+                == Some(zone.as_str())
+            && resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some("volume-virtiofs")
+    }) else {
+        return Ok(());
+    };
+    let provider_ref = ResourceRef::parse("Provider/volume-virtiofs")
+        .map_err(|_| StaticControllerProjectionError::InvalidProviderResource)?;
+    let artifact_id = provider
+        .get("spec")
+        .and_then(|spec| spec.get("artifactId"))
+        .and_then(Value::as_str)
+        .ok_or(StaticControllerProjectionError::InvalidProviderResource)?;
+    let Some(artifact) = artifacts.get(artifact_id) else {
+        return Ok(());
+    };
+    let binary_ref = BinaryRef::parse("virtiofsd")
+        .map_err(|_| StaticControllerProjectionError::TemplateArtifactMissing)?;
+    let Some(artifact_digest) = artifact.compiled().executable_digests().get(binary_ref.as_str())
+    else {
+        return Ok(());
+    };
+    let template = BoundedToken::parse("virtiofsd-worker")
+        .map_err(|_| StaticControllerProjectionError::InvalidTemplate)?;
+    let execution_ref = provider
+        .get("spec")
+        .and_then(|spec| spec.get("config"))
+        .and_then(|config| config.get("controllerExecutionRef"))
+        .and_then(Value::as_str)
+        .and_then(|reference| ResourceRef::parse(reference).ok())
+        .ok_or(StaticControllerProjectionError::MissingControllerExecutionRef)?;
+    let process_ref = {
+        let candidate = format!("Process/virtiofsd-worker-template-{}", zone.as_str());
+        let digest = Sha256::digest(candidate.as_bytes());
+        let suffix = digest
+            .iter()
+            .take(12)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        ResourceRef::parse(&format!("Process/virtiofsd-worker-template-{suffix}"))
+            .map_err(|_| StaticControllerProjectionError::InvalidTemplate)?
+    };
+    let identity = ("Process".to_owned(), process_ref.name().as_str().to_owned());
+    if !generated_identities.insert(identity.clone()) {
+        return Err(StaticControllerProjectionError::DuplicateProcessName);
+    }
+    let binary_path = artifact
+        .store_path()
+        .join(EXECUTABLE_DIR)
+        .join(binary_ref.as_str());
+    templates.push(
+        ProcessTemplateBinding::new_dynamic(
+            process_ref,
+            provider_ref,
+            execution_ref,
+            template,
+            artifact.artifact_id().clone(),
+            binary_ref,
+            artifact_digest.clone(),
+            binary_path.to_string_lossy().into_owned(),
+        )
+        .map_err(|_| StaticControllerProjectionError::TemplateBindingInvalid)?,
+    );
+    Ok(())
 }
 
 /// Return the deterministic resource ordering key.
