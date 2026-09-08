@@ -2505,6 +2505,12 @@ pub(crate) async fn start(
             },
         );
         tasks.push(tokio::spawn(async move {
+            // Runner tasks are fire-and-forget; log each start so a silently
+            // missing runner is diagnosable from the journal alone.
+            tracing::warn!(
+                kind = ?kind,
+                "u7 shared volume runner task started",
+            );
             if let Err(error) = runner.run().await {
                 tracing::warn!(
                     error = %error,
