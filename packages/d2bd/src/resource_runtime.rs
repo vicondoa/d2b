@@ -17857,7 +17857,10 @@ impl ControllerSessionCoordinator {
                     }
                 }
                 Err(error) => {
-                    providers.fail_controller_bootstrap(&context);
+                    // The controller retries its bootstrap send forever;
+                    // re-arm so the next reconcile pass answers it instead
+                    // of orphaning the controller.
+                    providers.rearm_controller_bootstrap(endpoint);
                     tracing::warn!(
                         error = %error,
                         "external Provider controller ResourceV3 session setup failed",
