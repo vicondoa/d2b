@@ -1906,7 +1906,14 @@ impl DaemonSharedProviderEffects {
             Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
                 return Err(SharedProviderEffectError::InvalidResource);
             }
-            Err(_) => return Err(SharedProviderEffectError::Unavailable),
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    resource = %target.to_canonical_string(),
+                    "audio dependency authoritative read failed",
+                );
+                return Err(SharedProviderEffectError::Unavailable);
+            }
         };
         validate_audio_dependency_identity(&authoritative, target, &self.zone)?;
         self.validate_audio_assignment(runtime, context, &authoritative, false)
@@ -2831,6 +2838,11 @@ impl DaemonSharedProviderEffects {
                 .and_then(Value::as_str)
                 .and_then(|value| ResourceRef::parse(value).ok())
             else {
+                tracing::debug!(
+                    provider = %provider_ref.to_canonical_string(),
+                    field = *field,
+                    "credential reference missing or unparseable; custody validation skipped",
+                );
                 continue;
             };
             if credential_ref.resource_type().as_str() != "Credential" {
@@ -4003,9 +4015,23 @@ impl SharedRunnerNetworkResources {
         {
             Ok(resource) => serde_json::from_slice(&resource.canonical_json)
                 .map(Some)
-                .map_err(|_| NetworkEffectError::ConfigVolume),
+                .map_err(|error| {
+                    tracing::debug!(
+                        error = ?error,
+                        resource = %target.to_canonical_string(),
+                        "network volume child decode failed",
+                    );
+                    NetworkEffectError::ConfigVolume
+                }),
             Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => Ok(None),
-            Err(_) => Err(NetworkEffectError::ConfigVolume),
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    resource = %target.to_canonical_string(),
+                    "network volume child read failed",
+                );
+                Err(NetworkEffectError::ConfigVolume)
+            }
         }
     }
 
@@ -4898,6 +4924,11 @@ impl DaemonGpuLifecyclePort {
             )
             .is_err()
         {
+            tracing::debug!(
+                vm = %vm,
+                role = %intent.role_id,
+                "GPU pidfd registration failed; rejecting spawn and stopping VM",
+            );
             let _ = crate::stop_vm_pidfd_role(
                 &self.state,
                 BrokerCallerRole::AdminUid {
@@ -4917,6 +4948,11 @@ impl DaemonGpuLifecyclePort {
                 &intent.role_id,
                 response.pid,
                 response.start_time_ticks,
+            );
+            tracing::debug!(
+                vm = %vm,
+                role = %intent.role_id,
+                "GPU pidfd snapshot failed; rejecting spawn and stopping VM",
             );
             let _ = crate::stop_vm_pidfd_role(
                 &self.state,
@@ -5193,6 +5229,10 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort 
                 .release_authority(&generic)
         });
         if result.is_err() {
+            tracing::debug!(
+                device = %self.device_ref.to_canonical_string(),
+                "GPU authority lease release failed; lease restored",
+            );
             self.authority_leases
                 .lock()
                 .map_err(|_| d2b_provider_device_gpu::GpuEffectError::AuthorityConflict)?
@@ -5865,7 +5905,14 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
             },
             &mut controller,
         )
-        .map_err(|_| SharedProviderEffectError::Unavailable);
+        .map_err(|error| {
+            tracing::debug!(
+                error = ?error,
+                device = %resource.key().resource_ref().to_canonical_string(),
+                "TPM device controller reconcile failed",
+            );
+            SharedProviderEffectError::Unavailable
+        });
         if result.is_err() {
             self.tpm_controllers
                 .lock()
@@ -6467,7 +6514,12 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
                     .insert(resource.key().uid().clone(), controller);
                 return Ok(SharedProviderEffectPhase::Pending);
             }
-            Err(_) => {
+            Err(error) => {
+                tracing::debug!(
+                    error = ?error,
+                    device = %resource.key().resource_ref().to_canonical_string(),
+                    "GPU upgrade plan failed",
+                );
                 self.gpu_controllers
                     .lock()
                     .map_err(|_| SharedProviderEffectError::Unavailable)?
@@ -6803,7 +6855,14 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
                 },
                 &mut controller,
             )
-            .map_err(|_| SharedProviderEffectError::Unavailable);
+            .map_err(|error| {
+                tracing::debug!(
+                    error = ?error,
+                    device = %resource.key().resource_ref().to_canonical_string(),
+                    "TPM device controller finalize failed",
+                );
+                SharedProviderEffectError::Unavailable
+            });
             if result.is_err() {
                 self.tpm_controllers
                     .lock()
@@ -6903,7 +6962,14 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
             };
             let result = controller
                 .finalize_lifecycle(&mut port)
-                .map_err(|_| SharedProviderEffectError::Unavailable);
+                .map_err(|error| {
+                    tracing::debug!(
+                        error = ?error,
+                        device = %resource.key().resource_ref().to_canonical_string(),
+                        "GPU lifecycle finalize failed",
+                    );
+                    SharedProviderEffectError::Unavailable
+                });
             if result.is_err() {
                 let opened_devices = std::mem::take(&mut port.opened_devices);
                 self.retain_gpu_opened_devices(resource.key().uid(), opened_devices)?;
@@ -8437,6 +8503,7 @@ async fn install_core_runner_tasks(
     let mut tasks = match task_store.lock() {
         Ok(tasks) => tasks,
         Err(_) => {
+            tracing::warn!("core runner task store lock poisoned; runner install failed");
             abort_core_runner_tasks(&mut new_tasks).await;
             return Err(ResourceRuntimeError::WatchUnavailable);
         }
@@ -8465,7 +8532,13 @@ async fn reap_finished_core_runner_tasks(
         finished
     };
     for task in finished {
-        let _ = task.handle.await;
+        if let Err(error) = task.handle.await {
+            tracing::warn!(
+                controller = %task.identity.controller_ref.to_canonical_string(),
+                error = ?error,
+                "core runner task died",
+            );
+        }
     }
     Ok(())
 }
@@ -8544,7 +8617,14 @@ async fn u9_provider_generations(
                     return Err(ResourceRuntimeError::ProviderPathUnavailable);
                 }
             }
-            Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    provider = %registration.provider_ref,
+                    "U9 provider generation read failed",
+                );
+                return Err(ResourceRuntimeError::StoreReadFailed);
+            }
             _ => return Err(ResourceRuntimeError::HandlerNotReady),
         }
     }
@@ -9408,6 +9488,12 @@ fn guest_session_evidence(
         target.endpoint_generation().get(),
         1,
     )
+    .inspect_err(|_| {
+        tracing::debug!(
+            guest = %guest_ref.to_canonical_string(),
+            "guest session evidence binding construction failed",
+        );
+    })
     .ok()?;
     GuestSessionEvidence::current_bound(
         guest_ref.clone(),
@@ -9418,6 +9504,12 @@ fn guest_session_evidence(
         true,
         binding,
     )
+    .inspect_err(|_| {
+        tracing::debug!(
+            guest = %guest_ref.to_canonical_string(),
+            "guest session evidence construction failed",
+        );
+    })
     .ok()
 }
 
@@ -10287,7 +10379,12 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     Err(CloudHypervisorResourceApiError::NotFound) => {
                         d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Absent
                     }
-                    Err(_) => {
+                    Err(error) => {
+                        tracing::debug!(
+                            error = ?error,
+                            guest = %guest_ref.to_canonical_string(),
+                            "adoption probe failed; status unavailable",
+                        );
                         d2b_provider_runtime_cloud_hypervisor::ProcessAdoptionStatus::Unavailable
                     }
                 };
@@ -11270,13 +11367,18 @@ impl ZoneResourceRuntime {
             zone_status,
             authorization_state,
         ) = if store_metadata.policy_snapshot.policy_revision == 0 {
-            let _ = core.connect_runtime(CoreRuntimeReadiness {
+            if let Err(error) = core.connect_runtime(CoreRuntimeReadiness {
                 store_ready: true,
                 resource_api_ready: false,
                 local_bus_ready: false,
                 controller_endpoint_registered: false,
                 authenticated_system_core_session: false,
-            });
+            }) {
+                tracing::warn!(
+                    error = ?error,
+                    "core runtime readiness connect failed during zone bootstrap",
+                );
+            }
             (
                 false,
                 false,
@@ -12150,7 +12252,13 @@ impl ZoneResourceRuntime {
                         .collect();
                     (session.driver.clone(), frames)
                 }),
-            Err(_) => None,
+            Err(_) => {
+                tracing::warn!(
+                    provider = %binding.provider_ref().to_canonical_string(),
+                    "controller session registry lock poisoned; assignment revocation batch skipped",
+                );
+                None
+            }
         };
         if let Some((driver, frames)) = revocation_batch {
             self.schedule_assignment_revocations(driver, frames);
@@ -12576,7 +12684,11 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         if let Some(mut ingress) = ingress {
-            if registrar.revoke_in_place(&mut ingress).await.is_err() {
+            if let Err(error) = registrar.revoke_in_place(&mut ingress).await {
+                tracing::warn!(
+                    error = ?error,
+                    "system-core session ingress revoke failed during rebind",
+                );
                 *self
                     .registrar
                     .lock()
@@ -13619,6 +13731,7 @@ impl ZoneResourceRuntime {
             });
         }
         if prepared.is_empty() {
+            tracing::debug!("no core runner preparations available; retrying");
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
         let system_core_runner_identity = CoreRunnerIdentity::new(
@@ -13713,6 +13826,10 @@ impl ZoneResourceRuntime {
             .lock()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
         if !core_runner_tasks_are_ready(&tasks, &required_identities) {
+            tracing::debug!(
+                controller = "Host/User",
+                "core runner task set not ready after install",
+            );
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
         drop(tasks);
@@ -13820,7 +13937,14 @@ impl ZoneResourceRuntime {
                     }
                     continue;
                 }
-                Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        provider = %provider_ref.to_canonical_string(),
+                        "U10 provider read failed",
+                    );
+                    return Err(ResourceRuntimeError::StoreReadFailed);
+                }
             };
             if provider.zone != self.zone
                 || provider.resource_ref != provider_ref
@@ -13863,7 +13987,13 @@ impl ZoneResourceRuntime {
                 std::mem::take(&mut *tasks)
             };
             for task in stale {
-                let _ = task.await;
+                if let Err(error) = task.await {
+                    tracing::warn!(
+                        controller = "credential",
+                        error = ?error,
+                        "stale U10 controller runner task died",
+                    );
+                }
             }
         }
         if expected_task_count == 0 {
@@ -14016,6 +14146,10 @@ impl ZoneResourceRuntime {
         match self.u10_runner_tasks.lock() {
             Ok(mut tasks) => tasks.extend(new_tasks),
             Err(_) => {
+                tracing::warn!(
+                    controller = "credential",
+                    "U10 runner task store lock poisoned; aborting new runner tasks",
+                );
                 abort_controller_runner_tasks(&mut new_tasks).await;
                 self.u10_required.store(false, Ordering::Release);
                 return Err(ResourceRuntimeError::WatchUnavailable);
@@ -14069,6 +14203,10 @@ impl ZoneResourceRuntime {
             match self.u7_state.lock() {
                 Ok(mut current) => *current = Some(state),
                 Err(_) => {
+                    tracing::warn!(
+                        controller = "volume",
+                        "U7 controller runner state lock poisoned; stopping runners",
+                    );
                     self.stop_u7_controller_runners_locked().await?;
                     return Err(ResourceRuntimeError::AuthenticationUnavailable);
                 }
@@ -14101,7 +14239,13 @@ impl ZoneResourceRuntime {
             std::mem::take(&mut *tasks)
         };
         for task in stale {
-            let _ = task.await;
+            if let Err(error) = task.await {
+                tracing::warn!(
+                    controller = "volume",
+                    error = ?error,
+                    "stale U7 controller runner task died",
+                );
+            }
         }
         let required = volume_provider_runtime::start(self, state).await?;
         self.u7_required.store(required, Ordering::Release);
@@ -14139,6 +14283,10 @@ impl ZoneResourceRuntime {
             match self.u6_state.lock() {
                 Ok(mut current) => *current = Some(state),
                 Err(_) => {
+                    tracing::warn!(
+                        controller = "guest",
+                        "U6 controller runner state lock poisoned; stopping runners",
+                    );
                     self.stop_u6_controller_runners_locked().await?;
                     return Err(ResourceRuntimeError::AuthenticationUnavailable);
                 }
@@ -14171,7 +14319,13 @@ impl ZoneResourceRuntime {
             std::mem::take(&mut *tasks)
         };
         for task in stale {
-            let _ = task.await;
+            if let Err(error) = task.await {
+                tracing::warn!(
+                    controller = "guest",
+                    error = ?error,
+                    "stale U6 controller runner task died",
+                );
+            }
         }
         let required = guest_provider_runtime::start(self, state).await?;
         self.u6_required.store(required, Ordering::Release);
@@ -14212,6 +14366,10 @@ impl ZoneResourceRuntime {
             match self.u9_state.lock() {
                 Ok(mut current) => *current = Some(state),
                 Err(_) => {
+                    tracing::warn!(
+                        controller = "interaction",
+                        "U9 controller runner state lock poisoned; stopping runners",
+                    );
                     self.stop_u9_controller_runners_locked().await?;
                     return Err(ResourceRuntimeError::AuthenticationUnavailable);
                 }
@@ -14514,7 +14672,16 @@ impl ZoneResourceRuntime {
         for startup in startup_receivers {
             match startup.await {
                 Ok(Ok(())) => {}
-                Ok(Err(_)) | Err(_) => {
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        error = ?error,
+                        "U9 shared runner startup failed",
+                    );
+                    abort_u9_runner_tasks(&mut new_tasks).await;
+                    return Err(ResourceRuntimeError::HandlerNotReady);
+                }
+                Err(_) => {
+                    tracing::warn!("U9 shared runner startup channel closed");
                     abort_u9_runner_tasks(&mut new_tasks).await;
                     return Err(ResourceRuntimeError::HandlerNotReady);
                 }
@@ -14523,6 +14690,10 @@ impl ZoneResourceRuntime {
         let mut tasks = match self.u9_runner_tasks.lock() {
             Ok(tasks) => tasks,
             Err(_) => {
+                tracing::warn!(
+                    controller = "interaction",
+                    "U9 runner task store lock poisoned; aborting new runner tasks",
+                );
                 abort_u9_runner_tasks(&mut new_tasks).await;
                 return Err(ResourceRuntimeError::WatchUnavailable);
             }
@@ -14546,6 +14717,10 @@ impl ZoneResourceRuntime {
             match self.u12_state.lock() {
                 Ok(mut current) => *current = Some(state),
                 Err(_) => {
+                    tracing::warn!(
+                        controller = "observability-activation",
+                        "U12 controller runner state lock poisoned; stopping runners",
+                    );
                     self.stop_u12_controller_runners_locked().await?;
                     return Err(ResourceRuntimeError::AuthenticationUnavailable);
                 }
@@ -14663,7 +14838,14 @@ impl ZoneResourceRuntime {
                         }
                         continue;
                     }
-                    Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
+                    Err(error) => {
+                        tracing::debug!(
+                            error = %error,
+                            provider = %provider_ref.to_canonical_string(),
+                            "U12 provider read failed",
+                        );
+                        return Err(ResourceRuntimeError::StoreReadFailed);
+                    }
                 };
                 required = true;
                 if provider.zone != self.zone
@@ -15536,6 +15718,13 @@ impl ZoneResourceRuntime {
             let guest_session_target =
                 crate::resolve_committed_guest_session_target(self, &guest_ref)
                     .await
+                    .inspect_err(|error| {
+                        tracing::debug!(
+                            error = ?error,
+                            guest = %guest_ref.to_canonical_string(),
+                            "guest session target resolution failed during reconcile",
+                        );
+                    })
                     .ok();
             // Deletion may reuse the already authenticated live session below,
             // but it never creates a new session solely to clear a finalizer.
@@ -16133,7 +16322,14 @@ impl ZoneResourceRuntime {
                 Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
                     return Ok(false);
                 }
-                Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        resource = %resource_ref.to_canonical_string(),
+                        "Cloud Hypervisor dependency read failed",
+                    );
+                    return Err(ResourceRuntimeError::StoreReadFailed);
+                }
             };
             let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
                 .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
@@ -16163,9 +16359,25 @@ impl ZoneResourceRuntime {
             }
             self.reconcile_cloud_hypervisor_guests(Arc::clone(&state))
                 .await?;
-            if let Ok(target) = crate::resolve_committed_guest_session_target(self, guest_ref).await
-            {
-                let _ = crate::connect_guest_component_session_for_guest(&state, &target).await;
+            match crate::resolve_committed_guest_session_target(self, guest_ref).await {
+                Ok(target) => {
+                    if let Err(error) =
+                        crate::connect_guest_component_session_for_guest(&state, &target).await
+                    {
+                        tracing::debug!(
+                            guest = %guest_ref.to_canonical_string(),
+                            error = %error,
+                            "guest component session connect failed during lifecycle wait",
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        guest = %guest_ref.to_canonical_string(),
+                        error = ?error,
+                        "guest session target unavailable during lifecycle wait; skipping connect",
+                    );
+                }
             }
             let actual = self
                 .cloud_hypervisor_lifecycle_state(Arc::clone(&state), guest_ref)
@@ -16362,7 +16574,19 @@ impl ZoneResourceRuntime {
             Ok(crate::process_provider_runtime::ProviderLiveness::Exited) => {
                 Ok(crate::provider_effects::GuestLifecycleState::Stopped)
             }
-            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) | Err(_) => {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Unknown) => {
+                tracing::debug!(
+                    guest = %guest_ref.to_canonical_string(),
+                    "Cloud Hypervisor lifecycle probe returned unknown liveness",
+                );
+                Err(ResourceRuntimeError::CapabilityUnavailable)
+            }
+            Err(error) => {
+                tracing::debug!(
+                    guest = %guest_ref.to_canonical_string(),
+                    error = ?error,
+                    "Cloud Hypervisor lifecycle probe failed",
+                );
                 Err(ResourceRuntimeError::CapabilityUnavailable)
             }
         }
@@ -16435,6 +16659,10 @@ impl ZoneResourceRuntime {
             let Some(spec) =
                 crate::binding_child_resource_runtime::parsed_binding_spec(binding)
             else {
+                tracing::debug!(
+                    binding = %binding.resource_ref.to_canonical_string(),
+                    "volume binding spec unparseable; gate kept",
+                );
                 kept.push(binding.resource_ref.clone());
                 continue;
             };
@@ -16444,7 +16672,14 @@ impl ZoneResourceRuntime {
             match self.volume_admits_binding(&spec, &binding.resource_ref).await {
                 Ok(true) => kept.push(binding.resource_ref.clone()),
                 Ok(false) => {}
-                Err(_) => kept.push(binding.resource_ref.clone()),
+                Err(error) => {
+                    tracing::debug!(
+                        error = ?error,
+                        binding = %binding.resource_ref.to_canonical_string(),
+                        "volume binding admission check failed; gate kept",
+                    );
+                    kept.push(binding.resource_ref.clone());
+                }
             }
         }
         kept
@@ -17251,6 +17486,10 @@ impl ControllerSessionCoordinator {
                         if Self::controller_session_clear_error_is_stale_identity(&error) =>
                     {
                         providers.fail_controller_bootstrap(context);
+                        tracing::debug!(
+                            process = %context.process_ref(),
+                            "controller session evidence identity stale; bootstrap failed",
+                        );
                         continue;
                     }
                     Err(error)
@@ -17425,6 +17664,11 @@ impl ControllerSessionCoordinator {
                 });
             if let Some((context, finished, session_generation)) = existing {
                 if finished {
+                    tracing::warn!(
+                        process = %process_ref,
+                        session_generation = session_generation.get(),
+                        "controller session service task finished; tearing down session",
+                    );
                     providers.fail_controller_bootstrap(&context);
                     self.clear_controller_session_for_reconcile(
                         &process_ref,
@@ -17482,7 +17726,13 @@ impl ControllerSessionCoordinator {
             let mut registrar = match self.registrar.lock() {
                 Ok(mut registrar) => match registrar.take() {
                     Some(registrar) => registrar,
-                    None => continue,
+                    None => {
+                        tracing::debug!(
+                            process = %context.process_ref(),
+                            "controller session registrar unavailable; bootstrap deferred",
+                        );
+                        continue;
+                    }
                 },
                 Err(_) => {
                     return Err(ResourceRuntimeError::AuthenticationUnavailable);
@@ -17496,6 +17746,10 @@ impl ControllerSessionCoordinator {
                     .lock()
                     .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
                     Some(registrar);
+                tracing::debug!(
+                    process = %context.process_ref(),
+                    "controller bootstrap begin refused; endpoint re-armed for retry",
+                );
                 continue;
             };
             let context = endpoint.context().clone();
@@ -17639,6 +17893,10 @@ impl ControllerSessionCoordinator {
                         let _ = service_task.await;
                         providers.fail_controller_bootstrap(&context);
                         self.revoke_controller_ingress(ingress).await?;
+                        tracing::debug!(
+                            provider = %context.provider_owner_ref().to_canonical_string(),
+                            "controller session establish rejected; context not current or bootstrap activation refused",
+                        );
                         continue;
                     }
                     let context_for_cleanup = context.clone();
@@ -17685,7 +17943,13 @@ impl ControllerSessionCoordinator {
                                 true
                             }
                         }
-                        Err(_) => false,
+                        Err(_) => {
+                            tracing::debug!(
+                                process = %context.process_ref(),
+                                "controller session registry lock poisoned; admitted session torn down",
+                            );
+                            false
+                        }
                     };
                     if inserted {
                         if let Err(error) = self
@@ -18022,7 +18286,12 @@ impl ControllerSessionCoordinator {
             };
             let encoded = match lease.assignment_grant().encode() {
                 Ok(encoded) => encoded,
-                Err(_) => {
+                Err(error) => {
+                    tracing::debug!(
+                        error = ?error,
+                        resource = %lease.identity().resource_uid().as_str(),
+                        "controller assignment grant encode failed; revoking unrecorded lease",
+                    );
                     self.revoke_unrecorded_assignment(&lease, false).await;
                     degraded = true;
                     continue;
@@ -18046,6 +18315,10 @@ impl ControllerSessionCoordinator {
             }
             if let Err(lease) = self.record_controller_assignment(binding, context, lease) {
                 self.revoke_unrecorded_assignment(&lease, true).await;
+                tracing::debug!(
+                    resource = %lease.identity().resource_uid().as_str(),
+                    "controller assignment record failed; revoking unrecorded lease",
+                );
                 degraded = true;
             }
         }
@@ -18192,7 +18465,11 @@ impl ControllerSessionCoordinator {
                     .map(|session| session.driver.clone())
             })
         {
-            if driver.send_named_stream(stream, bytes).await.is_err() {
+            if let Err(error) = driver.send_named_stream(stream, bytes).await {
+                tracing::debug!(
+                    error = %error,
+                    "unrecorded assignment revocation delivery failed",
+                );
                 if driver.reset_named_stream(stream).await.is_ok() {
                     let _ = self.mark_controller_assignment_stream_closed(
                         lease.identity().session_binding(),
@@ -18696,7 +18973,13 @@ impl ControllerSessionCoordinator {
                 tokio::spawn(async move {
                     loop {
                         match monitor.receive_control().await {
-                            Ok(d2b_session::SessionEvent::Close(_)) | Err(_) => return Ok(()),
+                            Ok(d2b_session::SessionEvent::Close(_)) => return Ok(()),
+                            Err(_) => {
+                                tracing::debug!(
+                                    "provider session monitor stopped: control receive failed",
+                                );
+                                return Ok(());
+                            }
                             Ok(_) => {}
                         }
                     }
@@ -18988,6 +19271,10 @@ impl ZoneResourceRuntime {
                     .committed_resource_value(&owner_ref, "process-owner-identity")
                     .await
                 else {
+                    tracing::debug!(
+                        owner = %owner_ref.to_canonical_string(),
+                        "process owner identity unavailable; liveness gate degraded",
+                    );
                     continue;
                 };
                 let Ok(owner_bytes) = serde_json::to_vec(&owner) else {
@@ -19016,16 +19303,27 @@ impl ZoneResourceRuntime {
             let liveness_providers = Arc::clone(&providers);
             runtime.set_liveness_waker(Arc::new(move |key, revision| {
                 if let Some(source) = wake_source.upgrade() {
-                    let _ = source.dispatch_observation(key, revision);
+                    if let Err(error) = source.dispatch_observation(key, revision) {
+                        tracing::debug!(
+                            error = ?error,
+                            revision = revision.get(),
+                            "liveness observation dispatch failed",
+                        );
+                    }
                 }
                 if let Some(coordinator) = liveness_coordinator.upgrade() {
-                    let _ = schedule_controller_session_reconcile(
+                    if let Err(error) = schedule_controller_session_reconcile(
                         Arc::clone(&liveness_task_slot),
                         Arc::clone(&liveness_wake),
                         Arc::clone(&liveness_shutdown),
                         coordinator,
                         Arc::clone(&liveness_providers),
-                    );
+                    ) {
+                        tracing::debug!(
+                            error = ?error,
+                            "controller session reconcile scheduling failed",
+                        );
+                    }
                 }
             }));
             runtime.set_status_client(self.status_client()?);
@@ -19150,7 +19448,16 @@ impl ZoneResourceRuntime {
             });
             match startup_rx.await {
                 Ok(Ok(())) => {}
-                Ok(Err(_)) | Err(_) => {
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        error = ?error,
+                        "process provider shared runner startup failed",
+                    );
+                    let _ = task.await;
+                    return Err(ResourceRuntimeError::HandlerNotReady);
+                }
+                Err(_) => {
+                    tracing::warn!("process provider shared runner startup channel closed");
                     let _ = task.await;
                     return Err(ResourceRuntimeError::HandlerNotReady);
                 }
@@ -19780,6 +20087,13 @@ impl ZoneResourceRuntime {
                 projection: StoreProjection::Full,
             })
             .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    device = %device_ref,
+                    error = %error,
+                    "legacy TPM device admission read failed",
+                );
+            })
             .ok();
         let Some(resource) = resource.filter(|resource| {
             resource.uid == *device_uid
@@ -19851,6 +20165,13 @@ impl ZoneResourceRuntime {
                 projection: StoreProjection::Full,
             })
             .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    device = %request.device_ref,
+                    error = %error,
+                    "security-key device admission read failed",
+                );
+            })
             .ok();
         let Some(resource) = resource.filter(|resource| {
             resource.uid == *request.device_uid
@@ -19928,7 +20249,13 @@ impl ZoneResourceRuntime {
             Err(error) if error.reason_code() == "audit-deferred-evidence-pending" => {
                 Err(ResourceRuntimeError::HandlerNotReady)
             }
-            Err(_) => Err(ResourceRuntimeError::StoreOpenFailed),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "trusted-deferred activation outbox drain check failed",
+                );
+                Err(ResourceRuntimeError::StoreOpenFailed)
+            }
         }
     }
 
@@ -20358,6 +20685,11 @@ async fn discover_local_user(
             .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?
         else {
             groups_verified = false;
+            tracing::debug!(
+                user = %username,
+                group = %group.as_str(),
+                "system-core user group record missing; membership unverified",
+            );
             continue;
         };
         digest.update([0]);
@@ -21400,7 +21732,11 @@ async fn send_controller_assignment_revocations(
         else {
             continue;
         };
-        if driver.send_named_stream(stream, bytes).await.is_err() {
+        if let Err(error) = driver.send_named_stream(stream, bytes).await {
+            tracing::warn!(
+                error = %error,
+                "controller assignment revocation delivery failed",
+            );
             let _ = driver.reset_named_stream(stream).await;
             break;
         }

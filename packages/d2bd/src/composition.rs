@@ -1238,7 +1238,12 @@ impl ZoneLinkGatewayComposition {
         if had_session
             && self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Ready
         {
-            let _ = self.apply_event(ZoneLinkEvent::SessionDisconnected);
+            if let Err(error) = self.apply_event(ZoneLinkEvent::SessionDisconnected) {
+                tracing::warn!(
+                    error = %error,
+                    "zone-link session disconnect event rejected by zone-link state machine"
+                );
+            }
         }
         self.gateway_guest
             .lock()
@@ -6781,7 +6786,15 @@ fn admit_gateway_zone_request(
         }
         composition
             .reset_gateway_guest_identity()
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    error = ?error,
+                    guest_ref = %gateway_guest.guest_ref(),
+                    zone = %gateway_guest.zone().as_str(),
+                    "gateway guest identity reset failed; gateway route request denied"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
     }
     if composition.gateway_guest().as_ref() != Some(&gateway_guest) {
         if composition.gateway_guest().is_some() {
@@ -6794,10 +6807,26 @@ fn admit_gateway_zone_request(
             state,
             &gateway_guest,
         ))
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                error = %error,
+                guest_ref = %gateway_guest.guest_ref(),
+                zone = %gateway_guest.zone().as_str(),
+                "guest component session connect failed; gateway route request denied"
+            );
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
         composition
             .bind_gateway_session(session)
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    error = ?error,
+                    guest_ref = %gateway_guest.guest_ref(),
+                    zone = %gateway_guest.zone().as_str(),
+                    "gateway session bind failed; gateway route request denied"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
     }
     let gateway_guest_for_invalidation = gateway_guest.clone();
     let target_zone = composition.child_path().clone();
@@ -6808,7 +6837,15 @@ fn admit_gateway_zone_request(
     let operation_id = gateway_route_operation_id(request, peer_uid, method);
     composition
         .admit_request(&operation_id, target_zone)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                error = ?error,
+                method = %method,
+                operation_id = %operation_id,
+                "gateway route admission denied for child-zone request"
+            );
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     debug_assert!(gateway_forwardable_request(request));
     let session = composition
         .gateway_session()
