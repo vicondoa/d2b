@@ -105,7 +105,15 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
             .await?;
         self.port
             .write_binding_status(&self.provider, binding, &report.projection)
-            .await?;
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = error.code(),
+                    "binding status write rejected; reconcile failed closed",
+                );
+            })?;
         Ok(report)
     }
 
@@ -129,20 +137,69 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
         };
 
         if binding.spec().access() == AttachmentAccess::SharedWrite {
+            tracing::warn!(
+                binding = %binding.uid().to_canonical_string(),
+                provider = %self.provider.as_str(),
+                reason = VirtiofsBindingError::SharedWriteUnsupported.code(),
+                "binding rejected: shared-write attachment unsupported",
+            );
             return Ok(failed(VirtiofsBindingError::SharedWriteUnsupported));
         }
-        WorkerSandbox::conformant().assert_conformant()?;
+        if let Err(error) = WorkerSandbox::conformant().assert_conformant() {
+            tracing::warn!(
+                binding = %binding.uid().to_canonical_string(),
+                provider = %self.provider.as_str(),
+                reason = error.code(),
+                "virtiofsd sandbox posture assertion failed; worker launch refused",
+            );
+            return Err(error);
+        }
         let view = match resolve_view(volume, binding) {
             Ok(view) => view,
-            Err(reason) => return Ok(failed(reason)),
+            Err(reason) => {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = reason.code(),
+                    "binding view resolution failed",
+                );
+                return Ok(failed(reason));
+            }
         };
         let plan = match VirtiofsdWorkerPlan::for_binding(binding, view, vcpu_count, principal) {
             Ok(plan) => plan,
-            Err(error) => return Ok(failed(error)),
+            Err(error) => {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = error.code(),
+                    "virtiofsd worker plan rejected for binding",
+                );
+                return Ok(failed(error));
+            }
         };
         if binding.spec().view().as_str() == "ro-store"
-            && !self.port.observe_store_view_marker(binding).await?
+            && !self
+                .port
+                .observe_store_view_marker(binding)
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        binding = %binding.uid().to_canonical_string(),
+                        provider = %self.provider.as_str(),
+                        reason = error.code(),
+                        "store-view marker probe failed for binding",
+                    );
+                })?
         {
+            // Cardinality: dependency wait that can recur every pass;
+            // keep it at debug level.
+            tracing::debug!(
+                binding = %binding.uid().to_canonical_string(),
+                provider = %self.provider.as_str(),
+                reason = VirtiofsBindingError::StoreViewMarkerMissing.code(),
+                "binding pending: store-view marker missing",
+            );
             return Ok(BindingStatusReport {
                 provider: self.provider.clone(),
                 phase: BindingPhase::Pending,
@@ -161,25 +218,75 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
 
         let worker = match self.port.launch_worker(binding, &plan).await {
             Ok(worker) => worker,
-            Err(error) => return Ok(failed(error)),
+            Err(error) => {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = error.code(),
+                    "virtiofsd worker launch failed for binding",
+                );
+                return Ok(failed(error));
+            }
         };
-        let binding_ready = self.port.observe_socket(&worker).await?;
+        let binding_ready = self
+            .port
+            .observe_socket(&worker)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    worker = %worker.process_ref.to_canonical_string(),
+                    reason = error.code(),
+                    "worker socket probe failed for binding",
+                );
+            })?;
         let guest_mount_ready = if binding_ready {
-            self.port.observe_guest_mount(binding).await?
+            self.port
+                .observe_guest_mount(binding)
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        binding = %binding.uid().to_canonical_string(),
+                        provider = %self.provider.as_str(),
+                        reason = error.code(),
+                        "guest mount probe failed for binding",
+                    );
+                })?
         } else {
             false
         };
 
         let (phase, reason) = match (binding_ready, guest_mount_ready) {
             (true, true) => (BindingPhase::Ready, None),
-            (true, false) => (
-                BindingPhase::Degraded,
-                Some(VirtiofsBindingError::GuestMountNotReady),
-            ),
-            (false, _) => (
-                BindingPhase::Pending,
-                Some(VirtiofsBindingError::BindingNotReady),
-            ),
+            (true, false) => {
+                // Cardinality: degraded steady state can recur every pass;
+                // keep it at debug level.
+                tracing::debug!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = VirtiofsBindingError::GuestMountNotReady.code(),
+                    "binding degraded: guest mount not ready",
+                );
+                (
+                    BindingPhase::Degraded,
+                    Some(VirtiofsBindingError::GuestMountNotReady),
+                )
+            }
+            (false, _) => {
+                // Cardinality: pending steady state can recur every pass;
+                // keep it at debug level.
+                tracing::debug!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = VirtiofsBindingError::BindingNotReady.code(),
+                    "binding pending: worker socket not ready",
+                );
+                (
+                    BindingPhase::Pending,
+                    Some(VirtiofsBindingError::BindingNotReady),
+                )
+            }
         };
         Ok(BindingStatusReport {
             provider: self.provider.clone(),
@@ -218,8 +325,37 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
         binding: &StoredBinding,
         worker: &LaunchedWorker,
     ) -> Result<(), VirtiofsBindingError> {
-        self.port.delete_worker(worker).await?;
-        if self.port.observe_guest_mount(binding).await? {
+        self.port
+            .delete_worker(worker)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = error.code(),
+                    "virtiofsd worker delete failed during drain",
+                );
+            })?;
+        if self
+            .port
+            .observe_guest_mount(binding)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    binding = %binding.uid().to_canonical_string(),
+                    provider = %self.provider.as_str(),
+                    reason = error.code(),
+                    "guest mount probe failed during drain",
+                );
+            })?
+        {
+            // Cardinality: once per blocked finalization pass.
+            tracing::warn!(
+                binding = %binding.uid().to_canonical_string(),
+                provider = %self.provider.as_str(),
+                reason = VirtiofsBindingError::DrainIncomplete.code(),
+                "binding drain blocked: guest mount still present",
+            );
             return Err(VirtiofsBindingError::DrainIncomplete);
         }
         Ok(())

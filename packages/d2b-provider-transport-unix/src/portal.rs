@@ -205,22 +205,48 @@ impl TransportPortal {
         request: OpenTransportRequest,
         fd: OwnedFd,
     ) -> Result<OpenedTransport, PortalError> {
-        validate_and_prepare(&fd, request)?;
-        let accepted =
-            AcceptedTransport::bind(binding, fd).map_err(|_| PortalError::PeerCredentials)?;
+        validate_and_prepare(&fd, request).map_err(|error| {
+            tracing::warn!(
+                provider = "transport-unix",
+                reason = %error,
+                "transport admission rejected for accepted socket"
+            );
+            PortalError::from(error)
+        })?;
+        let accepted = AcceptedTransport::bind(binding, fd).map_err(|_| {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport open rejected: peer credentials unavailable on accepted socket"
+            );
+            PortalError::PeerCredentials
+        })?;
         let (binding, peer, fd) = accepted.into_parts();
         let descriptor = TransportDescriptor {
             socket_kind: request.socket_kind(),
             attachments_enabled: request.attachments_enabled(),
         };
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| PortalError::MonitorUnavailable)?;
+        let mut state = self.state.lock().map_err(|_| {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport portal monitor lock poisoned; open rejected"
+            );
+            PortalError::MonitorUnavailable
+        })?;
         if state.entries.len() == MAX_OPEN_TRANSPORTS {
+            tracing::warn!(
+                provider = "transport-unix",
+                open_transports = state.entries.len(),
+                "transport open rejected: portal handle table full"
+            );
             return Err(PortalError::HandleTableFull);
         }
-        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| PortalError::Cloexec)?;
+        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport monitor fd duplication failed; open rejected"
+            );
+            PortalError::Cloexec
+        })?;
         let handle = next_handle(&state)?;
         state.entries.insert(
             handle,
@@ -249,6 +275,10 @@ impl TransportPortal {
         } else if state.finalized.contains(&handle) {
             Ok(())
         } else {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport close rejected: handle is not owned by this portal"
+            );
             Err(PortalError::UnknownHandle)
         }
     }
@@ -267,7 +297,13 @@ impl TransportPortal {
             &entry.monitor_fd,
             PollFlags::ERR | PollFlags::HUP | PollFlags::RDHUP,
         )];
-        poll(&mut fds, 0).map_err(|_| PortalError::MonitorUnavailable)?;
+        poll(&mut fds, 0).map_err(|_| {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport observation poll failed"
+            );
+            PortalError::MonitorUnavailable
+        })?;
         let observed = fds[0].revents();
         if observed.intersects(PollFlags::HUP | PollFlags::RDHUP) {
             Ok(TransportObservation::PeerDisconnected)
@@ -308,12 +344,22 @@ impl fmt::Debug for TransportPortal {
 fn next_handle(state: &PortalState) -> Result<TransportHandle, PortalError> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 16];
-        fill(&mut bytes).map_err(|_| PortalError::MonitorUnavailable)?;
+        fill(&mut bytes).map_err(|_| {
+            tracing::warn!(
+                provider = "transport-unix",
+                "transport handle generation failed: entropy source unavailable"
+            );
+            PortalError::MonitorUnavailable
+        })?;
         let handle = TransportHandle(bytes);
         if handle_is_available(state, handle) {
             return Ok(handle);
         }
     }
+    tracing::warn!(
+        provider = "transport-unix",
+        "transport handle generation failed: collision budget exhausted"
+    );
     Err(PortalError::MonitorUnavailable)
 }
 

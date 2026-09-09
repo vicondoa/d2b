@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+use tracing::{error, warn};
 
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use sha2::{Digest, Sha256};
@@ -441,33 +442,72 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
             Ok(())
         })();
         if let Err(error) = result {
+            warn!(
+                provider = "notification-desktop",
+                zone = ?plan.zone(),
+                error = error,
+                "lifecycle plan application failed; compensating"
+            );
             let mut compensation_failed = false;
             if let Some(sink) = started_host_sink {
-                compensation_failed |= self.backend.stop_host_sink(&sink).is_err();
+                if self.backend.stop_host_sink(&sink).is_err() {
+                    warn!(
+                        provider = "notification-desktop",
+                        zone = ?plan.zone(),
+                        "host sink rollback failed during lifecycle compensation"
+                    );
+                    compensation_failed = true;
+                }
                 if state.host_sink.as_ref() == Some(&sink) {
                     state.host_sink = None;
                 }
             }
             for source in started_sources.into_iter().rev() {
-                compensation_failed |= self.backend.stop_source(&source).is_err();
+                if self.backend.stop_source(&source).is_err() {
+                    warn!(
+                        provider = "notification-desktop",
+                        zone = ?plan.zone(),
+                        "source rollback failed during lifecycle compensation"
+                    );
+                    compensation_failed = true;
+                }
                 if state.sources.get(source.source_ref()) == Some(&source) {
                     state.sources.remove(source.source_ref());
                 }
             }
             if let Some(sink) = stopped_host_sink {
-                compensation_failed |= self.backend.start_host_sink(&sink).is_err();
+                if self.backend.start_host_sink(&sink).is_err() {
+                    warn!(
+                        provider = "notification-desktop",
+                        zone = ?plan.zone(),
+                        "host sink restore failed during lifecycle compensation"
+                    );
+                    compensation_failed = true;
+                }
                 if !compensation_failed {
                     state.host_sink = Some(sink);
                 }
             }
             for source in stopped_sources.into_iter().rev() {
-                compensation_failed |= self.backend.start_source(&source).is_err();
+                if self.backend.start_source(&source).is_err() {
+                    warn!(
+                        provider = "notification-desktop",
+                        zone = ?plan.zone(),
+                        "source restore failed during lifecycle compensation"
+                    );
+                    compensation_failed = true;
+                }
                 if !compensation_failed {
                     state.sources.insert(source.source_ref().clone(), source);
                 }
             }
             if compensation_failed {
                 drop(state);
+                error!(
+                    provider = "notification-desktop",
+                    zone = ?plan.zone(),
+                    "lifecycle compensation incomplete; attempting supervisor recovery"
+                );
                 self.recover(plan.zone(), plan.provider_ref())?;
                 return Err("notification-lifecycle-recovery-required");
             }
@@ -485,10 +525,13 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
 
     /// Return whether no source or host-sink ownership remains.
     pub fn is_drained(&self) -> Result<bool, &'static str> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "notification-lifecycle-state-unavailable")?;
+        let state = self.state.lock().map_err(|_| {
+            warn!(
+                provider = "notification-desktop",
+                "lifecycle state lock poisoned; drained check unavailable"
+            );
+            "notification-lifecycle-state-unavailable"
+        })?;
         Ok(state.sources.is_empty() && state.host_sink.is_none())
     }
 }

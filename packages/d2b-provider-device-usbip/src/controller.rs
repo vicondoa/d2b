@@ -213,10 +213,24 @@ impl UsbipBindingController {
             || service_ref.resource_type().as_str() != crate::USB_SERVICE_RESOURCE_TYPE
             || target_ref.resource_type().as_str() != "Guest"
         {
+            tracing::warn!(
+                binding = %binding_ref.to_canonical_string(),
+                service = %service_ref.to_canonical_string(),
+                reason = "binding, service, or target reference has the wrong resource type",
+                "usbip binding controller construction refused",
+            );
             return Err(UsbipBindingControllerError::Admission);
         }
         let children = binding_child_resources(binding_ref, service_ref, target_ref)
-            .map_err(|_| UsbipBindingControllerError::Admission)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    binding = %binding_ref.to_canonical_string(),
+                    service = %service_ref.to_canonical_string(),
+                    error = %error,
+                    "usbip binding child declaration failed",
+                );
+                UsbipBindingControllerError::Admission
+            })?;
         Ok(Self {
             binding_ref: binding_ref.clone(),
             service_ref: service_ref.clone(),
@@ -271,6 +285,11 @@ impl UsbipBindingController {
         ready: bool,
     ) -> Result<UsbipBindingReconcileResult, UsbipBindingControllerError> {
         if self.phase == UsbipBindingPhase::Deleted {
+            tracing::debug!(
+                binding = %self.binding_ref.to_canonical_string(),
+                reason = "binding already finalized",
+                "usbip binding child observation refused",
+            );
             return Err(UsbipBindingControllerError::Finalized);
         }
         self.phase = if ready {
@@ -317,6 +336,11 @@ impl UsbipBindingController {
         admission: &UsbipBindingAdmission,
     ) -> Result<(), UsbipBindingControllerError> {
         if admission.assignment_epoch() == 0 {
+            tracing::warn!(
+                binding = %self.binding_ref.to_canonical_string(),
+                reason = "assignment epoch is zero",
+                "usbip binding admission rejected",
+            );
             return Err(UsbipBindingControllerError::InvalidAdmission);
         }
         if let Some(current) = self.admission.as_ref() {
@@ -326,9 +350,19 @@ impl UsbipBindingController {
                 || current.guest_uid() != admission.guest_uid()
                 || current.service_generation() != admission.service_generation()
             {
+                tracing::warn!(
+                    binding = %self.binding_ref.to_canonical_string(),
+                    reason = "admission zone, binding, service, guest, or generation differs",
+                    "usbip binding admission rejected: fence mismatch",
+                );
                 return Err(UsbipBindingControllerError::Admission);
             }
             if current.assignment_epoch() != admission.assignment_epoch() {
+                tracing::warn!(
+                    binding = %self.binding_ref.to_canonical_string(),
+                    reason = "assignment epoch moved backwards",
+                    "usbip binding admission rejected: stale assignment",
+                );
                 return Err(UsbipBindingControllerError::StaleAssignment);
             }
         }
@@ -652,11 +686,25 @@ impl UsbipController {
         let network = self
             .network
             .as_ref()
-            .ok_or(UsbipControllerError::InvalidState)?;
+            .ok_or(UsbipControllerError::InvalidState)
+            .inspect_err(|_| {
+                tracing::debug!(
+                    device = %self.device_uid.to_canonical_string(),
+                    reason = "observe called before reconcile established network and firewall",
+                    "usbip service observation refused",
+                );
+            })?;
         let firewall = self
             .firewall
             .as_mut()
-            .ok_or(UsbipControllerError::InvalidState)?;
+            .ok_or(UsbipControllerError::InvalidState)
+            .inspect_err(|_| {
+                tracing::debug!(
+                    device = %self.device_uid.to_canonical_string(),
+                    reason = "observe called before reconcile established network and firewall",
+                    "usbip service observation refused",
+                );
+            })?;
         let intent = FirewallProjectionIntent::new(
             self.device_uid.clone(),
             network.identity().resource_uid().clone(),
@@ -672,6 +720,11 @@ impl UsbipController {
             }
             Ok(_) => {
                 self.phase = UsbipServicePhase::Drifted;
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    reason = "ownership-scoped firewall observation differs from desired state",
+                    "usbip service firewall drifted",
+                );
                 Err(UsbipControllerError::FirewallDrift)
             }
             Err(error) => self.effect_failed(error),
@@ -745,6 +798,13 @@ impl UsbipController {
     }
 
     fn effect_failed<T>(&mut self, error: UsbipEffectError) -> Result<T, UsbipControllerError> {
+        tracing::warn!(
+            device = %self.device_uid.to_canonical_string(),
+            service = %self.service.resource_uid().to_canonical_string(),
+            phase = ?self.phase,
+            error = %error,
+            "usbip service effect failed",
+        );
         self.last_error = Some(error);
         self.phase = match error {
             UsbipEffectError::Transient

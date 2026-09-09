@@ -452,6 +452,14 @@ pub fn execute_usbip_plan<E: UsbipStepExecutor>(
             Ok(()) => report.completed.push(*step),
             Err(reason) => {
                 report.failed = Some((*step, reason.clone()));
+                tracing::warn!(
+                    busid = %plan.busid,
+                    env = %plan.env,
+                    vm = %plan.vm,
+                    step = %step,
+                    reason = %reason,
+                    "usbip bring-up plan step failed",
+                );
                 let err = UsbipPlanError {
                     busid: plan.busid.clone(),
                     step: *step,

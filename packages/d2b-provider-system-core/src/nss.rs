@@ -13,6 +13,7 @@ use d2b_contracts_resource::v3::{
     user::{OsGroupName, UserSpec},
 };
 use serde::Serialize;
+use tracing::{debug, warn};
 
 use crate::{SystemCoreError, ownership};
 
@@ -127,8 +128,21 @@ where
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<NssUserStatus, SystemCoreError> {
-        ownership::require_resource_type(user_ref, "User")?;
+        ownership::require_resource_type(user_ref, "User").map_err(|error| {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                error = %error,
+                "assignment rejected: user resource type not owned by system-core"
+            );
+            error
+        })?;
         let Some(record) = self.port.lookup(user_ref, spec).await? else {
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                "nss lookup found no user record; reporting degraded"
+            );
             return Ok(NssUserStatus {
                 user_ref: user_ref.clone(),
                 phase: ResourcePhase::Degraded,
@@ -150,9 +164,21 @@ where
             if record.session_manager_available {
                 ResourcePhase::Ready
             } else {
+                debug!(
+                    provider = crate::PROVIDER_NAME,
+                    user = %user_ref.to_canonical_string(),
+                    "session manager unavailable; reporting user degraded"
+                );
                 ResourcePhase::Degraded
             }
         } else {
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                home_exists = record.home_exists,
+                groups_verified = group_membership_verified,
+                "user verification incomplete; reporting degraded"
+            );
             ResourcePhase::Degraded
         };
         Ok(NssUserStatus {

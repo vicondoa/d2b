@@ -78,18 +78,46 @@ impl ConfigServiceBackend for GuestConfigReader {
             return Err(ConfigError::Unauthorized);
         }
         let request: ConfigSyncRequest =
-            serde_json::from_value(payload).map_err(|_| ConfigError::InvalidRequest)?;
+            serde_json::from_value(payload).map_err(|error| {
+                tracing::debug!(
+                    resource = %self.guest_ref.to_canonical_string(),
+                    %error,
+                    "config-nixos guest read request rejected: payload invalid",
+                );
+                ConfigError::InvalidRequest
+            })?;
         if request.guest_ref != self.guest_ref {
+            tracing::debug!(
+                resource = %request.guest_ref.to_canonical_string(),
+                "config-nixos guest read rejected: session mismatch",
+            );
             return Err(ConfigError::SessionMismatch);
         }
-        let document = GuestConfigDocument::new(read_bounded_file(&self.path)?)?;
+        let document = match GuestConfigDocument::new(read_bounded_file(&self.path)?) {
+            Ok(document) => document,
+            Err(error) => {
+                tracing::warn!(
+                    resource = %request.guest_ref.to_canonical_string(),
+                    %error,
+                    "config-nixos guest config read failed",
+                );
+                return Err(error);
+            }
+        };
         let response = ConfigService.read_guest_config(
             ConfigCaller::Guest,
             &request,
             &self.evidence,
             document.bytes().to_vec(),
         )?;
-        serde_json::to_value(response).map_err(|_| ConfigError::EncodingFailed)
+        serde_json::to_value(response).map_err(|error| {
+            tracing::warn!(
+                resource = %request.guest_ref.to_canonical_string(),
+                %error,
+                "config-nixos guest read response encoding failed",
+            );
+            ConfigError::EncodingFailed
+        })
     }
 }
 
@@ -152,8 +180,14 @@ impl ConfigNixosClient {
         Request: Serialize,
         Response: DeserializeOwned,
     {
-        let payload =
-            serde_json::to_vec(request).map_err(|_| ttrpc::Error::RpcStatus(invalid_status()))?;
+        let payload = serde_json::to_vec(request).map_err(|error| {
+            tracing::warn!(
+                operation = operation.as_str(),
+                %error,
+                "config-nixos client request encoding failed",
+            );
+            ttrpc::Error::RpcStatus(invalid_status())
+        })?;
         let method = operation
             .as_str()
             .strip_prefix("ConfigNixosService/")
@@ -169,8 +203,14 @@ impl ConfigNixosClient {
                 ..Default::default()
             })
             .await?;
-        serde_json::from_slice(&response.payload)
-            .map_err(|_| ttrpc::Error::RpcStatus(invalid_status()))
+        serde_json::from_slice(&response.payload).map_err(|error| {
+            tracing::warn!(
+                operation = operation.as_str(),
+                %error,
+                "config-nixos client response decoding failed",
+            );
+            ttrpc::Error::RpcStatus(invalid_status())
+        })
     }
 }
 
@@ -187,18 +227,40 @@ impl ttrpc::r#async::MethodHandler for ConfigMethod {
         request: ttrpc::Request,
     ) -> ttrpc::Result<ttrpc::Response> {
         let payload: Value = serde_json::from_slice(&request.payload)
-            .map_err(|_| rpc_error(ConfigError::InvalidRequest))?;
-        ConfigService
-            .validate_operation(self.operation, &payload)
-            .map_err(rpc_error)?;
-        let value = self
-            .backend
-            .dispatch(self.operation, payload)
-            .map_err(rpc_error)?;
+            .map_err(|error| {
+                tracing::debug!(
+                    operation = self.operation.as_str(),
+                    %error,
+                    "config-nixos service request rejected: payload invalid",
+                );
+                rpc_error(ConfigError::InvalidRequest)
+            })?;
+        if let Err(error) = ConfigService.validate_operation(self.operation, &payload) {
+            tracing::debug!(
+                operation = self.operation.as_str(),
+                %error,
+                "config-nixos service request rejected: validation failed",
+            );
+            return Err(rpc_error(error));
+        }
+        let value = self.backend.dispatch(self.operation, payload).map_err(|error| {
+            tracing::warn!(
+                operation = self.operation.as_str(),
+                %error,
+                "config-nixos service dispatch failed",
+            );
+            rpc_error(error)
+        })?;
         let mut response = ttrpc::Response::new();
         response.set_status(ttrpc::get_status(ttrpc::Code::OK, ""));
-        response.payload =
-            serde_json::to_vec(&value).map_err(|_| rpc_error(ConfigError::EncodingFailed))?;
+        response.payload = serde_json::to_vec(&value).map_err(|error| {
+            tracing::warn!(
+                operation = self.operation.as_str(),
+                %error,
+                "config-nixos service response encoding failed",
+            );
+            rpc_error(ConfigError::EncodingFailed)
+        })?;
         Ok(response)
     }
 }
@@ -245,6 +307,10 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
     };
 
     fn map_open_error(error: Errno) -> ConfigError {
+        tracing::warn!(
+            %error,
+            "config-nixos guest config open failed",
+        );
         match error {
             Errno::LOOP | Errno::NOTDIR => ConfigError::InvalidRequest,
             _ => ConfigError::Unavailable,
@@ -275,23 +341,38 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
             openat(&directory, *parent, directory_flags, Mode::empty()).map_err(map_open_error)?;
     }
     let file = openat(&directory, *leaf, file_flags, Mode::empty()).map_err(map_open_error)?;
-    let metadata = fstat(&file).map_err(|_| ConfigError::Unavailable)?;
+    let metadata = fstat(&file).map_err(|error| {
+        tracing::warn!(
+            %error,
+            "config-nixos guest config stat failed",
+        );
+        ConfigError::Unavailable
+    })?;
     if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile || metadata.st_nlink != 1
     {
+        tracing::debug!("config-nixos guest config rejected: not a singly-linked regular file");
         return Err(ConfigError::InvalidRequest);
     }
     let size = usize::try_from(metadata.st_size).unwrap_or(crate::MAX_CONFIG_BYTES + 1);
     if size > crate::MAX_CONFIG_BYTES {
+        tracing::debug!("config-nixos guest config rejected: document too large");
         return Err(ConfigError::DocumentTooLarge);
     }
     let mut bytes = Vec::with_capacity(size);
     let mut chunk = [0_u8; 64 * 1024];
     loop {
-        let count = read(&file, &mut chunk).map_err(|_| ConfigError::Unavailable)?;
+        let count = read(&file, &mut chunk).map_err(|error| {
+            tracing::warn!(
+                %error,
+                "config-nixos guest config read failed",
+            );
+            ConfigError::Unavailable
+        })?;
         if count == 0 {
             break;
         }
         if bytes.len() + count > crate::MAX_CONFIG_BYTES {
+            tracing::debug!("config-nixos guest config rejected: document too large");
             return Err(ConfigError::DocumentTooLarge);
         }
         bytes.extend_from_slice(&chunk[..count]);

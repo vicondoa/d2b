@@ -495,6 +495,11 @@ fn mark_action_failed(
 ) -> UsbipRevocationFlowExecutionError {
     let reason = reason.into();
     report.failed = Some((action, reason.clone()));
+    tracing::warn!(
+        action = ?action,
+        reason = %reason,
+        "usbip revocation flow action failed",
+    );
     UsbipRevocationFlowExecutionError::ActionFailed { action, reason }
 }
 
@@ -530,6 +535,10 @@ pub fn execute_usbip_revocation_flow_termination<E: UsbipRevocationFlowExecutor>
             UsbipProxySynchronizationAction::WithdrawFirewallCarveout,
             reason.clone(),
         ));
+        tracing::warn!(
+            reason = %reason,
+            "usbip revocation flow refused: plan invariant violated",
+        );
         return Err((
             report,
             UsbipRevocationFlowExecutionError::PlanInvariantViolation { reason },
@@ -561,6 +570,10 @@ pub fn execute_usbip_revocation_flow_termination<E: UsbipRevocationFlowExecutor>
                         .summary()
                         .to_owned(),
                 ));
+                tracing::warn!(
+                    reason = ?plan.fail_closed_reason,
+                    "usbip revocation flow failed closed: flow not isolated",
+                );
                 return Err((
                     report,
                     UsbipRevocationFlowExecutionError::NotIsolated {
@@ -871,6 +884,11 @@ fn mark_cleanup_action_failed(
 ) -> UsbipVmCarrierCleanupExecutionError {
     let reason = reason.into();
     report.failed.get_or_insert((action, reason.clone()));
+    tracing::warn!(
+        action = ?action,
+        reason = %reason,
+        "usbip carrier cleanup action failed",
+    );
     UsbipVmCarrierCleanupExecutionError::ActionFailed { action, reason }
 }
 
@@ -947,6 +965,10 @@ pub fn execute_usbip_vm_carrier_cleanup<E: UsbipVmCarrierCleanupExecutor>(
                     .fail_closed_reason
                     .unwrap_or(UsbipRevocationFlowFailure::MissingExactTuple);
                 report.failed = Some((*action, reason.summary().to_owned()));
+                tracing::warn!(
+                    reason = ?reason,
+                    "usbip carrier cleanup failed closed: flow not isolated",
+                );
                 return Err((
                     report,
                     UsbipVmCarrierCleanupExecutionError::NotIsolated { reason },

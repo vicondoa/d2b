@@ -111,6 +111,11 @@ impl SecurityKeyLease {
             || admission.zone_ref().resource_type().as_str() != "Zone"
             || admission.holder_ref().resource_type().as_str() != "Guest"
         {
+            tracing::warn!(
+                device = %device_uid.to_canonical_string(),
+                reason = "admission device, zone, or holder binding mismatch",
+                "security-key authorized lease construction refused",
+            );
             return Err(SecurityKeyLeaseError::AuthorizationDenied);
         }
         let holder = device_uid.clone();
@@ -154,17 +159,34 @@ impl SecurityKeyLease {
             LeaseState::Idle | LeaseState::Completed | LeaseState::Cancelled | LeaseState::Expired
         ) || self.session.is_some()
         {
+            tracing::warn!(
+                device = %self.holder.to_canonical_string(),
+                reason = "lease already holds an active or unfinished session",
+                "security-key session acquire rejected: session conflict",
+            );
             return Err(SecurityKeyLeaseError::SessionConflict);
         }
         let backing = self
             .backing
             .clone()
-            .ok_or(SecurityKeyLeaseError::AuthorizationDenied)?;
+            .ok_or(SecurityKeyLeaseError::AuthorizationDenied)
+            .inspect_err(|_| {
+                tracing::warn!(
+                    device = %self.holder.to_canonical_string(),
+                    reason = "admission evidence consumed; no physical backing claim remains",
+                    "security-key session acquire refused: authorization denied",
+                );
+            })?;
         self.state = LeaseState::AwaitingLease;
         let authority_lease = match port.claim_physical_backing(&backing) {
             Ok(lease) => lease,
             Err(error) => {
                 self.state = LeaseState::Idle;
+                tracing::warn!(
+                    device = %self.holder.to_canonical_string(),
+                    error = %error,
+                    "security-key physical backing claim failed",
+                );
                 return Err(SecurityKeyLeaseError::Effect(error));
             }
         };
@@ -178,11 +200,21 @@ impl SecurityKeyLease {
                     .as_ref()
                     .cloned()
                     .ok_or(SecurityKeyLeaseError::InvalidTransition)?;
+                tracing::warn!(
+                    device = %self.holder.to_canonical_string(),
+                    error = %error,
+                    "security-key hidraw open failed during session start",
+                );
                 if let Err(release_error) = port.release_physical_backing(authority) {
                     // Keep the authority lease and remain non-reacquirable
                     // until Core confirms its release. Reacquiring here
                     // would permit two owners after a partial cleanup.
                     self.state = LeaseState::AwaitingLease;
+                    tracing::warn!(
+                        device = %self.holder.to_canonical_string(),
+                        error = %release_error,
+                        "security-key physical backing release failed after open failure",
+                    );
                     return Err(SecurityKeyLeaseError::Effect(release_error));
                 }
                 self.authority_lease = None;
@@ -208,6 +240,12 @@ impl SecurityKeyLease {
         if self.authorized_device.as_ref() != Some(&device_uid)
             || self.authorized_holder.as_ref() != Some(holder)
         {
+            tracing::warn!(
+                device = %device_uid.to_canonical_string(),
+                holder = %holder.to_canonical_string(),
+                reason = "device or holder binding differs from the admission",
+                "security-key authorized session acquire refused",
+            );
             return Err(SecurityKeyLeaseError::AuthorizationDenied);
         }
         self.acquire(session, device_uid, port)
@@ -228,6 +266,11 @@ impl SecurityKeyLease {
             || admission.zone_ref().resource_type().as_str() != "Zone"
             || admission.holder_ref().resource_type().as_str() != "Guest"
         {
+            tracing::warn!(
+                device = %device_uid.to_canonical_string(),
+                reason = "lease state, session, authority, or admission binding mismatch",
+                "security-key admission rebind refused",
+            );
             return Err(SecurityKeyLeaseError::AuthorizationDenied);
         }
         let holder = admission.holder_ref().clone();
@@ -269,6 +312,12 @@ impl SecurityKeyLease {
         port: &mut P,
     ) -> Result<(), SecurityKeyLeaseError> {
         if self.state != LeaseState::Active {
+            tracing::debug!(
+                device = %self.holder.to_canonical_string(),
+                state = ?self.state,
+                reason = "finish requested outside the Active phase",
+                "security-key session finish refused",
+            );
             return Err(SecurityKeyLeaseError::InvalidTransition);
         }
         let authority = self
@@ -277,7 +326,14 @@ impl SecurityKeyLease {
             .cloned()
             .ok_or(SecurityKeyLeaseError::InvalidTransition)?;
         port.release_physical_backing(authority)
-            .map_err(SecurityKeyLeaseError::Effect)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %self.holder.to_canonical_string(),
+                    error = %error,
+                    "security-key physical backing release failed during session finish",
+                );
+                SecurityKeyLeaseError::Effect(error)
+            })?;
         self.authority_lease = None;
         self.relay_ticket = None;
         self.session = None;

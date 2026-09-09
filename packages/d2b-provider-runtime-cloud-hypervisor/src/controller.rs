@@ -1821,7 +1821,17 @@ where
         if self.registered {
             return Ok(());
         }
-        self.api.register(&self.registration).await?;
+        self.api
+            .register(&self.registration)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = ?self.registration.provider_ref(),
+                    error = %error,
+                    "controller registration on the authenticated Resource API failed"
+                );
+                error
+            })?;
         self.registered = true;
         Ok(())
     }
@@ -1851,12 +1861,25 @@ where
             return Err(CloudHypervisorError::NotRegistered);
         }
         let guest = self.api.get_guest(guest_ref).await.map_err(|error| {
-            eprintln!("cloud-hypervisor-controller-stage=get-guest error={error}");
+            tracing::warn!(
+                resource = ?guest_ref,
+                stage = "get-guest",
+                error = %error,
+                "reconcile could not read the Guest snapshot"
+            );
             error
         })?;
         self.validate_guest(&guest, guest_ref)?;
         if !guest.controller_finalizer_present() {
-            self.api.ensure_guest_finalizer(&guest).await?;
+            self.api.ensure_guest_finalizer(&guest).await.map_err(|error| {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    error = %error,
+                    "ensuring the controller finalizer on the assigned Guest failed"
+                );
+                error
+            })?;
             return Ok(CloudHypervisorReconcileOutcome::Pending(
                 GuestStatusProjection::new(
                     GuestRuntimeStatus {
@@ -1876,7 +1899,15 @@ where
             guest.execution_ref.clone(),
             &self.descriptor,
         )
-        .map_err(|_| CloudHypervisorError::InvalidConfiguration)?;
+        .map_err(|error| {
+            tracing::debug!(
+                zone = ?guest.zone,
+                resource = ?guest.resource_ref,
+                error = ?error,
+                "child plan derivation from the verified descriptor failed"
+            );
+            CloudHypervisorError::InvalidConfiguration
+        })?;
         let expected_refs = child_plan
             .child_batch()
             .mutations()
@@ -1888,7 +1919,13 @@ where
             .relist_owned_children(&guest, &expected_refs)
             .await
             .map_err(|error| {
-                eprintln!("cloud-hypervisor-controller-stage=relist-children error={error}");
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "relist-children",
+                    error = %error,
+                    "reconcile could not relist owned children"
+                );
                 error
             })?;
         let children = self.validate_owner_relist(&guest, &expected_refs, observed)?;
@@ -1898,7 +1935,13 @@ where
             .observe_dependencies(&guest, &self.graph)
             .await
             .map_err(|error| {
-                eprintln!("cloud-hypervisor-controller-stage=observe-dependencies error={error}");
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "observe-dependencies",
+                    error = %error,
+                    "reconcile could not observe dependency status"
+                );
                 error
             })?;
         let (dependency_readiness, dependency_conditions) = dependencies.readiness(&self.graph);
@@ -1920,11 +1963,22 @@ where
             .assess_update(&guest, &children.values().cloned().collect::<Vec<_>>())
             .await
             .map_err(|error| {
-                eprintln!("cloud-hypervisor-controller-stage=assess-update error={error}");
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "assess-update",
+                    error = %error,
+                    "reconcile could not assess D091 update requirements"
+                );
                 error
             })?
             .is_some();
         if upgrade_required {
+            tracing::debug!(
+                zone = ?guest.zone,
+                resource = ?guest.resource_ref,
+                "disruptive D091 upgrade required for assigned Guest"
+            );
             let status = self.project_status(
                 &guest,
                 &child_plan,
@@ -1934,7 +1988,15 @@ where
                 &[GuestCondition::UpgradeRequired],
                 true,
             );
-            self.api.update_status(&guest, status.clone()).await?;
+            self.api.update_status(&guest, status.clone()).await.map_err(|error| {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    error = %error,
+                    "persisting the upgrade-required Guest status failed"
+                );
+                error
+            })?;
             return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
         }
         let mut lifecycle_conditions = Vec::new();
@@ -1951,15 +2013,39 @@ where
             {
                 ProcessAdoptionStatus::Current
             } else {
-                self.api.observe_process_adoption(&guest, process).await?
+                self.api
+                    .observe_process_adoption(&guest, process)
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?process.resource_ref,
+                            error = %error,
+                            "observing the VMM Process adoption outcome failed"
+                        );
+                        error
+                    })?
             };
             match adoption {
                 ProcessAdoptionStatus::Unavailable | ProcessAdoptionStatus::Quarantined => {
+                    tracing::debug!(
+                        zone = ?guest.zone,
+                        resource = ?guest.resource_ref,
+                        child = ?process.resource_ref,
+                        "VMM Process adoption unavailable or quarantined; Guest degraded"
+                    );
                     lifecycle_conditions.push(GuestCondition::AdoptionAmbiguous);
                     force_degraded = true;
                     adoption_blocked = true;
                 }
                 ProcessAdoptionStatus::Absent => {
+                    tracing::debug!(
+                        zone = ?guest.zone,
+                        resource = ?guest.resource_ref,
+                        child = ?process.resource_ref,
+                        "VMM Process observed absent; Guest degraded"
+                    );
                     lifecycle_conditions.push(GuestCondition::VmmProcessExited);
                     force_degraded = true;
                     self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
@@ -1978,7 +2064,15 @@ where
                     &lifecycle_conditions,
                     true,
                 );
-                self.api.update_status(&guest, status.clone()).await?;
+                self.api.update_status(&guest, status.clone()).await.map_err(|error| {
+                    tracing::warn!(
+                        zone = ?guest.zone,
+                        resource = ?guest.resource_ref,
+                        error = %error,
+                        "persisting the adoption-blocked Guest status failed"
+                    );
+                    error
+                })?;
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
         }
@@ -1994,7 +2088,13 @@ where
         if !missing.is_empty() {
             let batch = GuestChildCreateBatch::new(&guest, child_plan.child_batch(), missing)?;
             let response = match self.api.commit_batch(batch.clone()).await.map_err(|error| {
-                eprintln!("cloud-hypervisor-controller-stage=commit-batch error={error}");
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "commit-batch",
+                    error = %error,
+                    "creating missing direct children failed"
+                );
                 error
             }) {
                 Ok(response) => response,
@@ -2019,7 +2119,15 @@ where
                         )
                         .await;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    tracing::warn!(
+                        zone = ?guest.zone,
+                        resource = ?guest.resource_ref,
+                        error = %error,
+                        "child commit batch rejected by the Resource API"
+                    );
+                    return Err(error.into());
+                }
             };
             match response {
                 GuestChildCommitResponse::Committed(returned) => {
@@ -2039,6 +2147,11 @@ where
                                 .await;
                         }
                         Err(CloudHypervisorError::BatchResponseInvalid) => {
+                            tracing::warn!(
+                                zone = ?guest.zone,
+                                resource = ?guest.resource_ref,
+                                "child commit response failed validation; deferring with pending status"
+                            );
                             return self
                                 .pending_after_batch(
                                     &guest,
@@ -2056,6 +2169,11 @@ where
                     }
                 }
                 GuestChildCommitResponse::Uncertain | GuestChildCommitResponse::Truncated => {
+                    tracing::debug!(
+                        zone = ?guest.zone,
+                        resource = ?guest.resource_ref,
+                        "child commit outcome uncertain or truncated; requiring relist"
+                    );
                     return self
                         .pending_after_batch(
                             &guest,
@@ -2106,6 +2224,11 @@ where
                         CloudHypervisorResourceApiError::Conflict,
                     ) =>
             {
+                tracing::debug!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    "child spec repair rejected by conflict fence; deferring with current status"
+                );
                 let status = self.project_status(
                     &guest,
                     &child_plan,
@@ -2117,7 +2240,15 @@ where
                 );
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    error = %error,
+                    "child spec repair failed for the assigned Guest"
+                );
+                return Err(error);
+            }
         }
 
         let status = self.project_status(
@@ -2129,7 +2260,15 @@ where
             &lifecycle_conditions,
             force_degraded,
         );
-        self.api.update_status(&guest, status.clone()).await?;
+        self.api.update_status(&guest, status.clone()).await.map_err(|error| {
+            tracing::warn!(
+                zone = ?guest.zone,
+                resource = ?guest.resource_ref,
+                error = %error,
+                "persisting the projected Guest status failed"
+            );
+            error
+        })?;
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
     }
 
@@ -2143,6 +2282,12 @@ where
             || guest.system_artifact_id()
                 != Some(self.descriptor.descriptor().system_artifact_id().as_str())
         {
+            tracing::warn!(
+                zone = ?guest.zone,
+                resource = ?requested_ref,
+                provider = ?guest.provider_ref(),
+                "reconcile rejected the Guest snapshot; identity or provider fence mismatch"
+            );
             return Err(CloudHypervisorError::InvalidGuest);
         }
         Ok(())
@@ -2170,6 +2315,12 @@ where
                 child.resource_ref().clone(),
                 child.uid().clone(),
             )) {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?child.resource_ref,
+                    uid = ?child.uid,
+                    "child incarnation rejected; UID was retired by an earlier incarnation"
+                );
                 return Err(CloudHypervisorError::ChildConflict);
             }
             if self
@@ -2177,6 +2328,12 @@ where
                 .get(&key)
                 .is_some_and(|known| known != child.uid())
             {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?child.resource_ref,
+                    uid = ?child.uid,
+                    "child incarnation rejected; UID differs from the known child identity"
+                );
                 return Err(CloudHypervisorError::ChildConflict);
             }
             self.known_child_uids.insert(key, child.uid().clone());
@@ -2264,6 +2421,11 @@ where
         upgrade: &GuestUpgradePlan,
     ) -> Result<(), CloudHypervisorError> {
         if upgrade.guest_ref() != guest.resource_ref() || upgrade.guest_uid() != guest.uid() {
+            tracing::warn!(
+                zone = ?guest.zone,
+                resource = ?guest.resource_ref,
+                "D091 upgrade rejected; upgrade plan fence does not match the Guest snapshot"
+            );
             return Err(CloudHypervisorError::ChildConflict);
         }
         let (stored_reason, stored_cursor) = self
@@ -2280,16 +2442,48 @@ where
             let step = &upgrade.steps()[cursor];
             match step {
                 FinalizationStep::DrainGuestLocal => {
-                    self.api.drain_guest_local(guest).await?;
+                    self.api.drain_guest_local(guest).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "upgrade-drain-guest-local",
+                            error = %error,
+                            "draining target-local Guest Resources during the D091 recycle failed"
+                        );
+                        error
+                    })?;
                     cursor += 1;
                 }
                 FinalizationStep::CloseSession => {
-                    self.api.close_guest_session(guest).await?;
+                    self.api.close_guest_session(guest).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "upgrade-close-session",
+                            error = %error,
+                            "closing the authenticated Guest session during the D091 recycle failed"
+                        );
+                        error
+                    })?;
                     cursor += 1;
                 }
                 FinalizationStep::RecycleVmm { child } => {
-                    let observation = self.observe_upgrade_state(guest, child_plan).await?;
+                    let observation = self.observe_upgrade_state(guest, child_plan).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "upgrade-observe-state",
+                            error = %error,
+                            "observing finalization state for the VMM recycle step failed"
+                        );
+                        error
+                    })?;
                     if observation.guest_uid() != guest.uid() {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            "VMM recycle step rejected; observation UID fence mismatch"
+                        );
                         return Err(CloudHypervisorError::ChildConflict);
                     }
                     let fresh_process = observation
@@ -2300,6 +2494,12 @@ where
                     if let Some(fresh) = fresh_process.as_ref()
                         && fresh.uid() != child.uid()
                     {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?child.target(),
+                            "VMM recycle step rejected; child UID changed under the fence"
+                        );
                         return Err(CloudHypervisorError::ChildConflict);
                     }
                     if observation.process().is_stopped_or_absent() {
@@ -2308,13 +2508,29 @@ where
                             .insert(guest.uid().clone(), (upgrade.reason(), cursor));
                         return Ok(());
                     }
-                    let process = fresh_process.ok_or(CloudHypervisorError::ChildConflict)?;
+                    let process = fresh_process.ok_or_else(|| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?child.target(),
+                            "VMM recycle step lost the VMM Process child"
+                        );
+                        CloudHypervisorError::ChildConflict
+                    })?;
                     let mutation = child_plan
                         .child_batch()
                         .mutations()
                         .iter()
                         .find(|mutation| mutation.target() == child.target())
-                        .ok_or(CloudHypervisorError::ChildConflict)?;
+                        .ok_or_else(|| {
+                            tracing::warn!(
+                                zone = ?guest.zone,
+                                resource = ?guest.resource_ref,
+                                child = ?child.target(),
+                                "VMM recycle step lost the planned child mutation"
+                            );
+                            CloudHypervisorError::ChildConflict
+                        })?;
                     let update = ChildSpecUpdate::new(
                         process.target().clone(),
                         process.uid().clone(),
@@ -2322,7 +2538,16 @@ where
                         mutation.body().clone(),
                         Some(DesiredLifecycle::Stopped),
                     )?;
-                    self.api.update_spec(update).await?;
+                    self.api.update_spec(update).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?process.target(),
+                            error = %error,
+                            "stopping the VMM Process for the D091 recycle failed"
+                        );
+                        error
+                    })?;
                     cursor += 1;
                     self.upgrade_progress
                         .insert(guest.uid().clone(), (upgrade.reason(), cursor));
@@ -2335,8 +2560,22 @@ where
                             .insert(guest.uid().clone(), (upgrade.reason(), cursor));
                         continue;
                     }
-                    let observation = self.observe_upgrade_state(guest, child_plan).await?;
+                    let observation = self.observe_upgrade_state(guest, child_plan).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "upgrade-observe-state",
+                            error = %error,
+                            "observing finalization state for the child delete step failed"
+                        );
+                        error
+                    })?;
                     if observation.guest_uid() != guest.uid() {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            "child delete step rejected; observation UID fence mismatch"
+                        );
                         return Err(CloudHypervisorError::ChildConflict);
                     }
                     if !observation.process().is_stopped_or_absent() {
@@ -2358,6 +2597,12 @@ where
                         return Ok(());
                     };
                     if fresh.uid() != child.uid() {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?child.target(),
+                            "child delete step rejected; child UID changed under the fence"
+                        );
                         return Err(CloudHypervisorError::ChildConflict);
                     }
                     if fresh.deletion_requested() || fresh.finalizers_pending() {
@@ -2371,7 +2616,16 @@ where
                         child.uid().clone(),
                     ));
                     if !pending {
-                        self.api.delete_child(guest, fresh.clone()).await?;
+                        self.api.delete_child(guest, fresh.clone()).await.map_err(|error| {
+                            tracing::warn!(
+                                zone = ?guest.zone,
+                                resource = ?guest.resource_ref,
+                                child = ?fresh.target(),
+                                error = %error,
+                                "deleting the recycled direct child failed"
+                            );
+                            error
+                        })?;
                         self.retire_child(guest, &fresh);
                     }
                     self.upgrade_progress
@@ -2383,7 +2637,16 @@ where
                 } => {
                     self.api
                         .invalidate_guest_session(guest, *next_generation)
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            tracing::warn!(
+                                zone = ?guest.zone,
+                                resource = ?guest.resource_ref,
+                                error = %error,
+                                "invalidating prior session generations during the D091 recycle failed"
+                            );
+                            error
+                        })?;
                     cursor += 1;
                 }
                 FinalizationStep::StopVmm { .. }
@@ -2413,11 +2676,30 @@ where
         let children = self
             .api
             .relist_owned_children(guest, &expected_refs)
-            .await?;
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "upgrade-relist-children",
+                    error = %error,
+                    "relisting children for the D091 recycle observation failed"
+                );
+                error
+            })?;
         self.api
             .observe_finalization(guest, &children)
             .await
-            .map_err(CloudHypervisorError::ResourceApi)
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "upgrade-observe-finalization",
+                    error = %error,
+                    "observing finalization state for the D091 recycle failed"
+                );
+                CloudHypervisorError::ResourceApi(error)
+            })
     }
 
     async fn reconcile_deletion(
@@ -2431,19 +2713,55 @@ where
         let observation = self
             .api
             .observe_finalization(guest, &children.values().cloned().collect::<Vec<_>>())
-            .await?;
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?guest.resource_ref,
+                    stage = "deletion-observe-finalization",
+                    error = %error,
+                    "observing finalization state for Guest deletion failed"
+                );
+                error
+            })?;
         let finalization = plan_finalization(observation)?;
         let blocked = matches!(
             finalization.disposition(),
             FinalizationDisposition::Blocked(_)
         );
+        if blocked {
+            tracing::debug!(
+                zone = ?guest.zone,
+                resource = ?guest.resource_ref,
+                reason = ?finalization.disposition(),
+                "Guest deletion finalization blocked; retaining the controller finalizer"
+            );
+        }
         for step in finalization.steps() {
             match step {
                 FinalizationStep::DrainGuestLocal => {
-                    self.api.drain_guest_local(guest).await?;
+                    self.api.drain_guest_local(guest).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "deletion-drain-guest-local",
+                            error = %error,
+                            "draining target-local Guest Resources during deletion failed"
+                        );
+                        error
+                    })?;
                 }
                 FinalizationStep::CloseSession => {
-                    self.api.close_guest_session(guest).await?;
+                    self.api.close_guest_session(guest).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            stage = "deletion-close-session",
+                            error = %error,
+                            "closing the authenticated Guest session during deletion failed"
+                        );
+                        error
+                    })?;
                 }
                 FinalizationStep::StopVmm { child, .. } => {
                     let mutation = plan
@@ -2459,13 +2777,31 @@ where
                         mutation.body().clone(),
                         Some(DesiredLifecycle::Stopped),
                     )?;
-                    self.api.update_spec(update).await?;
+                    self.api.update_spec(update).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?child.target(),
+                            error = %error,
+                            "stopping the VMM Process during deletion failed"
+                        );
+                        error
+                    })?;
                 }
                 FinalizationStep::DeleteChild(child) => {
                     if child.deletion_requested() {
                         continue;
                     }
-                    self.api.delete_child(guest, child.clone()).await?;
+                    self.api.delete_child(guest, child.clone()).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            child = ?child.target(),
+                            error = %error,
+                            "deleting the direct child during Guest deletion failed"
+                        );
+                        error
+                    })?;
                     self.retire_child(guest, child);
                 }
                 FinalizationStep::ClearGuestFinalizer => {
@@ -2478,7 +2814,15 @@ where
                         &[],
                         false,
                     );
-                    self.api.clear_guest_finalizer(guest).await?;
+                    self.api.clear_guest_finalizer(guest).await.map_err(|error| {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            error = %error,
+                            "clearing the controller finalizer after Guest drain failed"
+                        );
+                        error
+                    })?;
                     let expected = plan
                         .child_batch()
                         .mutations()
@@ -2551,15 +2895,31 @@ where
                 || child.owner_ref() != guest.resource_ref()
                 || child.owner_uid() != Some(guest.uid())
             {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?child.resource_ref(),
+                    "owner relist rejected a child; owner fence mismatch"
+                );
                 return Err(CloudHypervisorError::ChildConflict);
             }
             if !expected.contains(child.resource_ref()) {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?child.resource_ref(),
+                    "owner relist rejected a child; child is not part of the planned owner set"
+                );
                 return Err(CloudHypervisorError::ChildConflict);
             }
+            let child_ref = child.resource_ref().clone();
             if children
-                .insert(child.resource_ref().clone(), child)
+                .insert(child_ref.clone(), child)
                 .is_some()
             {
+                tracing::warn!(
+                    zone = ?guest.zone,
+                    resource = ?child_ref,
+                    "owner relist rejected a child; duplicate child observation"
+                );
                 return Err(CloudHypervisorError::ChildConflict);
             }
         }

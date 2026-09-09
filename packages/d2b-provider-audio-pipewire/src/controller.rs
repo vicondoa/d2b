@@ -13,6 +13,7 @@ use d2b_contracts_provider::v3::semantic_services::{
     },
 };
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
+use tracing::{debug, warn};
 
 const AUDIO_PROVIDER_REF: &str = "Provider/audio-pipewire";
 
@@ -295,7 +296,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
         binding_ref: &ResourceRef,
         binding: &AudioBindingSpec,
     ) -> Result<BindingChildSet, AudioControllerError> {
-        crate::validate_audio_binding(binding).map_err(|_| AudioControllerError::Admission)?;
+        crate::validate_audio_binding(binding).map_err(|error| {
+            debug!(
+                binding = %binding_ref.to_canonical_string(),
+                error = %error,
+                "audio binding admission rejected while synthesizing child resources"
+            );
+            AudioControllerError::Admission
+        })?;
         explicit_binding_children(
             SemanticFamily::Audio,
             binding_ref.clone(),
@@ -304,7 +312,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
             ResourceRef::parse(AUDIO_PROVIDER_REF).expect("audio Provider reference is canonical"),
             &AUDIO_BINDING_CHILD_REQUESTS,
         )
-        .map_err(|_| AudioControllerError::Admission)
+        .map_err(|error| {
+            debug!(
+                binding = %binding_ref.to_canonical_string(),
+                error = %error,
+                "audio binding child resource synthesis rejected"
+            );
+            AudioControllerError::Admission
+        })
     }
 
     /// Reconcile a Binding and return the resource-backed child intents.
@@ -315,8 +330,15 @@ impl<M: AudioMediator> AudioBindingController<M> {
         service_zone: &str,
         lease: AudioLeaseId,
     ) -> Result<AudioReconcileResultWithChildren, AudioControllerError> {
-        validate_audio_binding_in_zone(binding, service_zone)
-            .map_err(|_| AudioControllerError::Admission)?;
+        validate_audio_binding_in_zone(binding, service_zone).map_err(|error| {
+            debug!(
+                binding = %binding_ref.to_canonical_string(),
+                zone = %service_zone,
+                error = %error,
+                "audio binding admission rejected during reconcile"
+            );
+            AudioControllerError::Admission
+        })?;
         let children = Self::child_resources(binding_ref, binding)?;
         let result = self.reconcile(binding, service_zone, lease)?;
         Ok(AudioReconcileResultWithChildren { result, children })
@@ -337,8 +359,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
         service_zone: &str,
         lease: AudioLeaseId,
     ) -> Result<AudioReconcileResult, AudioControllerError> {
-        validate_audio_binding_in_zone(binding, service_zone)
-            .map_err(|_| AudioControllerError::Admission)?;
+        validate_audio_binding_in_zone(binding, service_zone).map_err(|error| {
+            debug!(
+                zone = %service_zone,
+                error = %error,
+                "audio binding admission rejected during reconcile"
+            );
+            AudioControllerError::Admission
+        })?;
         let host_readiness = self.mediator.host_readiness();
         let guest_readiness = self.mediator.guest_readiness();
         let mut microphone = None;
@@ -354,12 +382,32 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 Err(poisoned) => poisoned.into_inner().request(lease),
             };
             microphone = Some(decision);
+            match decision {
+                MicDecision::Queued => debug!(
+                    zone = %service_zone,
+                    lease = ?lease,
+                    "microphone arbitration queued for binding"
+                ),
+                MicDecision::QueueFull => debug!(
+                    zone = %service_zone,
+                    lease = ?lease,
+                    "microphone arbitration queue full for binding"
+                ),
+                MicDecision::Granted => {}
+            }
             let needs_effect = decision == MicDecision::Granted
                 && (!already_active || !self.microphone_effect_applied);
             if needs_effect {
                 self.mediator
                     .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
                     .map_err(|error| {
+                        warn!(
+                            zone = %service_zone,
+                            channel = "microphone",
+                            lease = ?lease,
+                            error = %error,
+                            "microphone grant mediation failed for binding"
+                        );
                         if !already_active {
                             match self.microphone.lock() {
                                 Ok(mut arbiter) => {
@@ -397,13 +445,35 @@ impl<M: AudioMediator> AudioBindingController<M> {
             let transition = self
                 .speaker
                 .set_grant(lease, true)
-                .map_err(|_| AudioControllerError::Admission)?;
+                .map_err(|error| {
+                    debug!(
+                        zone = %service_zone,
+                        lease = ?lease,
+                        error = %error,
+                        "speaker grant bookkeeping rejected for binding"
+                    );
+                    AudioControllerError::Admission
+                })?;
             if transition {
                 if let Err(error) = self
                     .mediator
                     .set_channel_grant(AudioChannel::Speaker, AudioGrant::On)
                 {
-                    let _ = self.speaker.set_grant(lease, false);
+                    warn!(
+                        zone = %service_zone,
+                        channel = "speaker",
+                        lease = ?lease,
+                        error = %error,
+                        "speaker grant mediation failed for binding"
+                    );
+                    if let Err(rollback_error) = self.speaker.set_grant(lease, false) {
+                        warn!(
+                            zone = %service_zone,
+                            lease = ?lease,
+                            error = %rollback_error,
+                            "speaker grant rollback failed after mediation failure"
+                        );
+                    }
                     return Err(AudioControllerError::Mediator(error));
                 }
                 host_effect_applied = true;
@@ -417,11 +487,28 @@ impl<M: AudioMediator> AudioBindingController<M> {
             if last {
                 self.mediator
                     .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
-                    .map_err(AudioControllerError::Mediator)?;
+                    .map_err(|error| {
+                        warn!(
+                            zone = %service_zone,
+                            channel = "speaker",
+                            lease = ?lease,
+                            error = %error,
+                            "speaker mute mediation failed for binding"
+                        );
+                        AudioControllerError::Mediator(error)
+                    })?;
             }
             self.speaker
                 .set_grant(lease, false)
-                .map_err(|_| AudioControllerError::Admission)?;
+                .map_err(|error| {
+                    debug!(
+                        zone = %service_zone,
+                        lease = ?lease,
+                        error = %error,
+                        "speaker revoke bookkeeping rejected for binding"
+                    );
+                    AudioControllerError::Admission
+                })?;
             if last {
                 host_effect_applied = true;
                 guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
@@ -431,18 +518,43 @@ impl<M: AudioMediator> AudioBindingController<M> {
         if let Some(level) = binding.grants.speaker_level {
             self.speaker
                 .can_set_level(lease, level.get())
-                .map_err(|_| AudioControllerError::Admission)?;
+                .map_err(|error| {
+                    debug!(
+                        zone = %service_zone,
+                        lease = ?lease,
+                        error = %error,
+                        "speaker level precondition rejected for binding"
+                    );
+                    AudioControllerError::Admission
+                })?;
             if self.speaker.level(lease) != Some(level.get()) {
                 self.mediator
                     .set_channel_level(AudioChannel::Speaker, level)
-                    .map_err(AudioControllerError::Mediator)?;
+                    .map_err(|error| {
+                        warn!(
+                            zone = %service_zone,
+                            channel = "speaker",
+                            lease = ?lease,
+                            error = %error,
+                            "speaker level mediation failed for binding"
+                        );
+                        AudioControllerError::Mediator(error)
+                    })?;
                 host_effect_applied = true;
                 guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
                 speaker_live_enforced = true;
             }
             self.speaker
                 .set_level(lease, level.get())
-                .map_err(|_| AudioControllerError::Admission)?;
+                .map_err(|error| {
+                    debug!(
+                        zone = %service_zone,
+                        lease = ?lease,
+                        error = %error,
+                        "speaker level bookkeeping rejected for binding"
+                    );
+                    AudioControllerError::Admission
+                })?;
             if self.speaker.level(lease) == Some(level.get()) {
                 speaker_live_enforced = speaker_live_enforced || self.speaker.has_grant(lease);
             }
@@ -452,7 +564,16 @@ impl<M: AudioMediator> AudioBindingController<M> {
         {
             self.mediator
                 .set_channel_level(AudioChannel::Microphone, gain)
-                .map_err(AudioControllerError::Mediator)?;
+                .map_err(|error| {
+                    warn!(
+                        zone = %service_zone,
+                        channel = "microphone",
+                        lease = ?lease,
+                        error = %error,
+                        "microphone gain mediation failed for binding"
+                    );
+                    AudioControllerError::Mediator(error)
+                })?;
             host_effect_applied = true;
             guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
             microphone_live_enforced = true;
@@ -462,7 +583,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
             Some(MicDecision::Queued) => AudioBindingPhase::Pending,
             Some(MicDecision::QueueFull) => AudioBindingPhase::Degraded,
             _ if self.mediator.readiness() == AudioReadiness::Ready => AudioBindingPhase::Ready,
-            _ => AudioBindingPhase::Degraded,
+            _ => {
+                debug!(
+                    zone = %service_zone,
+                    lease = ?lease,
+                    "audio mediator readiness degraded for binding"
+                );
+                AudioBindingPhase::Degraded
+            }
         };
         let arbitration_state = match microphone {
             Some(MicDecision::Granted) => AudioArbitrationState::Active,
@@ -539,10 +667,24 @@ impl<M: AudioMediator> AudioBindingController<M> {
     pub fn revoke_unmanaged(&mut self) -> Result<(), AudioControllerError> {
         self.mediator
             .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
-            .map_err(AudioControllerError::Mediator)?;
+            .map_err(|error| {
+                warn!(
+                    channel = "microphone",
+                    error = %error,
+                    "unmanaged microphone revoke mediation failed after restart"
+                );
+                AudioControllerError::Mediator(error)
+            })?;
         self.mediator
             .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
-            .map_err(AudioControllerError::Mediator)?;
+            .map_err(|error| {
+                warn!(
+                    channel = "speaker",
+                    error = %error,
+                    "unmanaged speaker revoke mediation failed after restart"
+                );
+                AudioControllerError::Mediator(error)
+            })?;
         Ok(())
     }
 
@@ -559,6 +701,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
             .mediator
             .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
         {
+            warn!(
+                lease = ?lease,
+                error = %error,
+                "promoted microphone activation mediation failed"
+            );
             match self.microphone.lock() {
                 Ok(mut arbiter) => arbiter.requeue_active(lease),
                 Err(poisoned) => poisoned.into_inner().requeue_active(lease),
@@ -577,7 +724,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
         if self.speaker.is_last_grant(lease) {
             self.mediator
                 .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
-                .map_err(AudioControllerError::Mediator)?;
+                .map_err(|error| {
+                    warn!(
+                        lease = ?lease,
+                        error = %error,
+                        "speaker mute mediation failed during binding finalize"
+                    );
+                    AudioControllerError::Mediator(error)
+                })?;
         }
         self.speaker.remove(lease);
         Ok(promoted)
@@ -600,7 +754,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
         }
         self.mediator
             .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
-            .map_err(AudioControllerError::Mediator)?;
+            .map_err(|error| {
+                warn!(
+                    lease = ?lease,
+                    error = %error,
+                    "microphone mute mediation failed during release"
+                );
+                AudioControllerError::Mediator(error)
+            })?;
         self.microphone_effect_applied = false;
         let next = match self.microphone.lock() {
             Ok(mut arbiter) => {
@@ -621,6 +782,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 .mediator
                 .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
         {
+            warn!(
+                lease = ?next,
+                error = %error,
+                "promoted microphone activation mediation failed during release"
+            );
             match self.microphone.lock() {
                 Ok(mut arbiter) => arbiter.requeue_active(next),
                 Err(poisoned) => poisoned.into_inner().requeue_active(next),

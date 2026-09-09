@@ -12,6 +12,7 @@ use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
 use crate::{
     IdentityCanaries, Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate, MetricFrame,
 };
+use tracing::{debug, warn};
 
 const TELEMETRY_PROVIDER_REF: &str = "Provider/observability-otel";
 /// Qualified semantic telemetry Service type.
@@ -113,14 +114,26 @@ impl TelemetryServiceController {
         if service_ref.resource_type().as_str() != TELEMETRY_SERVICE_RESOURCE_TYPE
             || provider_ref.to_canonical_string() != TELEMETRY_PROVIDER_REF
         {
+            warn!(
+                provider = "observability-otel",
+                "telemetry service reconcile rejected: reference or provider mismatch"
+            );
             return Err(TelemetryServiceError::InvalidReference);
         }
         if self.phase == TelemetryServicePhase::Deleted {
+            debug!(
+                provider = "observability-otel",
+                "telemetry service reconcile rejected: service already finalized"
+            );
             return Err(TelemetryServiceError::Finalized);
         }
         if matches!(role, TelemetryServiceRole::Authority)
             && !(1..=8).contains(&ingest_endpoint_refs.len())
         {
+            warn!(
+                provider = "observability-otel",
+                "telemetry authority service degraded: ingest endpoint count out of range"
+            );
             self.phase = TelemetryServicePhase::Degraded;
             return Err(TelemetryServiceError::InvalidAuthority);
         }
@@ -130,11 +143,19 @@ impl TelemetryServiceController {
             || (matches!(role, TelemetryServiceRole::Projection)
                 && !ingest_endpoint_refs.is_empty())
         {
+            warn!(
+                provider = "observability-otel",
+                "telemetry service degraded: ingest endpoint references invalid for the role"
+            );
             self.phase = TelemetryServicePhase::Degraded;
             return Err(TelemetryServiceError::InvalidAuthority);
         }
         let endpoint_count = u8::try_from(ingest_endpoint_refs.len()).unwrap_or(u8::MAX);
         self.phase = if !authority_unique {
+            debug!(
+                provider = "observability-otel",
+                "telemetry authority not unique; reporting service degraded"
+            );
             TelemetryServicePhase::Degraded
         } else if ingest_ready {
             TelemetryServicePhase::Ready
@@ -361,6 +382,11 @@ impl TelemetryBindingController {
         target_ref: &ResourceRef,
     ) -> Result<BindingChildSet, TelemetryControllerError> {
         if !matches!(target_ref.resource_type().as_str(), "Guest" | "Zone") {
+            debug!(
+                provider = "observability-otel",
+                binding = %binding_ref.to_canonical_string(),
+                "telemetry binding admission rejected: unsupported target type"
+            );
             return Err(TelemetryControllerError::Admission);
         }
         let declarations = if target_ref.resource_type().as_str() == "Guest" {
@@ -377,7 +403,15 @@ impl TelemetryBindingController {
                 .expect("telemetry Provider reference is canonical"),
             declarations,
         )
-        .map_err(|_| TelemetryControllerError::Admission)
+        .map_err(|error| {
+            debug!(
+                provider = "observability-otel",
+                binding = %binding_ref.to_canonical_string(),
+                error = %error,
+                "telemetry binding child resource synthesis rejected"
+            );
+            TelemetryControllerError::Admission
+        })
     }
 
     /// Reconcile one bounded ingress frame and return the children owned by
@@ -394,9 +428,18 @@ impl TelemetryBindingController {
         capacity_available: bool,
     ) -> Result<TelemetryReconcileResult, TelemetryControllerError> {
         if self.phase == TelemetryBindingPhase::Deleted {
+            debug!(
+                provider = "observability-otel",
+                "telemetry binding reconcile rejected: binding already finalized"
+            );
             return Err(TelemetryControllerError::Finalized);
         }
         if connection_id == 0 {
+            warn!(
+                provider = "observability-otel",
+                binding = %binding_ref.to_canonical_string(),
+                "telemetry binding reconcile rejected: connection id zero"
+            );
             return Err(TelemetryControllerError::Admission);
         }
         let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
@@ -410,6 +453,13 @@ impl TelemetryBindingController {
         self.phase = match outcome {
             IngressOutcome::Accepted => TelemetryBindingPhase::Ready,
             IngressOutcome::Rejected | IngressOutcome::Quarantined => {
+                debug!(
+                    provider = "observability-otel",
+                    binding = %binding_ref.to_canonical_string(),
+                    outcome = ?outcome,
+                    error_class = ?error_class,
+                    "telemetry ingress frame rejected; binding degraded"
+                );
                 TelemetryBindingPhase::Degraded
             }
         };

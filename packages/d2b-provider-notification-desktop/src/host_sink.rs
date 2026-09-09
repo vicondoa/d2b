@@ -7,6 +7,7 @@ use crate::{
     redact::SanitizedNotification,
     types::NotificationRequest,
 };
+use tracing::{debug, warn};
 use std::collections::{BTreeMap, VecDeque};
 
 /// D-Bus/presentation sink failures.
@@ -176,16 +177,28 @@ impl NotificationSink {
         request: NotificationRequest,
         now_secs: u64,
     ) -> Result<NotificationResult, crate::types::NotificationError> {
-        source_session
-            .admit_source()
-            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        source_session.admit_source().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "delivery refused: source session not authenticated"
+            );
+            crate::types::NotificationError::InvalidOpaqueKey
+        })?;
         if !self.observer_enabled {
             return Err(crate::types::NotificationError::ObserverDisabled);
         }
-        observer_session
-            .admit_observer()
-            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+        observer_session.admit_observer().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "delivery refused: observer session not authenticated"
+            );
+            crate::types::NotificationError::InvalidOpaqueKey
+        })?;
         if source_session.zone() != observer_session.zone() {
+            debug!(
+                provider = "notification-desktop",
+                "delivery refused: source and observer zone mismatch"
+            );
             return Err(crate::types::NotificationError::InvalidOpaqueKey);
         }
         let observer_session = observer_session.session_key();
@@ -234,7 +247,12 @@ impl NotificationSink {
         let presentation = notification.clone().with_action_keys(&action_nonces)?;
         let notification_id = match port.notify(&presentation) {
             Ok(id) => id,
-            Err(_) => {
+            Err(notify_error) => {
+                warn!(
+                    provider = "notification-desktop",
+                    notify_error = ?notify_error,
+                    "desktop notification delivery failed; revoking issued action capabilities"
+                );
                 for action_key in &issued_keys {
                     self.nonces.revoke(action_key);
                 }
@@ -298,13 +316,23 @@ impl NotificationSink {
         observer_session: &SessionEvidence,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        observer_session
-            .admit_observer()
-            .map_err(|_| ActionNonceError::SessionMismatch)?;
+        observer_session.admit_observer().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "action invoke refused: observer session not authenticated"
+            );
+            ActionNonceError::SessionMismatch
+        })?;
         let observer_session = observer_session.session_key();
         let result = self.nonces.consume(action_key, &observer_session, now_secs);
         if result.is_ok() {
             self.forget_consumed_nonce(action_key);
+        } else {
+            debug!(
+                provider = "notification-desktop",
+                action = action_key,
+                "action capability rejected"
+            );
         }
         result
     }
@@ -317,9 +345,13 @@ impl NotificationSink {
         action_id: &str,
         now_secs: u64,
     ) -> Result<String, ActionNonceError> {
-        observer_session
-            .admit_observer()
-            .map_err(|_| ActionNonceError::SessionMismatch)?;
+        observer_session.admit_observer().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "action invoke refused: observer session not authenticated"
+            );
+            ActionNonceError::SessionMismatch
+        })?;
         let observer_session = observer_session.session_key();
         let result = self.nonces.consume_for_action(
             action_key,
@@ -329,6 +361,12 @@ impl NotificationSink {
         );
         if result.is_ok() {
             self.forget_consumed_nonce(action_key);
+        } else {
+            debug!(
+                provider = "notification-desktop",
+                action = action_key,
+                "action capability rejected for the requested action id"
+            );
         }
         result
     }

@@ -21,6 +21,7 @@ use crate::finalization::{
     FinalizationAction, FinalizationObservation, FinalizationResult, finalization_plan,
 };
 use crate::identity::{MarkerState, VolumeRootHandle};
+use d2b_contracts_resource::v3::volume::CleanupPolicy;
 use crate::layout::{ConditionSeverity, EntryCondition, EntryRequest, plan_cleanup, plan_entry};
 use crate::port::{QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort};
 use crate::source::{SourcePolicyCatalog, validate_source_spec};
@@ -227,6 +228,22 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             let observed = self.layout.observe(&root, &entry).await?;
             let plan = plan_entry(&entry, &observed, marker);
             if let Some(condition) = plan.condition {
+                match condition.severity {
+                    ConditionSeverity::Failed => tracing::warn!(
+                        volume = %volume_uid.as_str(),
+                        provider = %self.profile.provider().as_str(),
+                        entry = %condition.entry.to_hex(),
+                        reason = condition.reason.code(),
+                        "volume layout entry failed fail-closed; no mutation attempted",
+                    ),
+                    ConditionSeverity::Degraded => tracing::debug!(
+                        volume = %volume_uid.as_str(),
+                        provider = %self.profile.provider().as_str(),
+                        entry = %condition.entry.to_hex(),
+                        reason = condition.reason.code(),
+                        "volume layout entry degraded",
+                    ),
+                }
                 conditions.push(condition);
                 phase = phase.worse(severity_phase(condition));
             }
@@ -322,6 +339,24 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<Vec<crate::identity::EntryDigest>, VolumeLocalError> {
+        let removed = self.cleanup_entries(volume_uid, spec).await;
+        if let Err(error) = &removed {
+            // Cardinality: once per failed finalize pass.
+            tracing::warn!(
+                volume = %volume_uid.as_str(),
+                provider = %self.profile.provider().as_str(),
+                reason = error.code(),
+                "volume cleanup failed for assigned resource",
+            );
+        }
+        removed
+    }
+
+    async fn cleanup_entries(
+        &self,
+        volume_uid: &ResourceUid,
+        spec: &VolumeSpec,
+    ) -> Result<Vec<crate::identity::EntryDigest>, VolumeLocalError> {
         let kind = self.validate_spec(spec)?;
         let root = self
             .source
@@ -347,6 +382,18 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             if plan_cleanup(&entry, &observed) {
                 self.layout.cleanup(&root, &entry).await?;
                 removed.push(entry.digest());
+            } else if matches!(
+                entry.cleanup_policy(),
+                CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit
+            ) {
+                // Cardinality: fires every pass while an owner is not proven
+                // dead, so keep it at debug level.
+                tracing::debug!(
+                    volume = %volume_uid.as_str(),
+                    provider = %self.profile.provider().as_str(),
+                    entry = %entry.digest().to_hex(),
+                    "entry cleanup skipped: process owner not proven dead",
+                );
             }
         }
         Ok(removed)

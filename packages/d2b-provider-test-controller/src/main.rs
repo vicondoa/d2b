@@ -10,8 +10,9 @@ use std::{
 };
 
 use d2b_contracts_zone_session::v3::component_session::CloseReason;
-use d2b_core_controller::{CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID};
+use tracing::{debug, error, warn};
 use d2b_session::{HandshakeCredentials, SessionEngine, SessionEvent, StreamEvent, StreamId};
+use d2b_core_controller::{CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID};
 use d2b_session_unix::{
     AncillaryCapacity, CONTROLLER_BOOTSTRAP_TIMEOUT, DescriptorPolicyResolver, PeerIdentityPolicy,
     SeqpacketSocket, UnixSeqpacketTransport, UnixSessionError,
@@ -34,7 +35,10 @@ fn main() {
         .build()
     {
         Ok(runtime) => runtime,
-        Err(_) => std::process::exit(RUNTIME_FAILURE_EXIT),
+        Err(_) => {
+            error!("controller runtime build failed; exiting");
+            std::process::exit(RUNTIME_FAILURE_EXIT)
+        }
     };
     if runtime.block_on(run()).is_err() {
         std::process::exit(RUNTIME_FAILURE_EXIT);
@@ -42,14 +46,19 @@ fn main() {
 }
 
 async fn run() -> Result<(), ()> {
-    let bootstrap = SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD).map_err(|_| ())?;
-    let expected_peer = bootstrap.acceptor_peer_credentials().map_err(|_| ())?;
+    let bootstrap = SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD).map_err(|e| {
+        error!(reason = %e, "controller bootstrap fd setup failed; exiting");
+    })?;
+    let expected_peer = bootstrap.acceptor_peer_credentials().map_err(|e| {
+        error!(reason = %e, "controller bootstrap peer credential check failed; exiting");
+    })?;
     loop {
         // A well-behaved controller rides out transient daemon stalls:
         // setup failures retry like reconnects instead of exiting and
         // orphaning the control plane until an operator intervenes.
         match run_session(&bootstrap, expected_peer).await {
             Ok(SessionDisposition::Reconnect) => {
+                debug!("controller session closed with reconnect disposition; retrying after backoff");
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Ok(SessionDisposition::Shutdown) => return Ok(()),
@@ -73,9 +82,13 @@ async fn run_session(
             .min(policy.limits.keepalive_timeout_ms),
     ));
     let (daemon_endpoint, controller_endpoint) =
-        prearmed_seqpacket_pair().map_err(|_| ())?;
+        prearmed_seqpacket_pair().map_err(|e| {
+            warn!(reason = %e, "controller session setup failed: prearmed socket pair creation failed");
+        })?;
     let controller_socket =
-        SeqpacketSocket::from_parent_prearmed(controller_endpoint).map_err(|_| ())?;
+        SeqpacketSocket::from_parent_prearmed(controller_endpoint).map_err(|e| {
+            warn!(reason = %e, "controller session setup failed: controller endpoint setup failed");
+        })?;
     if let Err(()) = send_bootstrap(&bootstrap, daemon_endpoint).await {
         eprintln!("acceptance-controller: bootstrap send failed, retrying");
         return Err(());
@@ -97,7 +110,9 @@ async fn run_session(
             return Err(());
         }
     };
-    let assignment_stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|_| ())?;
+    let assignment_stream = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID).map_err(|e| {
+        warn!(reason = %e, "controller session setup failed: assignment stream id invalid");
+    })?;
     session
         .open_named_stream(
             assignment_stream,
@@ -120,11 +135,15 @@ async fn run_session(
             Ok(Ok(SessionEvent::NamedStream(StreamEvent::Data { stream, bytes })))
                 if stream == assignment_stream =>
             {
-                let byte_count = u32::try_from(bytes.len()).map_err(|_| ())?;
+                let byte_count = u32::try_from(bytes.len()).map_err(|e| {
+                    warn!(reason = %e, "controller assignment credit accounting failed; reconnecting");
+                })?;
                 session
                     .grant_named_stream_credit(assignment_stream, byte_count)
                     .await
-                    .map_err(|_| ())?;
+                    .map_err(|e| {
+                        warn!(reason = %e, "controller assignment stream credit grant failed; reconnecting");
+                    })?;
             }
             Ok(Ok(SessionEvent::NamedStream(StreamEvent::Reset { stream })))
                 if stream == assignment_stream =>
@@ -135,15 +154,22 @@ async fn run_session(
                         CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
                         CONTROLLER_ASSIGNMENT_STREAM_CREDIT,
                     )
-                    .map_err(|_| ())?;
+                    .map_err(|e| {
+                        warn!(reason = %e, "controller assignment stream reopen after reset failed; reconnecting");
+                    })?;
             }
             Ok(Ok(SessionEvent::NamedStream(_))) => {
+                warn!("controller received an unexpected named stream; reconnecting");
                 return Ok(SessionDisposition::Reconnect);
             }
             Ok(Ok(_)) | Err(_) => {}
-            Ok(Err(_)) => return Ok(SessionDisposition::Reconnect),
+            Ok(Err(e)) => {
+                warn!(reason = %e, "controller session error; reconnecting");
+                return Ok(SessionDisposition::Reconnect);
+            }
         }
         if session.drive_keepalive(Instant::now()).await.is_err() {
+            warn!("controller keepalive drive failed; reconnecting");
             return Ok(SessionDisposition::Reconnect);
         }
     }

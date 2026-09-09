@@ -97,7 +97,10 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<AuthenticatedClipboardSession, ClipboardRuntimeError> {
         let authenticated = AuthenticatedClipboardSession::from_component_session(session)
-            .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
+            .map_err(|e| {
+                tracing::debug!(error = %e, "admission refused: component session not authenticated for clipboard");
+                ClipboardRuntimeError::SessionUnauthenticated
+            })?;
         Ok(authenticated)
     }
 
@@ -107,7 +110,10 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         route: AuthenticatedSessionRouteBinding,
     ) -> Result<AuthenticatedClipboardSession, ClipboardRuntimeError> {
         AuthenticatedClipboardSession::from_authenticated_route(route)
-            .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)
+            .map_err(|e| {
+                tracing::debug!(error = %e, "admission refused: retained route not authenticated for clipboard");
+                ClipboardRuntimeError::SessionUnauthenticated
+            })
     }
 
     /// Admit a bridge session for host/Guest selection mediation.
@@ -141,6 +147,7 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     ) -> Result<AuthenticatedClipboardSession, ClipboardRuntimeError> {
         let authenticated = self.admit_session(session)?;
         if authenticated.role() != role {
+            tracing::debug!(role = ?role, "admission refused: session role does not match requested clipboard role");
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }
         Ok(authenticated)
@@ -185,6 +192,7 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     ) -> Result<String, ClipboardRuntimeError> {
         let authenticated = self.admit_route(route)?;
         if authenticated.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!("admission refused: route is not a clipboard bridge session");
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }
         self.host
@@ -204,8 +212,12 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     ) -> Result<String, ClipboardRuntimeError> {
         let authenticated =
             AuthenticatedClipboardSession::from_authenticated_route_for_guest(route, guest_ref)
-                .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "admission refused: guest route not authenticated for clipboard");
+                    ClipboardRuntimeError::SessionUnauthenticated
+                })?;
         if authenticated.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!("admission refused: guest route is not a clipboard bridge session");
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }
         self.host
@@ -238,7 +250,10 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     ) -> Result<GuestSelectionEvent, ClipboardRuntimeError> {
         let authenticated =
             AuthenticatedClipboardSession::from_authenticated_route_for_guest(route, guest_ref)
-                .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "admission refused: guest route not authenticated for clipboard");
+                    ClipboardRuntimeError::SessionUnauthenticated
+                })?;
         self.host
             .guest_selection_event(&authenticated, entry_digest, now_secs)
             .map_err(ClipboardRuntimeError::Service)
@@ -281,8 +296,12 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
                         )
                     })
             })
-            .map_err(|_| ClipboardRuntimeError::SessionUnauthenticated)?;
+            .map_err(|e| {
+                tracing::debug!(error = %e, "admission refused: host route not authenticated for clipboard capture");
+                ClipboardRuntimeError::SessionUnauthenticated
+            })?;
         if authenticated.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!("admission refused: host route is not a clipboard bridge session");
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }
         self.host
@@ -331,11 +350,20 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         if source.role() != ClipboardServiceRole::Picker
             || destination.role() != ClipboardServiceRole::Bridge
         {
+            tracing::debug!(
+                source_role = ?source.role(),
+                destination_role = ?destination.role(),
+                "picker completion rejected: session roles do not match picker/bridge contract"
+            );
             return Err(ClipboardRuntimeError::SessionRoleInvalid);
         }
         self.host
             .complete_picker(source, destination, request, result, entry_digest, now_secs)
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "picker completion failed; collapsing failure to PickerReceiptInvalid"
+                );
                 ClipboardRuntimeError::Service(ClipboardServiceError::PickerReceiptInvalid)
             })
     }
@@ -348,7 +376,10 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
     ) -> Result<usize, ClipboardRuntimeError> {
         self.host
             .flush_audit(sink, limit)
-            .map_err(|_| ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable))
+            .map_err(|_e| {
+                tracing::warn!("audit flush through daemon-owned sink failed");
+                ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable)
+            })
     }
 
     /// Drain daemon-owned workers without releasing the authenticated
@@ -371,7 +402,10 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         }
         self.effects
             .drain()
-            .map_err(ClipboardRuntimeError::Service)?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, "worker drain effect failed during clipboard finalization");
+                ClipboardRuntimeError::Service(e)
+            })?;
         let mut had_guest = false;
         for guest in guests {
             had_guest = true;
@@ -382,10 +416,16 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
         }
         self.host
             .reconcile_display_dependency(None)
-            .map_err(ClipboardRuntimeError::Service)?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, "display dependency revocation failed during clipboard finalization");
+                ClipboardRuntimeError::Service(e)
+            })?;
         self.effects
             .release_authority()
-            .map_err(ClipboardRuntimeError::Service)?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "session authority release failed during clipboard finalization");
+                ClipboardRuntimeError::Service(e)
+            })?;
         self.finalized = true;
         Ok(ClipboardFinalizationReport {
             drained: true,
@@ -400,7 +440,10 @@ impl<E: ClipboardProcessEffectPort + ClipboardAuditSink> ClipboardRuntime<E> {
     pub fn flush_audit(&mut self, limit: usize) -> Result<usize, ClipboardRuntimeError> {
         self.host
             .flush_audit(&mut self.effects, limit)
-            .map_err(|_| ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable))
+            .map_err(|_e| {
+                tracing::warn!("audit flush through daemon-owned effect sink failed");
+                ClipboardRuntimeError::Service(ClipboardServiceError::AuditUnavailable)
+            })
     }
 }
 

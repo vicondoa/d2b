@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use tracing::warn;
 use d2b_process_conformance::{
     AdoptionOutcome, LaunchTicket, ProcessConformanceError, ProcessIdentityDigest, ProcessProvider,
     ProcessStatusReport, StopClass,
@@ -75,7 +76,13 @@ impl<P: d2b_process_conformance::ProcessLaunchEffectPort> SystemdProcessControll
             Some(
                 Arc::clone(&self.launch_slots)
                     .try_acquire_owned()
-                    .map_err(|_| ProcessConformanceError::DeadlineExceeded)?,
+                    .map_err(|_| {
+                        warn!(
+                            provider = "system-systemd",
+                            "launch slot exhausted; reporting deadline-exceeded for start"
+                        );
+                        ProcessConformanceError::DeadlineExceeded
+                    })?,
             )
         } else {
             None
@@ -105,7 +112,14 @@ impl<P: d2b_process_conformance::ProcessLaunchEffectPort> SystemdProcessControll
                 operation,
             )
             .await
-            .map_err(|_| ProcessConformanceError::DeadlineExceeded)?
+            .map_err(|_| {
+                warn!(
+                    provider = "system-systemd",
+                    timeout_sec = timeout,
+                    "reconcile operation timed out; reporting deadline-exceeded"
+                );
+                ProcessConformanceError::DeadlineExceeded
+            })?
         } else {
             operation.await
         };

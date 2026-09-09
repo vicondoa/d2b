@@ -67,14 +67,26 @@ pub fn reject_process_environment_credential_chain(
 /// Enter the supervised Provider runtime through the inherited fd 10 handoff.
 pub fn run_from_fd10() -> i32 {
     if reject_process_environment_credential_chain().is_err() {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "entra credential provider startup aborted: ambient credential-chain environment present",
+        );
         return 1;
     }
     let Ok(provider_ref) = ResourceRef::parse(PROVIDER_REF) else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "entra credential provider startup aborted: provider reference unparseable",
+        );
         return 1;
     };
     let Ok(purpose) =
         d2b_contracts_resource::v3::identity::SessionPurpose::parse("provider-control")
     else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "entra credential provider startup aborted: session purpose unparseable",
+        );
         return 1;
     };
     run_provider_from_fd10::<EntraCredentialProvider, RouteCredentialAuthorization, _>(
@@ -105,22 +117,44 @@ fn runtime_provider(
     ProviderRuntimeError,
 > {
     if metadata.user_ref().is_some() {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            "entra credential provider session setup rejected: user-backed session not admitted",
+        );
         return Err(ProviderRuntimeError::SessionUnauthenticated);
     }
     let provider_ref = route
         .provider_ref()
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "entra credential provider session setup rejected: route has no provider reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     let zone_ref = route.context().zone_ref().clone();
     let execution_ref = route
         .context()
         .execution_ref()
         .filter(|reference| reference.resource_type().as_str() == "Guest")
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "entra credential provider session setup rejected: route has no Guest execution reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     let endpoint_generation = route
         .provider_generation()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "entra credential provider session setup rejected: route has no provider generation",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?
         .get();
     let identity_guest_ref = execution_ref.clone();
     let placement = EntraPlacement::new_runtime_in_zone(
@@ -129,9 +163,22 @@ fn runtime_provider(
         execution_ref,
         endpoint_generation,
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
-    let config = EntraConfig::new("allocator-issued-tenant", MAX_LOCAL_LEASES)
-        .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "entra credential provider session setup rejected: placement invalid",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?;
+    let config = EntraConfig::new("allocator-issued-tenant", MAX_LOCAL_LEASES).map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "entra credential provider session setup rejected: config invalid",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?;
     let provider = EntraCredentialProviderFactory::new(
         config,
         placement,
@@ -142,7 +189,14 @@ fn runtime_provider(
             login_endpoint_ref: None,
         }),
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "entra credential provider session setup rejected: factory construction failed",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?
     .construct();
     Ok((Arc::new(provider), Arc::new(RouteCredentialAuthorization)))
 }
@@ -156,6 +210,7 @@ struct GuestEntraClient {
 impl EntraCredentialClient for GuestEntraClient {
     fn state(&self) -> EntraFuture<'_, EntraClientState> {
         let backend = Arc::clone(&self.backend);
+        let identity_guest = self.identity_guest_ref.to_canonical_string();
         let fields = serde_json::json!({
             "identityGuestRef": self.identity_guest_ref.to_canonical_string(),
             "loginEndpointRef": self
@@ -167,17 +222,33 @@ impl EntraCredentialClient for GuestEntraClient {
             let response = backend
                 .request("entra.state", fields)
                 .await
-                .map_err(|_| EntraClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "entra.state",
+                        identity_guest = %identity_guest,
+                        %error,
+                        "entra credential backend request failed",
+                    );
+                    EntraClientError::Unavailable
+                })?;
             match response.state() {
                 Some("ready") => Ok(EntraClientState::Ready),
                 Some("interaction-required") => Ok(EntraClientState::InteractionRequired),
-                _ => Err(EntraClientError::Unavailable),
+                _ => {
+                    tracing::warn!(
+                        operation = "entra.state",
+                        identity_guest = %identity_guest,
+                        "entra credential backend state response unrecognized",
+                    );
+                    Err(EntraClientError::Unavailable)
+                }
             }
         })
     }
 
     fn issue_lease(&self, request: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
         let backend = Arc::clone(&self.backend);
+        let credential = request.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "identityGuestRef": self.identity_guest_ref.to_canonical_string(),
             "loginEndpointRef": self
@@ -194,13 +265,22 @@ impl EntraCredentialClient for GuestEntraClient {
             let response = backend
                 .request("entra.issue-lease", fields)
                 .await
-                .map_err(|_| EntraClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "entra.issue-lease",
+                        resource = %credential,
+                        %error,
+                        "entra credential backend request failed",
+                    );
+                    EntraClientError::Unavailable
+                })?;
             entra_grant(response)
         })
     }
 
     fn inspect_lease(&self, lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseInspection> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "identityGuestRef": self.identity_guest_ref.to_canonical_string(),
             "loginEndpointRef": self
@@ -215,13 +295,22 @@ impl EntraCredentialClient for GuestEntraClient {
             let response = backend
                 .request("entra.inspect-lease", fields)
                 .await
-                .map_err(|_| EntraClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "entra.inspect-lease",
+                        resource = %credential,
+                        %error,
+                        "entra credential backend request failed",
+                    );
+                    EntraClientError::Unavailable
+                })?;
             entra_inspection(response)
         })
     }
 
     fn refresh_lease(&self, lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "identityGuestRef": self.identity_guest_ref.to_canonical_string(),
             "loginEndpointRef": self
@@ -236,13 +325,22 @@ impl EntraCredentialClient for GuestEntraClient {
             let response = backend
                 .request("entra.refresh-lease", fields)
                 .await
-                .map_err(|_| EntraClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "entra.refresh-lease",
+                        resource = %credential,
+                        %error,
+                        "entra credential backend request failed",
+                    );
+                    EntraClientError::Unavailable
+                })?;
             entra_grant(response)
         })
     }
 
     fn revoke_lease(&self, lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "identityGuestRef": self.identity_guest_ref.to_canonical_string(),
             "loginEndpointRef": self
@@ -257,11 +355,26 @@ impl EntraCredentialClient for GuestEntraClient {
             let response = backend
                 .request("entra.revoke-lease", fields)
                 .await
-                .map_err(|_| EntraClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "entra.revoke-lease",
+                        resource = %credential,
+                        %error,
+                        "entra credential backend request failed",
+                    );
+                    EntraClientError::Unavailable
+                })?;
             match response.outcome() {
                 Some("revoked") => Ok(EntraLeaseRevocation::Revoked),
                 Some("already-revoked") => Ok(EntraLeaseRevocation::AlreadyRevoked),
-                _ => Err(EntraClientError::Unavailable),
+                _ => {
+                    tracing::warn!(
+                        operation = "entra.revoke-lease",
+                        resource = %credential,
+                        "entra credential backend revoke outcome unrecognized",
+                    );
+                    Err(EntraClientError::Unavailable)
+                }
             }
         })
     }
@@ -857,6 +970,12 @@ impl EntraCredentialProvider {
         if observed_generation == self.placement.endpoint_generation() {
             Ok(())
         } else {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                observed_generation,
+                expected = self.placement.endpoint_generation(),
+                "entra credential stale endpoint generation rejected",
+            );
             Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,
             ))
@@ -1003,6 +1122,11 @@ impl EntraCredentialProvider {
                         | CredentialServiceErrorCode::LeaseRevoked
                 )
             {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %credential_ref.to_canonical_string(),
+                    "entra credential owned-handle revoke failed during finalization",
+                );
                 return Err(error);
             }
             revoked += 1;
@@ -1156,6 +1280,11 @@ impl EntraCredentialProvider {
     }
 
     pub(crate) fn map_client_error(error: EntraClientError) -> CredentialServiceError {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "entra credential client operation failed",
+        );
         let code = match error {
             EntraClientError::InteractionRequired | EntraClientError::Unavailable => {
                 CredentialServiceErrorCode::ProviderUnavailable
@@ -1228,12 +1357,24 @@ impl EntraCredentialProvider {
     ) -> Result<bool, CredentialServiceError> {
         let metadata = match Self::committed_grant_metadata(grant) {
             Ok(metadata) => metadata,
-            Err(_) => return Ok(false),
+            Err(_) => {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %key,
+                    "entra credential committed refresh metadata rejected",
+                );
+                return Ok(false);
+            }
         };
         let mut leases = self.leases.lock().map_err(|_| {
             CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
         })?;
         let Some(record) = leases.get_mut(key) else {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "entra credential committed refresh has no lease record",
+            );
             return Ok(false);
         };
         record.idempotency_key = idempotency_key.to_owned();
@@ -1252,6 +1393,12 @@ impl EntraCredentialProvider {
                 .saturating_add(1)
                 .min(MAX_REFRESH_ATTEMPTS);
             record.health = EntraResourceHealth::Degraded;
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                attempts = record.refresh_attempts,
+                "entra credential bounded refresh failure recorded",
+            );
         }
     }
 }

@@ -15,6 +15,7 @@ use crate::{
     Authorizer, ExecutionTarget, ShellPool, ShellSession, ShellTerminalError, Subject,
     session::{OutputRing, RingReplay, SupervisorIdentity},
 };
+use tracing::{debug, warn};
 
 #[derive(PartialEq, Eq)]
 struct SessionFingerprint {
@@ -409,9 +410,13 @@ impl ShellAuthorityLedger {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, ShellTerminalError> {
-        self.state
-            .lock()
-            .map_err(|_| ShellTerminalError::CapacityExceeded)
+        self.state.lock().map_err(|_| {
+            warn!(
+                provider = "shell-terminal",
+                "authority state lock poisoned; reporting capacity-exceeded"
+            );
+            ShellTerminalError::CapacityExceeded
+        })
     }
 
     /// Validate that a Provider-reconstructed session still matches the
@@ -1110,11 +1115,27 @@ impl SessionSupervisor {
         self.authorize(subject)?;
         let generation = self.identity.generation();
         if request.expected_generation != generation {
+            warn!(
+                provider = "shell-terminal",
+                session = self.session.name(),
+                expected = request.expected_generation,
+                actual = generation,
+                "attach rejected: stale session generation"
+            );
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
         let attachment = self
             .authority
-            .reserve_attachment(&self.session, &self.identity)?;
+            .reserve_attachment(&self.session, &self.identity)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = self.session.name(),
+                    error = ?error,
+                    "authority refused attachment reservation"
+                );
+                error
+            })?;
         Ok(AttachReceipt {
             generation,
             replay: self.ring.tail(request.tail_bytes as usize),
@@ -1136,11 +1157,18 @@ impl SessionSupervisor {
     ) -> Result<AttachReceipt, ShellTerminalError> {
         self.authorize(subject)?;
         let generation = self.identity.generation();
-        let attachment = self.authority.admit_capability_attachment(
-            &self.session,
-            &self.identity,
-            &capability,
-        )?;
+        let attachment = self
+            .authority
+            .admit_capability_attachment(&self.session, &self.identity, &capability)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = self.session.name(),
+                    error = ?error,
+                    "authority refused capability attachment"
+                );
+                error
+            })?;
         Ok(AttachReceipt {
             generation,
             replay: self.ring.tail(0),
@@ -1158,6 +1186,15 @@ impl SessionSupervisor {
         self.authorize(subject)?;
         self.authority
             .release_attachment(&self.session, &attachment)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = self.session.name(),
+                    error = ?error,
+                    "authority refused attachment release"
+                );
+                error
+            })
     }
 
     /// Append bytes emitted by this supervisor-owned PTY to its bounded replay ring.
@@ -1168,6 +1205,12 @@ impl SessionSupervisor {
             .is_ok()
         {
             self.ring.append(bytes);
+        } else {
+            debug!(
+                provider = "shell-terminal",
+                session = self.session.name(),
+                "pty output dropped for session whose authority validation failed"
+            );
         }
     }
 
