@@ -21,6 +21,7 @@ use crate::{
     DispatchLimiter, ProviderAgentAuditEvent, ProviderAgentAuditLog, ProviderAgentAuditOutcome,
     ProviderToolkitError,
 };
+use tracing::warn;
 
 /// Validate the strict attachment-index sequence carried by a Provider
 /// adapter.  Descriptors are numbered from zero and may not repeat, reorder,
@@ -168,12 +169,13 @@ impl<S> ProviderAgentAdapter<S> {
             || route.controller_generation().is_none()
             || route.reconnect_generation().get() == 0
         {
+            warn!(provider = ?route.provider_ref(), "authenticated route bind refused: route is missing provider, generation, or reconnect identity");
             return Err(ProviderToolkitError::SessionUnauthenticated);
         }
-        let mut bound = self
-            .authenticated_route
-            .lock()
-            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        let mut bound = self.authenticated_route.lock().map_err(|_| {
+            warn!(provider = ?route.provider_ref(), "authenticated route bind failed: adapter route state lock poisoned");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
         match bound.as_ref() {
             None => {
                 *bound = Some(route);
@@ -187,7 +189,10 @@ impl<S> ProviderAgentAdapter<S> {
                 *bound = Some(route);
                 Ok(())
             }
-            Some(_) => Err(ProviderToolkitError::SessionUnauthenticated),
+            Some(_) => {
+                warn!(provider = ?route.provider_ref(), "authenticated route bind refused: route conflicts with an already-bound controller route");
+                Err(ProviderToolkitError::SessionUnauthenticated)
+            }
         }
     }
 
@@ -212,10 +217,10 @@ where
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let bound = self
-            .authenticated_route
-            .lock()
-            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        let bound = self.authenticated_route.lock().map_err(|_| {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: adapter route state lock poisoned");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
         if let Some(route) = bound.as_ref() {
             Self::validate_bound_request(route, &zone, &provider_ref)?;
         }
@@ -230,14 +235,16 @@ where
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let bound = self
-            .authenticated_route
-            .lock()
-            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
-        let current_route = bound
-            .as_ref()
-            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+        let bound = self.authenticated_route.lock().map_err(|_| {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: adapter route state lock poisoned");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
+        let current_route = bound.as_ref().ok_or_else(|| {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: no controller route is bound to the adapter");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
         if current_route != route {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, "dispatch refused: request route no longer matches the bound controller route");
             return Err(ProviderToolkitError::SessionUnauthenticated);
         }
         Self::validate_bound_request(route, &zone, &provider_ref)?;
@@ -251,8 +258,14 @@ where
         method: BoundedToken,
         payload: CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
-        let _permit = self.dispatch.acquire()?;
+        let _permit = self.dispatch.acquire().map_err(|e| {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "dispatch refused: dispatch admission ceiling saturated");
+            e
+        })?;
         let result = self.service.dispatch(&method, &payload);
+        if let Err(e) = result.as_ref() {
+            warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider service dispatch failed");
+        }
         let outcome = if result.is_ok() {
             ProviderAgentAuditOutcome::Accepted
         } else {
@@ -291,7 +304,10 @@ where
         let route = self
             .authenticated_route
             .lock()
-            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?
+            .map_err(|_| {
+                warn!("provider session refused: adapter route state lock poisoned");
+                ProviderToolkitError::SessionUnauthenticated
+            })?
             .clone()
             .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
         loop {
@@ -301,19 +317,24 @@ where
             let current_route = self
                 .authenticated_route
                 .lock()
-                .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?
+                .map_err(|_| {
+                    warn!("provider session loop aborted: adapter route state lock poisoned");
+                    ProviderToolkitError::SessionUnauthenticated
+                })?
                 .clone()
                 .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
             if current_route != route {
+                warn!(zone = ?route.zone(), "provider session loop aborted: bound controller route changed mid-session");
                 return Err(ProviderToolkitError::SessionUnauthenticated);
             }
-            let frame = driver
-                .receive_ttrpc()
-                .await
-                .map_err(|_| ProviderToolkitError::SessionClosed)?;
-            let request = codec
-                .decode_request(&frame)
-                .map_err(|_| ProviderToolkitError::WireInvalid)?;
+            let frame = driver.receive_ttrpc().await.map_err(|_| {
+                warn!(zone = ?route.zone(), "provider session receive failed; closing session");
+                ProviderToolkitError::SessionClosed
+            })?;
+            let request = codec.decode_request(&frame).map_err(|e| {
+                warn!(zone = ?route.zone(), reason = %e, "provider frame decode failed; closing session");
+                e
+            })?;
             let response = self.dispatch_for_route(
                 &route,
                 request.zone().clone(),
@@ -323,11 +344,17 @@ where
             )?;
             let encoded = codec
                 .encode_response(request.request_id(), &response)
-                .map_err(|_| ProviderToolkitError::WireInvalid)?;
+                .map_err(|e| {
+                    warn!(zone = ?route.zone(), reason = %e, "provider response encode failed; closing session");
+                    e
+                })?;
             driver
                 .send_ttrpc_cancellable(encoded, cancellation.clone())
                 .await
-                .map_err(|_| ProviderToolkitError::SessionClosed)?;
+                .map_err(|_| {
+                    warn!(zone = ?route.zone(), "provider session send failed; closing session");
+                    ProviderToolkitError::SessionClosed
+                })?;
         }
     }
 
@@ -336,15 +363,22 @@ where
         zone: &ZonePath,
         provider_ref: &ResourceRef,
     ) -> Result<(), ProviderToolkitError> {
-        let expected_zone = ZonePath::new(vec![
-            ZoneLabelId::parse(route.zone().as_str())
-                .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?,
-        ])
-        .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
-        let expected_provider = route
-            .provider_ref()
-            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+        let expected_zone = ZonePath::new(vec![ZoneLabelId::parse(route.zone().as_str()).map_err(
+            |_| {
+                warn!(zone = ?route.zone(), "dispatch refused: bound route zone label is not a valid zone root");
+                ProviderToolkitError::SessionUnauthenticated
+            },
+        )?])
+        .map_err(|_| {
+            warn!(zone = ?route.zone(), "dispatch refused: bound route zone is not a valid zone root");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
+        let expected_provider = route.provider_ref().ok_or_else(|| {
+            warn!(zone = ?route.zone(), "dispatch refused: bound route has no provider reference");
+            ProviderToolkitError::SessionUnauthenticated
+        })?;
         if zone != &expected_zone || provider_ref != expected_provider {
+            warn!(zone = ?zone, provider = %provider_ref, "dispatch refused: request target retargets a different zone or provider than the bound route");
             return Err(ProviderToolkitError::SessionUnauthenticated);
         }
         Ok(())

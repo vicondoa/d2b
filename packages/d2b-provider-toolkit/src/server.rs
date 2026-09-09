@@ -24,6 +24,7 @@ use d2b_session::{AuthenticatedSessionRouteBinding, Cancellation, ComponentSessi
 use tokio::sync::Notify;
 
 use crate::{ProviderAgentAdapter, ProviderFrameCodec, ProviderService, ProviderToolkitError};
+use tracing::warn;
 
 /// Maximum calls a generated service server may drain at once.
 pub const MAX_SERVER_IN_FLIGHT: usize = 64;
@@ -186,11 +187,13 @@ impl<S> GeneratedProviderServiceServer<S> {
     /// Reserve a server request slot.
     pub fn admit_request(&self) -> Result<ServerRequestPermit, ServerError> {
         if !self.is_accepting() {
+            warn!(service = ?self.generated.package(), "server request refused: server is draining and no longer accepting");
             return Err(ServerError::NotAccepting);
         }
         let mut current = self.state.in_flight.load(Ordering::Acquire);
         loop {
             if current >= MAX_SERVER_IN_FLIGHT {
+                warn!(service = ?self.generated.package(), limit = MAX_SERVER_IN_FLIGHT, "server request refused: in-flight ceiling reached");
                 return Err(ServerError::InFlightLimit);
             }
             match self.state.in_flight.compare_exchange_weak(
@@ -207,6 +210,7 @@ impl<S> GeneratedProviderServiceServer<S> {
             if self.state.in_flight.fetch_sub(1, Ordering::AcqRel) == 1 {
                 self.state.idle.notify_waiters();
             }
+            warn!(service = ?self.generated.package(), "server request refused: server began draining during admission");
             return Err(ServerError::NotAccepting);
         }
         Ok(ServerRequestPermit {
@@ -219,8 +223,7 @@ impl<S> GeneratedProviderServiceServer<S> {
     /// The `Notify` future is armed before the in-flight count is checked,
     /// closing the final-permit check/await race.
     pub async fn shutdown(&self, timeout: Duration) -> bool {
-        self.state.accepting.store(false, Ordering::Release);
-        tokio::time::timeout(timeout, async {
+        let drained = tokio::time::timeout(timeout, async {
             loop {
                 let notified = self.state.idle.notified();
                 tokio::pin!(notified);
@@ -232,7 +235,11 @@ impl<S> GeneratedProviderServiceServer<S> {
             }
         })
         .await
-        .is_ok()
+        .is_ok();
+        if !drained {
+            warn!(service = ?self.generated.package(), in_flight = self.in_flight(), "server drain timed out with requests still in flight");
+        }
+        drained
     }
 }
 

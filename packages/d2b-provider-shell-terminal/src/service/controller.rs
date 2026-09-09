@@ -11,6 +11,7 @@ use crate::{
     service::supervisor::{Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort},
     session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
+use tracing::warn;
 
 /// Default shared-Runner repair interval for shell resources.
 pub const SHELL_REPAIR_INTERVAL_SECS: u64 = 30;
@@ -206,9 +207,22 @@ impl ShellTerminalController {
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
         if self.pools.contains_key(pool.name()) {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool.name(),
+                "pool restore rejected: pool already projected"
+            );
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        self.authority.restore_pool(&pool, attached_streams)?;
+        self.authority.restore_pool(&pool, attached_streams).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool.name(),
+                error = ?error,
+                "authority rejected pool restore"
+            );
+            error
+        })?;
         self.pools.insert(pool.name().to_owned(), pool);
         Ok(())
     }
@@ -219,12 +233,16 @@ impl ShellTerminalController {
         pool_name: &str,
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
-        self.authority.reconcile_pool_attachments(
-            self.pools
-                .get(pool_name)
-                .ok_or(ShellTerminalError::CapacityExceeded)?,
-            attached_streams,
-        )
+        let pool = self.pools.get(pool_name).ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool_name,
+                "attachment reconcile rejected: pool not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        self.authority
+            .reconcile_pool_attachments(pool, attached_streams)
     }
 
     /// Retire attachment handles proved stale by the authoritative stream census.
@@ -234,13 +252,16 @@ impl ShellTerminalController {
         stale_attachments: &[Attachment],
         attached_streams: u32,
     ) -> Result<(), ShellTerminalError> {
-        self.authority.retire_proven_stale(
-            self.pools
-                .get(pool_name)
-                .ok_or(ShellTerminalError::CapacityExceeded)?,
-            stale_attachments,
-            attached_streams,
-        )
+        let pool = self.pools.get(pool_name).ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool_name,
+                "stale-attachment retirement rejected: pool not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        self.authority
+            .retire_proven_stale(pool, stale_attachments, attached_streams)
     }
 
     /// Restore a reconciled session before the controller admits new sessions.
@@ -257,14 +278,41 @@ impl ShellTerminalController {
         if !self.pools.contains_key(session.pool_name())
             || self.sessions.contains_key(session.name())
         {
+            warn!(
+                provider = "shell-terminal",
+                session = session.name(),
+                "session restore rejected: pool missing or session already projected"
+            );
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let decision = adopt_supervisor(session.name(), expected_identity, candidates);
+        if decision != AdoptionDecision::Adopted {
+            warn!(
+                provider = "shell-terminal",
+                session = session.name(),
+                decision = ?decision,
+                "session restart adoption did not adopt the supervisor"
+            );
+        }
         let authority_trusted = decision == AdoptionDecision::Adopted
             && self
                 .authority
-                .verify_recovery(&session, expected_identity)?;
+                .verify_recovery(&session, expected_identity)
+                .map_err(|error| {
+                    warn!(
+                        provider = "shell-terminal",
+                        session = session.name(),
+                        error = ?error,
+                        "authority recovery verification failed during session restore"
+                    );
+                    error
+                })?;
         let decision = if decision == AdoptionDecision::Adopted && !authority_trusted {
+            warn!(
+                provider = "shell-terminal",
+                session = session.name(),
+                "session adoption downgraded to ambiguous: authority could not confirm the incumbent"
+            );
             AdoptionDecision::Ambiguous
         } else {
             decision
@@ -283,24 +331,71 @@ impl ShellTerminalController {
         session_name: &str,
         retiring_identity: Option<&SupervisorIdentity>,
     ) -> Result<OpenSessionResult, ShellTerminalError> {
-        Authorizer::authorize_request(subject)?;
-        let session = self
-            .sessions
-            .get(session_name)
-            .cloned()
-            .ok_or(ShellTerminalError::CapacityExceeded)?;
-        let pool = self
-            .pools
-            .get(session.pool_name())
-            .ok_or(ShellTerminalError::CapacityExceeded)?;
-        Authorizer::authorize(subject, pool)?;
+        Authorizer::authorize_request(subject).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                error = ?error,
+                "supervisor restart request not authorized"
+            );
+            error
+        })?;
+        let session = self.sessions.get(session_name).cloned().ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                "supervisor restart rejected: session not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        let pool = self.pools.get(session.pool_name()).ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                "supervisor restart rejected: pool not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        Authorizer::authorize(subject, pool).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                error = ?error,
+                "supervisor restart not authorized for pool"
+            );
+            error
+        })?;
         if !self.trusted_sessions.contains(session_name) {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                "supervisor restart rejected: session identity is not trusted"
+            );
             return Err(ShellTerminalError::SupervisorAmbiguous);
         }
-        let grant = self
-            .authority
-            .advance_session(&session, retiring_identity)?;
-        self.authority.ensure_supervisor_process(&session)?;
+        let grant =
+            self.authority
+                .advance_session(&session, retiring_identity)
+                .map_err(|error| {
+                    warn!(
+                        provider = "shell-terminal",
+                        session = session_name,
+                        error = ?error,
+                        "authority rejected supervisor session advance"
+                    );
+                    error
+                })?;
+        self.authority
+            .ensure_supervisor_process(&session)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = session_name,
+                    error = ?error,
+                    "authority failed to ensure supervisor process during restart"
+                );
+                error
+            })?;
         let supervisor_generation = grant.generation();
         let capability = grant.capability();
         Ok(OpenSessionResult {
@@ -317,17 +412,47 @@ impl ShellTerminalController {
         subject: &Subject,
         request: OpenSessionRequest,
     ) -> Result<OpenSessionResult, ShellTerminalError> {
-        Authorizer::authorize_request(subject)?;
-        let pool = self
-            .pools
-            .get(&request.pool_name)
-            .ok_or(ShellTerminalError::CapacityExceeded)?;
-        Authorizer::authorize(subject, pool)?;
+        Authorizer::authorize_request(subject).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                pool = request.pool_name,
+                error = ?error,
+                "session open request not authorized"
+            );
+            error
+        })?;
+        let pool = self.pools.get(&request.pool_name).ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                pool = request.pool_name,
+                "session open rejected: pool not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        Authorizer::authorize(subject, pool).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool.name(),
+                error = ?error,
+                "session open not authorized for pool"
+            );
+            error
+        })?;
         if self.session_count(pool.name()) >= pool.active_session_capacity() {
+            warn!(
+                provider = "shell-terminal",
+                pool = pool.name(),
+                "session open rejected: pool session capacity exhausted"
+            );
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let resource_name = format!("{}-{}", pool.name(), request.session_name);
         if self.sessions.contains_key(&resource_name) {
+            warn!(
+                provider = "shell-terminal",
+                session = resource_name,
+                "session open rejected: session name already exists"
+            );
             return Err(ShellTerminalError::CapacityExceeded);
         }
         let session = ShellSession::from_pool(
@@ -336,9 +461,30 @@ impl ShellTerminalController {
             request.session_name,
             request.output_ring_capacity,
         )?;
-        let grant = self.authority.open_session(&session)?;
+        let grant = self.authority.open_session(&session).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = session.name(),
+                error = ?error,
+                "authority rejected session open"
+            );
+            error
+        })?;
         if let Err(error) = self.authority.ensure_supervisor_process(&session) {
-            let _ = self.authority.finalize_session(&session, None);
+            warn!(
+                provider = "shell-terminal",
+                session = session.name(),
+                error = ?error,
+                "authority failed to ensure supervisor process for new session"
+            );
+            if let Err(rollback_error) = self.authority.finalize_session(&session, None) {
+                warn!(
+                    provider = "shell-terminal",
+                    session = session.name(),
+                    error = %rollback_error,
+                    "session rollback after failed supervisor ensure also failed"
+                );
+            }
             return Err(error);
         }
         let supervisor_generation = grant.generation();
@@ -376,19 +522,62 @@ impl ShellTerminalController {
         session_name: &str,
         identity: Option<&SupervisorIdentity>,
     ) -> Result<(), ShellTerminalError> {
-        Authorizer::authorize_request(subject)?;
-        let session = self
-            .sessions
-            .get(session_name)
-            .cloned()
-            .ok_or(ShellTerminalError::CapacityExceeded)?;
-        let pool = self
-            .pools
-            .get(session.pool_name())
-            .ok_or(ShellTerminalError::CapacityExceeded)?;
-        Authorizer::authorize(subject, pool)?;
-        self.authority.remove_supervisor_process(&session)?;
-        self.authority.finalize_session(&session, identity)?;
+        Authorizer::authorize_request(subject).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                error = ?error,
+                "session finalize request not authorized"
+            );
+            error
+        })?;
+        let session = self.sessions.get(session_name).cloned().ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                "session finalize rejected: session not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        let pool = self.pools.get(session.pool_name()).ok_or_else(|| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                "session finalize rejected: pool not projected"
+            );
+            ShellTerminalError::CapacityExceeded
+        })?;
+        Authorizer::authorize(subject, pool).map_err(|error| {
+            warn!(
+                provider = "shell-terminal",
+                session = session_name,
+                error = ?error,
+                "session finalize not authorized for pool"
+            );
+            error
+        })?;
+        self.authority
+            .remove_supervisor_process(&session)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = session.name(),
+                    error = ?error,
+                    "authority failed to remove supervisor process during finalize"
+                );
+                error
+            })?;
+        self.authority
+            .finalize_session(&session, identity)
+            .map_err(|error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = session.name(),
+                    error = ?error,
+                    "authority rejected session finalize"
+                );
+                error
+            })?;
         self.sessions.remove(session_name);
         self.trusted_sessions.remove(session_name);
         Ok(())

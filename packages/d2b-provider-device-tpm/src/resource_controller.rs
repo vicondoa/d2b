@@ -137,11 +137,22 @@ impl TpmResourceController {
         execution_ref: ResourceRef,
     ) -> Result<Self, TpmResourceControllerError> {
         if device_ref.resource_type().as_str() != "Device" {
+            tracing::warn!(
+                device = %device_ref.to_canonical_string(),
+                reason = "device_ref is not a Device resource",
+                "tpm resource controller construction refused",
+            );
             return Err(TpmResourceControllerError::Effect(
                 TpmResourceEffectError::InvalidDevice,
             ));
         }
         if execution_ref.resource_type().as_str() != "Host" {
+            tracing::warn!(
+                device = %device_ref.to_canonical_string(),
+                execution = %execution_ref.to_canonical_string(),
+                reason = "execution_ref is not a Host resource",
+                "tpm resource controller construction refused",
+            );
             return Err(TpmResourceControllerError::Effect(
                 TpmResourceEffectError::InvalidExecutionRef,
             ));
@@ -168,6 +179,7 @@ impl TpmResourceController {
         execution_ref: ResourceRef,
         status: &TpmStatusReport,
     ) -> Result<Self, TpmResourceControllerError> {
+        let device = device_ref.to_canonical_string();
         let mut controller = Self::new(device_uid, device_ref, execution_ref)?;
         if matches!(
             status.marker_status,
@@ -175,6 +187,12 @@ impl TpmResourceController {
                 | TpmMarkerStatus::Replaced
                 | TpmMarkerStatus::Tampered
         ) {
+            tracing::warn!(
+                device = %device,
+                marker_status = ?status.marker_status,
+                reason = "persisted marker evidence is Missing, Replaced, or Tampered",
+                "tpm resource controller rehydration refused",
+            );
             return Err(TpmResourceControllerError::Effect(
                 TpmResourceEffectError::StateIntegrity,
             ));
@@ -184,6 +202,11 @@ impl TpmResourceController {
                 || status.last_flush_ref.is_some()
                 || status.tpm_endpoint_ref.is_some())
         {
+            tracing::warn!(
+                device = %device,
+                reason = "child references exist without a state volume reference",
+                "tpm resource controller rehydration refused",
+            );
             return Err(TpmResourceControllerError::Effect(
                 TpmResourceEffectError::StateIntegrity,
             ));
@@ -197,6 +220,12 @@ impl TpmResourceController {
             if reference
                 .is_some_and(|reference| reference.resource_type().as_str() != expected_type)
             {
+                tracing::warn!(
+                    device = %device,
+                    expected_type,
+                    reason = "persisted reference has the wrong resource type",
+                    "tpm resource controller rehydration refused",
+                );
                 return Err(TpmResourceControllerError::Effect(
                     TpmResourceEffectError::StateIntegrity,
                 ));
@@ -252,9 +281,19 @@ impl TpmResourceController {
         port: &P,
     ) -> Result<TpmResourceOutcome, TpmResourceControllerError> {
         if self.phase == TpmResourcePhase::Finalized {
+            tracing::debug!(
+                device = %self.device_ref.to_canonical_string(),
+                reason = "controller already finalized",
+                "tpm resource reconcile refused before any effect",
+            );
             return Err(TpmResourceControllerError::InvalidState);
         }
         if self.phase == TpmResourcePhase::Failed {
+            tracing::debug!(
+                device = %self.device_ref.to_canonical_string(),
+                reason = "controller phase is Failed; awaiting external reset",
+                "tpm resource reconcile replayed terminal failure",
+            );
             return Err(TpmResourceControllerError::Effect(
                 self.last_error
                     .unwrap_or(TpmResourceEffectError::StateIntegrity),
@@ -331,11 +370,21 @@ impl TpmResourceController {
             && self.process_ref.is_none()
             && self.flush_ref.is_none()
         {
+            tracing::debug!(
+                device = %self.device_ref.to_canonical_string(),
+                reason = "finalize requested before reconcile with no children",
+                "tpm resource finalize refused",
+            );
             return Err(TpmResourceControllerError::InvalidState);
         }
         if let Some(process) = self.process_ref.take()
             && let Err(error) = port.stop_swtpm_process(&process).await
         {
+            tracing::warn!(
+                device = %self.device_ref.to_canonical_string(),
+                error = %error,
+                "tpm swtpm process stop failed during finalize",
+            );
             self.process_ref = Some(process);
             self.phase = TpmResourcePhase::Degraded;
             return Err(TpmResourceControllerError::Effect(error));
@@ -343,6 +392,11 @@ impl TpmResourceController {
         if let Some(flush) = self.flush_ref.take()
             && let Err(error) = port.delete_flush_process(&flush).await
         {
+            tracing::warn!(
+                device = %self.device_ref.to_canonical_string(),
+                error = %error,
+                "tpm flush process deletion failed during finalize",
+            );
             self.flush_ref = Some(flush);
             self.phase = TpmResourcePhase::Degraded;
             return Err(TpmResourceControllerError::Effect(error));
@@ -357,6 +411,12 @@ impl TpmResourceController {
         &mut self,
         error: TpmResourceEffectError,
     ) -> Result<T, TpmResourceControllerError> {
+        tracing::warn!(
+            device = %self.device_ref.to_canonical_string(),
+            phase = ?self.phase,
+            error = %error,
+            "tpm resource reconcile effect failed",
+        );
         self.last_error = Some(error);
         if error == TpmResourceEffectError::StateIntegrity {
             self.marker_status = TpmMarkerStatus::Tampered;

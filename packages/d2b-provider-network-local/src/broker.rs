@@ -5,6 +5,7 @@
 //! its trusted bundle before dispatching a wire operation.
 
 use std::fmt;
+use tracing::warn;
 
 use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
 use d2b_contracts_broker::broker_wire::{NetworkTapContext, NftablesProjectionAction};
@@ -477,14 +478,30 @@ pub fn resolve_tap_identity(
         bridge_role,
         None,
     )
-    .map_err(|_| NetworkBrokerError::NetworkAdmissionMismatch)?;
+    .map_err(|error| {
+        warn!(
+            provider = "network-local",
+            network_uid = provenance.network_uid().as_str(),
+            error = %error,
+            "network tap bridge name derivation failed"
+        );
+        NetworkBrokerError::NetworkAdmissionMismatch
+    })?;
     let tap_ifname = d2b_contracts_resource::v3::derive_network_ifname(
         provenance.zone_uid(),
         provenance.network_uid(),
         tap_role,
         attachment,
     )
-    .map_err(|_| NetworkBrokerError::NetworkAdmissionMismatch)?;
+    .map_err(|error| {
+        warn!(
+            provider = "network-local",
+            network_uid = provenance.network_uid().as_str(),
+            error = %error,
+            "network tap name derivation failed"
+        );
+        NetworkBrokerError::NetworkAdmissionMismatch
+    })?;
     let intent_ref = BundleOpId::new(d2b_core::bundle_resolver::intent_id_network_tap(
         provenance.zone_uid(),
         provenance.network_uid(),

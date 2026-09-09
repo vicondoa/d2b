@@ -84,15 +84,27 @@ impl BootstrapAdmission {
         now_unix_ms: u64,
     ) -> Result<Zeroizing<Vec<u8>>, AzureVmError> {
         if now_unix_ms >= self.expires_at_unix_ms {
+            tracing::warn!(
+                provider = "runtime-azure-virtual-machine",
+                "bootstrap PSK admission refused: admission expired"
+            );
             self.state = BootstrapAdmissionState::Expired;
             self.psk = None;
             return Err(AzureVmError::BootstrapPskExpired);
         }
         let Some(psk) = self.psk.take() else {
+            tracing::warn!(
+                provider = "runtime-azure-virtual-machine",
+                "bootstrap PSK admission refused: PSK replayed"
+            );
             self.state = BootstrapAdmissionState::Consumed;
             return Err(AzureVmError::BootstrapPskReplayed);
         };
         if !psk.matches(presented) {
+            tracing::warn!(
+                provider = "runtime-azure-virtual-machine",
+                "bootstrap handshake failed: presented PSK does not match admission"
+            );
             self.state = BootstrapAdmissionState::Consumed;
             return Err(AzureVmError::BootstrapEnrollmentFailed);
         }

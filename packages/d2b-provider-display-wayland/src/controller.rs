@@ -772,6 +772,11 @@ impl DisplayController {
                 .zone()
                 .is_some_and(|zone| zone != policy.zone())
         {
+            tracing::debug!(
+                zone = policy.zone().as_str(),
+                guest = %spec.guest_ref().to_canonical_string(),
+                "reconcile rejected: authenticated session does not match WaylandSession spec"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         self.reconcile_with_policy_and_evidence_for_controller(
@@ -809,6 +814,11 @@ impl DisplayController {
                 .zone()
                 .is_some_and(|zone| zone != policy.zone())
         {
+            tracing::debug!(
+                zone = policy.zone().as_str(),
+                guest = %spec.guest_ref().to_canonical_string(),
+                "reconcile rejected: authenticated route does not match WaylandSession spec"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         self.reconcile_with_policy_and_evidence_for_controller(
@@ -880,9 +890,17 @@ impl DisplayController {
         controller_generation: u64,
     ) -> Result<ReconcileResult, WaylandSpecError> {
         if supervision.teardown_generation == 0 {
+            tracing::debug!(
+                zone = policy.zone().as_str(),
+                "reconcile rejected: teardown generation must be non-zero"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         if !spec.cross_domain_trusted() {
+            tracing::debug!(
+                zone = policy.zone().as_str(),
+                "reconcile rejected: session spec is not cross-domain trusted"
+            );
             return Err(WaylandSpecError::CrossDomainUntrusted);
         }
 
@@ -890,6 +908,10 @@ impl DisplayController {
         if let Some(zone) = dependencies.zone()
             && zone != policy.zone()
         {
+            tracing::debug!(
+                zone = zone.as_str(),
+                "reconcile rejected: dependency zone does not match policy zone"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         let session_key = session_key(spec, controller_generation);
@@ -901,6 +923,10 @@ impl DisplayController {
         if let Some(active) = self.active_policies.get(&session_key)
             && policy_binding.generation < active.generation
         {
+            tracing::debug!(
+                session = %session_key,
+                "reconcile rejected: policy generation regressed below active binding"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         let policy_changed = self
@@ -918,7 +944,12 @@ impl DisplayController {
             supervision,
         ) {
             Ok(actions) => actions,
-            Err(_) => {
+            Err(e) => {
+                tracing::warn!(
+                    session = %session_key,
+                    ?e,
+                    "worker supervision plan failed; session marked Failed"
+                );
                 self.active_policies.remove(&session_key);
                 self.ready_sessions.remove(&session_key);
                 return Ok(ReconcileResult {
@@ -1026,6 +1057,10 @@ impl DisplayController {
                 spec.identity().label(),
                 &worker_actions,
             ) else {
+                tracing::debug!(
+                    session = %session_key,
+                    "launch grants could not mint worker tickets; session stays Pending"
+                );
                 self.ready_sessions.remove(&session_key);
                 return Ok(ReconcileResult {
                     status: self.status(
@@ -1052,6 +1087,10 @@ impl DisplayController {
             let lease = match self.principal_pool.acquire_dynamic() {
                 Ok(lease) => lease,
                 Err(crate::principal::PrincipalPoolError::NoPrincipalAvailable) => {
+                    tracing::debug!(
+                        session = %session_key,
+                        "dynamic principal pool exhausted; session marked Failed"
+                    );
                     self.ready_sessions.remove(&session_key);
                     return Ok(ReconcileResult {
                         status: self.status(
@@ -1065,7 +1104,10 @@ impl DisplayController {
                         worker_actions: Vec::new(),
                     });
                 }
-                Err(_) => return Err(WaylandSpecError::InvalidReference),
+                Err(e) => {
+                    tracing::warn!(session = %session_key, ?e, "dynamic principal acquisition failed");
+                    return Err(WaylandSpecError::InvalidReference);
+                }
             };
             let principal = lease.principal().to_owned();
             self.principals.insert(session_key.clone(), lease);
@@ -1082,6 +1124,10 @@ impl DisplayController {
                 observation.proxy.generation(),
                 observation.frontend.generation(),
             ) else {
+                tracing::debug!(
+                    session = %session_key,
+                    "worker generations missing at ready fence; session stays Pending"
+                );
                 self.ready_sessions.remove(&session_key);
                 return Ok(ReconcileResult {
                     status: self.status(
@@ -1165,15 +1211,28 @@ impl DisplayController {
             || authenticated.reconnect_generation() != spec.reconnect_generation()
             || authenticated.zone() != policy.zone()
         {
+            tracing::debug!(
+                zone = policy.zone().as_str(),
+                guest = %spec.guest_ref().to_canonical_string(),
+                "dependency proof rejected: authenticated route does not match spec"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         let controller_generation = authenticated.controller_generation();
         let session_key = session_key(spec, controller_generation);
         let session_digest = session_digest(spec, controller_generation);
         let Some(ready_session) = self.ready_sessions.get(&session_key) else {
+            tracing::debug!(
+                session = %session_key,
+                "dependency proof rejected: no Ready session for the current fence"
+            );
             return Err(WaylandSpecError::InvalidReference);
         };
         let Some(active_policy) = self.active_policies.get(&session_key) else {
+            tracing::debug!(
+                session = %session_key,
+                "dependency proof rejected: no active policy binding for the session"
+            );
             return Err(WaylandSpecError::InvalidReference);
         };
         let principal_matches = result
@@ -1207,6 +1266,10 @@ impl DisplayController {
             || policy.policy_ref() != spec.policy_ref()
             || !principal_matches
         {
+            tracing::debug!(
+                session = %session_key,
+                "dependency proof rejected: reconciliation evidence does not match the current observation"
+            );
             return Err(WaylandSpecError::InvalidReference);
         }
         Ok(DisplayDependencyProof {

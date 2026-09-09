@@ -49,7 +49,13 @@ impl SecurityKeySemanticDescriptor {
         let projection_factory = pair
             .projection()
             .projection_factory()
-            .map_err(|_| ProviderContractError::ProjectionFactoryInvalid)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "security-key provider descriptor projection factory invalid",
+                );
+                ProviderContractError::ProjectionFactoryInvalid
+            })?;
         Ok(Self {
             service_binding,
             binding_binding,

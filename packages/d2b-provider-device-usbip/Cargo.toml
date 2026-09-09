@@ -16,6 +16,7 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 libc = "0.2"
 serde.workspace = true
+tracing = "0.1"
 
 [dev-dependencies]
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }

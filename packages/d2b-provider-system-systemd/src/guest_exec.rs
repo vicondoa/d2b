@@ -11,6 +11,7 @@ use std::{
     future::Future,
     sync::atomic::{AtomicU8, Ordering},
 };
+use tracing::{debug, warn};
 
 use d2b_contracts_control::public_wire::{
     NamedProcessStreamRequestFrame, NamedProcessStreamResponseFrame,
@@ -261,11 +262,22 @@ where
         if name.as_str() != GUEST_EXEC_STREAM_NAME {
             return Err(GuestExecError::InvalidStreamName);
         }
-        let stream = StreamId::new(stream_number).map_err(|_| GuestExecError::StreamUnavailable)?;
+        let stream =
+            StreamId::new(stream_number).map_err(|_| {
+                debug!(stream_number, "guest exec attach stream id rejected");
+                GuestExecError::StreamUnavailable
+            })?;
         driver
             .open_named_stream(stream, GUEST_EXEC_STREAM_CREDIT, GUEST_EXEC_STREAM_CREDIT)
             .await
-            .map_err(|_| GuestExecError::StreamUnavailable)?;
+            .map_err(|error| {
+                warn!(
+                    stream = ?stream,
+                    error = %error,
+                    "guest exec named stream open failed"
+                );
+                GuestExecError::StreamUnavailable
+            })?;
         Ok(Self {
             driver,
             stream,
@@ -299,7 +311,14 @@ where
         self.driver
             .send_named_stream(self.stream, bytes)
             .await
-            .map_err(|_| GuestExecError::StreamUnavailable)
+            .map_err(|error| {
+                warn!(
+                    stream = ?self.stream,
+                    error = %error,
+                    "guest exec named stream send failed"
+                );
+                GuestExecError::StreamUnavailable
+            })
     }
 
     /// Send one canonical Process named-stream request frame.
@@ -323,7 +342,14 @@ where
             .driver
             .receive_named_stream()
             .await
-            .map_err(|_| GuestExecError::StreamUnavailable)?;
+            .map_err(|error| {
+                debug!(
+                    stream = ?self.stream,
+                    error = %error,
+                    "guest exec named stream receive failed"
+                );
+                GuestExecError::StreamUnavailable
+            })?;
         if matches!(
             event,
             StreamEvent::RemoteClosed { .. } | StreamEvent::Reset { .. }
@@ -343,7 +369,14 @@ where
             return Err(GuestExecError::InvalidStreamPayload);
         }
         let frame: NamedProcessStreamResponseFrame =
-            serde_json::from_slice(&bytes).map_err(|_| GuestExecError::InvalidStreamPayload)?;
+            serde_json::from_slice(&bytes).map_err(|error| {
+                debug!(
+                    stream = ?self.stream,
+                    error = %error,
+                    "guest exec stream response frame decode failed"
+                );
+                GuestExecError::InvalidStreamPayload
+            })?;
         if frame.request_id == 0 {
             return Err(GuestExecError::InvalidStreamPayload);
         }
@@ -369,7 +402,12 @@ where
                 self.state.store(STREAM_CLOSED, Ordering::Release);
                 Ok(())
             }
-            Err(_) => {
+            Err(error) => {
+                warn!(
+                    stream = ?self.stream,
+                    error = %error,
+                    "guest exec named stream close failed"
+                );
                 self.state.store(STREAM_OPEN, Ordering::Release);
                 Err(GuestExecError::StreamUnavailable)
             }
@@ -395,7 +433,12 @@ where
                 self.state.store(STREAM_CLOSED, Ordering::Release);
                 Ok(())
             }
-            Err(_) => {
+            Err(error) => {
+                warn!(
+                    stream = ?self.stream,
+                    error = %error,
+                    "guest exec named stream reset failed"
+                );
                 self.state.store(STREAM_OPEN, Ordering::Release);
                 Err(GuestExecError::StreamUnavailable)
             }

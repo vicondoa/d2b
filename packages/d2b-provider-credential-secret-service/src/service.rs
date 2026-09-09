@@ -993,6 +993,10 @@ impl SecretServiceCredentialProvider {
                     .ok_or_else(expired)?
                     .metadata
                     .state = CredentialLeaseState::Expired;
+                tracing::warn!(
+                    resource = %key,
+                    "secret-service lease expired at inspect",
+                );
                 return Err(expired());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::LeaseRevoked)) => {
@@ -1003,6 +1007,10 @@ impl SecretServiceCredentialProvider {
                     .ok_or_else(expired)?
                     .metadata
                     .state = CredentialLeaseState::Revoked;
+                tracing::warn!(
+                    resource = %key,
+                    "secret-service lease revoked at inspect",
+                );
                 return Err(revoked());
             }
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
@@ -1066,6 +1074,13 @@ impl SecretServiceCredentialProvider {
         lease_key: &(SessionKey, String),
         state: CredentialLeaseState,
     ) -> Result<(), CredentialServiceError> {
+        if state != CredentialLeaseState::Active {
+            tracing::warn!(
+                resource = %lease_key.1,
+                state = ?state,
+                "secret-service lease state degraded",
+            );
+        }
         self.leases
             .lock()
             .map_err(|_| invariant())?
@@ -1159,11 +1174,19 @@ impl SecretServiceCredentialProvider {
                     self.clear_ambiguous_acquire(session_key, &credential, &idempotency_key)?;
                 }
                 Err(SecretServicePollError::Deadline) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service ambiguous acquire revoke timed out during session close",
+                    );
                     first_error.get_or_insert_with(|| {
                         CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
                     });
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service ambiguous acquire revoke failed during session close",
+                    );
                     first_error.get_or_insert_with(|| map_poll_error(error));
                 }
             }
@@ -1193,11 +1216,19 @@ impl SecretServiceCredentialProvider {
                     self.clear_ambiguous_refresh(session_key, &credential, &idempotency_key)?;
                 }
                 Err(SecretServicePollError::Deadline) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service ambiguous refresh revoke timed out during session close",
+                    );
                     first_error.get_or_insert_with(|| {
                         CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
                     });
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service ambiguous refresh revoke failed during session close",
+                    );
                     first_error.get_or_insert_with(|| map_poll_error(error));
                 }
             }
@@ -1238,16 +1269,28 @@ impl SecretServiceCredentialProvider {
                     self.clear_ambiguous_for_credential(session_key, &credential)?;
                 }
                 Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service lease revoke outcome unknown during session close",
+                    );
                     self.mark_metadata_unknown(&lease_key)?;
                     first_error.get_or_insert_with(invariant);
                 }
                 Err(SecretServicePollError::Deadline) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service lease revoke timed out during session close",
+                    );
                     self.mark_metadata_unknown(&lease_key)?;
                     first_error.get_or_insert_with(|| {
                         CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
                     });
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        resource = %credential,
+                        "secret-service lease revoke failed during session close",
+                    );
                     first_error.get_or_insert_with(|| map_poll_error(error));
                 }
             }
@@ -1270,6 +1313,9 @@ impl SecretServiceCredentialProvider {
             return Err(error);
         }
         if unresolved_leases || unresolved_operations {
+            tracing::warn!(
+                "secret-service session close left unresolved leases or ambiguous operations",
+            );
             return Err(invariant());
         }
 

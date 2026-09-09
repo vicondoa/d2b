@@ -1303,6 +1303,13 @@ where
     /// Mark the active session disconnected while retaining only its last
     /// bounded target-local observation.
     pub fn mark_session_lost(&mut self) {
+        if self.session.is_some() {
+            tracing::warn!(
+                zone = ?self.expectation.zone(),
+                resource = ?self.expectation.guest_ref(),
+                "guest-control session lost; retaining the last bounded target-local observation"
+            );
+        }
         self.session = None;
     }
 
@@ -1321,7 +1328,16 @@ where
         {
             return Ok(GuestLocalReconcileOutcome::Pending(self.status(host)));
         }
-        self.validate_batch(&batch)?;
+        self.validate_batch(&batch).map_err(|error| {
+            tracing::warn!(
+                zone = ?self.expectation.zone(),
+                resource = ?self.expectation.guest_ref(),
+                stage = "validate-batch",
+                error = %error,
+                "target-local seed batch rejected"
+            );
+            error
+        })?;
         let batch_key = batch.idempotency_key().to_owned();
         if self
             .operations
@@ -1366,11 +1382,33 @@ where
             {
                 Ok(session) => session,
                 Err(GuestLocalError::SessionLost) if self.was_ready => {
+                    tracing::warn!(
+                        zone = ?self.expectation.zone(),
+                        resource = ?self.expectation.guest_ref(),
+                        "guest-control reconnect lost after prior readiness; deferring to the session-loss outcome"
+                    );
                     return Ok(self.session_loss_outcome(host));
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    tracing::warn!(
+                        zone = ?self.expectation.zone(),
+                        resource = ?self.expectation.guest_ref(),
+                        error = %error,
+                        "guest-control session setup failed"
+                    );
+                    return Err(error);
+                }
             };
-            self.validate_session(&session, &endpoint, minimum_generation)?;
+            self.validate_session(&session, &endpoint, minimum_generation).map_err(|error| {
+                tracing::warn!(
+                    zone = ?self.expectation.zone(),
+                    resource = ?self.expectation.guest_ref(),
+                    stage = "validate-session",
+                    error = %error,
+                    "guest-control session binding rejected"
+                );
+                error
+            })?;
             self.last_binding = Some(session.binding().clone());
             self.session = Some(session);
         }
@@ -1386,9 +1424,26 @@ where
                     self.mark_session_lost();
                     return Ok(self.session_loss_outcome(host));
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    tracing::warn!(
+                        zone = ?self.expectation.zone(),
+                        resource = ?self.expectation.guest_ref(),
+                        error = %error,
+                        "resuming the target-local seed watch failed"
+                    );
+                    return Err(error);
+                }
             };
-            self.apply_watch(&batch, watch)?;
+            self.apply_watch(&batch, watch).map_err(|error| {
+                tracing::warn!(
+                    zone = ?self.expectation.zone(),
+                    resource = ?self.expectation.guest_ref(),
+                    stage = "apply-watch",
+                    error = %error,
+                    "seed watch update rejected"
+                );
+                error
+            })?;
         }
         let needs_commit = self.last_seed.is_none()
             || self.last_batch_key.as_deref() != Some(batch.idempotency_key());
@@ -1402,9 +1457,26 @@ where
                     self.mark_session_lost();
                     return Ok(self.session_loss_outcome(host));
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    tracing::warn!(
+                        zone = ?self.expectation.zone(),
+                        resource = ?self.expectation.guest_ref(),
+                        error = %error,
+                        "committing the target-local seed batch failed"
+                    );
+                    return Err(error);
+                }
             };
-            self.validate_result(&batch, &result)?;
+            self.validate_result(&batch, &result).map_err(|error| {
+                tracing::warn!(
+                    zone = ?self.expectation.zone(),
+                    resource = ?self.expectation.guest_ref(),
+                    stage = "validate-result",
+                    error = %error,
+                    "seed batch commit result rejected"
+                );
+                error
+            })?;
             self.last_revision = result.revision();
             self.last_seed = Some(result);
             self.operations

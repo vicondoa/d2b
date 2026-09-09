@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use tracing::{debug, warn};
 use zeroize::Zeroize;
 
 use crate::metric_policy::{
@@ -643,6 +644,11 @@ impl IngressPolicyGate {
         if !self.connections.contains_key(&(ingress, connection_id))
             && self.connections.len() >= MAX_TRACKED_CONNECTIONS
         {
+            warn!(
+                provider = "observability-otel",
+                ingress = ?ingress,
+                "ingress connection tracking table full; new connection rejected"
+            );
             return (IngressOutcome::Rejected, IngressErrorClass::Malformed);
         }
         let state = self
@@ -661,8 +667,22 @@ impl IngressPolicyGate {
                     .saturating_add(QUARANTINE_DURATION_SECONDS.saturating_mul(1000)),
             );
             self.quarantined_connections += 1;
+            warn!(
+                provider = "observability-otel",
+                ingress = ?ingress,
+                connection = connection_id,
+                error_class = ?error,
+                "ingress connection quarantined after repeated policy violations"
+            );
             return (IngressOutcome::Quarantined, error);
         }
+        debug!(
+            provider = "observability-otel",
+            ingress = ?ingress,
+            connection = connection_id,
+            error_class = ?error,
+            "ingress frame rejected by policy"
+        );
         (IngressOutcome::Rejected, error)
     }
 }

@@ -19,8 +19,19 @@ use d2b_process::{
     ProcessConformanceError, ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest,
     ProcessLaunchEffectPort, ProcessLaunchRequest, ProcessRequest, ProcessStopClass, StopClass,
 };
+use tracing::{debug, error, warn};
 /// Default upper bound for concurrent blocking process effects.
 pub const DEFAULT_BLOCKING_LIMIT: usize = 16;
+
+/// Log a poisoned process-effect state lock and map it to the caller's outcome.
+fn poisoned_state_lock(outcome: ProcessEffectError) -> ProcessEffectError {
+    error!(
+        provider = "supervisor",
+        lock = "runtime-state",
+        "process effect state lock poisoned; process table authority lost"
+    );
+    outcome
+}
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -95,6 +106,10 @@ impl BlockingPool {
             })
             .is_err()
         {
+            warn!(
+                provider = "supervisor",
+                "deadline registration failed; reporting launch-failed for the blocked effect"
+            );
             state.complete(Err(ProcessEffectError::LaunchFailed));
             return JobFuture { state, deadline };
         }
@@ -105,8 +120,20 @@ impl BlockingPool {
             .try_send(job)
         {
             Ok(()) => None,
-            Err(TrySendError::Full(_)) => Some(ProcessEffectError::Busy),
-            Err(TrySendError::Disconnected(_)) => Some(ProcessEffectError::LaunchFailed),
+            Err(TrySendError::Full(_)) => {
+                debug!(
+                    provider = "supervisor",
+                    "blocking pool saturated; reporting busy for the process effect"
+                );
+                Some(ProcessEffectError::Busy)
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                error!(
+                    provider = "supervisor",
+                    "blocking pool disconnected; reporting launch-failed for the process effect"
+                );
+                Some(ProcessEffectError::LaunchFailed)
+            }
         };
         if let Some(error) = submit_error {
             state.complete(Err(error));
@@ -361,7 +388,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .blocking(self.inner.default_timeout, move |backend| {
                 let result = backend.finalize(finalize_handle.as_ref());
                 if result.is_ok() || result == Err(ProcessEffectError::Vanished) {
-                    let mut state = state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                    let mut state = state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
                     if state
                         .handles
                         .get(&finalize_identity)
@@ -424,7 +451,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         self.inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::LaunchFailed)?
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?
             .handles
             .insert(identity, Arc::new(handle));
         Ok(())
@@ -436,7 +463,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
         if state.launches.contains_key(&operation_uid) {
             return Err(ProcessEffectError::Busy);
         }
@@ -456,7 +483,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
         let Some(launch) = state.launches.get_mut(operation_uid) else {
             return Ok(false);
         };
@@ -475,7 +502,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
         if let Some(launch) = state.launches.remove(operation_uid)
             && launch.quarantined
         {
@@ -494,7 +521,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         self.inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::StopFailed)?
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?
             .handles
             .get(identity)
             .cloned()
@@ -510,7 +537,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .inner
             .state
             .lock()
-            .map_err(|_| ProcessEffectError::StopFailed)?;
+            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
         if !state
             .handles
             .get(&identity)
@@ -541,7 +568,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                 match (launch, late) {
                     (Err(error), late) => {
                         let mut state =
-                            state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                            state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
                         if let Some(launch) = state.launches.remove(&worker_operation_uid)
                             && launch.quarantined
                         {
@@ -560,7 +587,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         let (observation, handle) = launch.into_parts();
                         let identity = observation.identity();
                         let mut state =
-                            state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                            state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
                         state.handles.insert(identity, Arc::new(handle));
                         if let Some(launch) = state.launches.get_mut(&worker_operation_uid) {
                             launch.identity = Some(identity);
@@ -573,7 +600,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         let handle = Arc::new(handle);
                         {
                             let mut state =
-                                state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                                state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::LaunchFailed))?;
                             state.handles.insert(identity, Arc::clone(&handle));
                             state.quarantined_identities.insert(identity);
                             let process_uid = if let Some(launch) =
@@ -592,7 +619,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                         match backend.stop(handle.as_ref(), ProcessStopClass::Terminate) {
                             Ok(()) | Err(ProcessEffectError::Vanished) => {
                                 let mut state =
-                                    state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                                    state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
                                 if state
                                     .handles
                                     .get(&identity)
@@ -606,7 +633,15 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                                 }
                                 Ok(LaunchOutcome::TimedOut)
                             }
-                            Err(_) => Err(ProcessEffectError::FateUnknown),
+                            Err(stop_error) => {
+                                error!(
+                                    provider = "supervisor",
+                                    identity = identity.to_hex(),
+                                    stop_error = ?stop_error,
+                                    "stop of timed-out launch failed; process fate unknown"
+                                );
+                                Err(ProcessEffectError::FateUnknown)
+                            }
                         }
                     }
                 }
@@ -615,7 +650,12 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(ProcessEffectError::DeadlineExceeded) => {
+                warn!(provider = "supervisor", "launch effect exceeded its deadline");
                 return if self.quarantine_launch(&operation_uid).map_err(map_error)? {
+                    warn!(
+                        provider = "supervisor",
+                        "late launch quarantined; reporting adoption-ambiguous"
+                    );
                     Err(ProcessConformanceError::AdoptionAmbiguous)
                 } else {
                     Err(ProcessConformanceError::DeadlineExceeded)
@@ -654,7 +694,13 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
         let timeout = Duration::from_millis(u64::from(ticket.operation().deadline_ms()));
         let request = ProcessLaunchRequest::new(ProcessRequest::new(ticket.clone()), inherited_fds)
-            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+            .map_err(|_| {
+                warn!(
+                    provider = "supervisor",
+                    "launch request rejected as invalid ticket"
+                );
+                ProcessConformanceError::InvalidTicket
+            })?;
         self.launch_with_timeout(ticket, request, timeout).await
     }
 
@@ -734,7 +780,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                     let result = backend.stop(stop_handle.as_ref(), backend_class);
                     let late = Instant::now() >= deadline;
                     if matches!(result, Ok(()) | Err(ProcessEffectError::Vanished)) {
-                        let mut state = state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                        let mut state = state.lock().map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?;
                         if state
                             .handles
                             .get(&stop_identity)
@@ -752,9 +798,14 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                     if late {
                         state
                             .lock()
-                            .map_err(|_| ProcessEffectError::StopFailed)?
+                            .map_err(|_| poisoned_state_lock(ProcessEffectError::StopFailed))?
                             .quarantined_identities
                             .insert(stop_identity);
+                        error!(
+                            provider = "supervisor",
+                            identity = stop_identity.to_hex(),
+                            "late stop could not confirm termination; process fate unknown"
+                        );
                         return Err(ProcessEffectError::FateUnknown);
                     }
                     result
@@ -765,6 +816,11 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
                     .quarantine_handle(*identity, &handle)
                     .map_err(map_error)?
             {
+                warn!(
+                    provider = "supervisor",
+                    identity = identity.to_hex(),
+                    "stop exceeded its deadline; identity quarantined as adoption-ambiguous"
+                );
                 return Err(ProcessConformanceError::AdoptionAmbiguous);
             }
             return result.map_err(map_error);

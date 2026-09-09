@@ -228,7 +228,14 @@ impl GpuController {
         tokens: GpuEffectTokenSet,
     ) -> Result<Self, GpuControllerError> {
         select_processes(&device_uid, arbitration, &settings)
-            .map_err(GpuControllerError::Selection)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %device_uid.to_canonical_string(),
+                    error = %error,
+                    "gpu process selection failed during controller construction",
+                );
+                GpuControllerError::Selection(error)
+            })?;
         Ok(Self {
             device_uid,
             arbitration,
@@ -335,11 +342,21 @@ impl GpuController {
         port: &mut P,
     ) -> Result<GpuReconcileOutcome, GpuControllerError> {
         if self.admission.is_none() || self.authority_lease.is_none() {
+            tracing::debug!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "authority startup rehydration required",
+                "gpu reconcile refused before any effect",
+            );
             return Err(GpuControllerError::Authority(
                 GpuAuthorityError::StartupRehydrationRequired,
             ));
         }
         if !self.finalizer || matches!(self.phase, GpuPhase::Finalizing | GpuPhase::Finalized) {
+            tracing::debug!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "finalizer missing or terminal phase",
+                "gpu reconcile refused before any effect",
+            );
             return Err(GpuControllerError::InvalidState);
         }
         if self.phase == GpuPhase::Ready {
@@ -350,6 +367,11 @@ impl GpuController {
                 Ok(ticket) => ticket,
                 Err(error) => {
                     self.phase = phase_for_effect(error);
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        error = %error,
+                        "gpu device open failed during reconcile",
+                    );
                     return Err(GpuControllerError::Effect(error));
                 }
             });
@@ -366,6 +388,12 @@ impl GpuController {
         if self.gpu_role.is_none() {
             if let Err(error) = port.start(gpu_role, ticket) {
                 self.phase = phase_for_effect(error);
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = ?gpu_role,
+                    error = %error,
+                    "gpu worker start failed during reconcile",
+                );
                 return Err(GpuControllerError::Effect(error));
             }
             self.gpu_role = Some(gpu_role);
@@ -374,6 +402,12 @@ impl GpuController {
         if self.settings.video_sidecar && !self.video_started {
             if let Err(error) = port.start(GpuProcessRole::Video, ticket) {
                 self.phase = phase_for_effect(error);
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = "video",
+                    error = %error,
+                    "video worker start failed during reconcile",
+                );
                 return Err(GpuControllerError::Effect(error));
             }
             self.video_started = true;
@@ -388,6 +422,11 @@ impl GpuController {
             return Ok(());
         }
         if self.authority_lease.is_none() {
+            tracing::debug!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "authority startup rehydration required",
+                "gpu finalize refused before any effect",
+            );
             return Err(GpuControllerError::Authority(
                 GpuAuthorityError::StartupRehydrationRequired,
             ));
@@ -396,6 +435,12 @@ impl GpuController {
         if self.video_started {
             if let Err(error) = port.stop(GpuProcessRole::Video) {
                 self.phase = phase_for_effect(error);
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = "video",
+                    error = %error,
+                    "video worker stop failed during finalize",
+                );
                 return Err(GpuControllerError::Effect(error));
             }
             self.video_started = false;
@@ -403,6 +448,12 @@ impl GpuController {
         if let Some(role) = self.gpu_role.take() {
             if let Err(error) = port.stop(role) {
                 self.gpu_role = Some(role);
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = ?role,
+                    error = %error,
+                    "gpu worker stop failed during finalize",
+                );
                 self.phase = GpuPhase::Degraded;
                 return Err(GpuControllerError::Effect(error));
             }
@@ -431,13 +482,30 @@ impl GpuController {
                     | GpuPhase::Quarantined
             )
         {
+            tracing::debug!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "finalizer missing or terminal phase",
+                "gpu lifecycle reconcile refused before any effect",
+            );
             return Err(GpuControllerError::InvalidState);
         }
         let admission = self
             .admission
             .as_ref()
-            .ok_or(GpuControllerError::InvalidState)?;
+            .ok_or(GpuControllerError::InvalidState)
+            .inspect_err(|_| {
+                tracing::debug!(
+                    device = %self.device_uid.to_canonical_string(),
+                    reason = "Core admission missing",
+                    "gpu lifecycle reconcile refused before any effect",
+                );
+            })?;
         if self.settings.video_sidecar && admission.video_principal().is_none() {
+            tracing::warn!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "video sidecar configured without a separated video principal",
+                "gpu authority admission rejected during reconcile",
+            );
             return Err(GpuControllerError::Authority(
                 GpuAuthorityError::PrincipalNotSeparated,
             ));
@@ -445,7 +513,14 @@ impl GpuController {
         if self.authority_lease.is_none() {
             self.authority_lease = Some(
                 port.reserve_authority(admission)
-                    .map_err(GpuControllerError::Effect)?,
+                    .map_err(|error| {
+                        tracing::warn!(
+                            device = %self.device_uid.to_canonical_string(),
+                            error = %error,
+                            "gpu authority reservation failed during reconcile",
+                        );
+                        GpuControllerError::Effect(error)
+                    })?,
             );
         }
         if self.phase == GpuPhase::Ready {
@@ -454,7 +529,14 @@ impl GpuController {
         if self.ticket.is_none() {
             self.ticket = Some(
                 port.open_authorized_devices(admission, &self.tokens)
-                    .map_err(GpuControllerError::Effect)?,
+                    .map_err(|error| {
+                        tracing::warn!(
+                            device = %self.device_uid.to_canonical_string(),
+                            error = %error,
+                            "gpu device open failed during lifecycle reconcile",
+                        );
+                        GpuControllerError::Effect(error)
+                    })?,
             );
         }
         let ticket = self
@@ -464,7 +546,14 @@ impl GpuController {
         let generation = admission.owner().generation();
         if self.gpu_identity.is_none() {
             let spec = GpuWorkerSpec::gpu(&self.device_uid, &self.settings)
-                .map_err(GpuControllerError::Selection)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        error = %error,
+                        "gpu worker spec selection failed during lifecycle reconcile",
+                    );
+                    GpuControllerError::Selection(error)
+                })?;
             let identity = port
                 .start_gpu_worker(
                     &spec,
@@ -473,7 +562,15 @@ impl GpuController {
                     admission.platform(),
                     generation,
                 )
-                .map_err(GpuControllerError::Effect)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        role = "gpu",
+                        error = %error,
+                        "gpu worker start failed during lifecycle reconcile",
+                    );
+                    GpuControllerError::Effect(error)
+                })?;
             self.gpu_role = Some(spec.process().role());
             self.gpu_identity = Some(identity.clone());
             if let Err(error) = validate_started_identity(
@@ -484,6 +581,12 @@ impl GpuController {
                 generation,
             ) {
                 self.phase = GpuPhase::Failed;
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = "gpu",
+                    error = %error,
+                    "started gpu worker identity failed validation",
+                );
                 return Err(GpuControllerError::Effect(error));
             }
         }
@@ -493,12 +596,35 @@ impl GpuController {
                 .video_principal()
                 .ok_or(GpuControllerError::Authority(
                     GpuAuthorityError::PrincipalNotSeparated,
-                ))?;
+                ))
+                .inspect_err(|_| {
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        reason = "video sidecar configured without a separated video principal",
+                        "video worker start refused during lifecycle reconcile",
+                    );
+                })?;
             let spec = VideoWorkerSpec::new(&self.device_uid, &self.settings)
-                .map_err(GpuControllerError::Selection)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        role = "video",
+                        error = %error,
+                        "video worker spec selection failed during lifecycle reconcile",
+                    );
+                    GpuControllerError::Selection(error)
+                })?;
             let identity = port
                 .start_video_worker(&spec, ticket, principal, admission.platform(), generation)
-                .map_err(GpuControllerError::Effect)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        device = %self.device_uid.to_canonical_string(),
+                        role = "video",
+                        error = %error,
+                        "video worker start failed during lifecycle reconcile",
+                    );
+                    GpuControllerError::Effect(error)
+                })?;
             self.video_identity = Some(identity.clone());
             self.video_started = true;
             if let Err(error) = validate_started_identity(
@@ -509,6 +635,12 @@ impl GpuController {
                 generation,
             ) {
                 self.phase = GpuPhase::Failed;
+                tracing::warn!(
+                    device = %self.device_uid.to_canonical_string(),
+                    role = "video",
+                    error = %error,
+                    "started video worker identity failed validation",
+                );
                 return Err(GpuControllerError::Effect(error));
             }
         }
@@ -523,6 +655,11 @@ impl GpuController {
         port: &mut P,
     ) -> Result<GpuReconcileOutcome, GpuControllerError> {
         if plan.dependents.iter().any(|dependent| !dependent.drained()) {
+            tracing::warn!(
+                device = %self.device_uid.to_canonical_string(),
+                reason = "dependent resources are not drained",
+                "gpu upgrade refused",
+            );
             return Err(GpuControllerError::DependenciesNotDrained);
         }
         if self.assess_update(&plan.desired_settings) == GpuUpdateState::Current {

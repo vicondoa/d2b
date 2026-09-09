@@ -48,9 +48,19 @@ impl ActivationCaller {
 
     fn authorize(&self, spec: &NixosGenerationSpec) -> Result<(), ActivationError> {
         if !matches!(self.role, CallerRole::Lifecycle | CallerRole::Admin) {
+            tracing::debug!(
+                target = %self.target.to_canonical_string(),
+                role = ?self.role,
+                "activation request rejected: caller lacks lifecycle authority",
+            );
             return Err(ActivationError::Unauthorized);
         }
         if self.target != *spec.execution_ref() {
+            tracing::debug!(
+                target = %self.target.to_canonical_string(),
+                expected = %spec.execution_ref().to_canonical_string(),
+                "activation request rejected: caller target mismatch",
+            );
             return Err(ActivationError::TargetMismatch);
         }
         Ok(())
@@ -562,36 +572,65 @@ impl ActivationTrust {
         activation_catalog_digest: &str,
     ) -> Result<(), ActivationVerificationError> {
         if self.trust_epoch == 0 || self.trust_epoch != expected.trust_epoch {
+            tracing::warn!(
+                "activation verification refused: trust epoch mismatch",
+            );
             return Err(ActivationVerificationError::TrustEpochMismatch);
         }
         if self.revocation_ref != expected.revocation_ref {
+            tracing::warn!(
+                "activation verification refused: revocation reference mismatch",
+            );
             return Err(ActivationVerificationError::RevocationRefMismatch);
         }
         if self.revocation_status != TrustStatus::Clear || self.deny_status != TrustStatus::Clear {
+            tracing::warn!(
+                "activation verification refused: trust or deny status not clear",
+            );
             return Err(ActivationVerificationError::TrustDenied);
         }
         if self.publisher_root.is_empty() || self.publisher_root != expected.publisher_root {
+            tracing::warn!(
+                "activation verification refused: publisher root mismatch",
+            );
             return Err(ActivationVerificationError::PublisherRootMismatch);
         }
         if self.signature_id.is_empty() || self.signature_id != expected.signature_id {
+            tracing::warn!(
+                "activation verification refused: signature identifier mismatch",
+            );
             return Err(ActivationVerificationError::SignatureIdMismatch);
         }
         if !is_sha256_digest(&expected.artifact_digest)
             || !is_sha256_digest(&expected.artifact_catalog_digest)
             || activation_catalog_digest != expected.artifact_catalog_digest
         {
+            tracing::warn!(
+                "activation verification refused: artifact catalog digest mismatch",
+            );
             return Err(ActivationVerificationError::ArtifactCatalogDigestMismatch);
         }
         let actual_artifact_digest = sha256_digest(artifact_bytes);
         if actual_artifact_digest != expected.artifact_digest {
+            tracing::warn!(
+                "activation verification refused: artifact digest mismatch",
+            );
             return Err(ActivationVerificationError::ArtifactDigestMismatch);
         }
         if self.public_key.len() != 32 || self.signature.len() != 64 {
+            tracing::warn!(
+                "activation verification refused: trust evidence malformed",
+            );
             return Err(ActivationVerificationError::InvalidEvidence);
         }
         signature::UnparsedPublicKey::new(&signature::ED25519, &self.public_key)
             .verify(&expected.signed_payload, &self.signature)
-            .map_err(|_| ActivationVerificationError::SignatureInvalid)
+            .map_err(|_| {
+                tracing::warn!(
+                    "activation verification refused: Ed25519 signature invalid",
+                );
+                ActivationVerificationError::SignatureInvalid
+            })
     }
 }
 
@@ -722,12 +761,25 @@ impl ActivationController {
                 .iter()
                 .any(|generation| generation.name() == prior_ref.name().as_str())
         {
+            tracing::warn!(
+                generation = %observed.name(),
+                prior = %prior_ref.name().as_str(),
+                "activation reconcile refused: prior generation missing from observations",
+            );
             return Err(ActivationError::InvalidSpec);
         }
         if observed.phase == GenerationPhase::Deleted {
+            tracing::debug!(
+                generation = %observed.name(),
+                "activation reconcile refused: generation already deleted",
+            );
             return Err(ActivationError::AlreadyDeleted);
         }
         if observed.ordinal == 0 {
+            tracing::warn!(
+                generation = %observed.name(),
+                "activation reconcile refused: generation ordinal is zero",
+            );
             return Err(ActivationError::InvalidSpec);
         }
         let runner_requests = if matches!(
@@ -769,9 +821,17 @@ impl ActivationController {
         source: GenerationObservation,
     ) -> Result<RunnerResult, ActivationError> {
         if source.ordinal == 0 {
+            tracing::warn!(
+                generation = %source.name(),
+                "activation runner result refused: generation ordinal is zero",
+            );
             return Err(ActivationError::InvalidSpec);
         }
         if source.phase == GenerationPhase::Deleted {
+            tracing::debug!(
+                generation = %source.name(),
+                "activation runner result refused: generation already deleted",
+            );
             return Err(ActivationError::AlreadyDeleted);
         }
         let outcome_matches_mode = match spec.activation_mode() {
@@ -779,6 +839,11 @@ impl ActivationController {
             _ => !matches!(outcome, ActivationOutcomeCode::Adopted),
         };
         if !outcome_matches_mode {
+            tracing::warn!(
+                generation = %source.name(),
+                outcome = ?outcome,
+                "activation runner result refused: outcome does not match activation mode",
+            );
             return Err(ActivationError::OutcomeMismatch);
         }
         let phase = if outcome.is_success() {

@@ -55,8 +55,22 @@ impl SessionTtrpcClient {
             let incoming =
                 forward_session_frames(writer, Arc::clone(&driver), bridge_cancellation.clone());
             tokio::select! {
-                _ = outgoing => {}
-                _ = incoming => {}
+                result = outgoing => {
+                    if let Err(error) = result {
+                        tracing::warn!(
+                            error = %error,
+                            "client ttrpc bridge request forward loop terminated"
+                        );
+                    }
+                }
+                result = incoming => {
+                    if let Err(error) = result {
+                        tracing::warn!(
+                            error = %error,
+                            "client ttrpc bridge response forward loop terminated"
+                        );
+                    }
+                }
             }
             bridge_cancellation.cancel();
         });

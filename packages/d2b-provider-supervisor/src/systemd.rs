@@ -16,6 +16,7 @@ use d2b_process::{
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
 };
 use sha2::{Digest, Sha256};
+use tracing::{error, warn};
 
 use crate::broker::{
     BrokerFrame, BrokerLaunchIntent, BrokerLaunchResolver, BundleBackedLaunchResolver,
@@ -280,10 +281,13 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
     }
 
     fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
-        let mut observations = self
-            .observations
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?;
+        let mut observations = self.observations.lock().map_err(|_| {
+            error!(
+                provider = "supervisor",
+                "systemd observation ledger lock poisoned; observe failed"
+            );
+            ProcessEffectError::ObserveFailed
+        })?;
         let digest = identity.digest();
         if observations.len() >= MAX_PENDING_OBSERVATIONS
             && !observations.contains_key(&digest)
@@ -299,9 +303,13 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
-        self.observations
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?
+        self.observations.lock().map_err(|_| {
+            error!(
+                provider = "supervisor",
+                "systemd observation ledger lock poisoned; observation lookup failed"
+            );
+            ProcessEffectError::ObserveFailed
+        })?
             .remove(identity)
             .ok_or(ProcessEffectError::IdentityChanged)
     }
@@ -591,9 +599,13 @@ impl BrokerSystemdEffectOwner {
         identity: &SystemdInvocationIdentity,
         request: SystemdUnitRequest,
     ) -> Result<(), ProcessEffectError> {
-        self.requests
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?
+        self.requests.lock().map_err(|_| {
+            error!(
+                provider = "supervisor",
+                "systemd unit request ledger lock poisoned; lookup failed"
+            );
+            ProcessEffectError::ObserveFailed
+        })?
             .insert(identity.digest(), request);
         Ok(())
     }
@@ -602,9 +614,13 @@ impl BrokerSystemdEffectOwner {
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {
-        self.requests
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?
+        self.requests.lock().map_err(|_| {
+            error!(
+                provider = "supervisor",
+                "systemd unit request ledger lock poisoned; lookup failed"
+            );
+            ProcessEffectError::ObserveFailed
+        })?
             .get(&identity.digest())
             .cloned()
             .ok_or(ProcessEffectError::IdentityChanged)
@@ -614,9 +630,13 @@ impl BrokerSystemdEffectOwner {
         &self,
         identity: &SystemdInvocationIdentity,
     ) -> Result<SystemdUnitRequest, ProcessEffectError> {
-        self.requests
-            .lock()
-            .map_err(|_| ProcessEffectError::StopFailed)?
+        self.requests.lock().map_err(|_| {
+            error!(
+                provider = "supervisor",
+                "systemd unit request ledger lock poisoned; take failed"
+            );
+            ProcessEffectError::StopFailed
+        })?
             .remove(&identity.digest())
             .ok_or(ProcessEffectError::IdentityChanged)
     }
@@ -633,6 +653,10 @@ impl BrokerSystemdEffectOwner {
             || wire.guest_execution != intent.guest_execution
             || wire.main_pid == 0
         {
+            warn!(
+                provider = "supervisor",
+                "systemd unit identity fields mismatch the resolved intent"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         SystemdInvocationIdentity::from_wire(wire)
@@ -671,6 +695,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(response_error(&frame.response));
         };
         if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            warn!(
+                provider = "supervisor",
+                "systemd unit start response scope mismatch"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         let identity = self.identity(&response.identity, &intent)?;
@@ -696,6 +724,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(response_error(&frame.response));
         };
         if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            warn!(
+                provider = "supervisor",
+                "systemd unit observe response scope mismatch"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         let Some(wire) = response.identity else {
@@ -716,6 +748,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(response_error(&frame.response));
         };
         if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            warn!(
+                provider = "supervisor",
+                "systemd unit observe response scope mismatch"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         let Some(wire) = response.identity else {
@@ -740,6 +776,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         };
         let actual = SystemdInvocationIdentity::from_wire(&response.identity)?;
         if actual != *expected || response.vm_id != unit.vm_id || response.role_id != unit.role_id {
+            warn!(
+                provider = "supervisor",
+                "systemd unit pidfd reopen identity mismatch"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         let pidfd = frame.take_fd(response.pidfd_index)?;
@@ -778,6 +818,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(response_error(&frame.response));
         };
         if !response.stopped {
+            warn!(
+                provider = "supervisor",
+                "service manager refused the unit stop"
+            );
             return Err(ProcessEffectError::StopFailed);
         }
         let _ = &handle.pidfd;
@@ -798,6 +842,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(response_error(&frame.response));
         };
         if response.vm_id != intent.vm_id || response.role_id != intent.role_id {
+            warn!(
+                provider = "supervisor",
+                "user manager check response scope mismatch"
+            );
             return Err(ProcessEffectError::IdentityChanged);
         }
         Ok(response.available)
@@ -810,6 +858,10 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
 }
 
 fn response_error(response: &BrokerResponse) -> ProcessEffectError {
+    warn!(
+        provider = "supervisor",
+        "broker returned an unexpected response for a systemd unit request"
+    );
     match response {
         BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
         _ => ProcessEffectError::ObserveFailed,

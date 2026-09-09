@@ -25,6 +25,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+tracing = "0.1"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 zeroize = "1"
 

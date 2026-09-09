@@ -73,11 +73,20 @@ impl ConfigSyncResponse {
         {
             return Err(ConfigError::InvalidRequest);
         }
-        let bytes = STANDARD
-            .decode(&self.content_base64)
-            .map_err(|_| ConfigError::EncodingFailed)?;
+        let bytes = STANDARD.decode(&self.content_base64).map_err(|error| {
+            tracing::warn!(
+                resource = %self.guest_ref.to_canonical_string(),
+                %error,
+                "config-nixos document decode failed",
+            );
+            ConfigError::EncodingFailed
+        })?;
         let document = GuestConfigDocument::new(bytes)?;
         if document.len() != self.bytes || document.sha256() != self.sha256 {
+            tracing::warn!(
+                resource = %self.guest_ref.to_canonical_string(),
+                "config-nixos document integrity mismatch against response digest",
+            );
             return Err(ConfigError::EncodingFailed);
         }
         Ok(document)
@@ -116,9 +125,14 @@ impl ConfigStageRequest {
         if self.content_base64.len() > MAX_CONFIG_ENCODED_BYTES {
             return Err(ConfigError::DocumentTooLarge);
         }
-        let bytes = STANDARD
-            .decode(&self.content_base64)
-            .map_err(|_| ConfigError::EncodingFailed)?;
+        let bytes = STANDARD.decode(&self.content_base64).map_err(|error| {
+            tracing::warn!(
+                resource = %self.guest_ref.to_canonical_string(),
+                %error,
+                "config-nixos staged document decode failed",
+            );
+            ConfigError::EncodingFailed
+        })?;
         GuestConfigDocument::new(bytes)
     }
 }
@@ -452,6 +466,10 @@ impl ConfigStagingStore {
             .get(&guest_key)
             .ok_or(ConfigError::StagingMissing)?;
         if approved.destination != request.destination {
+            tracing::warn!(
+                resource = %request.guest_ref.to_canonical_string(),
+                "config-nixos approval rejected: destination conflicts with approved receipt",
+            );
             return Err(ConfigError::ApprovalConflict);
         }
         Ok(ConfigApproveResponse {

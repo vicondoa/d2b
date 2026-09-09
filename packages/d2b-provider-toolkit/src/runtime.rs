@@ -25,6 +25,7 @@ use d2b_provider::{
     OperationLedger, OperationLedgerAdmission, OperationLedgerError, OperationLedgerRow,
 };
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
+use tracing::{debug, error, warn};
 
 const STARTING: u8 = 0;
 const READY: u8 = 1;
@@ -374,13 +375,15 @@ impl ProviderEntrypoint {
     /// Admit one local service registration.
     pub fn admit(&self) -> Result<ProviderAdmission, ProviderRuntimeError> {
         let (lock, _) = &*self.state;
-        let mut state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let mut state = lock.lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "registration admission refused: runtime state lock poisoned");
+            ProviderRuntimeError::NotAccepting
+        })?;
         // Drain takes the lifecycle transition before it waits on this lock.
         // Checking only before locking would let a registration slip into a
         // draining process after the supervisor had fenced new work.
         if self.lifecycle() != ProviderLifecycle::Starting {
+            warn!(name = self.name, provider = ?self.provider_ref, "registration admission refused: runtime not in Starting lifecycle");
             return Err(ProviderRuntimeError::NotAccepting);
         }
         state.admitted = state.admitted.saturating_add(1);
@@ -409,18 +412,22 @@ impl ProviderEntrypoint {
         R: AuthenticatedRoute,
     {
         if self.lifecycle() != ProviderLifecycle::Starting {
+            warn!(name = self.name, provider = ?self.provider_ref, "session admission refused: runtime not in Starting lifecycle");
             return Err(ProviderRuntimeError::NotAccepting);
         }
         let Some(expected_provider) = &self.provider_ref else {
+            warn!(name = self.name, "session admission refused: runtime has no bound provider identity");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         };
         let Some(expected_service) = self.service else {
+            warn!(name = self.name, provider = ?self.provider_ref, "session admission refused: runtime has no bound service package");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         };
         let route = session.route_binding();
         if route.provider_ref() != Some(expected_provider)
             || route.service().as_str() != expected_service
         {
+            warn!(name = self.name, provider = ?self.provider_ref, "session admission refused: route provider/service mismatch");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         self.validate_authenticated_route(&route)?;
@@ -433,6 +440,7 @@ impl ProviderEntrypoint {
         route: &AuthenticatedSessionRouteBinding,
     ) -> Result<(), ProviderRuntimeError> {
         if !route.liveness().is_live() || !self.route_matches_expected(route) {
+            warn!(name = self.name, provider = ?self.provider_ref, "route validation failed: route not live or does not match expected identity");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         Ok(())
@@ -445,17 +453,20 @@ impl ProviderEntrypoint {
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<ProviderSessionAdmission, ProviderRuntimeError> {
         if self.lifecycle() != ProviderLifecycle::Ready {
+            warn!(name = self.name, provider = ?self.provider_ref, "reconnect admission refused: runtime not in Ready lifecycle");
             return Err(ProviderRuntimeError::NotAccepting);
         }
         let route = session.route_binding();
-        let previous = self
-            .ready_route()
-            .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        let previous = self.ready_route().ok_or_else(|| {
+            warn!(name = self.name, provider = ?self.provider_ref, "reconnect admission refused: no retained ready route");
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
         if !route.liveness().is_live()
             || !self.route_matches_expected(&route)
             || !same_controller_identity(&previous, &route)
             || route.reconnect_generation() <= previous.reconnect_generation()
         {
+            warn!(name = self.name, provider = ?self.provider_ref, "reconnect admission refused: route not live, identity mismatch, or stale reconnect generation");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         Ok(ProviderSessionAdmission { route })
@@ -479,9 +490,10 @@ impl ProviderEntrypoint {
         let mut stdout = io::stdout().lock();
         self.publish_ready_to(&mut stdout)?;
         let (lock, _) = &*self.state;
-        let mut state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let mut state = lock.lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication failed: runtime state lock poisoned");
+            ProviderRuntimeError::NotAccepting
+        })?;
         state.ready_route = Some(route);
         Ok(())
     }
@@ -536,19 +548,23 @@ impl ProviderEntrypoint {
         if self.lifecycle() != ProviderLifecycle::Ready
             || !self.route_matches_expected(&admission.route)
         {
+            warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: runtime not Ready or route does not match expected identity");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         let (lock, _) = &*self.state;
-        let mut state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let mut state = lock.lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "route rebind failed: runtime state lock poisoned");
+            ProviderRuntimeError::NotAccepting
+        })?;
         let Some(previous) = state.ready_route.as_ref() else {
+            warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: no retained ready route");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         };
         if !admission.route.liveness().is_live()
             || !same_controller_identity(previous, &admission.route)
             || admission.route.reconnect_generation() <= previous.reconnect_generation()
         {
+            warn!(name = self.name, provider = ?self.provider_ref, "route rebind refused: route not live, identity mismatch, or stale reconnect generation");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         state.ready_route = Some(admission.route);
@@ -557,15 +573,20 @@ impl ProviderEntrypoint {
 
     fn publish_ready_to<W: Write>(&self, writer: &mut W) -> Result<(), ProviderRuntimeError> {
         let (lock, _) = &*self.state;
-        let state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let state = lock.lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication failed: runtime state lock poisoned");
+            ProviderRuntimeError::NotAccepting
+        })?;
         if state.admitted == 0 || self.lifecycle() != ProviderLifecycle::Starting {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness publication refused: no registration admitted or runtime not in Starting lifecycle");
             return Err(ProviderRuntimeError::NotAccepting);
         }
         writeln!(writer, "D2B_PROVIDER_READY {}", self.name)
             .and_then(|()| writer.flush())
-            .map_err(|_| ProviderRuntimeError::ReadinessIo)?;
+            .map_err(|_| {
+                error!(name = self.name, provider = ?self.provider_ref, "readiness handshake write to supervisor failed");
+                ProviderRuntimeError::ReadinessIo
+            })?;
         self.transition_ready()
     }
 
@@ -576,9 +597,10 @@ impl ProviderEntrypoint {
         live_route: &AuthenticatedSessionRouteBinding,
     ) -> Result<(), ProviderRuntimeError> {
         let (lock, _) = &*self.state;
-        let state = lock
-            .lock()
-            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let state = lock.lock().map_err(|_| {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness validation failed: runtime state lock poisoned");
+            ProviderRuntimeError::NotAccepting
+        })?;
         if !Arc::ptr_eq(&registration.state, &self.state)
             || state.admitted == 0
             || self.lifecycle() != ProviderLifecycle::Starting
@@ -589,6 +611,7 @@ impl ProviderEntrypoint {
             || session.route.controller_generation().is_none()
             || session.route != *live_route
         {
+            warn!(name = self.name, provider = ?self.provider_ref, "readiness validation refused: registration, lifecycle, route liveness, or route identity mismatch");
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         Ok(())
@@ -648,6 +671,7 @@ impl ProviderEntrypoint {
         let (lock, idle) = &*self.state;
         let guard = lock.lock();
         let Ok(mut state) = guard else {
+            warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned");
             return false;
         };
         let prior = self.lifecycle.swap(DRAINING, Ordering::AcqRel);
@@ -658,6 +682,7 @@ impl ProviderEntrypoint {
             .wait_timeout_while(state, timeout, |state| state.admitted != 0)
             .ok();
         let Some((new_state, wait)) = result else {
+            warn!(name = self.name, provider = ?self.provider_ref, "drain failed: runtime state lock poisoned during wait");
             return false;
         };
         state = new_state;
@@ -665,6 +690,8 @@ impl ProviderEntrypoint {
         if drained {
             self.lifecycle.store(STOPPED, Ordering::Release);
             state.ready_route = None;
+        } else {
+            debug!(name = self.name, provider = ?self.provider_ref, "drain incomplete: registrations still admitted or wait timed out");
         }
         drained
     }

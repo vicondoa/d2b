@@ -990,6 +990,16 @@ impl DaemonVolumeProviderEffects {
                 &context.operation_id,
             )
             .await
+            .map_err(|error| {
+                // Cardinality: per reconcile pass; a missing Guest keeps
+                // defaulting vcpus, so only note it at debug level.
+                tracing::debug!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    error = ?error,
+                    "u7 binding: guest resource read failed, defaulting vcpus",
+                );
+                error
+            })
             .ok();
         let vcpu_count = guest_value
             .as_ref()
@@ -1077,6 +1087,12 @@ impl DaemonVolumeProviderEffects {
             true
         };
         if binding.spec().view().as_str() == "ro-store" && !store_view_marker_ready {
+            // Cardinality: per reconcile pass; Pending repeat is expected
+            // while the store view is still syncing.
+            tracing::debug!(
+                resource = %resource.key().resource_ref().to_canonical_string(),
+                "u7 binding: ro-store marker not ready, holding Pending",
+            );
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
                 resource_projection: None,
@@ -1499,6 +1515,10 @@ impl VirtiofsBindingEffectPort for ChildReadinessPort {
         // controller reconciled, so a write-time fence self-check could
         // never fail.
         if writer.as_str() != "volume-virtiofs" {
+            tracing::warn!(
+                writer = writer.as_str(),
+                "binding status write rejected: unauthorized writer identity",
+            );
             return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter);
         }
         Ok(())
@@ -1638,10 +1658,17 @@ impl DaemonVolumeRootResolver {
             .parent()
             .map(|root| root.join("volume-local-markers"))
             .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
-        open_anchored_directory(&marker_root)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)
+        open_anchored_directory(&marker_root).map_err(|error| {
+            // Cardinality: per distinct marker-root open failure; repeats
+            // while the directory is unopenable.
+            tracing::warn!(
+                resource = %self.volume_ref.to_canonical_string(),
+                error = %error,
+                "U7 volume marker root directory unavailable",
+            );
+            d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
+        })
     }
-
     fn source_unresolved(
         &self,
         stage: &'static str,
@@ -1679,12 +1706,27 @@ impl DaemonVolumeRootResolver {
                 uid: self.state.daemon_uid,
             },
         )
-        .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
+        .map_err(|error| {
+            // Cardinality: per distinct broker dispatch failure.
+            tracing::warn!(
+                resource = %self.volume_ref.to_canonical_string(),
+                error = ?error,
+                "U7 volume store sync broker dispatch failed",
+            );
+            d2b_provider_volume_local::VolumeLocalError::EffectFailed
+        })?;
         match response {
             d2b_contracts_broker::broker_wire::BrokerResponse::StoreSync(response) => Ok(response),
-            _ => Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed),
+            _ => {
+                tracing::warn!(
+                    resource = %self.volume_ref.to_canonical_string(),
+                    "U7 volume store sync broker returned unexpected response type",
+                );
+                Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            }
         }
     }
+
 
     fn validate_store_sync_response(
         &self,
@@ -1846,9 +1888,24 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
         nix::unistd::User::from_name(reference.name().as_str())
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+            .map_err(|error| {
+                // Cardinality: per entry per reconcile pass; repeats while
+                // the principal cannot be resolved.
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    error = ?error,
+                    "volume principal lookup failed",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })?
             .map(|user| user.uid.as_raw())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            .ok_or_else(|| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    "volume principal user not found",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })
     }
 
     fn resolve_group(
@@ -1859,9 +1916,22 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
         nix::unistd::User::from_name(reference.name().as_str())
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+            .map_err(|error| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    error = ?error,
+                    "volume group lookup failed",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })?
             .map(|user| user.gid.as_raw())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            .ok_or_else(|| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    "volume group user not found",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })
     }
 }
 
@@ -2401,20 +2471,35 @@ pub(crate) async fn start(
     let subject_context = runtime
         .core_controller_subject
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller subject lock poisoned");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(super::ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller subject context unavailable");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let authorization_state = runtime
         .authorization_state
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: authorization state lock poisoned");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(super::ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: authorization state unavailable");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let controller_generation = runtime
         .store_metadata
         .policy_snapshot
         .controller_generation
-        .ok_or(super::ResourceRuntimeError::HandlerNotReady)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller generation not ready");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
     let session_generation = subject_context.reconnect_generation();
     let (active_registrations, provider_generations) = provider_generations(runtime).await?;
     if active_registrations.is_empty() {
@@ -2426,25 +2511,47 @@ pub(crate) async fn start(
         controller_generation,
         &provider_generations,
         session_generation,
-    )?;
+    )
+    .map_err(|error| {
+        tracing::warn!(
+            zone = runtime.zone.as_str(),
+            error = %error,
+            "u7 runner: descriptor composition failed",
+        );
+        error
+    })?;
     let effects: Arc<dyn SharedVolumeEffectExecutor> = Arc::new(DaemonVolumeProviderEffects::new(
         state,
         runtime.zone.clone(),
     ));
     let mut tasks = Vec::new();
     for (registration, descriptor) in descriptors {
-        let kind = SharedVolumeResourceKind::from_registration(registration)?;
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
-        let controller_ref = ResourceRef::parse(registration.controller_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
+        let kind = SharedVolumeResourceKind::from_registration(registration).map_err(|error| {
+            tracing::warn!(
+                zone = runtime.zone.as_str(),
+                error = %error,
+                "u7 runner: registration did not match a known volume provider kind",
+            );
+            error
+        })?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "u7 runner: provider ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
+        let controller_ref = ResourceRef::parse(registration.controller_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), controller_ref = registration.controller_ref, "u7 runner: controller ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
         let (assignments, authority) = runtime
             .u12_controller_assignments(
                 &descriptor,
                 controller_ref.clone(),
                 *provider_generations
                     .get(&provider_ref)
-                    .ok_or(super::ResourceRuntimeError::HandlerNotReady)?,
+                    .ok_or_else(|| {
+                        tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: provider generation missing");
+                        super::ResourceRuntimeError::HandlerNotReady
+                    })?,
                 controller_generation,
                 session_generation,
             )
@@ -2452,11 +2559,17 @@ pub(crate) async fn start(
         let subject = runtime
             .authorizer
             .issue_authenticated_subject(subject_context.clone(), authorization_state.clone())
-            .map_err(|_| super::ResourceRuntimeError::AuthorizationUnavailable)?;
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: authenticated subject issuance failed");
+                super::ResourceRuntimeError::AuthorizationUnavailable
+            })?;
         let api = runtime
             .api
             .registered_controller_api(subject, authorization_state.clone(), assignments)
-            .map_err(|_| super::ResourceRuntimeError::ResourceApiBindFailed)?;
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: resource api bind failed");
+                super::ResourceRuntimeError::ResourceApiBindFailed
+            })?;
         let mut allowed_types = descriptor
             .resource_types()
             .cloned()
@@ -2466,12 +2579,16 @@ pub(crate) async fn start(
             // (virtiofsd worker Process + private Endpoint) as owner-child
             // mutations; their targets must pass the same fence gate.
             allowed_types.insert(
-                ResourceTypeName::parse("Process".to_owned())
-                    .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?,
+                ResourceTypeName::parse("Process".to_owned()).map_err(|_| {
+                    tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: Process type parse failed");
+                    super::ResourceRuntimeError::HandlerNotReady
+                })?,
             );
             allowed_types.insert(
-                ResourceTypeName::parse("Endpoint".to_owned())
-                    .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?,
+                ResourceTypeName::parse("Endpoint".to_owned()).map_err(|_| {
+                    tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: Endpoint type parse failed");
+                    super::ResourceRuntimeError::HandlerNotReady
+                })?,
             );
         }
         let resolver_store = Arc::clone(&runtime.store);
@@ -2544,7 +2661,10 @@ pub(crate) async fn start(
             let mut backoff_ms = 500u64;
             loop {
                 match runner.run().await {
-                    Ok(_) => break,
+                    Ok(_) => {
+                        tracing::warn!(kind = ?kind, "u7 shared volume runner stopped cleanly");
+                        break;
+                    }
                     Err(error) if matches!(
                         error.error(),
                         RunnerError::Source(
@@ -2583,7 +2703,10 @@ pub(crate) async fn start(
     let mut slot = runtime
         .u7_runner_tasks
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::WatchUnavailable)?;
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: u7 runner task slot lock poisoned");
+            super::ResourceRuntimeError::WatchUnavailable
+        })?;
     slot.extend(tasks);
     Ok(true)
 }
@@ -2648,8 +2771,10 @@ async fn provider_generations(
     let mut generations = BTreeMap::new();
     let mut active = Vec::new();
     for registration in U7_SHARED_PROVIDER_RUNNERS {
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "u7 runner: provider ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
         let request = StoreGetRequest {
                 operation: StoreOperationContext {
                     operation_id: "u7-provider-generation".to_owned(),
@@ -2682,11 +2807,32 @@ async fn provider_generations(
                     )
                     .await?
                 {
+                    // Cardinality: once per start attempt per registration.
+                    tracing::warn!(
+                        zone = runtime.zone.as_str(),
+                        provider_ref = registration.provider_ref,
+                        "u7 runner: provider resource missing from store while owned resources exist",
+                    );
                     return Err(super::ResourceRuntimeError::ProviderPathUnavailable);
                 }
             }
-            Err(_) => return Err(super::ResourceRuntimeError::StoreReadFailed),
-            _ => return Err(super::ResourceRuntimeError::HandlerNotReady),
+            Err(error) => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    error = ?error,
+                    "u7 runner: provider generation store read failed",
+                );
+                return Err(super::ResourceRuntimeError::StoreReadFailed);
+            }
+            _ => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    "u7 runner: provider resource present but zone or generation not usable",
+                );
+                return Err(super::ResourceRuntimeError::HandlerNotReady);
+            }
         }
     }
     Ok((active, generations))

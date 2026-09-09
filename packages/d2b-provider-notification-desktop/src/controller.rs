@@ -1,6 +1,7 @@
 //! Process placement controller for desktop notification components.
 
 use crate::SessionEvidence;
+use tracing::{debug, warn};
 use crate::{
     NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
     NotificationSourceIdentity,
@@ -812,10 +813,18 @@ impl SourceEndpoint {
         session: &SessionEvidence,
         display: &DisplayDependencyEvidence,
     ) -> Result<Self, &'static str> {
-        session
-            .admit_source()
-            .map_err(|_| "notification-source-unauthenticated")?;
+        session.admit_source().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "source endpoint construction refused: session not authenticated as a source"
+            );
+            "notification-source-unauthenticated"
+        })?;
         if session.subject_ref() != source.source_ref() || session.zone() != source.zone() {
+            debug!(
+                provider = "notification-desktop",
+                "source endpoint construction refused: session binding mismatch"
+            );
             return Err("notification-source-binding-mismatch");
         }
         let mut digest = Sha256::new();
@@ -921,9 +930,19 @@ pub struct NotificationController {
 impl NotificationController {
     /// Construct a controller for one exact Provider instance.
     pub fn new(provider_ref: impl AsRef<str>) -> Result<Self, &'static str> {
-        let provider_ref = ResourceRef::parse(provider_ref.as_ref())
-            .map_err(|_| "notification-provider-ref-invalid")?;
+        let provider_ref = ResourceRef::parse(provider_ref.as_ref()).map_err(|error| {
+            warn!(
+                provider = "notification-desktop",
+                error = %error,
+                "notification controller construction refused: provider reference invalid"
+            );
+            "notification-provider-ref-invalid"
+        })?;
         if provider_ref.to_canonical_string() != crate::PROVIDER_REF {
+            warn!(
+                provider = "notification-desktop",
+                "notification controller construction refused: provider reference mismatch"
+            );
             return Err("notification-provider-ref-invalid");
         }
         Ok(Self {

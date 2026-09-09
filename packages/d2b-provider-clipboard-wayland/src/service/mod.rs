@@ -573,7 +573,10 @@ impl ClipdHost {
         display: Option<DisplayDependencyEvidence>,
     ) -> Result<Self, ClipboardServiceError> {
         let history = ClipboardHistory::new(crate::ClipboardConfig::from_policy(policy.clone()))
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::warn!("clipboard history construction refused at service start");
+                ClipboardServiceError::HistoryRejected
+            })?;
         let max_concurrent_fds = policy.max_concurrent_fds();
         let mut host = Self {
             policy,
@@ -614,10 +617,20 @@ impl ClipdHost {
             return Ok(DependencyStatus::Absent);
         };
         if !Self::valid_display_dependency(&display) {
+            let zone = display.zone().as_str();
+            tracing::warn!(
+                zone,
+                "display dependency evidence rejected as invalid; clipboard authority stays fenced"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         let next_fence = DisplayDependencyFence::from_evidence(&display);
         if !self.display_fence.accepts(&next_fence) {
+            let zone = display.zone().as_str();
+            tracing::warn!(
+                zone,
+                "stale display dependency fence rejected; clipboard authority stays fenced"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         self.dependency.status = DependencyStatus::Ready;
@@ -650,11 +663,16 @@ impl ClipdHost {
         F: std::os::fd::AsFd,
     {
         if session.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!("attachment admission rejected: session is not a clipboard bridge");
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
         if self.dependency.status != DependencyStatus::Ready
             || !self.dependency_zone_matches(session.zone())
         {
+            tracing::debug!(
+                zone = session.zone(),
+                "attachment admission rejected: display dependency not ready or zone mismatched"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         Self::validate_attachment_subject(session, attachment_class)?;
@@ -663,15 +681,27 @@ impl ClipdHost {
             AttachmentClass::HostSelectionRead | AttachmentClass::HostSelectionWrite
         ) && !self.dependency_host_user_matches(session)
         {
+            tracing::debug!(
+                zone = session.zone(),
+                "attachment admission rejected: host selection class not bound to the dependency user"
+            );
             return Err(ClipboardServiceError::HostSessionInvalid);
         }
         let descriptors = batch
             .validate_control(attachment_class, self.policy.max_item_bytes() as u64)
-            .map_err(|_: FdSafetyError| ClipboardServiceError::AttachmentRejected)?;
+            .map_err(|_: FdSafetyError| {
+                tracing::debug!("attachment admission rejected: descriptor control validation failed");
+                ClipboardServiceError::AttachmentRejected
+            })?;
         let permit = self
             .fd_permits
             .acquire(descriptors.len())
-            .map_err(|_| ClipboardServiceError::AttachmentRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(
+                    "attachment admission rejected: concurrent fd permit pool exhausted"
+                );
+                ClipboardServiceError::AttachmentRejected
+            })?;
         Ok(VerifiedReceivedFds {
             descriptors,
             permit,
@@ -684,11 +714,19 @@ impl ClipdHost {
     ) -> Result<(), ClipboardServiceError> {
         match attachment_class {
             AttachmentClass::GuestTransfer if !session.is_guest() => {
+                tracing::debug!(
+                    zone = session.zone(),
+                    "attachment admission rejected: non-guest session requested guest transfer"
+                );
                 Err(ClipboardServiceError::SessionUnauthenticated)
             }
             AttachmentClass::HostSelectionRead | AttachmentClass::HostSelectionWrite
                 if !session.is_user() =>
             {
+                tracing::debug!(
+                    zone = session.zone(),
+                    "attachment admission rejected: non-user session requested host selection access"
+                );
                 Err(ClipboardServiceError::HostSessionInvalid)
             }
             _ => Ok(()),
@@ -713,6 +751,7 @@ impl ClipdHost {
             .map(|attachment| match attachment {
                 AcceptedAttachment::File(fd) => Ok(fd),
                 AcceptedAttachment::Credentials(_) => {
+                    tracing::debug!("attachment admission rejected: credential attachments are never accepted");
                     Err(ClipboardServiceError::AttachmentRejected)
                 }
             })
@@ -746,36 +785,69 @@ impl ClipdHost {
         self.history.gc(now_secs);
         self.prune_echo_window(now_secs);
         if self.dependency.status != DependencyStatus::Ready {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest capture rejected: display dependency not ready"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         if !self.dependency_zone_matches(session.zone()) {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest capture rejected: session zone does not match display dependency zone"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         if !session.is_guest() || session.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest capture rejected: session is not an authenticated guest bridge"
+            );
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
         if !self.policy.allow_guest_capture() {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest capture rejected: guest capture disabled by policy"
+            );
             return Err(ClipboardServiceError::HistoryRejected);
         }
         if bytes.len() > self.policy.max_item_bytes() {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest capture rejected: payload exceeds configured item byte limit"
+            );
             return Err(ClipboardServiceError::HistoryRejected);
         }
         let guest = session.subject_ref().to_canonical_string();
         self.history
             .check_guest_request(&guest, now_secs)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(guest = %guest, "guest capture rejected: per-guest request rate limit");
+                ClipboardServiceError::HistoryRejected
+            })?;
         let entry = ClipboardEntry::new(&guest, mime, bytes, now_secs)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(guest = %guest, "guest capture rejected: entry construction refused");
+                ClipboardServiceError::HistoryRejected
+            })?;
         let token = entry.token().to_owned();
         if self.audit.is_full() {
+            tracing::warn!(guest = %guest, "guest capture rejected: audit queue full");
             return Err(ClipboardServiceError::AuditUnavailable);
         }
         self.history
             .insert(entry)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(guest = %guest, "guest capture rejected: history insert refused");
+                ClipboardServiceError::HistoryRejected
+            })?;
         self.history
             .record_guest_request(&guest, now_secs)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(guest = %guest, "guest capture rejected: request bookkeeping refused");
+                ClipboardServiceError::HistoryRejected
+            })?;
         let event = ClipboardAuditEvent::new(
             "guest",
             "host",
@@ -785,7 +857,10 @@ impl ClipdHost {
         .with_event_type(crate::ClipboardEventType::GuestCapture);
         self.audit
             .push(event)
-            .map_err(|_| ClipboardServiceError::AuditUnavailable)?;
+            .map_err(|_e| {
+                tracing::warn!(guest = %guest, "guest capture rejected: audit event push failed");
+                ClipboardServiceError::AuditUnavailable
+            })?;
         self.echo_window.insert(
             token.clone(),
             EchoSuppression {
@@ -811,10 +886,15 @@ impl ClipdHost {
             || session.role() != ClipboardServiceRole::Bridge
             || !self.dependency_zone_matches(session.zone())
         {
+            tracing::debug!(
+                zone = session.zone(),
+                "guest selection event refused: session is not an in-zone guest bridge"
+            );
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
         let owner = entry_owner_for_session(session);
         let Some(suppression) = self.echo_window.get(entry_digest) else {
+            tracing::debug!(owner = %owner, "guest selection event refused: no echo suppression record");
             return Err(ClipboardServiceError::HistoryRejected);
         };
         if suppression.expires_at <= now_secs
@@ -824,6 +904,7 @@ impl ClipdHost {
                 .history
                 .entry_owned_and_live(entry_digest, &owner, now_secs)
         {
+            tracing::debug!(owner = %owner, "guest selection event refused: suppression expired or entry not owned and live");
             return Err(ClipboardServiceError::HistoryRejected);
         }
         Ok(GuestSelectionEvent {
@@ -849,15 +930,31 @@ impl ClipdHost {
         if self.dependency.status != DependencyStatus::Ready
             || !self.dependency_zone_matches(session.zone())
         {
+            tracing::debug!(
+                zone = session.zone(),
+                "host capture rejected: display dependency not ready or zone mismatched"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         if !session.is_user() || session.role() != ClipboardServiceRole::Bridge {
+            tracing::debug!(
+                zone = session.zone(),
+                "host capture rejected: session is not an authenticated user bridge"
+            );
             return Err(ClipboardServiceError::HostSessionInvalid);
         }
         if !self.dependency_host_user_matches(session) {
+            tracing::debug!(
+                zone = session.zone(),
+                "host capture rejected: session user does not match the display dependency user"
+            );
             return Err(ClipboardServiceError::HostSessionInvalid);
         }
         if !self.policy.allow_host_capture() {
+            tracing::debug!(
+                zone = session.zone(),
+                "host capture rejected: host capture disabled by policy"
+            );
             return Err(ClipboardServiceError::HistoryRejected);
         }
         if self.policy.suppress_echo()
@@ -889,21 +986,33 @@ impl ClipdHost {
                     .with_event_type(crate::ClipboardEventType::EchoSuppressed),
                 );
             }
+            tracing::debug!(zone = session.zone(), "host capture suppressed as guest echo");
             return Err(ClipboardServiceError::EchoSuppressed);
         }
         if bytes.len() > self.policy.max_item_bytes() {
+            tracing::debug!(
+                zone = session.zone(),
+                "host capture rejected: payload exceeds configured item byte limit"
+            );
             return Err(ClipboardServiceError::HistoryRejected);
         }
         let owner = entry_owner_for_session(session);
         let entry = ClipboardEntry::new(owner, mime, bytes, now_secs)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(zone = session.zone(), "host capture rejected: entry construction refused");
+                ClipboardServiceError::HistoryRejected
+            })?;
         let token = entry.token().to_owned();
         if self.audit.is_full() {
+            tracing::warn!(zone = session.zone(), "host capture rejected: audit queue full");
             return Err(ClipboardServiceError::AuditUnavailable);
         }
         self.history
             .insert(entry)
-            .map_err(|_| ClipboardServiceError::HistoryRejected)?;
+            .map_err(|_e| {
+                tracing::debug!(zone = session.zone(), "host capture rejected: history insert refused");
+                ClipboardServiceError::HistoryRejected
+            })?;
         self.audit
             .push(
                 ClipboardAuditEvent::new(
@@ -914,7 +1023,10 @@ impl ClipdHost {
                 )
                 .with_event_type(crate::ClipboardEventType::HostCapture),
             )
-            .map_err(|_| ClipboardServiceError::AuditUnavailable)?;
+            .map_err(|_e| {
+                tracing::warn!(zone = session.zone(), "host capture rejected: audit event push failed");
+                ClipboardServiceError::AuditUnavailable
+            })?;
         Ok(token)
     }
 
@@ -972,6 +1084,10 @@ impl ClipdHost {
                 .history
                 .entry_owned_and_live(entry_digest, receipt.source_owner(), now_secs)
         {
+            tracing::debug!(
+                zone = route.destination_zone(),
+                "paste authorization refused: picker receipt invalid or entry no longer owned and live"
+            );
             return Err(ClipboardServiceError::PickerReceiptInvalid);
         }
 
@@ -994,7 +1110,13 @@ impl ClipdHost {
                 route.source_subject().to_canonical_string().as_str(),
                 now_secs,
             )
-            .map_err(|_| ClipboardServiceError::PickerReceiptInvalid)
+            .map_err(|_e| {
+                tracing::debug!(
+                    zone = route.destination_zone(),
+                    "paste materialization refused after picker authorization"
+                );
+                ClipboardServiceError::PickerReceiptInvalid
+            })
     }
 
     /// Complete one authenticated picker operation and mint its one-use
@@ -1026,9 +1148,17 @@ impl ClipdHost {
         picker_completed: bool,
     ) -> Result<(), ClipboardServiceError> {
         if self.dependency.status != DependencyStatus::Ready {
+            tracing::debug!(
+                zone = route.destination_zone(),
+                "paste authorization refused: display dependency not ready"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         if !self.dependency_zone_matches(route.destination_zone()) {
+            tracing::debug!(
+                zone = route.destination_zone(),
+                "paste authorization refused: destination zone does not match display dependency zone"
+            );
             return Err(ClipboardServiceError::DependencyUnavailable);
         }
         if route.source_subject().resource_type().as_str() == "User"
@@ -1037,22 +1167,46 @@ impl ClipdHost {
                     || evidence.zone().as_str() != route.source_zone()
             })
         {
+            tracing::debug!(
+                zone = route.destination_zone(),
+                "paste authorization refused: host source not bound to the display dependency user and zone"
+            );
             return Err(ClipboardServiceError::HostSessionInvalid);
         }
 
         if route.source_zone() != route.destination_zone() && !self.policy.cross_zone_enabled() {
+            tracing::debug!(
+                zone = route.destination_zone(),
+                "paste authorization refused: cross-zone paste with cross-zone disabled by policy"
+            );
             return Err(ClipboardServiceError::CrossZoneDenied);
         }
         self.history
             .authorize_guest(route.destination_guest())
-            .map_err(|_| ClipboardServiceError::GuestSuspended)
+            .map_err(|_e| {
+                tracing::debug!(
+                    zone = route.destination_zone(),
+                    "paste authorization refused: destination guest is suspended"
+                );
+                ClipboardServiceError::GuestSuspended
+            })
             .and_then(|()| {
                 if let Some(source_guest) = route.source_guest() {
                     self.history
                         .authorize_guest(source_guest)
-                        .map_err(|_| ClipboardServiceError::GuestSuspended)?;
+                        .map_err(|_e| {
+                            tracing::debug!(
+                                zone = route.destination_zone(),
+                                "paste authorization refused: source guest is suspended"
+                            );
+                            ClipboardServiceError::GuestSuspended
+                        })?;
                 }
                 if self.policy.require_picker_for_paste() && !picker_completed {
+                    tracing::debug!(
+                        zone = route.destination_zone(),
+                        "paste authorization refused: picker completion required before paste"
+                    );
                     Err(ClipboardServiceError::PickerRequired)
                 } else {
                     Ok(())

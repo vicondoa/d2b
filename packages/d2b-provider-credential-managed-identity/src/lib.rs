@@ -84,14 +84,26 @@ pub fn reject_process_environment_credential_chain(
 /// Enter a supervised Provider runtime through the inherited fd 10 handoff.
 pub fn run_from_fd10(name: &'static str) -> i32 {
     if reject_process_environment_credential_chain().is_err() {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "managed-identity provider startup aborted: ambient credential-chain environment present",
+        );
         return 1;
     }
     let Ok(provider_ref) = ResourceRef::parse(PROVIDER_REF) else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "managed-identity provider startup aborted: provider reference unparseable",
+        );
         return 1;
     };
     let Ok(purpose) =
         d2b_contracts_resource::v3::identity::SessionPurpose::parse("provider-control")
     else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "managed-identity provider startup aborted: session purpose unparseable",
+        );
         return 1;
     };
     run_provider_from_fd10::<ManagedIdentityAgent, RouteCredentialAuthorization, _>(
@@ -116,25 +128,55 @@ fn runtime_provider(
     backend: Arc<GuestCredentialBackend>,
 ) -> Result<(Arc<ManagedIdentityAgent>, Arc<RouteCredentialAuthorization>), ProviderRuntimeError> {
     if metadata.user_ref().is_some() {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            "managed-identity provider session setup rejected: user-backed session not admitted",
+        );
         return Err(ProviderRuntimeError::SessionUnauthenticated);
     }
     let provider_ref = route
         .provider_ref()
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "managed-identity provider session setup rejected: route has no provider reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     let zone_ref = route.context().zone_ref().clone();
     let execution_ref = route
         .context()
         .execution_ref()
         .filter(|reference| reference.resource_type().as_str() == "Guest")
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "managed-identity provider session setup rejected: route has no Guest execution reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     let placement =
         ManagedIdentityPlacement::new(PlacementBinding::GuestAgent, execution_ref, zone_ref)
-            .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    %error,
+                    "managed-identity provider session setup rejected: placement invalid",
+                );
+                ProviderRuntimeError::SessionUnauthenticated
+            })?;
     let config =
         ManagedIdentityClientConfig::new("allocator-issued-client", "azure-imds", MAX_LOCAL_LEASES)
-            .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    %error,
+                    "managed-identity provider session setup rejected: config invalid",
+                );
+                ProviderRuntimeError::SessionUnauthenticated
+            })?;
     let client_id = config.client_id().as_str().to_owned();
     let endpoint_alias = config.endpoint_alias().as_str().to_owned();
     let provider = ManagedIdentityCredentialProviderFactory::new(
@@ -147,7 +189,14 @@ fn runtime_provider(
             endpoint_alias,
         }),
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "managed-identity provider session setup rejected: factory construction failed",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?
     .construct();
     Ok((
         Arc::new(ManagedIdentityAgent::new(provider)),
@@ -172,11 +221,24 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
             let response = backend
                 .request("managed-identity.state", fields)
                 .await
-                .map_err(|_| ManagedIdentityClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "managed-identity.state",
+                        %error,
+                        "managed-identity backend request failed",
+                    );
+                    ManagedIdentityClientError::Unavailable
+                })?;
             match response.state() {
                 Some("ready") => Ok(ManagedIdentityClientState::Ready),
                 Some("unavailable") => Ok(ManagedIdentityClientState::Unavailable),
-                _ => Err(ManagedIdentityClientError::Unavailable),
+                _ => {
+                    tracing::warn!(
+                        operation = "managed-identity.state",
+                        "managed-identity backend state response unrecognized",
+                    );
+                    Err(ManagedIdentityClientError::Unavailable)
+                }
             }
         })
     }
@@ -186,6 +248,7 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
         request: &ManagedIdentityLeaseRequest,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseGrant> {
         let backend = Arc::clone(&self.backend);
+        let credential = request.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "clientId": self.client_id,
             "imdsEndpointAlias": self.endpoint_alias,
@@ -199,7 +262,15 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
             let response = backend
                 .request("managed-identity.issue-lease", fields)
                 .await
-                .map_err(|_| ManagedIdentityClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "managed-identity.issue-lease",
+                        resource = %credential,
+                        %error,
+                        "managed-identity backend request failed",
+                    );
+                    ManagedIdentityClientError::Unavailable
+                })?;
             managed_identity_grant(response)
         })
     }
@@ -209,6 +280,7 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
         lease: &ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseInspection> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "clientId": self.client_id,
             "imdsEndpointAlias": self.endpoint_alias,
@@ -219,7 +291,15 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
             let response = backend
                 .request("managed-identity.inspect-lease", fields)
                 .await
-                .map_err(|_| ManagedIdentityClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "managed-identity.inspect-lease",
+                        resource = %credential,
+                        %error,
+                        "managed-identity backend request failed",
+                    );
+                    ManagedIdentityClientError::Unavailable
+                })?;
             managed_identity_inspection(response)
         })
     }
@@ -229,6 +309,7 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
         lease: &ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRenewal> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "clientId": self.client_id,
             "imdsEndpointAlias": self.endpoint_alias,
@@ -239,7 +320,15 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
             let response = backend
                 .request("managed-identity.refresh-lease", fields)
                 .await
-                .map_err(|_| ManagedIdentityClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "managed-identity.refresh-lease",
+                        resource = %credential,
+                        %error,
+                        "managed-identity backend request failed",
+                    );
+                    ManagedIdentityClientError::Unavailable
+                })?;
             managed_identity_grant(response)
         })
     }
@@ -249,6 +338,7 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
         lease: &ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRevocation> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "clientId": self.client_id,
             "imdsEndpointAlias": self.endpoint_alias,
@@ -259,11 +349,26 @@ impl ManagedIdentityCredentialClient for GuestManagedIdentityClient {
             let response = backend
                 .request("managed-identity.revoke-lease", fields)
                 .await
-                .map_err(|_| ManagedIdentityClientError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "managed-identity.revoke-lease",
+                        resource = %credential,
+                        %error,
+                        "managed-identity backend request failed",
+                    );
+                    ManagedIdentityClientError::Unavailable
+                })?;
             match response.outcome() {
                 Some("revoked") => Ok(ManagedIdentityLeaseRevocation::Revoked),
                 Some("already-revoked") => Ok(ManagedIdentityLeaseRevocation::AlreadyRevoked),
-                _ => Err(ManagedIdentityClientError::Unavailable),
+                _ => {
+                    tracing::warn!(
+                        operation = "managed-identity.revoke-lease",
+                        resource = %credential,
+                        "managed-identity backend revoke outcome unrecognized",
+                    );
+                    Err(ManagedIdentityClientError::Unavailable)
+                }
             }
         })
     }
@@ -1118,6 +1223,11 @@ impl ManagedIdentityCredentialProvider {
     }
 
     pub(crate) fn map_client_error(error: ManagedIdentityClientError) -> CredentialServiceError {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "managed-identity client operation failed",
+        );
         let code = match error {
             ManagedIdentityClientError::Denied => CredentialServiceErrorCode::OperationDenied,
             ManagedIdentityClientError::Unavailable => {
@@ -1219,6 +1329,11 @@ impl ManagedIdentityCredentialProvider {
                 || idempotency_key.is_empty()
                 || session_expires_at_unix_ms == 0
             {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %credential_ref.to_canonical_string(),
+                    "managed-identity checkpoint restore refused: checkpoint invalid",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::InvariantFailure,
                 ));
@@ -1266,6 +1381,10 @@ impl ManagedIdentityCredentialProvider {
         }
         next.retain(|_, records| !records.is_empty());
         if Self::active_lease_count(&next) > self.config.max_leases() as usize {
+            tracing::debug!(
+                provider = crate::PROVIDER_REF,
+                "managed-identity checkpoint restore rejected: lease capacity reached",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));

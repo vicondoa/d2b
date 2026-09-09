@@ -57,12 +57,25 @@ pub(crate) fn run_from_fd10() -> i32 {
         .build()
     {
         Ok(runtime) => runtime,
-        Err(_) => return crate::RUNTIME_UNAVAILABLE_EXIT,
+        Err(error) => {
+            tracing::error!(
+                error = ?error,
+                "cloud-hypervisor-controller cannot start: tokio runtime unavailable"
+            );
+            return crate::RUNTIME_UNAVAILABLE_EXIT;
+        }
     };
     runtime.block_on(async {
         let bootstrap = match SeqpacketSocket::from_inherited_fd(CONTROLLER_BOOTSTRAP_FD) {
             Ok(bootstrap) => bootstrap,
-            Err(_) => return crate::RUNTIME_UNAVAILABLE_EXIT,
+            Err(error) => {
+                tracing::error!(
+                    fd = CONTROLLER_BOOTSTRAP_FD,
+                    error = ?error,
+                    "cloud-hypervisor-controller cannot start: bootstrap descriptor FD10 unavailable"
+                );
+                return crate::RUNTIME_UNAVAILABLE_EXIT;
+            }
         };
         // A dead controller wedges the whole guest chain until an operator
         // intervenes; transient daemon stalls and session resets retry
@@ -72,10 +85,13 @@ pub(crate) fn run_from_fd10() -> i32 {
             match run_controller_session(&bootstrap).await {
                 Ok(()) => return 0,
                 Err(ControllerSessionError::Assignment) => {
-                    eprintln!("cloud-hypervisor-controller: assignment stream failed, retrying");
+                    tracing::warn!(
+                        backoff_ms,
+                        "controller assignment stream failed; retrying with backoff"
+                    );
                 }
                 Err(error) => {
-                    eprintln!("cloud-hypervisor-controller: {error}, retrying");
+                    tracing::warn!(error = %error, backoff_ms, "controller session failed; retrying with backoff");
                 }
             }
             tokio::time::sleep(Duration::from_millis(backoff_ms)).await;

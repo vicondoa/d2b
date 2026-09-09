@@ -286,9 +286,16 @@ impl<T: QmpTransport> QmpSession<T> {
             device_id: node_name.to_owned(),
             drive: node_name.to_owned(),
         }) {
-            let _ = self.execute(QmpCommand::BlockdevDel {
+            if let Err(rollback_error) = self.execute(QmpCommand::BlockdevDel {
                 node_name: node_name.to_owned(),
-            });
+            }) {
+                tracing::warn!(
+                    node = %node_name,
+                    provider = "runtime-qemu-media",
+                    "blockdev rollback failed after DeviceAdd failure; orphaned block node possible"
+                );
+                let _ = rollback_error;
+            }
             return Err(error);
         }
         Ok(())

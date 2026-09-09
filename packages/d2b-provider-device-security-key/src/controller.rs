@@ -298,6 +298,11 @@ impl SecurityKeyController {
     ) -> Result<(), SecurityKeyControllerError> {
         if admission.device_uid() != self.lease.holder() || admission.assignment_epoch() == 0 {
             self.phase = SecurityKeyPhase::Quarantined;
+            tracing::warn!(
+                device = %self.lease.holder().to_canonical_string(),
+                reason = "admission device mismatch or assignment epoch is zero",
+                "security-key binding admission rejected",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         if self
@@ -306,6 +311,11 @@ impl SecurityKeyController {
             .is_some_and(|current| current != &admission)
         {
             self.phase = SecurityKeyPhase::Quarantined;
+            tracing::warn!(
+                device = %self.lease.holder().to_canonical_string(),
+                reason = "admission differs from the retained binding admission",
+                "security-key binding admission rejected: fence mismatch",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         self.binding_admission = Some(admission);
@@ -329,6 +339,11 @@ impl SecurityKeyController {
         target_ref: &ResourceRef,
     ) -> Result<BindingChildSet, SecurityKeyControllerError> {
         if target_ref.resource_type().as_str() != "Guest" {
+            tracing::warn!(
+                binding = %binding_ref.to_canonical_string(),
+                reason = "target reference is not a Guest resource",
+                "security-key binding children refused",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         explicit_binding_children(
@@ -340,7 +355,14 @@ impl SecurityKeyController {
                 .expect("security-key Provider reference is canonical"),
             &SECURITY_KEY_BINDING_CHILD_REQUESTS,
         )
-        .map_err(|_| SecurityKeyControllerError::Admission)
+        .map_err(|error| {
+            tracing::warn!(
+                binding = %binding_ref.to_canonical_string(),
+                error = %error,
+                "security-key binding child declaration failed",
+            );
+            SecurityKeyControllerError::Admission
+        })
     }
 
     /// Build security-key children while binding the frontend to the
@@ -354,6 +376,11 @@ impl SecurityKeyController {
         if target_ref.resource_type().as_str() != "Guest"
             || user_ref.resource_type().as_str() != "User"
         {
+            tracing::warn!(
+                binding = %binding_ref.to_canonical_string(),
+                reason = "target is not a Guest or user reference is not a User",
+                "security-key binding children refused",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         explicit_binding_children_with_user(
@@ -366,7 +393,14 @@ impl SecurityKeyController {
             Some(user_ref.clone()),
             &SECURITY_KEY_BINDING_CHILD_REQUESTS_WITH_USER,
         )
-        .map_err(|_| SecurityKeyControllerError::Admission)
+        .map_err(|error| {
+            tracing::warn!(
+                binding = %binding_ref.to_canonical_string(),
+                error = %error,
+                "security-key binding child declaration failed",
+            );
+            SecurityKeyControllerError::Admission
+        })
     }
 
     /// Return the session outcome together with the explicit Binding children.
@@ -421,6 +455,12 @@ impl SecurityKeyController {
             || user_ref.resource_type().as_str() != "User"
         {
             self.phase = SecurityKeyPhase::Quarantined;
+            tracing::warn!(
+                device = %self.lease.holder().to_canonical_string(),
+                binding = %binding_ref.to_canonical_string(),
+                reason = "admission, binding, service, target, or user reference mismatch",
+                "security-key binding reconcile rejected: admission mismatch",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         self.reconcile_with_children_for_user(
@@ -472,6 +512,11 @@ impl SecurityKeyController {
         self.lease
             .acquire(session, device_uid, port)
             .map_err(|error| {
+                tracing::warn!(
+                    device = %self.lease.holder().to_canonical_string(),
+                    error = %error,
+                    "security-key session acquire failed",
+                );
                 if matches!(
                     error,
                     SecurityKeyLeaseError::AuthorizationDenied
@@ -500,6 +545,12 @@ impl SecurityKeyController {
         self.lease
             .acquire_authorized(session, device_uid, holder, port)
             .map_err(|error| {
+                tracing::warn!(
+                    device = %self.lease.holder().to_canonical_string(),
+                    holder = %holder.to_canonical_string(),
+                    error = %error,
+                    "security-key authorized session acquire failed",
+                );
                 if matches!(
                     error,
                     SecurityKeyLeaseError::AuthorizationDenied
@@ -524,9 +575,17 @@ impl SecurityKeyController {
         device_uid: ResourceUid,
         admission: SecurityKeyAdmission,
     ) -> Result<(), SecurityKeyControllerError> {
+        let device = device_uid.to_canonical_string();
         self.lease
             .rebind_authorized(device_uid, admission)
-            .map_err(SecurityKeyControllerError::Lease)
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %device,
+                    error = %error,
+                    "security-key admission rebind refused",
+                );
+                SecurityKeyControllerError::Lease(error)
+            })
     }
 
     /// Complete and record the active session.
@@ -540,10 +599,24 @@ impl SecurityKeyController {
             .copied()
             .ok_or(SecurityKeyControllerError::Lease(
                 SecurityKeyLeaseError::InvalidTransition,
-            ))?;
+            ))
+            .inspect_err(|_| {
+                tracing::warn!(
+                    device = %self.lease.holder().to_canonical_string(),
+                    reason = "complete requested with no active session",
+                    "security-key session complete refused",
+                );
+            })?;
         self.lease
             .complete(port)
-            .map_err(SecurityKeyControllerError::Lease)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %self.lease.holder().to_canonical_string(),
+                    error = %error,
+                    "security-key session complete failed",
+                );
+                SecurityKeyControllerError::Lease(error)
+            })?;
         self.ring
             .push(SessionRecord::new(session, SessionResult::Success));
         self.phase = SecurityKeyPhase::Completed;
@@ -562,6 +635,11 @@ impl SecurityKeyController {
             || self.lease.session() != Some(&session)
         {
             self.phase = SecurityKeyPhase::Quarantined;
+            tracing::warn!(
+                device = %self.lease.holder().to_canonical_string(),
+                reason = "session or assignment fence does not match the current admission",
+                "security-key session complete rejected: admission mismatch",
+            );
             return Err(SecurityKeyControllerError::Admission);
         }
         self.complete(port)

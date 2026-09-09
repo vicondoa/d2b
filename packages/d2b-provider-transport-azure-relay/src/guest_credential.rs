@@ -536,6 +536,10 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
             return Err(RelayCredentialError::Expired);
         }
         if self.credential.generation() == 0 {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                "credential lease acquire rejected: no valid credential generation loaded"
+            );
             return Err(RelayCredentialError::Unavailable);
         }
         let now = (self.now_unix_ms)();
@@ -549,6 +553,10 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
             expires_at = expires_at.min(not_after.saturating_sub(1));
         }
         if expires_at <= now {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                "credential lease acquire rejected: credential already expired"
+            );
             return Err(RelayCredentialError::Expired);
         }
         let mut lease = RelayCredentialLease::new_bound(
@@ -561,8 +569,19 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
         let mut active = self
             .active
             .lock()
-            .map_err(|_| RelayCredentialError::Unavailable)?;
+            .map_err(|_| {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    "credential lease acquire rejected: lease registry lock poisoned"
+                );
+                RelayCredentialError::Unavailable
+            })?;
         if active.len() >= MAX_ACTIVE_RELAY_LEASES {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                active_leases = active.len(),
+                "credential lease acquire rejected: active lease budget exhausted"
+            );
             return Err(RelayCredentialError::Unavailable);
         }
         active.insert(
@@ -594,8 +613,20 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
                 active.remove(&lease.lease_id());
                 Ok(())
             }
-            Some(_) => Err(RelayCredentialError::BindingMismatch),
-            None => Err(RelayCredentialError::UnknownLease),
+            Some(_) => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    "credential lease revoke rejected: binding or role mismatch"
+                );
+                Err(RelayCredentialError::BindingMismatch)
+            }
+            None => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    "credential lease revoke rejected: unknown lease"
+                );
+                Err(RelayCredentialError::UnknownLease)
+            }
         };
         drop(active);
         result

@@ -267,6 +267,10 @@ async fn serve_ttrpc_services_inner(
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .remove(&header.stream_id);
                 let _ = receive_driver.remove_inbound_call(request_id).await;
+                tracing::warn!(
+                    stream_id = header.stream_id,
+                    "inbound ttrpc dispatch or bridge write failed; terminating session server bridge"
+                );
                 return Err(SessionServerError::Transport);
             }
         }
@@ -313,9 +317,22 @@ async fn serve_ttrpc_services_inner(
                     .send_ttrpc_cancellable(frame, active_call.cancellation.clone())
                     .await
             };
-            let _ = send_driver
+            if let Err(complete_error) = send_driver
                 .complete_inbound_call(active_call.request_id)
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    stream_id = header.stream_id,
+                    error = %complete_error,
+                    "failed to complete inbound call after response send"
+                );
+            }
+            if send_result.is_err() {
+                tracing::warn!(
+                    stream_id = header.stream_id,
+                    "failed to send inbound ttrpc response; terminating session server bridge"
+                );
+            }
             send_result.map_err(|_| SessionServerError::Session)?;
         }
     };
@@ -329,6 +346,12 @@ async fn serve_ttrpc_services_inner(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::mem::take(&mut *active)
     };
+    if !terminal.is_empty() {
+        tracing::debug!(
+            count = terminal.len(),
+            "discarding active inbound calls after session server bridge termination"
+        );
+    }
     for (_, active) in terminal {
         let _ = driver.remove_inbound_call(active.request_id).await;
     }

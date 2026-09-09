@@ -163,7 +163,13 @@ impl SessionDriverHandle {
                 request_id,
                 reply,
             })
-            .map_err(|_| disconnected())?;
+            .map_err(|error| {
+                tracing::debug!(
+                    error = %error,
+                    "session cancellation could not be queued: driver command channel closed"
+                );
+                disconnected()
+            })?;
         Ok(receive)
     }
 
@@ -514,6 +520,27 @@ impl OwnedTransport for DriverTransport {
     }
 }
 
+fn report_writer_failure(error: SessionError, failures: &mpsc::Sender<SessionError>) {
+    let reason = error.to_string();
+    if failures.try_send(error).is_err() {
+        tracing::warn!(
+            error = %reason,
+            "session writer failure could not be reported: failure channel closed"
+        );
+    }
+}
+
+fn report_writer_completion(
+    completion: Option<oneshot::Sender<Result<()>>>,
+    result: Result<()>,
+) {
+    if completion.is_some_and(|completion| completion.send(result).is_err()) {
+        tracing::debug!(
+            "session writer completion receiver dropped; send outcome discarded"
+        );
+    }
+}
+
 async fn run_writer(
     mut writer: Box<dyn TransportWriter>,
     mut writes: mpsc::Receiver<WriterCommand>,
@@ -563,13 +590,11 @@ async fn run_writer(
                 let writer_admission = match writer_fence.admit_write() {
                     Some(admission) => admission,
                     None => {
-                        if let Some(completion) = completion {
-                            let _ = completion
-                                .send(Err(SessionError::new(SessionErrorCode::Cancelled)));
-                        }
+                        let error = SessionError::new(SessionErrorCode::Cancelled);
+                        report_writer_completion(completion, Err(error));
                         let error = SessionError::new(SessionErrorCode::Cancelled);
                         let _ = writer.close().await;
-                        let _ = failures.try_send(error);
+                        report_writer_failure(error, &failures);
                         return;
                     }
                 };
@@ -577,13 +602,11 @@ async fn run_writer(
                     Some(cancellation) => match cancellation.admit_write() {
                         Some(admission) => Some(admission),
                         None => {
-                            if let Some(completion) = completion {
-                                let _ = completion
-                                    .send(Err(SessionError::new(SessionErrorCode::Cancelled)));
-                            }
+                            let error = SessionError::new(SessionErrorCode::Cancelled);
+                            report_writer_completion(completion, Err(error));
                             let error = SessionError::new(SessionErrorCode::Cancelled);
                             let _ = writer.close().await;
-                            let _ = failures.try_send(error);
+                            report_writer_failure(error, &failures);
                             return;
                         }
                     },
@@ -641,11 +664,9 @@ async fn run_writer(
                         }
                     };
                     if let Err(error) = result {
-                        if let Some(completion) = completion {
-                            let _ = completion.send(Err(error));
-                        }
+                        report_writer_completion(completion, Err(error));
                         let _ = writer.close().await;
-                        let _ = failures.try_send(error);
+                        report_writer_failure(error, &failures);
                         return;
                     }
                 }
@@ -653,21 +674,17 @@ async fn run_writer(
                 drop(writer_admission);
                 if close_after {
                     let result = writer.close().await.map_err(SessionError::from);
-                    if let Some(completion) = completion {
-                        let _ = completion.send(result);
-                    }
+                    report_writer_completion(completion, result);
                     if let Err(error) = result {
-                        let _ = failures.try_send(error);
+                        report_writer_failure(error, &failures);
                     }
                     return;
                 }
-                if let Some(completion) = completion {
-                    let _ = completion.send(Ok(()));
-                }
+                report_writer_completion(completion, Ok(()));
             }
             WriterCommand::Close => {
                 if let Err(error) = writer.close().await.map_err(SessionError::from) {
-                    let _ = failures.try_send(error);
+                    report_writer_failure(error, &failures);
                 }
                 return;
             }
@@ -676,7 +693,7 @@ async fn run_writer(
                 if let Some(closed) = closed {
                     let _ = closed.send(());
                 }
-                let _ = failures.try_send(error);
+                report_writer_failure(error, &failures);
                 return;
             }
         }

@@ -34,6 +34,7 @@ use crate::ifname::{
 use crate::observe::{NetworkObservation, ObserveDecision, evaluate_observation};
 use crate::plan::{ActualState, NetworkReconcilePlan, compute_plan};
 use crate::routes::RouteTuple;
+use tracing::{debug, warn};
 
 /// Config Volume byte ceiling charged to the Host memory budget.
 pub const CONFIG_VOLUME_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -337,8 +338,15 @@ impl NetworkAdmissionIntent {
             (NetworkIfRole::NetVmLanTap, "tap:net-vm-lan"),
             (NetworkIfRole::NetVmUplinkTap, "tap:net-vm-uplink"),
         ] {
-            let ifname = derive_network_ifname(key.zone_uid(), key.network_uid(), role, None)
-                .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            let ifname = derive_network_ifname(key.zone_uid(), key.network_uid(), role, None).map_err(|error| {
+                debug!(
+                    provider = "network-local",
+                    network_uid = key.network_uid().as_str(),
+                    error = %error,
+                    "network interface name derivation failed"
+                );
+                NetworkEffectError::NetworkInterfaceCollision
+            })?;
             interface_markers.insert(
                 ifname.clone(),
                 d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, object),
@@ -355,7 +363,16 @@ impl NetworkAdmissionIntent {
                 NetworkIfRole::WorkloadGuestTap,
                 Some(guest_uid),
             )
-            .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            .map_err(|error| {
+                debug!(
+                    provider = "network-local",
+                    network_uid = key.network_uid().as_str(),
+                    guest_uid = guest_uid.as_str(),
+                    error = %error,
+                    "guest tap name derivation failed"
+                );
+                NetworkEffectError::NetworkInterfaceCollision
+            })?;
             interface_markers.insert(
                 ifname.clone(),
                 d2b_contracts_resource::v3::derive_network_ownership_marker(
@@ -379,7 +396,15 @@ impl NetworkAdmissionIntent {
                 NetworkIfRole::ExternalMacvtap,
                 None,
             )
-            .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+            .map_err(|error| {
+                debug!(
+                    provider = "network-local",
+                    network_uid = key.network_uid().as_str(),
+                    error = %error,
+                    "external macvtap name derivation failed"
+                );
+                NetworkEffectError::NetworkInterfaceCollision
+            })?;
             interface_markers.insert(
                 ifname.clone(),
                 d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "macvtap"),
@@ -391,6 +416,11 @@ impl NetworkAdmissionIntent {
             .iter()
             .any(|ifname| !unique_interfaces.insert(ifname.as_str().to_owned()))
         {
+            debug!(
+                provider = "network-local",
+                network_uid = key.network_uid().as_str(),
+                "derived interface names collide"
+            );
             return Err(NetworkEffectError::NetworkInterfaceCollision);
         }
         let route_count = spec.routing().host_blocklist().len().max(1);
@@ -409,7 +439,15 @@ impl NetworkAdmissionIntent {
             NetworkIfRole::UplinkBridge,
             None,
         )
-        .map_err(|_| NetworkEffectError::NetworkInterfaceCollision)?;
+        .map_err(|error| {
+            debug!(
+                provider = "network-local",
+                network_uid = key.network_uid().as_str(),
+                error = %error,
+                "uplink bridge name derivation failed"
+            );
+            NetworkEffectError::NetworkInterfaceCollision
+        })?;
         let routes = route_destinations
             .into_iter()
             .map(|destination| {
@@ -436,6 +474,11 @@ impl NetworkAdmissionIntent {
             .collect();
         let mut unique_routes = BTreeSet::new();
         if route_names.iter().any(|name| !unique_routes.insert(name)) {
+            debug!(
+                provider = "network-local",
+                network_uid = key.network_uid().as_str(),
+                "derived route names collide"
+            );
             return Err(NetworkEffectError::NetworkRouteCollision);
         }
         let ownership_marker =
@@ -1007,6 +1050,10 @@ where
         &self,
         _observation: NetworkObservation,
     ) -> Result<ObserveDecision, NetworkEffectError> {
+        warn!(
+            provider = "network-local",
+            "adoption refused: network observation lacks root-owned admission evidence"
+        );
         Err(NetworkEffectError::NetworkAdmissionRequired)
     }
 
@@ -1017,6 +1064,10 @@ where
         observation: NetworkObservation,
     ) -> Result<ObserveDecision, NetworkEffectError> {
         if proof.intent().ownership_marker().is_empty() {
+            warn!(
+                provider = "network-local",
+                "adoption refused: admission proof carries no ownership marker"
+            );
             return Err(NetworkEffectError::NetworkAdmissionMismatch);
         }
         self.observe(observation)
@@ -1029,37 +1080,78 @@ where
     ) -> Result<ReconcileProgress, NetworkEffectError> {
         validate_input(input)?;
         if !input.user_ready {
+            debug!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                "reconcile pending: reserved user dependency is not ready"
+            );
             return Ok(ReconcileProgress::Pending(
                 NetworkConditionReason::UserNotReady,
             ));
         }
         if input.host_memory_budget_available < CONFIG_VOLUME_MAX_BYTES {
+            warn!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                "reconcile rejected: host memory budget below the config volume ceiling"
+            );
             return Err(NetworkEffectError::HostMemoryBudgetExceeded);
         }
-        self.effects.validate_policy(&input.spec).await?;
+        self.effects.validate_policy(&input.spec).await.map_err(|error| {
+            warn!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                error = %error,
+                "reconcile rejected: policy validation failed"
+            );
+            error
+        })?;
         if !input.admission.matches(
             &input.network_uid,
             input.network_generation,
             &input.installed_generation,
             &input.spec,
         ) {
+            warn!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                "reconcile rejected: admission does not match the installed generation"
+            );
             return Err(NetworkEffectError::NetworkAdmissionMismatch);
         }
 
         self.effects
             .create_bridges(&input.network_uid)
             .await
-            .map_err(|_| NetworkEffectError::BridgeCreate)?;
+            .map_err(|error| {
+                warn!(
+                    provider = "network-local",
+                    network_uid = input.network_uid.as_str(),
+                    error = %error,
+                    "bridge creation failed"
+                );
+                NetworkEffectError::BridgeCreate
+            })?;
         self.effects.apply_sysctls(&input.network_uid).await?;
         let firewall =
             FirewallIntent::from_admission(&input.admission, input.installed_generation.clone());
         match self.effects.apply_host_firewall(&firewall).await {
             Err(NetworkEffectError::StaleConfigurationGeneration) => {
+                debug!(
+                    provider = "network-local",
+                    network_uid = input.network_uid.as_str(),
+                    "requeueing: firewall generation is stale"
+                );
                 return Ok(ReconcileProgress::Requeue(
                     NetworkConditionReason::StaleGeneration,
                 ));
             }
             Err(NetworkEffectError::ForeignOwnership) => {
+                warn!(
+                    provider = "network-local",
+                    network_uid = input.network_uid.as_str(),
+                    "blocked: foreign ownership marker on the host firewall"
+                );
                 return Ok(ReconcileProgress::Blocked(
                     NetworkConditionReason::ForeignOwnership,
                 ));
@@ -1078,7 +1170,15 @@ where
         self.resources
             .upsert_volume_backing(&volume)
             .await
-            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+            .map_err(|error| {
+                warn!(
+                    provider = "network-local",
+                    network_uid = input.network_uid.as_str(),
+                    error = %error,
+                    "config volume backing upsert failed"
+                );
+                NetworkEffectError::ConfigVolume
+            })?;
         let provenance = NetworkProvenance::new(
             input.admission.key().zone_uid().clone(),
             input.admission.key().network_uid().clone(),
@@ -1088,10 +1188,20 @@ where
         );
         let content = render_config_with_provenance(&input.spec, &provenance)?;
         if content.provenance() != Some(&provenance) {
+            warn!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                    "rendered config provenance does not match the admission key"
+            );
             return Err(NetworkEffectError::NetworkAdmissionMismatch);
         }
         self.resources.upsert_volume_content(&content).await?;
         if !input.volume_ready {
+            debug!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                    "reconcile pending: config volume is not ready"
+            );
             return Ok(ReconcileProgress::Pending(
                 NetworkConditionReason::VolumeNotReady,
             ));
@@ -1105,6 +1215,11 @@ where
             ))
             .await?;
         if !input.guest_ready {
+            debug!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                    "reconcile pending: net vm guest is not ready"
+            );
             return Ok(ReconcileProgress::Pending(
                 NetworkConditionReason::GuestNotReady,
             ));
@@ -1113,6 +1228,11 @@ where
         let attachment = config_volume_attachment(&net_vm_name)?;
         self.resources.attach_volume(&attachment).await?;
         if !input.volume_attachment_ready {
+            debug!(
+                provider = "network-local",
+                network_uid = input.network_uid.as_str(),
+                    "reconcile pending: config volume attachment is not ready"
+            );
             return Ok(ReconcileProgress::Pending(
                 NetworkConditionReason::AttachmentNotReady,
             ));
@@ -1130,11 +1250,21 @@ where
                     .await
                 {
                     Err(NetworkEffectError::StaleAttachmentGeneration) => {
+                        debug!(
+                            provider = "network-local",
+                            network_uid = input.network_uid.as_str(),
+                    "requeueing: attachment tap generation is stale"
+                        );
                         return Ok(ReconcileProgress::Requeue(
                             NetworkConditionReason::StaleGeneration,
                         ));
                     }
                     Err(NetworkEffectError::ForeignOwnership) => {
+                        warn!(
+                            provider = "network-local",
+                            network_uid = input.network_uid.as_str(),
+                    "blocked: foreign ownership marker on a persistent tap"
+                        );
                         return Ok(ReconcileProgress::Blocked(
                             NetworkConditionReason::ForeignOwnership,
                         ));
@@ -1163,6 +1293,11 @@ where
             {
                 Err(NetworkEffectError::Transient) => return Ok(FinalizerStage::PersistentTaps),
                 Err(NetworkEffectError::StaleAttachmentGeneration) => {
+                    debug!(
+                        provider = "network-local",
+                        network_uid = input.network_uid.as_str(),
+                    "finalizer deferring: attachment tap generation is stale"
+                    );
                     return Ok(FinalizerStage::PersistentTaps);
                 }
                 result => result?,
@@ -1201,12 +1336,24 @@ impl<E, R> core::fmt::Debug for NetworkReconciler<E, R> {
 
 fn validate_input(input: &ReconcileInput) -> Result<(), NetworkEffectError> {
     if input.network_uid != *input.admission.key().network_uid() {
+        warn!(
+            provider = "network-local",
+            "reconcile input rejected: network uid mismatch against admission key"
+        );
         return Err(NetworkEffectError::NetworkAdmissionMismatch);
     }
     if input.network_generation != input.admission.key().network_generation() {
+        warn!(
+            provider = "network-local",
+            "reconcile input rejected: network generation mismatch against admission key"
+        );
         return Err(NetworkEffectError::NetworkAdmissionMismatch);
     }
     if input.attachment_generation != input.admission.key().attachment_generation() {
+        warn!(
+            provider = "network-local",
+            "reconcile input rejected: attachment generation mismatch against admission key"
+        );
         return Err(NetworkEffectError::NetworkAdmissionMismatch);
     }
     if input.attachments.iter().any(|attachment| {
@@ -1215,9 +1362,17 @@ fn validate_input(input: &ReconcileInput) -> Result<(), NetworkEffectError> {
             || fence.network_generation() != input.network_generation
             || fence.attachment_generation() != input.admission.key().attachment_generation()
     }) {
+        warn!(
+            provider = "network-local",
+            "reconcile input rejected: attachment generation fence mismatch"
+        );
         return Err(NetworkEffectError::NetworkAdmissionMismatch);
     }
     if cidr_overlaps(input.spec.lan_cidr(), input.spec.uplink_cidr()) {
+        warn!(
+            provider = "network-local",
+            "reconcile input rejected: lan and uplink CIDRs overlap"
+        );
         return Err(NetworkEffectError::CidrConflict);
     }
     Ok(())

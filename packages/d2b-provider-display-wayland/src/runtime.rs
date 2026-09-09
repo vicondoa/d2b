@@ -347,12 +347,23 @@ where
         policy: &WaylandPolicySnapshot,
     ) -> Result<crate::ReconcileResult, DisplayRuntimeError> {
         let authenticated = AuthenticatedDisplaySession::from_component_session(session)
-            .map_err(|_| DisplayRuntimeError::SessionUnauthenticated)?;
+            .map_err(|e| {
+                tracing::debug!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    error = %e,
+                    "admission refused: component session not authenticated for display"
+                );
+                DisplayRuntimeError::SessionUnauthenticated
+            })?;
         if authenticated.guest_ref() != spec.guest_ref()
             || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
             || authenticated.zone() != policy.zone()
         {
+            tracing::debug!(
+                guest = %spec.guest_ref().to_canonical_string(),
+                "reconcile rejected: session identity does not match WaylandSession spec"
+            );
             return Err(DisplayRuntimeError::SessionMismatch);
         }
         self.effects
@@ -362,7 +373,14 @@ where
                 policy.generation(),
                 supervision.teardown_generation,
             )
-            .map_err(DisplayRuntimeError::Effect)?;
+            .map_err(|e| {
+                tracing::warn!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    error = %e,
+                    "session bind effect failed before reconciliation"
+                );
+                DisplayRuntimeError::Effect(e)
+            })?;
         if let Some(observation) = self
             .effects
             .current_observation()
@@ -382,7 +400,15 @@ where
                 None,
                 policy,
             )
-            .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+            .map_err(|e| {
+                tracing::warn!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    zone = policy.zone().as_str(),
+                    error = %e,
+                    "reconcile rejected for assigned display session"
+                );
+                DisplayRuntimeError::InvalidPolicy
+            })?;
         if !result.worker_actions.is_empty() {
             let fence = grant_fence(&authenticated, supervision, policy.generation());
             if self.issued_grants.contains(&fence) {
@@ -397,11 +423,27 @@ where
                     policy,
                     self.controller
                         .dependency_proof(session, spec, &result, policy, self.observation)
+                        .map_err(|e| {
+                            tracing::debug!(
+                                guest = %spec.guest_ref().to_canonical_string(),
+                                error = %e,
+                                "launch proof unavailable before grant issue; continuing without proof"
+                            );
+                            e
+                        })
                         .ok()
                         .as_ref(),
                     supervision.teardown_generation,
                 )
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "launch grant issue failed for assigned display session"
+                    );
+                    DisplayRuntimeError::Effect(e)
+                })?;
             let launch_tickets = self
                 .controller
                 .reconcile_authenticated_session(
@@ -413,7 +455,15 @@ where
                     Some(grants),
                     policy,
                 )
-                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "reconcile rejected for assigned display session (granted pass)"
+                    );
+                    DisplayRuntimeError::InvalidPolicy
+                })?
                 .launch_tickets;
             if launch_tickets.is_empty() {
                 result = self
@@ -427,7 +477,15 @@ where
                         None,
                         policy,
                     )
-                    .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            guest = %spec.guest_ref().to_canonical_string(),
+                            zone = policy.zone().as_str(),
+                            error = %e,
+                            "reconcile rejected for assigned display session (post-grant pass)"
+                        );
+                        DisplayRuntimeError::InvalidPolicy
+                    })?;
                 self.apply_resource_projection(&mut result)?;
                 return Ok(result);
             }
@@ -435,10 +493,21 @@ where
                 let receipt = self
                     .effects
                     .launch(ticket)
-                    .map_err(DisplayRuntimeError::Effect)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            guest = %spec.guest_ref().to_canonical_string(),
+                            error = %e,
+                            "worker launch effect failed for assigned display session"
+                        );
+                        DisplayRuntimeError::Effect(e)
+                    })?;
                 if receipt.teardown_generation() != supervision.teardown_generation
                     || receipt.policy_generation() != policy.generation()
                 {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        "worker launch receipt does not match the supervision fence; observation unavailable"
+                    );
                     return Err(DisplayRuntimeError::ObservationUnavailable);
                 }
                 self.observe_receipt(receipt);
@@ -455,7 +524,15 @@ where
                     None,
                     policy,
                 )
-                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "reconcile rejected for assigned display session (after launch)"
+                    );
+                    DisplayRuntimeError::InvalidPolicy
+                })?;
         }
         self.apply_resource_projection(&mut result)?;
         Ok(result)
@@ -473,12 +550,23 @@ where
         policy: &WaylandPolicySnapshot,
     ) -> Result<crate::ReconcileResult, DisplayRuntimeError> {
         let authenticated = AuthenticatedDisplaySession::from_authenticated_route(route.clone())
-            .map_err(|_| DisplayRuntimeError::SessionUnauthenticated)?;
+            .map_err(|e| {
+                tracing::debug!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    error = %e,
+                    "admission refused: registered route not authenticated for display"
+                );
+                DisplayRuntimeError::SessionUnauthenticated
+            })?;
         if authenticated.guest_ref() != spec.guest_ref()
             || authenticated.host_ref() != spec.host_ref()
             || authenticated.reconnect_generation() != spec.reconnect_generation()
             || authenticated.zone() != policy.zone()
         {
+            tracing::debug!(
+                guest = %spec.guest_ref().to_canonical_string(),
+                "reconcile rejected: registered route identity does not match WaylandSession spec"
+            );
             return Err(DisplayRuntimeError::SessionMismatch);
         }
         self.effects
@@ -488,7 +576,14 @@ where
                 policy.generation(),
                 supervision.teardown_generation,
             )
-            .map_err(DisplayRuntimeError::Effect)?;
+            .map_err(|e| {
+                tracing::warn!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    error = %e,
+                    "session bind effect failed before reconciliation"
+                );
+                DisplayRuntimeError::Effect(e)
+            })?;
         if let Some(observation) = self
             .effects
             .current_observation()
@@ -508,7 +603,15 @@ where
                 None,
                 policy,
             )
-            .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+            .map_err(|e| {
+                tracing::warn!(
+                    guest = %spec.guest_ref().to_canonical_string(),
+                    zone = policy.zone().as_str(),
+                    error = %e,
+                    "reconcile rejected for assigned display session (registered route)"
+                );
+                DisplayRuntimeError::InvalidPolicy
+            })?;
         if !result.worker_actions.is_empty() {
             let fence = grant_fence(&authenticated, supervision, policy.generation());
             if self.issued_grants.contains(&fence) {
@@ -518,6 +621,14 @@ where
             let proof = self
                 .controller
                 .dependency_proof_from_route(route, spec, &result, policy, self.observation)
+                .map_err(|e| {
+                    tracing::debug!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        error = %e,
+                        "launch proof unavailable before grant issue; continuing without proof"
+                    );
+                    e
+                })
                 .ok();
             let grants = self
                 .effects
@@ -528,7 +639,15 @@ where
                     proof.as_ref(),
                     supervision.teardown_generation,
                 )
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "launch grant issue failed for assigned display session"
+                    );
+                    DisplayRuntimeError::Effect(e)
+                })?;
             let launch_tickets = self
                 .controller
                 .reconcile_authenticated_route(
@@ -540,7 +659,15 @@ where
                     Some(grants),
                     policy,
                 )
-                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "reconcile rejected for assigned display session (granted pass)"
+                    );
+                    DisplayRuntimeError::InvalidPolicy
+                })?
                 .launch_tickets;
             if launch_tickets.is_empty() {
                 result = self
@@ -554,7 +681,15 @@ where
                         None,
                         policy,
                     )
-                    .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            guest = %spec.guest_ref().to_canonical_string(),
+                            zone = policy.zone().as_str(),
+                            error = %e,
+                            "reconcile rejected for assigned display session (post-grant pass)"
+                        );
+                        DisplayRuntimeError::InvalidPolicy
+                    })?;
                 self.apply_resource_projection(&mut result)?;
                 return Ok(result);
             }
@@ -562,10 +697,21 @@ where
                 let receipt = self
                     .effects
                     .launch(ticket)
-                    .map_err(DisplayRuntimeError::Effect)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            guest = %spec.guest_ref().to_canonical_string(),
+                            error = %e,
+                            "worker launch effect failed for assigned display session"
+                        );
+                        DisplayRuntimeError::Effect(e)
+                    })?;
                 if receipt.teardown_generation() != supervision.teardown_generation
                     || receipt.policy_generation() != policy.generation()
                 {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        "worker launch receipt does not match the supervision fence; observation unavailable"
+                    );
                     return Err(DisplayRuntimeError::ObservationUnavailable);
                 }
                 self.observe_receipt(receipt);
@@ -582,7 +728,15 @@ where
                     None,
                     policy,
                 )
-                .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                .map_err(|e| {
+                    tracing::warn!(
+                        guest = %spec.guest_ref().to_canonical_string(),
+                        zone = policy.zone().as_str(),
+                        error = %e,
+                        "reconcile rejected for assigned display session (after launch)"
+                    );
+                    DisplayRuntimeError::InvalidPolicy
+                })?;
         }
         self.apply_resource_projection(&mut result)?;
         Ok(result)
@@ -640,14 +794,20 @@ where
             let receipt = self
                 .effects
                 .stop(DisplayProcessRole::HostProxy)
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "proxy stop effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
             self.observe_receipt(receipt);
         }
         if stop_frontend {
             let receipt = self
                 .effects
                 .stop(DisplayProcessRole::GuestFrontend)
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "frontend stop effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
             self.observe_receipt(receipt);
         }
         let decision = DisplayController::finalize(FinalizationInput::from_supervisor(
@@ -664,7 +824,10 @@ where
             self.volume = self
                 .effects
                 .delete_runtime_volume()
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "runtime volume deletion effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
         }
         if self.volume.is_deleted()
             && self.observation.proxy.is_terminal()
@@ -675,15 +838,24 @@ where
             self.portal = self
                 .effects
                 .revoke_portal()
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "portal authority revocation effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
             self.principal = self
                 .effects
                 .release_principal()
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "principal release effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
             self.authority = self
                 .effects
                 .release_authority()
-                .map_err(DisplayRuntimeError::Effect)?;
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "session authority release effect failed during finalization");
+                    DisplayRuntimeError::Effect(e)
+                })?;
         }
         let final_decision = DisplayController::finalize(FinalizationInput::from_supervisor(
             StopRequest::Requested,
@@ -696,6 +868,9 @@ where
             grace,
         ));
         if final_decision.ambiguous && matches!(grace, GraceState::Expired) {
+            tracing::error!(
+                "display finalization still ambiguous after grace expired; finalizer retained"
+            );
             return Err(DisplayRuntimeError::FinalizationAmbiguous);
         }
         Ok(FinalizationReport {

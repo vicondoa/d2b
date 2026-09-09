@@ -5,6 +5,7 @@
 //! runtime builder is allowed to consume any entry.
 
 use std::{collections::BTreeSet, error::Error, fmt};
+use tracing::warn;
 
 use d2b_contracts_provider::v3::ProviderManifest;
 use d2b_provider::{ProviderDescriptor, ProviderRegistryBuilder, RegistryBuildError};
@@ -72,6 +73,7 @@ where
     let entries: Vec<(ProviderDescriptor, I)> =
         entries.into_iter().map(ExactRegistration::split).collect();
     if entries.is_empty() {
+        warn!("provider registration refused: no exact instances were supplied");
         return Err(ToolkitError::EmptyRegistration);
     }
 
@@ -79,14 +81,24 @@ where
     for (descriptor, _) in &entries {
         descriptor
             .validate()
-            .map_err(|_| ToolkitError::DescriptorInvalid)?;
+            .map_err(|e| {
+                warn!(provider = %descriptor.provider_ref(), reason = %e, "provider registration refused: descriptor failed validation");
+                ToolkitError::DescriptorInvalid
+            })?;
         if !seen.insert(descriptor.provider_ref().clone()) {
+            warn!(provider = %descriptor.provider_ref(), "provider registration refused: duplicate provider reference in registration set");
             return Err(ToolkitError::DuplicateProvider);
         }
     }
 
     for (descriptor, instance) in entries {
-        builder.register_instance(descriptor, instance)?;
+        let provider_ref = descriptor.provider_ref().clone();
+        builder
+            .register_instance(descriptor, instance)
+            .map_err(|e| {
+                warn!(provider = %provider_ref, reason = %e, "provider registration refused: registry rejected the instance");
+                ToolkitError::from(e)
+            })?;
     }
     Ok(())
 }
@@ -95,7 +107,10 @@ where
 pub fn validate_manifest_registration(manifest: &ProviderManifest) -> Result<(), ToolkitError> {
     manifest
         .validate_installation_contract()
-        .map_err(|_| ToolkitError::ManifestInvalid)
+        .map_err(|e| {
+            warn!(reason = %e, "provider manifest registration refused: installation contract validation failed");
+            ToolkitError::ManifestInvalid
+        })
 }
 
 #[cfg(test)]

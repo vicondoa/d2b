@@ -30,6 +30,14 @@ use crate::{
 };
 use crate::providers::{ProviderHandler, ProviderIntent, ProviderObservation, ProviderPhase};
 
+fn resource_field(key: &ResourceKey) -> String {
+    key.resource_ref().to_canonical_string()
+}
+
+fn controller_field(controller: &ControllerLeaseKey) -> String {
+    controller.controller_ref().to_canonical_string()
+}
+
 /// Core adapter construction or hint dispatch failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreSourceError {
@@ -262,9 +270,21 @@ where
     ) -> Result<CoreDispatchOutcome, CoreSourceError> {
         let decision = change.suppression();
         if decision != SuppressionDecision::Dispatch {
+            tracing::debug!(
+                zone = change.target.zone().as_str(),
+                resource = resource_field(&change.target),
+                decision = ?decision,
+                "change suppressed by convergence policy",
+            );
             return Ok(CoreDispatchOutcome::Suppressed(decision));
         }
         if controller != self.controller {
+            tracing::warn!(
+                zone = controller.zone().as_str(),
+                controller = controller_field(&controller),
+                resource = resource_field(&change.target),
+                "hint rejected: change routed to a foreign controller",
+            );
             return Err(CoreSourceError::Hint(HintAdmissionError::InvalidHint));
         }
         if !self
@@ -272,12 +292,25 @@ where
             .resource_types()
             .any(|resource_type| resource_type == change.target.resource_ref().resource_type())
         {
+            tracing::warn!(
+                zone = controller.zone().as_str(),
+                resource = resource_field(&change.target),
+                "hint rejected: target ResourceType is not owned by this controller",
+            );
             return Err(CoreSourceError::Hint(HintAdmissionError::InvalidHint));
         }
         let target = change.target.clone();
         let revision = change.revision;
         let hint = ControllerHint::new(controller, change.target, change.revision, change.reasons)
-            .map_err(CoreSourceError::Hint)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = target.zone().as_str(),
+                    resource = resource_field(&target),
+                    reason = %error,
+                    "hint rejected: hint construction failed",
+                );
+                CoreSourceError::Hint(error)
+            })?;
         self.admit_hint(hint, target, revision, operation)
     }
 
@@ -297,6 +330,11 @@ where
                 .resource_types()
                 .any(|resource_type| resource_type == target.resource_ref().resource_type())
         {
+            tracing::warn!(
+                zone = target.zone().as_str(),
+                resource = resource_field(&target),
+                "observation wakeup rejected: revision, zone, or type invalid",
+            );
             return Err(CoreSourceError::Hint(HintAdmissionError::InvalidHint));
         }
         let operation_suffix = format!(
@@ -311,14 +349,30 @@ where
             format!("process-observe:{operation_suffix}"),
             None,
         )
-        .map_err(|_| CoreSourceError::Hint(HintAdmissionError::InvalidHint))?;
+        .map_err(|error| {
+            tracing::warn!(
+                zone = target.zone().as_str(),
+                resource = resource_field(&target),
+                reason = %error,
+                "observation wakeup rejected: operation context construction failed",
+            );
+            CoreSourceError::Hint(HintAdmissionError::InvalidHint)
+        })?;
         let hint = ControllerHint::new(
             self.controller.clone(),
             target.clone(),
             revision,
             BTreeSet::from([d2b_controller_toolkit::TriggerReason::ScheduledObserve]),
         )
-        .map_err(CoreSourceError::Hint)?;
+        .map_err(|error| {
+            tracing::warn!(
+                zone = target.zone().as_str(),
+                resource = resource_field(&target),
+                reason = %error,
+                "observation wakeup rejected: hint construction failed",
+            );
+            CoreSourceError::Hint(error)
+        })?;
         self.admit_hint(hint, target, revision, operation)
     }
 
@@ -336,6 +390,12 @@ where
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if watch.closed {
+                tracing::warn!(
+                    zone = self.controller.zone().as_str(),
+                    controller = controller_field(&self.controller),
+                    resource = resource_field(&key.1),
+                    "hint dropped: controller watch is closed",
+                );
                 return Err(CoreSourceError::WatchClosed);
             }
             match watch.admission.push(hint) {
@@ -356,6 +416,12 @@ where
                 Err(error) => {
                     if error == HintAdmissionError::Backpressure {
                         self.backpressure.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(
+                            zone = self.controller.zone().as_str(),
+                            controller = controller_field(&self.controller),
+                            resource = resource_field(&key.1),
+                            "hint dropped under fair-queue backpressure",
+                        );
                     }
                     return Err(CoreSourceError::Hint(error));
                 }
@@ -374,6 +440,11 @@ where
         match self.watch_signal_tx.try_send(()) {
             Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => Ok(dispatch),
             Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                tracing::error!(
+                    zone = self.controller.zone().as_str(),
+                    controller = controller_field(&self.controller),
+                    "controller watch signal channel closed; watch is dead",
+                );
                 Err(CoreSourceError::WatchClosed)
             }
         }
@@ -390,6 +461,11 @@ where
         match self.watch_signal_tx.try_send(()) {
             Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                tracing::warn!(
+                    zone = self.controller.zone().as_str(),
+                    controller = controller_field(&self.controller),
+                    "watch close signal undeliverable; signal channel already closed",
+                );
                 Err(CoreSourceError::WatchClosed)
             }
         }
@@ -470,6 +546,12 @@ where
                 if let Some(hint) = watch.admission.pop() {
                     let key = (hint.controller().clone(), hint.target().clone());
                     let Some((_, operation)) = watch.operations.remove(&key) else {
+                        tracing::error!(
+                            zone = hint.controller().zone().as_str(),
+                            controller = controller_field(hint.controller()),
+                            resource = resource_field(hint.target()),
+                            "admitted hint has no operation state; escalating to fatal watch failure",
+                        );
                         return Err(WatchFailure::Fatal);
                     };
                     Some(WatchEvent::Hint(Box::new(hint.into_watch_hint(operation))))
@@ -501,7 +583,15 @@ where
                             Some((change, operation));
                         return Err(WatchFailure::Backpressure);
                     }
-                    Err(_) => return Err(WatchFailure::Fatal),
+                    Err(error) => {
+                        tracing::error!(
+                            zone = self.controller.zone().as_str(),
+                            controller = controller_field(&self.controller),
+                            reason = ?error,
+                            "pending watch change escalated to fatal watch failure",
+                        );
+                        return Err(WatchFailure::Fatal);
+                    }
                 }
             }
             if self.watch_stream_enabled.load(Ordering::Acquire) {
@@ -528,10 +618,23 @@ where
                                             Some((change, operation));
                                         return Err(WatchFailure::Backpressure);
                                     }
-                                    Err(_) => return Err(WatchFailure::Fatal),
+                                    Err(error) => {
+                                        tracing::error!(
+                                            zone = self.controller.zone().as_str(),
+                                            controller = controller_field(&self.controller),
+                                            reason = ?error,
+                                            "stream watch change escalated to fatal watch failure",
+                                        );
+                                        return Err(WatchFailure::Fatal);
+                                    }
                                 }
                             }
                             None => {
+                                tracing::warn!(
+                                    zone = self.controller.zone().as_str(),
+                                    controller = controller_field(&self.controller),
+                                    "controller watch stream closed by source; disabling stream",
+                                );
                                 self.watch_stream_enabled.store(false, Ordering::Release);
                                 self.watch
                                     .lock()
@@ -754,7 +857,14 @@ fn resource_has_finalizer(
     expected: &str,
 ) -> Result<bool, CoreReconcileError> {
     let value = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
-        .map_err(|_| CoreReconcileError)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "finalizer check failed: canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?;
     Ok(value
         .pointer("/metadata/finalizers")
         .and_then(serde_json::Value::as_array)
@@ -767,12 +877,36 @@ fn resource_has_finalizer(
 
 fn status_candidate(resource: &ResourceSnapshot) -> Result<Vec<u8>, CoreReconcileError> {
     let value = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
-        .map_err(|_| CoreReconcileError)?;
-    let status = value.get("status").cloned().ok_or(CoreReconcileError)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "status candidate failed: canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?;
+    let status = value.get("status").cloned().ok_or_else(|| {
+        tracing::warn!(
+            resource = resource_field(resource.key()),
+            "status candidate failed: canonical JSON has no status object",
+        );
+        CoreReconcileError
+    })?;
     if !status.is_object() {
+        tracing::warn!(
+            resource = resource_field(resource.key()),
+            "status candidate failed: status is not an object",
+        );
         return Err(CoreReconcileError);
     }
-    serde_json::to_vec(&status).map_err(|_| CoreReconcileError)
+    serde_json::to_vec(&status).map_err(|error| {
+        tracing::warn!(
+            resource = resource_field(resource.key()),
+            reason = %error,
+            "status candidate failed: status did not serialize",
+        );
+        CoreReconcileError
+    })
 }
 
 fn provider_process_session_ready(
@@ -784,7 +918,14 @@ fn provider_process_session_ready(
     let process_value =
         match serde_json::from_slice::<serde_json::Value>(process.canonical_json()) {
             Ok(value) => value,
-            Err(_) => return false,
+            Err(error) => {
+                tracing::debug!(
+                    resource = resource_field(process.key()),
+                    reason = %error,
+                    "controller session treated as not ready: process canonical JSON did not parse",
+                );
+                return false;
+            }
         };
     let session = process_value
         .pointer("/status/resource/controllerSession")
@@ -844,6 +985,10 @@ fn fixed_system_core_handlers_ready(dependencies: &[DependencySnapshot]) -> bool
         }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
         else {
+            tracing::debug!(
+                resource = resource_field(resource.key()),
+                "mandatory-handler readiness treated as false: Zone canonical JSON did not parse",
+            );
             return false;
         };
         let Some(status) = value.pointer("/status/resource").cloned() else {
@@ -862,6 +1007,10 @@ fn fixed_provider_host_ready(dependencies: &[DependencySnapshot]) -> bool {
         }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
         else {
+            tracing::debug!(
+                resource = resource_field(resource.key()),
+                "host readiness treated as false: Host canonical JSON did not parse",
+            );
             return false;
         };
         value
@@ -896,7 +1045,14 @@ fn provider_observation(
     dependencies: &[DependencySnapshot],
 ) -> Result<ProviderObservation, CoreReconcileError> {
     let provider = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
-        .map_err(|_| CoreReconcileError)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "provider observation failed: canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?;
     let provider_ref = resource.key().resource_ref().to_canonical_string();
     let spec = provider
         .get("spec")
@@ -940,7 +1096,14 @@ fn provider_observation(
         let value = serde_json::from_slice::<serde_json::Value>(
             dependency_resource.canonical_json(),
         )
-        .map_err(|_| CoreReconcileError)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(dependency_resource.key()),
+                reason = %error,
+                "provider observation failed: dependency canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?;
         let owner_ref = value
             .pointer("/metadata/ownerRef")
             .and_then(serde_json::Value::as_str);
@@ -1049,7 +1212,17 @@ fn provider_observation(
 fn resource_status_observed_generation(
     resource: &ResourceSnapshot,
 ) -> Option<d2b_contracts_resource::v3::ResourceGeneration> {
-    let value = serde_json::from_slice::<serde_json::Value>(resource.canonical_json()).ok()?;
+    let value = match serde_json::from_slice::<serde_json::Value>(resource.canonical_json()) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::debug!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "observedGeneration unreadable: canonical JSON did not parse",
+            );
+            return None;
+        }
+    };
     let generation = value
         .pointer("/status/observedGeneration")
         .and_then(serde_json::Value::as_u64)?;
@@ -1062,7 +1235,14 @@ fn provider_status_candidate(
     observation: ProviderObservation,
 ) -> Result<Option<Vec<u8>>, CoreReconcileError> {
     let mut value = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
-        .map_err(|_| CoreReconcileError)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "provider status candidate failed: canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?;
     let status = value
         .get_mut("status")
         .and_then(serde_json::Value::as_object_mut)
@@ -1100,10 +1280,23 @@ fn provider_status_candidate(
     status.insert("resource".to_owned(), serde_json::Value::Object(projection));
     let candidate = status.clone();
     let current = serde_json::from_slice::<serde_json::Value>(resource.canonical_json())
-        .map_err(|_| CoreReconcileError)?
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "provider status candidate failed: stored canonical JSON did not parse",
+            );
+            CoreReconcileError
+        })?
         .get("status")
         .cloned()
-        .ok_or(CoreReconcileError)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                "provider status candidate failed: stored canonical JSON has no status object",
+            );
+            CoreReconcileError
+        })?;
     // Damping: a candidate whose phase is unchanged and whose
     // providerReadiness carries no false→true readiness edge is observation
     // churn (detail reshuffles among already-true fields, true→false
@@ -1141,6 +1334,11 @@ fn provider_status_candidate(
                 .unwrap_or(&serde_json::Value::Null),
         );
     if damped {
+        tracing::debug!(
+            resource = resource_field(resource.key()),
+            phase = ?phase,
+            "provider status write damped: no phase change and no false→true readiness edge",
+        );
         return Ok(None);
     }
     if current == serde_json::Value::Object(candidate.clone()) {
@@ -1148,7 +1346,14 @@ fn provider_status_candidate(
     }
     serde_json::to_vec(&candidate)
         .map(Some)
-        .map_err(|_| CoreReconcileError)
+        .map_err(|error| {
+            tracing::warn!(
+                resource = resource_field(resource.key()),
+                reason = %error,
+                "provider status candidate failed: candidate did not serialize",
+            );
+            CoreReconcileError
+        })
 }
 
 /// Core's baseline reconciler for metadata-only convergence.
@@ -1231,7 +1436,14 @@ impl ResourceReconciler for CoreResourceReconciler {
         std::future::ready((|| {
             context
                 .authorize_effect()
-                .map_err(|_| CoreReconcileError)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        resource = resource_field(resource.key()),
+                        reason = %error,
+                        "effect authorization refused; reconcile pass blocked",
+                    );
+                    CoreReconcileError
+                })?;
             if !self.ensure_finalizer {
                 return Ok(ReconcileResult::converged(
                     resource.revision(),
@@ -1284,7 +1496,14 @@ impl ResourceReconciler for CoreResourceReconciler {
                             None,
                             StatusPersistence::Pending,
                         )
-                        .map_err(|_| CoreReconcileError);
+                        .map_err(|error| {
+                            tracing::warn!(
+                                resource = resource_field(resource.key()),
+                                reason = %error,
+                                "provider reconcile result rejected",
+                            );
+                            CoreReconcileError
+                        });
                     }
                 }
                 return Ok(ReconcileResult::converged(
@@ -1303,7 +1522,14 @@ impl ResourceReconciler for CoreResourceReconciler {
                 None,
                 StatusPersistence::Pending,
             )
-            .map_err(|_| CoreReconcileError)
+            .map_err(|error| {
+                tracing::warn!(
+                    resource = resource_field(resource.key()),
+                    reason = %error,
+                    "finalizer reconcile result rejected",
+                );
+                CoreReconcileError
+            })
         })())
     }
 
@@ -1337,7 +1563,14 @@ impl ResourceReconciler for CoreResourceReconciler {
         let result = (|| {
             context
                 .authorize_effect()
-                .map_err(|_| CoreReconcileError)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        resource = resource_field(deleting_resource.key()),
+                        reason = %error,
+                        "finalize effect authorization refused; deletion blocked",
+                    );
+                    CoreReconcileError
+                })?;
             let Some(finalizer) = self.descriptor.finalizers().first() else {
                 return Ok(ReconcileResult::converged(
                     deleting_resource.revision(),
@@ -1357,9 +1590,22 @@ impl ResourceReconciler for CoreResourceReconciler {
                 MutationIntentKind::UpdateFinalizers,
                 None,
             )
-            .map_err(|_| CoreReconcileError)?;
-            let batch =
-                ResourceMutationBatch::new(vec![mutation]).map_err(|_| CoreReconcileError)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    resource = resource_field(deleting_resource.key()),
+                    reason = %error,
+                    "finalizer mutation intent rejected",
+                );
+                CoreReconcileError
+            })?;
+            let batch = ResourceMutationBatch::new(vec![mutation]).map_err(|error| {
+                tracing::warn!(
+                    resource = resource_field(deleting_resource.key()),
+                    reason = %error,
+                    "finalizer mutation batch rejected",
+                );
+                CoreReconcileError
+            })?;
             ReconcileResult::new(
                 deleting_resource.revision(),
                 deleting_resource.generation(),
@@ -1370,7 +1616,14 @@ impl ResourceReconciler for CoreResourceReconciler {
                 None,
                 StatusPersistence::NotRequested,
             )
-            .map_err(|_| CoreReconcileError)
+            .map_err(|error| {
+                tracing::warn!(
+                    resource = resource_field(deleting_resource.key()),
+                    reason = %error,
+                    "finalizer reconcile result rejected",
+                );
+                CoreReconcileError
+            })
         })();
         std::future::ready(result)
     }
@@ -1437,7 +1690,14 @@ impl ResourceReconciler for CoreResourceReconciler {
         std::future::ready(
             context
                 .authorize_effect()
-                .map_err(|_| CoreReconcileError)
+                .map_err(|error| {
+                    tracing::warn!(
+                        resource = resource_field(resource.key()),
+                        reason = %error,
+                        "upgrade effect authorization refused",
+                    );
+                    CoreReconcileError
+                })
                 .map(|_| ReconcileResult::converged(resource.revision(), resource.generation())),
         )
     }

@@ -295,6 +295,12 @@ impl<R: VolumeRootResolver> VolumeSourceEffectPort for AnchoredVolumeEffectAdapt
         async move {
             let root = root?;
             if root.volume_uid != *volume_uid {
+                // Cardinality: per distinct resolve attempt; resolver
+                // mismatch is never expected in steady state.
+                tracing::warn!(
+                    volume = ?volume_uid,
+                    "volume root resolver returned a different volume uid",
+                );
                 return Err(VolumeLocalError::SourceUnresolved);
             }
             Ok(VolumeRootHandle::from_anchored(
@@ -318,7 +324,15 @@ impl<R: VolumeRootResolver> VolumeSourceEffectPort for AnchoredVolumeEffectAdapt
     ) -> impl Future<Output = Result<QuotaCapability, VolumeLocalError>> + Send {
         let result = match root_fd(root) {
             Ok(Some(fd)) => ensure_directory(fd).map(|_| QuotaCapability::Enforceable),
-            Ok(None) | Err(_) => Err(VolumeLocalError::EffectFailed),
+            Ok(None) | Err(_) => {
+                // Cardinality: per distinct quota probe; fires only while
+                // the root is unusable.
+                tracing::warn!(
+                    volume = ?root.volume_uid(),
+                    "quota capability probe failed for volume root",
+                );
+                Err(VolumeLocalError::EffectFailed)
+            }
         };
         async move { result }
     }
@@ -359,6 +373,13 @@ impl<R: VolumeRootResolver> VolumeLayoutEffectPort for AnchoredVolumeEffectAdapt
         entry: &EntryRequest,
     ) -> impl Future<Output = Result<(), VolumeLocalError>> + Send {
         let result = if entry.has_acl() {
+            // Cardinality: per distinct entry carrying an ACL; such a spec
+            // is rejected on every pass until corrected.
+            tracing::warn!(
+                volume = ?_root.volume_uid(),
+                path = entry.declared().path(),
+                "volume entry with ACL declared rejected (ACL unsupported)",
+            );
             Err(VolumeLocalError::InvariantViolated)
         } else {
             Ok(())
@@ -661,6 +682,14 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                 DriftClass::Acl | DriftClass::EntryType | DriftClass::SameFilesystem
             )
         }) {
+            // Cardinality: per distinct repair request; unrecoverable drift
+            // repeats until the spec is corrected.
+            tracing::warn!(
+                volume = ?root.volume_uid(),
+                path = entry.declared().path(),
+                drift = ?drift,
+                "volume repair refused: unrecoverable drift classes",
+            );
             return Err(VolumeLocalError::InvariantViolated);
         }
         self.with_lock(root, |_guard| {
@@ -694,7 +723,16 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             match unlinkat(&parent, leaf.as_str(), flags) {
                 Ok(()) => fsync(&parent).map_err(|_| VolumeLocalError::EffectFailed),
                 Err(error) if error == rustix::io::Errno::NOENT => Ok(()),
-                Err(_) => Err(VolumeLocalError::EffectFailed),
+                Err(error) => {
+                    // Cardinality: per distinct cleanup failure.
+                    tracing::warn!(
+                        volume = ?root.volume_uid(),
+                        path = entry.declared().path(),
+                        error = ?error,
+                        "volume entry cleanup unlink failed",
+                    );
+                    Err(VolumeLocalError::EffectFailed)
+                }
             }
         })
     }
@@ -817,6 +855,12 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
     ) -> Result<Vec<ObservedContentFile>, VolumeLocalError> {
         ensure_root_identity(root)?;
         if marker_state_unlocked(root)? != MarkerState::Provisioned {
+            // Cardinality: per distinct materialization attempt; repeats
+            // while the volume stays unprovisioned.
+            tracing::warn!(
+                volume = ?root.volume_uid(),
+                "volume content materialization refused: marker not provisioned",
+            );
             return Err(VolumeLocalError::InvariantViolated);
         }
         for file in files {
@@ -833,6 +877,13 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                     || existing.group() != file.group()
                     || existing.mode() != file.mode()
                 {
+                    // Cardinality: per distinct mismatched file; repeats
+                    // until the on-disk file is corrected.
+                    tracing::warn!(
+                        volume = ?root.volume_uid(),
+                        path = file.path(),
+                        "volume content file metadata diverges from projection",
+                    );
                     return Err(VolumeLocalError::InvariantViolated);
                 }
                 if existing.bytes() != file.bytes() {
@@ -844,7 +895,16 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                         self.resolver.resolve_group(file.group())?,
                         parse_mode(file.mode())?,
                     )
-                    .map_err(|_| VolumeLocalError::EffectFailed)?;
+                    .map_err(|error| {
+                        // Cardinality: per distinct replacement failure.
+                        tracing::warn!(
+                            volume = ?root.volume_uid(),
+                            path = file.path(),
+                            error = ?error,
+                            "volume content file replacement failed (existing)",
+                        );
+                        VolumeLocalError::EffectFailed
+                    })?;
                 }
             } else {
                 let mut filesystem = AnchoredAtomicFilesystem::new(root, file.path())?;
@@ -855,7 +915,16 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                     self.resolver.resolve_group(file.group())?,
                     parse_mode(file.mode())?,
                 )
-                .map_err(|_| VolumeLocalError::EffectFailed)?;
+                .map_err(|error| {
+                    // Cardinality: per distinct creation failure.
+                    tracing::warn!(
+                        volume = ?root.volume_uid(),
+                        path = file.path(),
+                        error = ?error,
+                        "volume content file replacement failed (new)",
+                    );
+                    VolumeLocalError::EffectFailed
+                })?;
             }
         }
         files
@@ -902,9 +971,16 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
         )
         .map_err(|_| VolumeLocalError::EffectFailed)?;
         let mut locks = LockSet::new();
-        let guard = locks
-            .acquire(&backend, &spec)
-            .map_err(|_| VolumeLocalError::EffectFailed)?;
+        let guard = locks.acquire(&backend, &spec).map_err(|error| {
+            // Cardinality: per distinct lock acquisition failure; the
+            // effect that needed the lock fails closed.
+            tracing::warn!(
+                volume = ?root.volume_uid(),
+                error = ?error,
+                "volume OFD lock acquisition failed",
+            );
+            VolumeLocalError::EffectFailed
+        })?;
         operation(guard)
     }
 }
@@ -921,6 +997,12 @@ fn ensure_root_identity(root: &VolumeRootHandle) -> Result<(), VolumeLocalError>
     let fd = root.anchored_fd().ok_or(VolumeLocalError::EffectFailed)?;
     let expected = root.root_identity().ok_or(VolumeLocalError::EffectFailed)?;
     if root_identity(fd)? != expected {
+        // Cardinality: per distinct identity check; a mismatch means the
+        // root fd no longer points at the provisioned directory.
+        tracing::warn!(
+            volume = ?root.volume_uid(),
+            "volume root identity mismatch (fd detached from provisioned directory)",
+        );
         return Err(VolumeLocalError::InvariantViolated);
     }
     Ok(())
@@ -1101,6 +1183,12 @@ fn marker_state_unlocked(root: &VolumeRootHandle) -> Result<MarkerState, VolumeL
             if root.preexisting_state() {
                 Ok(MarkerState::NeverProvisioned)
             } else {
+                // Cardinality: per distinct marker observation; repeats
+                // while state is inconsistent.
+                tracing::warn!(
+                    volume = ?root_uid(root)?,
+                    "volume previously provisioned but marker state missing",
+                );
                 Err(VolumeLocalError::PreviouslyProvisionedStateMissing)
             }
         } else {
@@ -1109,7 +1197,15 @@ fn marker_state_unlocked(root: &VolumeRootHandle) -> Result<MarkerState, VolumeL
     }
     match verify_marker(&mut store, root.root_identity(), binding) {
         Ok(MarkerDisposition::Verified) => Ok(MarkerState::Provisioned),
-        _ => Err(VolumeLocalError::EffectFailed),
+        disposition => {
+            // Cardinality: per distinct marker verification failure.
+            tracing::warn!(
+                volume = ?root_uid(root)?,
+                disposition = ?disposition.err(),
+                "volume marker verification failed",
+            );
+            Err(VolumeLocalError::EffectFailed)
+        }
     }
 }
 

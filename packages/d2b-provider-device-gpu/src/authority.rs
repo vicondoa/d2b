@@ -604,7 +604,15 @@ impl GpuAuthorityIndex {
         let mut index = Self::new_unrehydrated();
         for record in snapshot.records {
             for process in &record.processes {
-                validate_process_identity(&record.admission, process)?;
+                if let Err(error) = validate_process_identity(&record.admission, process) {
+                    tracing::warn!(
+                        device = %record.admission.owner().device_uid().to_canonical_string(),
+                        zone = %record.admission.owner().zone_ref().to_canonical_string(),
+                        error = %error,
+                        "gpu authority rehydrate rejected a persisted process identity",
+                    );
+                    return Err(error);
+                }
             }
             let key = record.admission.backing.clone();
             if index.quarantined.contains(&key) {
@@ -620,6 +628,12 @@ impl GpuAuthorityIndex {
             if let Some(existing_key) = duplicate_lease {
                 index.quarantined.insert(existing_key.clone());
                 index.quarantined.insert(key.clone());
+                tracing::warn!(
+                    device = %record.admission.owner().device_uid().to_canonical_string(),
+                    zone = %record.admission.owner().zone_ref().to_canonical_string(),
+                    reason = "duplicate authority lease across distinct owners",
+                    "gpu authority rehydrate quarantined conflicting records",
+                );
                 if let Some(entry) = index.entries.get_mut(&existing_key) {
                     entry.owners.clear();
                 }
@@ -644,6 +658,12 @@ impl GpuAuthorityIndex {
             {
                 entry.owners.clear();
                 index.quarantined.insert(key);
+                tracing::warn!(
+                    device = %record.admission.owner().device_uid().to_canonical_string(),
+                    zone = %record.admission.owner().zone_ref().to_canonical_string(),
+                    reason = "rehydrated entry disagrees with durable arbitration or platform",
+                    "gpu authority rehydrate quarantined conflicting records",
+                );
                 continue;
             }
             if let Some(owner) = entry
@@ -654,6 +674,12 @@ impl GpuAuthorityIndex {
                 if owner.lease != record.lease || owner.admission != record.admission {
                     entry.owners.clear();
                     index.quarantined.insert(key);
+                    tracing::warn!(
+                        device = %record.admission.owner().device_uid().to_canonical_string(),
+                        zone = %record.admission.owner().zone_ref().to_canonical_string(),
+                        reason = "same owner rehydrated with a changed lease or admission",
+                        "gpu authority rehydrate quarantined conflicting records",
+                    );
                     continue;
                 }
                 for process in record.processes {
@@ -690,9 +716,19 @@ impl GpuAuthorityIndex {
         admission: GpuAuthorityAdmission,
     ) -> Result<GpuAuthorityLease, GpuAuthorityError> {
         if !self.rehydrated {
+            tracing::debug!(
+                reason = "authority index not rehydrated",
+                "gpu authority reservation refused before startup recovery",
+            );
             return Err(GpuAuthorityError::StartupRehydrationRequired);
         }
         if self.quarantined.contains(&admission.backing) {
+            tracing::warn!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "backing is quarantined",
+                "gpu authority reservation refused",
+            );
             return Err(GpuAuthorityError::Quarantined);
         }
         let next_ordinal = {
@@ -709,9 +745,21 @@ impl GpuAuthorityIndex {
             if entry.arbitration != admission.arbitration
                 || entry.max_holders != admission.max_holders
             {
+                tracing::warn!(
+                    device = %admission.owner().device_uid().to_canonical_string(),
+                    zone = %admission.owner().zone_ref().to_canonical_string(),
+                    reason = "request disagrees with the retained arbitration or holder ceiling",
+                    "gpu authority reservation refused",
+                );
                 return Err(GpuAuthorityError::ArbitrationViolation);
             }
             if entry.platform != admission.platform {
+                tracing::warn!(
+                    device = %admission.owner().device_uid().to_canonical_string(),
+                    zone = %admission.owner().zone_ref().to_canonical_string(),
+                    reason = "request platform differs from the retained platform identity",
+                    "gpu authority reservation refused: stale device identity",
+                );
                 return Err(GpuAuthorityError::StaleDeviceIdentity);
             }
             if entry
@@ -719,12 +767,30 @@ impl GpuAuthorityIndex {
                 .iter()
                 .any(|owner| owner.admission.owner == admission.owner)
             {
+                tracing::warn!(
+                    device = %admission.owner().device_uid().to_canonical_string(),
+                    zone = %admission.owner().zone_ref().to_canonical_string(),
+                    reason = "this owner already holds an active reservation",
+                    "gpu authority reservation refused: duplicate active reservation",
+                );
                 return Err(GpuAuthorityError::DuplicateActiveReservation);
             }
             if admission.arbitration == DeviceArbitration::Exclusive && !entry.owners.is_empty() {
+                tracing::warn!(
+                    device = %admission.owner().device_uid().to_canonical_string(),
+                    zone = %admission.owner().zone_ref().to_canonical_string(),
+                    reason = "exclusive claim conflicts with an existing owner",
+                    "gpu authority reservation refused: claim conflict",
+                );
                 return Err(GpuAuthorityError::ClaimConflict);
             }
             if entry.owners.len() >= admission.max_holders as usize {
+                tracing::warn!(
+                    device = %admission.owner().device_uid().to_canonical_string(),
+                    zone = %admission.owner().zone_ref().to_canonical_string(),
+                    reason = "signed holder ceiling reached",
+                    "gpu authority reservation refused: max claims exceeded",
+                );
                 return Err(GpuAuthorityError::MaxClaimsExceeded);
             }
             entry.lease_seq.saturating_add(1).max(1)
@@ -751,7 +817,14 @@ impl GpuAuthorityIndex {
         process: GpuProcessIdentity,
     ) -> Result<(), GpuAuthorityError> {
         let owner = self.find_owner_mut(lease)?;
-        validate_process_identity(&owner.admission, &process)?;
+        if let Err(error) = validate_process_identity(&owner.admission, &process) {
+            tracing::warn!(
+                device = %owner.admission.owner().device_uid().to_canonical_string(),
+                error = %error,
+                "gpu authority rejected a broker-issued process identity",
+            );
+            return Err(error);
+        }
         if !owner.processes.iter().any(|known| known == &process) {
             owner.processes.push(process);
         }
@@ -765,9 +838,21 @@ impl GpuAuthorityIndex {
         observations: &[GpuProcessObservation],
     ) -> Result<GpuAdoption, GpuAuthorityError> {
         if self.quarantined.contains(&admission.backing) {
+            tracing::warn!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "backing is quarantined",
+                "gpu adoption refused: quarantine",
+            );
             return Ok(GpuAdoption::Quarantined);
         }
         let Some(entry) = self.entries.get(&admission.backing) else {
+            tracing::debug!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "no authority entry for the backing",
+                "gpu adoption missing",
+            );
             return Ok(GpuAdoption::Missing);
         };
         let owner = entry
@@ -775,9 +860,21 @@ impl GpuAuthorityIndex {
             .iter()
             .find(|owner| owner.admission.owner == admission.owner);
         let Some(owner) = owner else {
+            tracing::debug!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "no owner record for this admission",
+                "gpu adoption missing",
+            );
             return Ok(GpuAdoption::Missing);
         };
         if owner.admission != *admission {
+            tracing::warn!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "retained owner evidence differs from the presented admission",
+                "gpu adoption refused: owner proof mismatch",
+            );
             return Err(GpuAuthorityError::OwnerProofMismatch);
         }
         let owner_lease = owner.lease.clone();
@@ -787,11 +884,25 @@ impl GpuAuthorityIndex {
             .any(|observation| matches!(observation, GpuProcessObservation::Ambiguous))
         {
             self.quarantined.insert(admission.backing.clone());
+            tracing::warn!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "worker observation was ambiguous",
+                "gpu adoption refused: quarantine",
+            );
             return Ok(GpuAdoption::Quarantined);
         }
         for observation in observations {
             if let GpuProcessObservation::Matching(identity) = observation {
-                validate_process_identity(admission, identity)?;
+                if let Err(error) = validate_process_identity(admission, identity) {
+                    tracing::warn!(
+                        device = %admission.owner().device_uid().to_canonical_string(),
+                        zone = %admission.owner().zone_ref().to_canonical_string(),
+                        error = %error,
+                        "gpu adoption rejected an observed process identity",
+                    );
+                    return Err(error);
+                }
             }
         }
         let mut matched_roles = BTreeSet::new();
@@ -803,6 +914,12 @@ impl GpuAuthorityIndex {
             if owner_processes.iter().any(|known| known == identity) {
                 if !matched_roles.insert(identity.role()) {
                     self.quarantined.insert(admission.backing.clone());
+                    tracing::warn!(
+                        device = %admission.owner().device_uid().to_canonical_string(),
+                        zone = %admission.owner().zone_ref().to_canonical_string(),
+                        reason = "same worker role observed more than once",
+                        "gpu adoption refused: quarantine",
+                    );
                     return Ok(GpuAdoption::Quarantined);
                 }
                 matched_count += 1;
@@ -814,8 +931,20 @@ impl GpuAuthorityIndex {
             .iter()
             .any(|observation| matches!(observation, GpuProcessObservation::StaleIdentity))
         {
+            tracing::warn!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "persisted worker identity is stale",
+                "gpu adoption refused: stale identity",
+            );
             Ok(GpuAdoption::StaleIdentity)
         } else {
+            tracing::debug!(
+                device = %admission.owner().device_uid().to_canonical_string(),
+                zone = %admission.owner().zone_ref().to_canonical_string(),
+                reason = "no matching worker observed",
+                "gpu adoption missing",
+            );
             Ok(GpuAdoption::Missing)
         }
     }
@@ -845,7 +974,13 @@ impl GpuAuthorityIndex {
                     .any(|owner| &owner.lease == lease)
                     .then(|| key.clone())
             })
-            .ok_or(GpuAuthorityError::OwnerProofMismatch)?;
+            .ok_or(GpuAuthorityError::OwnerProofMismatch)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "gpu authority release failed: lease is unknown to the index",
+                );
+            })?;
         let entry = self.entries.get_mut(&key).expect("authority entry exists");
         let position = entry
             .owners
@@ -858,7 +993,13 @@ impl GpuAuthorityIndex {
                         })
                 }
             })
-            .ok_or(GpuAuthorityError::CloseUnconfirmed)?;
+            .ok_or(GpuAuthorityError::CloseUnconfirmed)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "gpu authority release failed: closure proofs do not cover the lease",
+                );
+            })?;
         entry.owners.remove(position);
         if entry.owners.is_empty() {
             self.entries.remove(&key);
@@ -897,7 +1038,13 @@ impl GpuAuthorityIndex {
             }
             ordinal = ordinal
                 .checked_add(1)
-                .ok_or(GpuAuthorityError::MaxClaimsExceeded)?;
+                .ok_or(GpuAuthorityError::MaxClaimsExceeded)
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        error = %error,
+                        "gpu authority lease ordinal space exhausted",
+                    );
+                })?;
         }
     }
 

@@ -12,6 +12,7 @@ use d2b_process_conformance::{
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
     ProcessProvider, ProcessProviderProfile, ProcessStatusReport, StopClass, WaitReapOwner,
 };
+use tracing::{debug, warn};
 
 /// User-domain supervisor lifecycle delegated to `Provider/system-systemd`.
 ///
@@ -71,17 +72,37 @@ impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
 
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
         if ticket.selected_provider().as_str() != "system-systemd" {
+            warn!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                "assignment rejected: selected provider mismatch"
+            );
             return Err(ProcessConformanceError::ProviderMismatch);
         }
         if ticket.domain() != ExecutionDomain::User || ticket.user_ref().is_none() {
+            warn!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                "assignment rejected: user domain requires a user ref"
+            );
             return Err(ProcessConformanceError::UserRefRequired);
         }
         if ticket.execution_ref() != &self.execution_ref
             || ticket.user_ref() != Some(&self.user_ref)
         {
+            warn!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                "assignment rejected: execution or user ref mismatch"
+            );
             return Err(ProcessConformanceError::InvalidTicket);
         }
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
+            debug!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                "assignment rejected: operation cancelled"
+            );
             return Err(ProcessConformanceError::Cancelled);
         }
         Ok(())
@@ -122,7 +143,15 @@ impl<P: ProcessLaunchEffectPort> SupervisorProcessLifecycle<P> {
             .await
         {
             Ok(()) => error,
-            Err(_) => ProcessConformanceError::StopUnavailable,
+            Err(stop_error) => {
+                warn!(
+                    provider = "system-systemd",
+                    identity = launched.identity.to_hex(),
+                    stop_error = %stop_error,
+                    "stop of failed supervisor launch unavailable; reporting stop-unavailable"
+                );
+                ProcessConformanceError::StopUnavailable
+            }
         }
     }
 }
@@ -137,11 +166,30 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
         ticket: &LaunchTicket,
     ) -> Result<ProcessStatusReport, ProcessConformanceError> {
         self.validate(ticket)?;
-        let launched = self.port.launch(ticket).await?;
+        let launched = self.port.launch(ticket).await.map_err(|error| {
+            warn!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                error = ?error,
+                "supervisor process start failed"
+            );
+            error
+        })?;
         if let Err(error) = launched.validate(self.profile.required_identity_bindings()) {
+            warn!(
+                provider = "system-systemd",
+                identity = launched.identity.to_hex(),
+                error = ?error,
+                "launched supervisor process identity validation failed"
+            );
             return Err(self.cleanup_failed_launch(&launched, error).await);
         }
         if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
+            warn!(
+                provider = "system-systemd",
+                identity = launched.identity.to_hex(),
+                "launched supervisor process wait/reap owner mismatch"
+            );
             return Err(self
                 .cleanup_failed_launch(&launched, ProcessConformanceError::WaitOwnerMismatch)
                 .await);
@@ -170,6 +218,11 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
             .expected_identity_digest()
             .is_none_or(|expected| *expected == candidate.identity);
         if !identity_verified || !expected_identity_matches {
+            warn!(
+                provider = "system-systemd",
+                resource = ticket.process_ref().to_canonical_string(),
+                "adoption refused: supervisor identity verification failed"
+            );
             return Ok(AdoptionOutcome::Quarantined(self.report(
                 ticket,
                 candidate.identity,
@@ -177,7 +230,19 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
                 AdoptionCondition::Quarantined,
             )));
         }
-        let _pidfd = self.port.open_pidfd(&candidate).await?;
+        let _pidfd = self
+            .port
+            .open_pidfd(&candidate)
+            .await
+            .map_err(|error| {
+                warn!(
+                    provider = "system-systemd",
+                    identity = candidate.identity.to_hex(),
+                    error = ?error,
+                    "pidfd open failed during supervisor adoption"
+                );
+                error
+            })?;
         Ok(AdoptionOutcome::Adopted(self.report(
             ticket,
             candidate.identity,
@@ -191,6 +256,14 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SupervisorProcessLifecycle<
         identity: &ProcessIdentityDigest,
         class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
-        self.port.stop(identity, class).await
+        self.port.stop(identity, class).await.map_err(|error| {
+            warn!(
+                provider = "system-systemd",
+                identity = identity.to_hex(),
+                error = ?error,
+                "supervisor process stop failed"
+            );
+            error
+        })
     }
 }

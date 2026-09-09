@@ -1,6 +1,7 @@
 //! Authenticated notification Provider runtime composition.
 
 use d2b_contracts_resource::v3::ResourceRef;
+use tracing::{debug, warn};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{
@@ -196,9 +197,13 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         observer_session: &AuthenticatedComponentSession<C>,
     ) -> Result<(), NotificationRuntimeError> {
         let observer = self.source_evidence(observer_session)?;
-        observer
-            .admit_observer()
-            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)?;
+        observer.admit_observer().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "observer close refused: session not authenticated as observer"
+            );
+            NotificationRuntimeError::SessionAdmissionFailed
+        })?;
         self.sink.close_session(&observer);
         Ok(())
     }
@@ -208,9 +213,13 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
         &mut self,
         observer: &SessionEvidence,
     ) -> Result<(), NotificationRuntimeError> {
-        observer
-            .admit_observer()
-            .map_err(|_| NotificationRuntimeError::SessionAdmissionFailed)?;
+        observer.admit_observer().map_err(|_| {
+            debug!(
+                provider = "notification-desktop",
+                "observer close refused: session not authenticated as observer"
+            );
+            NotificationRuntimeError::SessionAdmissionFailed
+        })?;
         self.sink.close_session(observer);
         Ok(())
     }
@@ -273,7 +282,14 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &source_evidence,
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification source reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })
     }
 
     /// Reconcile source routes retained by the daemon after registration.
@@ -294,7 +310,14 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &source_evidence,
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification source route reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })
     }
 
     /// Reconcile daemon-local Guest source routes admitted through the
@@ -316,7 +339,14 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &source_evidence,
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification source route reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })
     }
 
     /// Reconcile configured Guest source projections over one authenticated
@@ -343,7 +373,14 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &source_evidence,
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification source route reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })
     }
 
     /// Drain source processes and the bounded host projection without
@@ -357,7 +394,14 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &[],
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)?;
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification drain reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })?;
         self.sink.drain();
         Ok(plan)
     }
@@ -376,13 +420,27 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
                 &[],
                 &mut self.effects,
             )
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)?;
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification drain reconcile failed"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })?;
         let drained_sources = plan.stop_endpoints.len();
         let drained_host_sink = plan.stop_host_sink;
         self.sink.drain();
         self.effects
             .release_authority()
-            .map_err(|_| NotificationRuntimeError::ReconciliationFailed)?;
+            .map_err(|error| {
+                warn!(
+                    provider = "notification-desktop",
+                    reason = error,
+                    "notification finalize failed: authority release error"
+                );
+                NotificationRuntimeError::ReconciliationFailed
+            })?;
         let report = NotificationFinalizationReport {
             drained_sources,
             drained_host_sink,

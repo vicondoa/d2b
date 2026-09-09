@@ -100,9 +100,22 @@ impl ActivationRunner {
             "Host" | "Guest"
         ) || request.target_generation == 0
         {
+            tracing::warn!(
+                target = %request.execution_ref.to_canonical_string(),
+                target_generation = request.target_generation,
+                "activation runner request rejected: request invalid",
+            );
             return Err(ActivationRunnerError::InvalidRequest);
         }
-        let outcome = helper.activate(request)?;
+        let outcome = helper.activate(request).map_err(|error| {
+            tracing::warn!(
+                target = %request.execution_ref.to_canonical_string(),
+                target_generation = request.target_generation,
+                %error,
+                "activation helper failed",
+            );
+            error
+        })?;
         Ok(ActivationRunnerResult {
             outcome,
             source_generation_preserved: !matches!(
@@ -120,10 +133,19 @@ impl ActivationRunner {
             outcome: RunnerOutcomeCode,
         }
         if bytes.len() > 512 || bytes.contains(&b'/') {
+            tracing::warn!(
+                bytes = bytes.len(),
+                "activation helper output rejected: unbounded or malformed",
+            );
             return Err(ActivationRunnerError::InvalidHelperOutput);
         }
-        let wire: Wire = serde_json::from_slice(bytes)
-            .map_err(|_| ActivationRunnerError::InvalidHelperOutput)?;
+        let wire: Wire = serde_json::from_slice(bytes).map_err(|error| {
+            tracing::warn!(
+                %error,
+                "activation helper output rejected: not a bounded outcome envelope",
+            );
+            ActivationRunnerError::InvalidHelperOutput
+        })?;
         Ok(wire.outcome)
     }
 }

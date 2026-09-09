@@ -240,6 +240,10 @@ impl TpmController {
         port: &mut P,
     ) -> Result<TpmReconcileOutcome, TpmControllerError> {
         if !self.finalizer || matches!(self.phase, TpmPhase::Finalizing | TpmPhase::Finalized) {
+            tracing::debug!(
+                reason = "finalizer missing or terminal phase",
+                "tpm reconcile refused before any effect",
+            );
             return Err(TpmControllerError::InvalidState);
         }
         if !self.migration_complete {
@@ -255,14 +259,26 @@ impl TpmController {
                         self.migration_complete = true;
                     }
                     LegacyMigrationOutcome::Pending => {
+                        tracing::debug!(
+                            reason = "legacy state migration still pending",
+                            "tpm reconcile deferred: transient",
+                        );
                         return Ok(TpmReconcileOutcome::Transient);
                     }
                     outcome if outcome.is_terminal_failure() => {
                         self.phase = TpmPhase::Failed;
+                        tracing::warn!(
+                            outcome = ?outcome,
+                            "tpm legacy state migration failed terminally",
+                        );
                         return Err(TpmControllerError::LegacyMigration(outcome));
                     }
                     _ => {
                         self.phase = TpmPhase::Failed;
+                        tracing::warn!(
+                            reason = "legacy migration outcome neither permits ensure nor is terminal",
+                            "tpm legacy migration outcome invalid",
+                        );
                         return Err(TpmControllerError::InvalidState);
                     }
                 }
@@ -275,6 +291,10 @@ impl TpmController {
         };
         if let Err(error) = self.intent.validate(&prepared.observation) {
             self.phase = TpmPhase::Failed;
+            tracing::warn!(
+                error = %error,
+                "tpm state-directory observation rejected before flush",
+            );
             return Err(TpmControllerError::StateValidation(error));
         }
         self.phase = TpmPhase::Flushing;
@@ -298,6 +318,10 @@ impl TpmController {
         self.phase = TpmPhase::Finalizing;
         if self.worker_started {
             port.stop().map_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "tpm swtpm worker stop failed during finalize",
+                );
                 self.phase = TpmPhase::Degraded;
                 TpmControllerError::Effect(error)
             })?;
@@ -310,6 +334,11 @@ impl TpmController {
     }
 
     fn effect_failed<T>(&mut self, error: TpmEffectError) -> Result<T, TpmControllerError> {
+        tracing::warn!(
+            phase = ?self.phase,
+            error = %error,
+            "tpm reconcile effect failed",
+        );
         self.phase = if error == TpmEffectError::Transient {
             TpmPhase::Degraded
         } else {
