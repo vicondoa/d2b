@@ -496,6 +496,22 @@ rec {
   d2bDaemonNode =
     { extra ? { }, writableStore ? false }:
     { config, pkgs, ... }:
+    let
+      # Dedicated state disk: the redb Zone store pays an fsync per commit
+      # on the emulated root disk, and bring-up write bursts stall the
+      # daemon writer thread ~700-900ms per write. Attaching /var/lib/d2b
+      # as its own virtio drive with cache=unsafe makes guest fsync a host
+      # page-cache no-op; the fixture VM is ephemeral, so the durability
+      # semantics that unsafe drops are irrelevant here.
+      stateDisk = pkgs.runCommand "d2b-state.img"
+        {
+          nativeBuildInputs = [ pkgs.e2fsprogs ];
+        }
+        ''
+          truncate -s 4G "$out"
+          mkfs.ext4 -q -F "$out"
+        '';
+    in
     {
       imports = [
         self.nixosModules.default
@@ -555,6 +571,24 @@ rec {
         # a fast, reliable boot.
         (lib.mkIf writableStore {
           virtualisation.useBootLoader = true;
+        })
+        # The state disk keeps /var/lib/d2b off the emulated root disk:
+        # cache=unsafe (host fsync no-op), noatime + nobarrier mounts.
+        # The writableStore hardlink-farm tests stay on the default
+        # same-fs layout, so this is opt-out for them.
+        (lib.mkIf (! writableStore) {
+          virtualisation.qemu.options = [
+            "-drive"
+            "file=${stateDisk},format=raw,if=virtio,cache=unsafe,aio=threads"
+          ];
+          fileSystems."/var/lib/d2b" = {
+            device = "/dev/vdb";
+            fsType = "ext4";
+            options = [ "noatime" "nobarrier" ];
+            # Up before activation so d2bTestStateDirs lands inside the
+            # mounted filesystem, not under the covered root mountpoint.
+            neededForBoot = true;
+          };
         })
       ];
     };
