@@ -208,8 +208,14 @@ pub(crate) async fn start(
                 policy_revision: authorization_state.snapshot.policy_revision,
                 api_revision: authorization_state.snapshot.api_catalog_revision,
                 configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                deadline_tick: 5_000,
-                max_attempts: 3,
+                // Startup phase: register/list_initial/open_watch each wait
+                // on store reads that take 500-750ms under the fsync'd
+                // commit stream (READ_LIFETIME comment in actor.rs). The
+                // deadline must cover ~10 retries with 100ms->1s backoff;
+                // the old 5s tick deadline + 3 attempts exhausted before any
+                // read completed (hostrun73: 30 runner terminations).
+                deadline_tick: 30_000,
+                max_attempts: 10,
             },
         );
         tasks.push(tokio::spawn(async move {

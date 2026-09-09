@@ -51,7 +51,15 @@ pub const READ_POOL_THREADS: usize = 4;
 /// Maximum read transactions admitted at once.
 pub const MAX_CONCURRENT_READS: usize = 16;
 /// Worker-enforced lifetime ceiling for an admitted read transaction.
-pub const READ_LIFETIME: Duration = Duration::from_millis(250);
+///
+/// Measured on the host-integration VM: store reads take 500-750ms while
+/// the fsync'd commit stream (Durability::Immediate, 106-455ms commits)
+/// saturates the writer — a 250ms ceiling guaranteed Timeout exactly under
+/// the load that matters and cascaded into runner startup integrity
+/// failures (hostrun 57/61/65/73: 236 read-deadline-elapsed, 30 runner
+/// terminations at accept_effect). Reads are allowed to wait out the
+/// commit stream instead.
+pub const READ_LIFETIME: Duration = Duration::from_secs(2);
 /// Worker-enforced lifetime ceiling for one bounded relist page.
 pub const LIST_READ_LIFETIME: Duration = Duration::from_secs(1);
 

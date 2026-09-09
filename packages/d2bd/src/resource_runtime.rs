@@ -13562,8 +13562,8 @@ impl ZoneResourceRuntime {
                     policy_revision: authorization_state.snapshot.policy_revision,
                     api_revision: authorization_state.snapshot.api_catalog_revision,
                     configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                    deadline_tick: 5_000,
-                    max_attempts: 3,
+                    deadline_tick: 30_000,
+                    max_attempts: 10,
                 },
                 handler: registration.handler().label(),
                 resource_type: registration.resource_type(),
@@ -13611,8 +13611,8 @@ impl ZoneResourceRuntime {
                 policy_revision: authorization_state.snapshot.policy_revision,
                 api_revision: authorization_state.snapshot.api_catalog_revision,
                 configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                deadline_tick: 5_000,
-                max_attempts: 3,
+                deadline_tick: 30_000,
+                max_attempts: 10,
             },
         );
         let provider_descriptors = if provider_generations.is_empty() {
@@ -13723,8 +13723,8 @@ impl ZoneResourceRuntime {
                     policy_revision: authorization_state.snapshot.policy_revision,
                     api_revision: authorization_state.snapshot.api_catalog_revision,
                     configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                    deadline_tick: 5_000,
-                    max_attempts: 3,
+                    deadline_tick: 30_000,
+                    max_attempts: 10,
                 },
                 controller_ref: runner_descriptor.identity().controller_ref().clone(),
                 resource_type,
@@ -14110,8 +14110,8 @@ impl ZoneResourceRuntime {
                         configuration_revision: authorization_state
                             .snapshot
                             .active_configuration_revision,
-                        deadline_tick: 5_000,
-                        max_attempts: 3,
+                        deadline_tick: 30_000,
+                        max_attempts: 10,
                     },
                 );
                 new_tasks.push(tokio::spawn(async move {
@@ -14545,8 +14545,8 @@ impl ZoneResourceRuntime {
                         configuration_revision: authorization_state
                             .snapshot
                             .active_configuration_revision,
-                        deadline_tick: 5_000,
-                        max_attempts: 3,
+                        deadline_tick: 30_000,
+                        max_attempts: 10,
                     },
                 );
                 let resource_type = registration.resource_type;
@@ -14967,8 +14967,8 @@ impl ZoneResourceRuntime {
                             configuration_revision: authorization_state
                                 .snapshot
                                 .active_configuration_revision,
-                            deadline_tick: 5_000,
-                            max_attempts: 3,
+                            deadline_tick: 30_000,
+                            max_attempts: 10,
                         },
                     );
                     tokio::spawn(async move {
@@ -14996,8 +14996,8 @@ impl ZoneResourceRuntime {
                             configuration_revision: authorization_state
                                 .snapshot
                                 .active_configuration_revision,
-                            deadline_tick: 5_000,
-                            max_attempts: 3,
+                            deadline_tick: 30_000,
+                            max_attempts: 10,
                         },
                     );
                     tokio::spawn(async move {
@@ -19340,8 +19340,8 @@ impl ZoneResourceRuntime {
                     configuration_revision: authorization_state
                         .snapshot
                         .active_configuration_revision,
-                    deadline_tick: 5_000,
-                    max_attempts: 3,
+                    deadline_tick: 30_000,
+                    max_attempts: 10,
                 },
             );
             let failure_slot = Arc::clone(&self.process_runner_failure);
@@ -30633,8 +30633,8 @@ mod tests {
                 policy_revision: authz_state.snapshot.policy_revision,
                 api_revision: authz_state.snapshot.api_catalog_revision,
                 configuration_revision: authz_state.snapshot.active_configuration_revision,
-                deadline_tick: 5_000,
-                max_attempts: 3,
+                deadline_tick: 30_000,
+                max_attempts: 10,
             },
         )
         .run();

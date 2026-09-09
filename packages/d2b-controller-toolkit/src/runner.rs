@@ -565,7 +565,13 @@ pub struct RunnerConfig {
 
 const WATCH_RECOVERY_MAX_RETRIES: usize = 3;
 const FAILURE_PERSISTENCE_MAX_ATTEMPTS: usize = 3;
-const SOURCE_RETRY_BACKOFF_TICKS: u64 = 1;
+/// Backoff between startup source-call retries: attempt * 100ms, capped by
+/// the runner deadline. Measured store reads take 500-750ms under the
+/// fsync'd commit stream (actor.rs READ_LIFETIME comment), so the old
+/// attempt*1ms backoff exhausted the startup retry budget before any read
+/// could complete (hostrun73: 30 runner terminations at accept_effect and
+/// startup).
+const SOURCE_RETRY_BACKOFF_TICKS: u64 = 100;
 
 /// Successful loop summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
