@@ -15865,7 +15865,10 @@ async fn open_resource_plane(
         // plane — the resources are committed, the reader is just early.
         let mut process_resource_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-        for attempt in 0..10 {
+        // 30 x 2s: with fast fixture IO the reader outruns the broker's
+        // publication by a wide margin, and 10 attempts (20s) exhausted
+        // before the rows landed. Give the publication a full minute.
+        for attempt in 0..30 {
             process_resource_startup = runtime
                 .reconcile_process_resources(Arc::new(state.clone()))
                 .await;
