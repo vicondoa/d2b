@@ -15859,10 +15859,29 @@ async fn open_resource_plane(
                 0
             },
         );
-        if let Err(error) = runtime
-            .reconcile_process_resources(Arc::new(state.clone()))
-            .await
-        {
+        // The generation publication above is the write; this startup read
+        // must not race it. Under a fast CPU the read can land before the
+        // published rows are visible, so retry instead of failing the
+        // plane — the resources are committed, the reader is just early.
+        let mut process_resource_startup =
+            Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+        for attempt in 0..10 {
+            process_resource_startup = runtime
+                .reconcile_process_resources(Arc::new(state.clone()))
+                .await;
+            match &process_resource_startup {
+                Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
+                    tracing::warn!(
+                        zone = %runtime.zone().as_str(),
+                        attempt,
+                        "process resource startup raced publication; retrying",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                _ => break,
+            }
+        }
+        if let Err(error) = process_resource_startup {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             while let Some((_, runtime, _)) = remaining.next() {
