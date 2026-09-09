@@ -19,6 +19,7 @@ getrandom = "0.2"
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = "0.1"
 sha2 = { workspace = true }
 
 [[bin]]

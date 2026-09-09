@@ -14,6 +14,7 @@ d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version =
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 serde.workspace = true
+tracing = "0.1"
 serde_json.workspace = true
 rustix = { workspace = true }
 zeroize = "1"
