@@ -1423,6 +1423,77 @@ mod tests {
 
     const OUTCOME_RETENTION: usize = 2;
 
+    /// A Provider resource body whose status carries the providerReadiness
+    /// projection and the given phase/observedGeneration, with deliberately
+    /// scrambled key ordering to exercise semantic (order-independent)
+    /// candidate comparison.
+    fn provider_resource_snapshot(
+        phase: &str,
+        observed_generation: u64,
+        generation: u64,
+    ) -> ResourceSnapshot {
+        let readiness = serde_json::json!({
+            "componentsReady": true,
+            "dependenciesReady": true,
+            "descriptorReady": true,
+            "artifactReady": true,
+            "registrationReady": true,
+        });
+        let canonical = serde_json::json!({
+            "status": {
+                "resource": { "providerReadiness": readiness },
+                "observedGeneration": observed_generation,
+                "phase": phase,
+            },
+            "spec": {},
+        });
+        ResourceSnapshot::new(
+            ResourceKey::new(
+                ZoneId::parse("work").unwrap(),
+                ResourceRef::parse("Provider/order-check").unwrap(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ),
+            ZoneRevision::new(9),
+            ResourceGeneration::new(generation).unwrap(),
+            serde_json::to_vec(&canonical).unwrap(),
+            false,
+        )
+    }
+
+    #[test]
+    fn provider_candidate_ignores_key_order_and_flags_real_changes() {
+        let observation = ProviderObservation {
+            package_present: true,
+            config_valid: true,
+            graph_valid: true,
+            conformance_valid: true,
+            required_dependencies_ready: true,
+            required_components_ready: true,
+            optional_components_degraded: false,
+            components_drained: false,
+        };
+
+        // The stored status is semantically identical to the rebuilt
+        // candidate (same values, different key order): no new write.
+
+        let resource = provider_resource_snapshot("Pending", 3, 3);
+        assert_eq!(
+            provider_status_candidate(&resource, ProviderPhase::Pending, observation)
+                .unwrap(),
+            None,
+            "key-order churn must not produce a status write"
+        );
+
+        // A genuinely different phase is a real change: write it.
+        let resource = provider_resource_snapshot("Ready", 3, 3);
+        assert!(
+            provider_status_candidate(&resource, ProviderPhase::Pending, observation)
+                .unwrap()
+                .is_some(),
+            "a phase regression must produce a status write"
+        );
+    }
+
     struct TestRegisteredApi {
         initial: InitialList,
         snapshots: Mutex<BTreeMap<ResourceKey, FreshSnapshot>>,
