@@ -56,7 +56,7 @@ use d2b_provider_volume_virtiofs::{
 use d2b_resource_api::registered::RedbRegisteredControllerApi;
 use d2b_resource_store::{
     ResourceAssignmentFence, ResourceAssignmentScope, StoreErrorKind, StoreGetRequest,
-    StoreListRequest, StoreOperationContext, StoreProjection, StoredResource,
+    StoreOperationContext, StoreProjection, StoredResource,
 };
 use d2bd_runtime::resource_runtime_support::retry_transient_store_read;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
@@ -259,6 +259,13 @@ impl SharedVolumeResourceKind {
         }
     }
 
+    const fn controller_ref(self) -> &'static str {
+        match self {
+            Self::Volume => VOLUME_LOCAL_CONTROLLER_REF,
+            Self::Binding => VOLUME_VIRTIOFS_CONTROLLER_REF,
+        }
+    }
+
     const fn resource_type(self) -> &'static str {
         match self {
             Self::Volume => "Volume",
@@ -361,6 +368,12 @@ impl DaemonVolumeProviderEffects {
     /// Effects hold while the controller is still starting so reconcile
     /// work is never thrown at a half-started provider. A controller that
     /// never appears reads as unhealthy; the caller retries.
+    ///
+    /// Read pattern: one targeted `get` of the static controller Process
+    /// ref per call. The previous implementation list-paged the entire
+    /// Process type every ~1s (201 scans/run), saturating the redb read
+    /// pool and starving the process runner's watch of the vol-vfd Created
+    /// event (hostrun 71: vol-vfd processes admitted but never dispatched).
     async fn provider_controller_healthy(&self, kind: SharedVolumeResourceKind) -> bool {
         let runtime = match self.runtime() {
             Ok(runtime) => runtime,
@@ -370,93 +383,59 @@ impl DaemonVolumeProviderEffects {
                 return false;
             }
         };
-        let provider = kind.provider_ref();
-        let mut cursor = None;
-        let mut scanned = 0usize;
-        let mut candidates = Vec::new();
-        loop {
-            let page = match runtime
-                .store
-                .list(StoreListRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "u7-controller-health".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "u7-controller-health".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    resource_types: vec![ResourceTypeName::parse("Process".to_owned())
-                        .expect("process type")],
-                    resource_names: Vec::new(),
-                    filters: vec![d2b_resource_store::StoreFilter {
-                        field: "owner.resourceRef".to_owned(),
-                        values: vec![provider.to_owned()],
-                    }],
-                    page_size: 256,
-                    cursor: cursor.take(),
-                    projection: StoreProjection::Full,
-                })
-                .await
-            {
-                Ok(page) => page,
-                Err(error) => {
-                    // XXX-host-bringup: temporary; remove once green.
-                    tracing::warn!(
-                        provider = kind.provider_ref(),
-                        error = ?error,
-                        "u7 health: store list failed",
-                    );
-                    return false;
-                }
-            };
-            for resource in &page.resources {
-                scanned += 1;
-                let value = match serde_json::from_slice::<Value>(&resource.canonical_json) {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                let owner = value
-                    .pointer("/metadata/ownerRef")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let class = value
-                    .pointer("/spec/processClass")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let phase = value
-                    .pointer("/status/phase")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let observed = value.pointer("/status/observedGeneration").and_then(Value::as_u64);
-                let generation = value.pointer("/metadata/generation").and_then(Value::as_u64);
-                if class == "controller" {
-                    candidates.push(format!(
-                        "{}:{}:{}:{:?}:{:?}",
-                        owner, phase, class, observed, generation
-                    ));
-                }
-                if owner == provider
-                    && class == "controller"
-                    && phase == "Ready"
-                    && observed == generation
-                {
-                    return true;
-                }
+        let controller_ref = match ResourceRef::parse(kind.controller_ref()) {
+            Ok(reference) => reference,
+            Err(_) => return false,
+        };
+        let resource = match runtime
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: "u7-controller-health".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "u7-controller-health".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: controller_ref,
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+        {
+            Ok(resource) => resource,
+            Err(error) => {
+                // XXX-host-bringup: temporary; remove once green.
+                tracing::warn!(
+                    provider = kind.provider_ref(),
+                    error = ?error,
+                    "u7 health: controller get failed",
+                );
+                return false;
             }
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        // XXX-host-bringup: temporary; remove once green.
-        tracing::warn!(
-            provider = kind.provider_ref(),
-            scanned,
-            candidates = ?candidates,
-            "u7 health: no healthy controller",
-        );
-        false
+        };
+        let value = match serde_json::from_slice::<Value>(&resource.canonical_json) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let owner = value
+            .pointer("/metadata/ownerRef")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let class = value
+            .pointer("/spec/processClass")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let phase = value
+            .pointer("/status/phase")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let observed = value.pointer("/status/observedGeneration").and_then(Value::as_u64);
+        let generation = value.pointer("/metadata/generation").and_then(Value::as_u64);
+        owner == kind.provider_ref()            && class == "controller"
+            && phase == "Ready"
+            && observed == generation
     }
 
     fn validate(
