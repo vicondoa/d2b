@@ -267,6 +267,7 @@ impl SharedVolumeResourceKind {
     }
 }
 
+/// The canonical binding reference for guard diagnostics.
 #[derive(Clone)]
 struct SharedVolumeEffectContext {
     identity: ControllerIdentity,
@@ -937,12 +938,18 @@ impl DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
-        let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
+        let value = self.validate(SharedVolumeResourceKind::Binding, context, resource).map_err(|error| {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "validate", error = ?error, "u7 binding guard rejected");
+            error
+        })?;
         // U4: the reconciler input is the stored binding envelope
         // itself, parsed strictly against the neutral binding contract.
         let binding = match StoredBinding::from_resource_spec(&value) {
             Ok(binding) => binding,
-            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "from_resource_spec", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
         };
         let runtime = self.runtime()?;
         // A binding whose Volume is missing or unparseable can never serve:
@@ -958,7 +965,8 @@ impl DaemonVolumeProviderEffects {
             .await
         {
             Ok(volume_resource) => volume_resource,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-lookup", error = ?error, "u7 binding guard rejected");
                 return Ok(Self::failed_binding_result(
                     resource,
                     d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -966,6 +974,7 @@ impl DaemonVolumeProviderEffects {
             }
         };
         if volume_resource.resource_ref != *binding.spec().volume_ref() {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-ref-mismatch", stored = %volume_resource.resource_ref.to_canonical_string(), wanted = %binding.spec().volume_ref().to_canonical_string(), "u7 binding guard rejected");
             return Ok(Self::failed_binding_result(
                 resource,
                 d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -974,10 +983,14 @@ impl DaemonVolumeProviderEffects {
         // Dependency-only Volume read (AE2): the envelope is parsed and
         // the view resolved; nothing in this path writes the Volume.
         let volume_value = serde_json::from_slice::<Value>(&volume_resource.canonical_json)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-envelope-decode", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::InvalidResource
+            })?;
         let volume_spec = match Self::volume_spec(&volume_value) {
             Ok(volume_spec) => volume_spec,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-spec", error = ?error, "u7 binding guard rejected");
                 return Ok(Self::failed_binding_result(
                     resource,
                     d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -1008,18 +1021,25 @@ impl DaemonVolumeProviderEffects {
             .and_then(|value| u32::try_from(value).ok())
             .filter(|value| *value > 0)
             .unwrap_or(1);
-        let principal = binding
-            .worker_principal()
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let principal = binding.worker_principal().map_err(|error| {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "worker-principal", error = ?error, "u7 binding guard rejected");
+            SharedVolumeEffectError::InvalidResource
+        })?;
         let view = match d2b_provider_volume_virtiofs::resolve_view(&volume_spec, &binding) {
             Ok(view) => view,
-            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "resolve-view", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
         };
-        let plan =
-            match VirtiofsdWorkerPlan::for_binding(&binding, view, vcpu_count, principal.clone()) {
-                Ok(plan) => plan,
-                Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
-            };
+        let plan = match VirtiofsdWorkerPlan::for_binding(&binding, view, vcpu_count, principal.clone())
+        {
+            Ok(plan) => plan,
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "worker-plan", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
+        };
         let store_view_marker_ready = if binding.spec().view().as_str() == "ro-store" {
             let nix_identity =
                 (volume_spec.source().settings().kind() == SourceKind::NixClosure)
@@ -1031,12 +1051,16 @@ impl DaemonVolumeProviderEffects {
                     )
                 })
                 .transpose()
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "nix-identity", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::InvalidResource
+                })?;
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
                 && nix_identity
                     .as_ref()
                     .is_none_or(|identity| identity.role != NixClosureVolumeRole::StoreView)
             {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "nix-closure-role", derived_role = ?nix_identity.as_ref().map(|identity| identity.role), "u7 binding guard rejected");
                 return Err(SharedVolumeEffectError::InvalidResource);
             }
             let guest_ref = (volume_spec.source().settings().kind() == SourceKind::NixClosure)
@@ -1049,6 +1073,7 @@ impl DaemonVolumeProviderEffects {
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
                 && guest_ref.as_ref() != Some(binding.spec().execution_ref())
             {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "guest-ref-mismatch", derived_guest = ?guest_ref, wanted = ?binding.spec().execution_ref(), "u7 binding guard rejected");
                 return Err(SharedVolumeEffectError::InvalidResource);
             }
             let nix_closure_role = nix_identity
@@ -1062,7 +1087,10 @@ impl DaemonVolumeProviderEffects {
                 guest_ref,
                 nix_closure_role,
             )
-            .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "root-resolver-construction", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::Unavailable
+            })?;
             let adapter = AnchoredVolumeEffectAdapter::new(resolver);
             let settings = volume_spec.source().settings();
             let root = adapter
@@ -1073,15 +1101,24 @@ impl DaemonVolumeProviderEffects {
                     settings.kind(),
                 )
                 .await
-                .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "resolve-root-for", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::Unavailable
+                })?;
             let guest = BoundedToken::parse(
                 binding.spec().execution_ref().name().as_str().to_owned(),
             )
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "guest-token-parse", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::InvalidResource
+            })?;
             let evidence = adapter
                 .observe_store_view_marker(&root, &marker_path(&guest))
                 .await
-                .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "observe-store-view-marker", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::Unavailable
+                })?;
             evidence.present && evidence.zero_length
         } else {
             true
@@ -1091,6 +1128,7 @@ impl DaemonVolumeProviderEffects {
             // while the store view is still syncing.
             tracing::debug!(
                 resource = %resource.key().resource_ref().to_canonical_string(),
+                guard = "store-view-marker-absent",
                 "u7 binding: ro-store marker not ready, holding Pending",
             );
             return Ok(SharedVolumeEffectResult {
