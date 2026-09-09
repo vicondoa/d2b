@@ -675,6 +675,144 @@ async fn seed_broker_audited_resource(
         .unwrap()
 }
 
+    #[tokio::test]
+    async fn status_candidate_round_trip_is_a_fixed_point() {
+        let (_directory, file, marker) = provisioned_store();
+        let store_identity = identity();
+        let (issuer, store_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+        let store = RedbResourceStore::provision_owned_with_test_ports(
+            file,
+            marker,
+            store_identity,
+            store_acceptor,
+            Arc::new(NoopStoreTelemetry),
+            Arc::new(RecordingAudit::default()),
+        )
+        .await
+        .unwrap();
+
+        let created =
+            seed_broker_audited_resource(&store, &issuer, "Provider", "round-trip-provider").await;
+
+        // The exact status object the core provider handler rebuilds each
+        // pass (provider_status_candidate): phase, observedGeneration, and
+        // the providerReadiness projection inside status.resource.
+        let candidate = serde_json::json!({
+            "phase": "Ready",
+            "observedGeneration": 1,
+            "resource": {
+                "providerReadiness": {
+                    "artifactReady": true,
+                    "componentsReady": true,
+                    "dependenciesReady": true,
+                    "descriptorReady": true,
+                    "registrationReady": true,
+                },
+            },
+        });
+
+        // Submit the way the controller's status mutation does: merge the
+        // candidate into the current envelope, canonicalize, commit. The
+        // envelope's other status fields (completedAt, conditions, update
+        // bookkeeping, ...) are preserved by the handler's rebuild and are
+        // part of the round-trip contract.
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&created.canonical_json).unwrap();
+        envelope["status"]["phase"] = serde_json::Value::String("Ready".to_owned());
+        envelope["status"]["observedGeneration"] = serde_json::json!(1);
+        envelope["status"]["resource"]["providerReadiness"] =
+            candidate["resource"]["providerReadiness"].clone();
+        let submitted_status = envelope["status"].clone();
+        let status_body = CanonicalJsonValue::parse(&serde_json::to_vec(&envelope).unwrap())
+            .unwrap()
+            .to_canonical_bytes();
+
+        let status_operation = "round-trip-status";
+        store
+            .commit_verified(issuer.seal(update_seal_body_for_type_as(
+                status_operation,
+                created.resource_ref.clone(),
+                ResourceMutationKind::UpdateStatus,
+                created.revision,
+                Some(created.uid.clone()),
+                Some(status_body.clone()),
+                "Provider/system-core",
+                None,
+                Vec::new(),
+                Vec::new(),
+            )))
+            .await
+            .unwrap();
+
+        let read_back = store
+            .get(StoreGetRequest {
+                operation: operation("round-trip-read"),
+                zone: ZoneId::parse("work").unwrap(),
+                target: created.resource_ref.clone(),
+                expected_uid: Some(created.uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .unwrap();
+
+        // FIXED POINT 1: the status subtree of the stored canonical bytes is
+        // exactly the submitted status (the write must not transform the
+        // status payload). metadata.revision and metadata.updatedAt are
+        // envelope bookkeeping the store stamps server-side and are exempt.
+        let submitted_status = {
+            let mut envelope: serde_json::Value =
+                serde_json::from_slice(&status_body).unwrap();
+            envelope.get_mut("status").cloned().unwrap()
+        };
+        let read_back_status = {
+            let mut envelope: serde_json::Value =
+                serde_json::from_slice(&read_back.canonical_json).unwrap();
+            envelope.get_mut("metadata")
+                .and_then(|metadata| {
+                    metadata.as_object_mut().map(|object| {
+                        object.remove("revision");
+                        object.remove("updatedAt");
+                    })
+                })
+                .unwrap();
+            envelope.get("status").cloned().unwrap()
+        };
+        assert_eq!(
+            read_back_status,
+            submitted_status,
+            "the store must persist the status subtree verbatim (exempting the server-stamped metadata.revision/updatedAt bookkeeping)"
+        );
+
+        // FIXED POINT 2: rebuilding the candidate from the read-back
+        // compares equal — the handler's convergence guard must see no
+        // change on the next pass.
+        let read_status: serde_json::Value =
+            serde_json::from_slice::<serde_json::Value>(&read_back.canonical_json)
+                .unwrap()
+                .get("status")
+                .cloned()
+                .unwrap();
+        assert_eq!(
+            read_status,
+            submitted_status,
+            "the handler's next pass must converge on the read-back (the handler preserves the envelope's other status fields)"
+        );
+
+        // FIXED POINT 3: re-submitting the same candidate is byte-identical.
+        let mut re_envelope: serde_json::Value =
+            serde_json::from_slice(&read_back.canonical_json).unwrap();
+        re_envelope["status"]["phase"] = serde_json::Value::String("Ready".to_owned());
+        re_envelope["status"]["observedGeneration"] = serde_json::json!(1);
+        re_envelope["status"]["resource"]["providerReadiness"] =
+            candidate["resource"]["providerReadiness"].clone();
+        let re_body = CanonicalJsonValue::parse(&serde_json::to_vec(&re_envelope).unwrap())
+            .unwrap()
+            .to_canonical_bytes();
+        assert_eq!(re_body, read_back.canonical_json, "re-merge must be a fixed point");
+
+        store.shutdown().await.unwrap();
+    }
+
 #[tokio::test]
 async fn system_core_status_and_finalizer_projections_do_not_need_broker_evidence() {
     let (_directory, file, marker) = provisioned_store();
