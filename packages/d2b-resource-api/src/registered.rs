@@ -77,6 +77,11 @@ where
                 Ok(value) => return Ok(value),
                 Err(SourceError::Backpressure) => {
                     if attempt + 1 == TRANSIENT_RETRY_ATTEMPTS {
+                        tracing::warn!(
+                            attempts = attempt + 1,
+                            reason = "source backpressure persisted through the bounded retry budget",
+                            "source backpressure retry exhausted",
+                        );
                         return Err(SourceError::Backpressure);
                     }
                     tokio::task::yield_now().await;
@@ -89,7 +94,14 @@ where
     .await
     {
         Ok(result) => result,
-        Err(_) => Err(SourceError::Timeout),
+        Err(error) => {
+            tracing::warn!(
+                reason = "source backpressure retry budget elapsed before completion",
+                error = ?error,
+                "source backpressure retry timed out",
+            );
+            Err(SourceError::Timeout)
+        }
     }
 }
 
@@ -170,11 +182,29 @@ impl RedbRegisteredControllerApi {
         if subject.claims().zone_ref().resource_type().as_str() != "Zone"
             || subject.authorization_state() != &state
         {
+            tracing::warn!(
+                subject = subject.claims().zone_ref().to_canonical_string(),
+                reason = "controller source adapter bind refused: subject is not a Zone-scoped controller identity with matching authorization state",
+                "controller source adapter bind rejected",
+            );
             return Err(StoreBindingError);
         }
-        let zone = ZoneId::parse(subject.claims().zone_ref().name().as_str())
-            .map_err(|_| StoreBindingError)?;
+        let zone = ZoneId::parse(subject.claims().zone_ref().name().as_str()).map_err(|error| {
+            tracing::warn!(
+                subject = subject.claims().zone_ref().to_canonical_string(),
+                reason = "controller source adapter bind refused: subject zone name is not a valid ZoneId",
+                error = ?error,
+                "controller source adapter bind rejected",
+            );
+            StoreBindingError
+        })?;
         if zone != *store.identity().zone() {
+            tracing::warn!(
+                zone = zone.as_str(),
+                store_zone = store.identity().zone().as_str(),
+                reason = "controller source adapter bind refused: subject zone does not match the bound store zone",
+                "controller source adapter bind rejected",
+            );
             return Err(StoreBindingError);
         }
         Ok(Self {
@@ -292,8 +322,17 @@ impl RedbRegisteredControllerApi {
         canonical_resource: Vec<u8>,
         operation_id: &str,
     ) -> Result<(), SourceError> {
-        let envelope =
-            ResourceEnvelope::from_json(&canonical_resource).map_err(|_| SourceError::Integrity)?;
+        let envelope = ResourceEnvelope::from_json(&canonical_resource).map_err(|error| {
+            tracing::warn!(
+                zone = resource.zone.as_str(),
+                resource = resource.resource_ref.to_canonical_string(),
+                uid = resource.uid.as_str(),
+                reason = "assigned status payload is not a decodable resource envelope",
+                error = ?error,
+                "assigned status persistence refused",
+            );
+            SourceError::Integrity
+        })?;
         validate_assigned_resource_identity(&self.store, resource, &envelope)?;
         let mutation = StoreMutation {
             kind: ResourceMutationKind::UpdateStatus,
@@ -344,19 +383,48 @@ impl RedbRegisteredControllerApi {
         remove_finalizers: Vec<String>,
         operation_id: &str,
     ) -> Result<(), SourceError> {
-        let envelope =
-            ResourceEnvelope::from_json(&resource.canonical_json).map_err(|_| SourceError::Integrity)?;
+        let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|error| {
+            tracing::warn!(
+                zone = resource.zone.as_str(),
+                resource = resource.resource_ref.to_canonical_string(),
+                uid = resource.uid.as_str(),
+                reason = "assigned finalizer payload is not a decodable resource envelope",
+                error = ?error,
+                "assigned finalizer persistence refused",
+            );
+            SourceError::Integrity
+        })?;
         validate_assigned_resource_identity(&self.store, resource, &envelope)?;
         let add_finalizers = add_finalizers
             .into_iter()
             .map(|value| {
-                FinalizerId::parse(value).map_err(|_| SourceError::Integrity)
+                FinalizerId::parse(value).map_err(|error| {
+                    tracing::warn!(
+                        zone = resource.zone.as_str(),
+                        resource = resource.resource_ref.to_canonical_string(),
+                        uid = resource.uid.as_str(),
+                        reason = "finalizer delta contains an invalid finalizer id",
+                        error = ?error,
+                        "assigned finalizer persistence refused",
+                    );
+                    SourceError::Integrity
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let remove_finalizers = remove_finalizers
             .into_iter()
             .map(|value| {
-                FinalizerId::parse(value).map_err(|_| SourceError::Integrity)
+                FinalizerId::parse(value).map_err(|error| {
+                    tracing::warn!(
+                        zone = resource.zone.as_str(),
+                        resource = resource.resource_ref.to_canonical_string(),
+                        uid = resource.uid.as_str(),
+                        reason = "finalizer delta contains an invalid finalizer id",
+                        error = ?error,
+                        "assigned finalizer persistence refused",
+                    );
+                    SourceError::Integrity
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         if add_finalizers.is_empty() && remove_finalizers.is_empty() {
@@ -414,10 +482,26 @@ impl RedbRegisteredControllerApi {
         mutations: Vec<StoreMutation>,
         operation_id: &str,
     ) -> Result<Vec<StoredResource>, SourceError> {
-        let owner_envelope =
-            ResourceEnvelope::from_json(&owner.canonical_json).map_err(|_| SourceError::Integrity)?;
+        let owner_envelope = ResourceEnvelope::from_json(&owner.canonical_json).map_err(|error| {
+            tracing::warn!(
+                zone = owner.zone.as_str(),
+                owner = owner.resource_ref.to_canonical_string(),
+                owner_uid = owner.uid.as_str(),
+                reason = "owner payload is not a decodable resource envelope",
+                error = ?error,
+                "child mutation batch rejected",
+            );
+            SourceError::Integrity
+        })?;
         validate_assigned_resource_identity(&self.store, owner, &owner_envelope)?;
         if mutations.is_empty() || mutations.len() > 128 || operation_id.is_empty() {
+            tracing::warn!(
+                zone = owner.zone.as_str(),
+                owner = owner.resource_ref.to_canonical_string(),
+                mutation_count = mutations.len(),
+                reason = "child mutation batch rejected: empty, oversized, or missing operation id",
+                "child mutation batch rejected",
+            );
             return Err(SourceError::Integrity);
         }
         let mut reads = Vec::new();
@@ -436,6 +520,13 @@ impl RedbRegisteredControllerApi {
                         | ResourceMutationKind::Delete
                 )
             {
+                tracing::warn!(
+                    zone = owner.zone.as_str(),
+                    owner = owner.resource_ref.to_canonical_string(),
+                    target = mutation.target.to_canonical_string(),
+                    reason = "child mutation rejected: target, owner, resource type, or mutation kind outside the owner-child contract",
+                    "child mutation rejected",
+                );
                 return Err(SourceError::Integrity);
             }
             match mutation.kind {
@@ -444,30 +535,79 @@ impl RedbRegisteredControllerApi {
                         || mutation.expected_uid.is_some()
                         || mutation.canonical_resource.is_none()
                     {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child create mutation rejected: expected create-absent without a uid and with a payload",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     }
                     reads.push((mutation.target.clone(), None));
                 }
                 ResourceMutationKind::UpdateSpec => {
                     let ExpectedRevision::Exact(revision) = mutation.expected else {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child update-spec mutation rejected: expected exact revision",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     };
                     let Some(uid) = mutation.expected_uid.clone() else {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child update-spec mutation rejected: missing expected uid",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     };
                     if mutation.canonical_resource.is_none() {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child update-spec mutation rejected: missing payload",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     }
                     reads.push((mutation.target.clone(), Some((uid, revision))));
                 }
                 ResourceMutationKind::Delete => {
                     let ExpectedRevision::Exact(revision) = mutation.expected else {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child delete mutation rejected: expected exact revision",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     };
                     let Some(uid) = mutation.expected_uid.as_ref() else {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child delete mutation rejected: missing expected uid",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     };
                     if mutation.canonical_resource.is_some() {
+                        tracing::warn!(
+                            zone = owner.zone.as_str(),
+                            owner = owner.resource_ref.to_canonical_string(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "child delete mutation rejected: unexpected payload",
+                            "child mutation rejected",
+                        );
                         return Err(SourceError::Integrity);
                     }
                     let _ = (uid, revision);
@@ -591,6 +731,13 @@ impl RedbRegisteredControllerApi {
             || fence.controller_generation.get() == 0
             || fence.session_generation.get() == 0
         {
+            tracing::warn!(
+                resource = target.to_canonical_string(),
+                uid = uid.as_str(),
+                revision = revision.get(),
+                reason = "assignment fence resolver returned a fence that does not match the target identity or generations",
+                "assignment fence refresh rejected",
+            );
             return Err(SourceError::Integrity);
         }
         commit
@@ -987,7 +1134,18 @@ impl RedbRegisteredControllerApi {
                 let owner_uid = context_uid;
                 let owner_revision = fallback_revision;
                 let parent_fence = if let Some(resolver) = resolver.as_ref() {
-                    resolver(owner.clone(), owner_uid.clone(), owner_revision).await?
+                    resolver(owner.clone(), owner_uid.clone(), owner_revision)
+                        .await
+                        .map_err(|error| {
+                            tracing::warn!(
+                                zone = zone.as_str(),
+                                owner = owner.to_canonical_string(),
+                                reason = "owner assignment fence resolution failed while binding a child mutation",
+                                error = ?error,
+                                "owner assignment fence resolution failed",
+                            );
+                            error
+                        })?
                 } else {
                     commit
                         .assignments
@@ -995,7 +1153,15 @@ impl RedbRegisteredControllerApi {
                         .map_err(|_| SourceError::Integrity)?
                         .get(owner)
                         .cloned()
-                        .ok_or(SourceError::Integrity)?
+                        .ok_or_else(|| {
+                            tracing::warn!(
+                                zone = zone.as_str(),
+                                owner = owner.to_canonical_string(),
+                                reason = "no assignment fence recorded for the owner of a child mutation",
+                                "owner assignment fence missing",
+                            );
+                            SourceError::Integrity
+                        })?
                 };
                 Some(owner_child_assignment_fence(
                     &parent_fence,
@@ -1008,7 +1174,15 @@ impl RedbRegisteredControllerApi {
             } else if let Some(resolver) = resolver.as_ref() {
                 let expected_revision = match mutation.expected {
                     ExpectedRevision::Exact(revision) => revision,
-                    ExpectedRevision::CreateAbsent => return Err(SourceError::Integrity),
+                    ExpectedRevision::CreateAbsent => {
+                        tracing::warn!(
+                            zone = zone.as_str(),
+                            target = mutation.target.to_canonical_string(),
+                            reason = "assignment fence resolution requires an exact revision; create-absent mutation refused",
+                            "mutation fence resolution rejected",
+                        );
+                        return Err(SourceError::Integrity);
+                    }
                 };
                 let fence = resolver(
                     mutation.target.clone(),
@@ -1029,6 +1203,13 @@ impl RedbRegisteredControllerApi {
                     || fence.controller_generation.get() == 0
                     || fence.session_generation.get() == 0
                 {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        target = mutation.target.to_canonical_string(),
+                        expected_uid = expected_uid.as_str(),
+                        reason = "assignment fence resolver returned a fence that does not match the mutation target identity or generations",
+                        "mutation assignment fence rejected",
+                    );
                     return Err(SourceError::Integrity);
                 }
                 commit
@@ -1060,6 +1241,12 @@ impl RedbRegisteredControllerApi {
                 }
                 mutation.assignment = Some(fence);
             } else if commit.require_assignment {
+                tracing::warn!(
+                    zone = zone.as_str(),
+                    target = mutation.target.to_canonical_string(),
+                    reason = "no assignment fence recorded for the mutation target while assignment is required",
+                    "commit rejected: assignment fence missing",
+                );
                 return Err(SourceError::Integrity);
             }
         }
@@ -1098,13 +1285,29 @@ impl RedbRegisteredControllerApi {
                     },
                     &commit.state,
                 )
-                .map_err(|_| SourceError::Integrity)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        reason = "commit batch authorization failed for the controller subject",
+                        error = ?error,
+                        "commit batch authorization failed",
+                    );
+                    SourceError::Integrity
+                })?;
             let admitted = if let Some(zone_uid) = commit.zone_uid.clone() {
                 grant.admit_with_zone_uid(mutations.clone(), operation.clone(), zone_uid)
             } else {
                 grant.admit(mutations.clone(), operation.clone())
             }
-            .map_err(|_| SourceError::Integrity)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = zone.as_str(),
+                    reason = "commit batch admission refused by the checked store",
+                    error = ?error,
+                    "commit batch admission refused",
+                );
+                SourceError::Integrity
+            })?;
             let result = commit.checked.commit(admitted).await.map_err(|error| {
                 if is_conflict(&error) {
                     SourceError::Conflict(error.current_revision().unwrap_or(fallback_revision))
@@ -1211,6 +1414,14 @@ impl RedbRegisteredControllerApi {
                 outcome => return outcome,
             }
         }
+        tracing::warn!(
+            zone = zone.as_str(),
+            resource = context_target.to_canonical_string(),
+            uid = context_uid.as_str(),
+            error = ?last_error,
+            reason = "ambiguous commit could not be resolved within the bounded verification retries",
+            "ambiguous commit unresolved",
+        );
         Err(last_error)
     }
 
@@ -1241,9 +1452,21 @@ impl RedbRegisteredControllerApi {
             .map_err(|_| SourceError::Integrity)?;
         let assignment = assignments.get(context.target().resource_ref());
         if commit.require_assignment && assignment.is_none() {
+            tracing::warn!(
+                resource = context.target().resource_ref().to_canonical_string(),
+                uid = context.target().uid().as_str(),
+                reason = "no assignment fence recorded for the effect claim target while assignment is required",
+                "effect claim rejected: assignment fence missing",
+            );
             return Err(SourceError::Integrity);
         }
         if assignment.is_some_and(|assignment| assignment.resource_uid != *context.target().uid()) {
+            tracing::warn!(
+                resource = context.target().resource_ref().to_canonical_string(),
+                uid = context.target().uid().as_str(),
+                reason = "recorded assignment fence belongs to a different resource uid than the effect claim target",
+                "effect claim rejected: assignment fence uid mismatch",
+            );
             return Err(SourceError::Integrity);
         }
         let operation_class = operation_class(context);
@@ -1287,7 +1510,15 @@ impl RedbRegisteredControllerApi {
         }
         let resource = match self.read_target(context.target()).await? {
             Ok(resource) => resource,
-            Err(_) => return Ok(None),
+            Err(_) => {
+                tracing::debug!(
+                    zone = context.target().zone().as_str(),
+                    resource = context.target().resource_ref().to_canonical_string(),
+                    reason = "target no longer present during the finalizer-first check",
+                    "finalizer-first skipped for vanished target",
+                );
+                return Ok(None);
+            }
         };
         if !descriptor
             .watch_selectors()
@@ -1459,13 +1690,29 @@ impl RedbRegisteredControllerApi {
             .map_err(|_| SourceError::Integrity)?
             .into_iter()
             .find(|row| row.operation_id == operation_id)
-            .ok_or(SourceError::Integrity)?;
+            .ok_or_else(|| {
+                tracing::warn!(
+                    resource = projection.target().resource_ref().to_canonical_string(),
+                    uid = projection.target().uid().as_str(),
+                    operation = operation_id,
+                    reason = "deferred status persistence refused: authority operation row not found",
+                    "deferred status operation row missing",
+                );
+                SourceError::Integrity
+            })?;
         if matches!(
             row.state,
             d2b_resource_store_redb::AuthorityOperationState::Released
                 | d2b_resource_store_redb::AuthorityOperationState::Closing
                 | d2b_resource_store_redb::AuthorityOperationState::Closed
         ) {
+            tracing::warn!(
+                resource = projection.target().resource_ref().to_canonical_string(),
+                uid = projection.target().uid().as_str(),
+                operation = operation_id,
+                reason = "deferred status persistence refused: authority operation already released or closed",
+                "deferred status operation closed",
+            );
             return Err(SourceError::Integrity);
         }
         let payload: serde_json::Value =
@@ -1477,6 +1724,13 @@ impl RedbRegisteredControllerApi {
                 .and_then(serde_json::Value::as_str)
                 != Some(projection.target().uid().as_str())
         {
+            tracing::warn!(
+                resource = projection.target().resource_ref().to_canonical_string(),
+                uid = projection.target().uid().as_str(),
+                operation = operation_id,
+                reason = "deferred status persistence refused: authority operation payload does not match the operation or target uid",
+                "deferred status operation payload mismatch",
+            );
             return Err(SourceError::Integrity);
         }
         let current = match self.read_target(projection.target()).await? {
@@ -1496,6 +1750,13 @@ impl RedbRegisteredControllerApi {
                 .and_then(|metadata| metadata.get("generation"))
                 .and_then(serde_json::Value::as_u64)
         {
+            tracing::warn!(
+                resource = projection.target().resource_ref().to_canonical_string(),
+                uid = projection.target().uid().as_str(),
+                operation = operation_id,
+                reason = "deferred status persistence refused: authority operation generation does not match the stored resource generation",
+                "deferred status operation generation mismatch",
+            );
             return Err(SourceError::Integrity);
         }
         let resumed = match row.state {
@@ -1512,7 +1773,17 @@ impl RedbRegisteredControllerApi {
                             binding_digest,
                         )
                         .await
-                        .map_err(|_| SourceError::Integrity)?,
+                        .map_err(|error| {
+                            tracing::warn!(
+                                resource = projection.target().resource_ref().to_canonical_string(),
+                                uid = projection.target().uid().as_str(),
+                                operation = operation_id,
+                                reason = "authority operation resume failed during deferred status persistence",
+                                error = ?error,
+                                "authority operation resume failed",
+                            );
+                            SourceError::Integrity
+                        })?,
                 )
             }
             d2b_resource_store_redb::AuthorityOperationState::EffectConfirmed
@@ -1597,6 +1868,15 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
         descriptor: &ControllerDescriptor,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
         let result = validate_descriptor(descriptor, self.store.identity().zone());
+        if let Err(error) = &result {
+            tracing::warn!(
+                controller = descriptor.identity().controller_ref().to_canonical_string(),
+                zone = self.store.identity().zone().as_str(),
+                reason = "controller source registration refused: descriptor failed validation",
+                error = ?error,
+                "controller source registration rejected",
+            );
+        }
         async move {
             result?;
             let mut registered = self.descriptor.lock().map_err(|_| SourceError::Integrity)?;
@@ -1604,6 +1884,11 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                 .as_ref()
                 .is_some_and(|current| current.as_ref() != descriptor)
             {
+                tracing::warn!(
+                    controller = descriptor.identity().controller_ref().to_canonical_string(),
+                    reason = "controller source registration refused: descriptor changed since the previous registration",
+                    "controller source registration rejected",
+                );
                 return Err(SourceError::Integrity);
             }
             *registered = Some(Arc::new(descriptor.clone()));
@@ -1618,6 +1903,10 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
         let descriptor = descriptor.clone();
         async move {
             if self.descriptor()?.as_ref() != &descriptor {
+                tracing::warn!(
+                    reason = "controller source call refused: the registered descriptor no longer matches the requested descriptor",
+                    "controller source descriptor mismatch",
+                );
                 return Err(SourceError::Integrity);
             }
             let projection = if descriptor.watch_selectors().iter().any(|selector| {
@@ -1667,6 +1956,10 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
         let descriptor = descriptor.clone();
         async move {
             if self.descriptor()?.as_ref() != &descriptor {
+                tracing::warn!(
+                    reason = "controller source call refused: the registered descriptor no longer matches the requested descriptor",
+                    "controller source descriptor mismatch",
+                );
                 return Err(SourceError::Integrity);
             }
             let (resource_types, filters) = if descriptor.consumes_owner_triggers() {
@@ -1729,7 +2022,14 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                 if let Some(revision) = self.acknowledge_after.lock().await.take() {
                     let mut watch = self.watch.lock().await;
                     if let Some(watch) = watch.as_mut() {
-                        let _ = watch.acknowledge(revision).await;
+                        if let Err(error) = watch.acknowledge(revision).await {
+                            tracing::debug!(
+                                revision = revision.get(),
+                                error = ?error,
+                                reason = "deferred watch acknowledge failed; the store may redeliver this change",
+                                "watch acknowledge failed",
+                            );
+                        }
                     }
                 }
                 let pending_change = { self.pending.lock().await.pop_front() };
@@ -1785,7 +2085,12 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                             self.watch_open.store(false, Ordering::Release);
                             return Err(WatchFailure::Backpressure);
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            tracing::warn!(
+                                error = ?error,
+                                reason = "watch resume failed with an unexpected store error",
+                                "watch resume failed; disconnecting watch",
+                            );
                             self.watch_open.store(false, Ordering::Release);
                             return Err(WatchFailure::Disconnected);
                         }
@@ -1800,7 +2105,14 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                 if changes.is_empty() {
                     let mut watch = self.watch.lock().await;
                     if let Some(watch) = watch.as_mut() {
-                        let _ = watch.acknowledge(batch.revision()).await;
+                        if let Err(error) = watch.acknowledge(batch.revision()).await {
+                            tracing::debug!(
+                                revision = batch.revision().get(),
+                                error = ?error,
+                                reason = "watch acknowledge failed for a batch with no controller-visible changes",
+                                "watch acknowledge failed",
+                            );
+                        }
                     }
                     continue;
                 }
@@ -1964,7 +2276,24 @@ impl RegisteredControllerApi for RedbRegisteredControllerApi {
                 {
                     Ok(true)
                 }
-                Ok(_) | Err(_) => Ok(false),
+                Ok(_) => {
+                    tracing::debug!(
+                        zone = context.target().zone().as_str(),
+                        resource = context.target().resource_ref().to_canonical_string(),
+                        reason = "target changed since the accepted effect claim",
+                        "expedited commit verification missed: target changed",
+                    );
+                    Ok(false)
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        zone = context.target().zone().as_str(),
+                        resource = context.target().resource_ref().to_canonical_string(),
+                        reason = "target no longer present",
+                        "expedited commit verification missed: target absent",
+                    );
+                    Ok(false)
+                }
             }
         }
     }
@@ -2155,12 +2484,30 @@ impl RedbRegisteredControllerApi {
             (ExpectedRevision::CreateAbsent, None)
         } else {
             (
-                ExpectedRevision::Exact(intent.expected_revision().ok_or(SourceError::Integrity)?),
+                ExpectedRevision::Exact(intent.expected_revision().ok_or_else(|| {
+                    tracing::warn!(
+                        zone = context.target().zone().as_str(),
+                        resource = context.target().resource_ref().to_canonical_string(),
+                        target = target.to_canonical_string(),
+                        reason = "mutation intent rejected: missing expected revision",
+                        "mutation intent rejected",
+                    );
+                    SourceError::Integrity
+                })?),
                 Some(
                     intent
                         .expected_uid()
                         .cloned()
-                        .ok_or(SourceError::Integrity)?,
+                        .ok_or_else(|| {
+                            tracing::warn!(
+                                zone = context.target().zone().as_str(),
+                                resource = context.target().resource_ref().to_canonical_string(),
+                                target = target.to_canonical_string(),
+                                reason = "mutation intent rejected: missing expected uid",
+                                "mutation intent rejected",
+                            );
+                            SourceError::Integrity
+                        })?,
                 ),
             )
         };
@@ -2245,6 +2592,13 @@ impl RedbRegisteredControllerApi {
         };
         let current_finalizers = finalizer_set(&current.canonical_json)?;
         if desired.is_none() && !deleting(&current.canonical_json) {
+            tracing::warn!(
+                zone = context.target().zone().as_str(),
+                resource = context.target().resource_ref().to_canonical_string(),
+                target = target.to_canonical_string(),
+                reason = "finalizer delta refused: removal requested on a live resource without a desired set",
+                "finalizer delta rejected",
+            );
             return Err(SourceError::Integrity);
         }
         let desired_finalizers = if let Some(bytes) = desired {
@@ -2801,6 +3155,13 @@ fn validate_assigned_resource_identity(
         || envelope.metadata().revision() != resource.revision
         || envelope.metadata().zone() != &resource.zone
     {
+        tracing::warn!(
+            zone = resource.zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            uid = resource.uid.as_str(),
+            reason = "assigned resource identity does not match the bound store zone or stored row",
+            "assigned resource identity validation failed",
+        );
         return Err(SourceError::Integrity);
     }
     Ok(())
@@ -2991,6 +3352,13 @@ fn owner_child_assignment_fence(
         || parent_fence.resource_revision != owner_revision
         || !matches!(parent_fence.scope, ResourceAssignmentScope::Primary)
     {
+        tracing::warn!(
+            owner = owner_ref.to_canonical_string(),
+            owner_uid = owner_uid.as_str(),
+            child = child_ref.to_canonical_string(),
+            reason = "owner-child assignment fence refused: child type, owner generation, or parent fence identity mismatch",
+            "owner-child assignment fence rejected",
+        );
         return Err(SourceError::Integrity);
     }
     let mut fence = parent_fence.clone();

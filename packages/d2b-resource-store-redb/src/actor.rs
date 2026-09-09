@@ -210,8 +210,15 @@ fn outbox_join_key(outbox: &AuditOutboxRecord) -> Result<ZoneOperationKey, Store
         .clone()
         .or_else(|| OperationIdentity::derive(&outbox.operation_id).ok())
         .ok_or_else(|| crate::transaction::durability_failure("audit-operation-key-invalid"))?;
-    let zone = d2b_audit::ZoneId::derive(&outbox.zone)
-        .map_err(|_| crate::transaction::durability_failure("audit-zone-invalid"))?;
+    let zone = d2b_audit::ZoneId::derive(&outbox.zone).map_err(|error| {
+        tracing::error!(
+            zone = %outbox.zone,
+            operation_id = %outbox.operation_id,
+            error = ?error,
+            "audit outbox zone invalid; durability verification failed"
+        );
+        crate::transaction::durability_failure("audit-zone-invalid")
+    })?;
     Ok(ZoneOperationKey::new(zone, operation))
 }
 
@@ -272,23 +279,47 @@ fn append_audit_outbox(
     join_key: &ZoneOperationKey,
 ) -> Result<(), StoreError> {
     let operation_identity = join_key.operation().clone();
-    let mut previous_hash = audit
-        .previous_hash()
-        .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+    let mut previous_hash = audit.previous_hash().map_err(|error| {
+        tracing::error!(
+            zone = %outbox.zone,
+            operation_id = %outbox.operation_id,
+            error = ?error,
+            "audit chain head unavailable; audit outbox replay failed"
+        );
+        crate::transaction::durability_failure("audit-unavailable")
+    })?;
     for mutation in &outbox.mutations {
         if let Some(record_hash) = mutation.record_hash.as_ref() {
-            let persisted = audit
-                .existing_mutation_hash(join_key, &mutation.mutation_id)
-                .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+        let persisted = audit
+            .existing_mutation_hash(join_key, &mutation.mutation_id)
+            .map_err(|error| {
+                tracing::error!(
+                    zone = %outbox.zone,
+                    operation_id = %outbox.operation_id,
+                    mutation_id = %mutation.mutation_id,
+                    error = ?error,
+                    "audit mutation lookup unavailable; audit outbox replay failed"
+                );
+                crate::transaction::durability_failure("audit-unavailable")
+            })?;
             if persisted.as_ref() != Some(record_hash) {
                 return Err(crate::transaction::durability_failure(
                     "audit-outbox-progress-membership-mismatch",
                 ));
             }
             if let Some(predecessor) = mutation.previous_hash.as_ref() {
-                let persisted_predecessor = audit
-                    .existing_mutation_predecessor(join_key, &mutation.mutation_id)
-                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            let persisted_predecessor = audit
+                .existing_mutation_predecessor(join_key, &mutation.mutation_id)
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = %outbox.zone,
+                        operation_id = %outbox.operation_id,
+                        mutation_id = %mutation.mutation_id,
+                        error = ?error,
+                        "audit mutation predecessor lookup unavailable; audit outbox replay failed"
+                    );
+                    crate::transaction::durability_failure("audit-unavailable")
+                })?;
                 if persisted_predecessor.as_ref() != Some(predecessor) {
                     return Err(crate::transaction::durability_failure(
                         "audit-outbox-progress-predecessor-mismatch",
@@ -300,12 +331,30 @@ fn append_audit_outbox(
         }
         if let Some(existing) = audit
             .existing_mutation_hash(join_key, &mutation.mutation_id)
-            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?
+            .map_err(|error| {
+                tracing::error!(
+                    zone = %outbox.zone,
+                    operation_id = %outbox.operation_id,
+                    mutation_id = %mutation.mutation_id,
+                    error = ?error,
+                    "audit mutation lookup unavailable; audit outbox replay failed"
+                );
+                crate::transaction::durability_failure("audit-unavailable")
+            })?
         {
             if let Some(predecessor) = mutation.previous_hash.as_ref() {
-                let persisted_predecessor = audit
-                    .existing_mutation_predecessor(join_key, &mutation.mutation_id)
-                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            let persisted_predecessor = audit
+                .existing_mutation_predecessor(join_key, &mutation.mutation_id)
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = %outbox.zone,
+                        operation_id = %outbox.operation_id,
+                        mutation_id = %mutation.mutation_id,
+                        error = ?error,
+                        "audit mutation predecessor lookup unavailable; audit outbox replay failed"
+                    );
+                    crate::transaction::durability_failure("audit-unavailable")
+                })?;
                 if persisted_predecessor.as_ref() != Some(predecessor) {
                     return Err(crate::transaction::durability_failure(
                         "audit-outbox-progress-predecessor-mismatch",
@@ -342,10 +391,28 @@ fn append_audit_outbox(
             Some(mutation.mutation_id.clone()),
             Some(mutation.ordinal),
         )
-        .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+        .map_err(|error| {
+            tracing::error!(
+                zone = %outbox.zone,
+                operation_id = %outbox.operation_id,
+                mutation_id = %mutation.mutation_id,
+                error = ?error,
+                "audit record construction failed; audit outbox replay failed"
+            );
+            crate::transaction::durability_failure("audit-record-invalid")
+        })?;
         audit
             .append_before_commit(&record)
-            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            .map_err(|error| {
+                tracing::error!(
+                    zone = %outbox.zone,
+                    operation_id = %outbox.operation_id,
+                    mutation_id = %mutation.mutation_id,
+                    error = ?error,
+                    "audit append failed; audit outbox replay failed"
+                );
+                crate::transaction::durability_failure("audit-unavailable")
+            })?;
         crate::transaction::mark_audit_outbox_progress(
             database,
             &outbox.operation_id,
@@ -429,7 +496,13 @@ impl WriterHandle {
                 )
                 .run();
             })
-            .map_err(|_| crate::transaction::integrity("writer-actor-start-failed"))?;
+            .map_err(|error| {
+                tracing::error!(
+                    error = ?error,
+                    "writer actor thread failed to start"
+                );
+                crate::transaction::integrity("writer-actor-start-failed")
+            })?;
         Ok(Self {
             sender: Some(sender),
             signals,
@@ -471,7 +544,13 @@ impl WriterHandle {
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?;
         let queue_permit = Arc::clone(&self.write_permits)
             .try_acquire_owned()
-            .map_err(|_| backpressure())?;
+            .map_err(|_| {
+                tracing::warn!(
+                    sequence = self.next_sequence.load(Ordering::Relaxed),
+                    "write rejected with backpressure; write queue permit exhausted"
+                );
+                backpressure()
+            })?;
         let (response, receiver) = oneshot::channel();
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let intent = audit_intent(opened.body());
@@ -502,6 +581,10 @@ impl WriterHandle {
             let mut audit_intents = match self.audit_intents.lock() {
                 Ok(intents) => intents,
                 Err(_) => {
+                    tracing::error!(
+                        sequence,
+                        "audit intent registry poisoned; commit rejected"
+                    );
                     self.signals
                         .writer_queue_depth
                         .fetch_sub(1, Ordering::Relaxed);
@@ -529,8 +612,18 @@ impl WriterHandle {
                 .lock()
                 .map(|mut intents| intents.remove(&sequence));
             return Err(match error {
-                mpsc::error::TrySendError::Full(_) => backpressure(),
+                mpsc::error::TrySendError::Full(_) => {
+                    tracing::warn!(
+                        sequence,
+                        "write rejected; writer queue full (backpressure)"
+                    );
+                    backpressure()
+                }
                 mpsc::error::TrySendError::Closed(_) => {
+                    tracing::error!(
+                        sequence,
+                        "writer actor closed; commit dropped"
+                    );
                     crate::transaction::integrity("writer-closed")
                 }
             });
@@ -540,6 +633,10 @@ impl WriterHandle {
         let result = match receiver.await {
             Ok(result) => result,
             Err(_) => {
+                tracing::warn!(
+                    sequence,
+                    "writer dropped commit response; writer stalled or restarted"
+                );
                 let _ = self
                     .audit_intents
                     .lock()
@@ -573,16 +670,26 @@ impl WriterHandle {
             .as_ref()
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::AuthorityPrepare {
-                operation_id,
+                operation_id: operation_id.clone(),
                 payload,
                 request_digest,
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    operation_id = %operation_id,
+                    "writer actor closed; authority prepare command dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
             .map_err(|_| {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    "authority prepare response closed; writer stalled or restarted"
+                );
                 // The writer actor dropped the response without processing
                 // the command (a stalled or restarted writer). The operation
                 // row, if the actor created it, stays `pending` and the claim
@@ -607,15 +714,25 @@ impl WriterHandle {
             .as_ref()
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::AuthorityUpdate {
-                operation_id,
+                operation_id: operation_id.clone(),
                 state: authority_state_name(state),
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    operation_id = %operation_id,
+                    "writer actor closed; authority update command dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
             .map_err(|_| {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    "authority update response closed; writer stalled or restarted"
+                );
                 // Mirror authority_prepare: a dropped response is a writer
                 // stall or restart, and the operation row stays resumable —
                 // transient, not corruption.
@@ -640,15 +757,27 @@ impl WriterHandle {
             .as_ref()
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::IngestBrokerEvidence {
-                operation_id,
+                operation_id: operation_id.clone(),
                 evidence,
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    operation_id = %operation_id,
+                    "writer actor closed; broker evidence ingest dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("broker-evidence-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    "broker evidence response closed; writer stalled or restarted"
+                );
+                crate::transaction::integrity("broker-evidence-response-closed")
+            })?
     }
 
     pub(crate) async fn audit_outbox_pending(
@@ -663,14 +792,26 @@ impl WriterHandle {
             .as_ref()
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::AuditOutboxPending {
-                operation_id,
+                operation_id: operation_id.clone(),
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    operation_id = %operation_id,
+                    "writer actor closed; audit outbox pending query dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("audit-outbox-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    "audit outbox response closed; writer stalled or restarted"
+                );
+                crate::transaction::integrity("audit-outbox-response-closed")
+            })?
     }
 
     pub(crate) async fn pending_deferred_activation_operation_ids(
@@ -686,10 +827,20 @@ impl WriterHandle {
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::PendingDeferredActivationOperationIds { zone, response })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    "writer actor closed; pending deferred activation query dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("audit-outbox-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!(
+                    "pending deferred activation response closed; writer stalled or restarted"
+                );
+                crate::transaction::integrity("audit-outbox-response-closed")
+            })?
     }
 
     pub(crate) async fn replay(
@@ -712,10 +863,16 @@ impl WriterHandle {
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!("writer actor closed; replay command dropped");
+                crate::transaction::integrity("writer-closed")
+            })?;
         let high_water = ready
             .await
-            .map_err(|_| crate::transaction::integrity("watch-replay-closed"))??;
+            .map_err(|_| {
+                tracing::warn!("watch replay response closed; writer stalled or restarted");
+                crate::transaction::integrity("watch-replay-closed")
+            })??;
         Ok(ZoneRevision::new(high_water))
     }
 
@@ -739,10 +896,14 @@ impl WriterHandle {
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!("writer actor closed; watch registration dropped");
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
             .map_err(|_| {
+                tracing::warn!("watch registration response closed; writer stalled or restarted");
                 // Mirror authority_prepare/authority_update: a dropped watch
                 // response is a writer stall or restart under the sustained
                 // commit stream — transient, the runner retries via its watch
@@ -773,10 +934,22 @@ impl WriterHandle {
                 response,
             })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    watch_id = ?id,
+                    "writer actor closed; watch acknowledgement dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("watch-ack-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!(
+                    watch_id = ?id,
+                    "watch acknowledgement response closed; writer stalled or restarted"
+                );
+                crate::transaction::integrity("watch-ack-response-closed")
+            })?
     }
 
     pub(crate) async fn unregister_watch(
@@ -792,10 +965,22 @@ impl WriterHandle {
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::UnregisterWatch { id, response })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!(
+                    watch_id = ?id,
+                    "writer actor closed; watch unregister dropped"
+                );
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("watch-unregister-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!(
+                    watch_id = ?id,
+                    "watch unregister response closed; writer stalled or restarted"
+                );
+                crate::transaction::integrity("watch-unregister-response-closed")
+            })?
     }
 
     pub(crate) async fn backup(
@@ -811,10 +996,16 @@ impl WriterHandle {
             .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
             .send(WriterCommand::Backup { identity, response })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!("writer actor closed; backup request dropped");
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("writer-backup-response-closed"))?
+            .map_err(|_| {
+                tracing::warn!("backup response closed; writer stalled or restarted");
+                crate::transaction::integrity("writer-backup-response-closed")
+            })?
     }
 
     pub(crate) async fn shutdown(&mut self) -> Result<(), StoreError> {
@@ -826,10 +1017,16 @@ impl WriterHandle {
         sender
             .send(WriterCommand::Shutdown { response })
             .await
-            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+            .map_err(|_| {
+                tracing::error!("writer actor closed; shutdown command dropped");
+                crate::transaction::integrity("writer-closed")
+            })?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("writer-shutdown-response-closed"))??;
+            .map_err(|_| {
+                tracing::warn!("shutdown response closed; writer stalled or restarted");
+                crate::transaction::integrity("writer-shutdown-response-closed")
+            })??;
         if self
             .thread
             .take()
@@ -837,6 +1034,7 @@ impl WriterHandle {
             .join()
             .is_err()
         {
+            tracing::error!("writer thread join failed at shutdown");
             return Err(crate::transaction::integrity("writer-thread-failed"));
         }
         Ok(())
@@ -1144,7 +1342,7 @@ impl WriterActor {
                     let result = self
                         .watch_coordinator
                         .lock()
-                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .map_err(|error| { tracing::warn!(error = ?error, code = "watch-coordinator-poisoned", "store operation failed; collapsed cause logged"); crate::transaction::integrity("watch-coordinator-poisoned") })
                         .and_then(|mut coordinator| {
                             coordinator.register_and_replay(
                                 &self.database,
@@ -1177,7 +1375,7 @@ impl WriterActor {
                     let result = self
                         .watch_coordinator
                         .lock()
-                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .map_err(|error| { tracing::warn!(error = ?error, code = "watch-coordinator-poisoned", "store operation failed; collapsed cause logged"); crate::transaction::integrity("watch-coordinator-poisoned") })
                         .and_then(|mut coordinator| coordinator.acknowledge(id, revision));
                     let _ = response.send(result);
                 }
@@ -1185,7 +1383,7 @@ impl WriterActor {
                     let result = self
                         .watch_coordinator
                         .lock()
-                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .map_err(|error| { tracing::warn!(error = ?error, code = "watch-coordinator-poisoned", "store operation failed; collapsed cause logged"); crate::transaction::integrity("watch-coordinator-poisoned") })
                         .map(|mut coordinator| coordinator.unregister(id));
                     if result.is_ok()
                         && let Ok(coordinator) = self.watch_coordinator.lock()
@@ -1479,6 +1677,7 @@ impl WriterActor {
         committed: &CommittedGroup,
     ) -> Result<(), StoreError> {
         let mut intents = self.audit_intents.lock().map_err(|_| {
+            tracing::error!("audit intent registry poisoned; audit append aborted");
             crate::transaction::durability_failure("audit-intent-registry-poisoned")
         })?;
         if !self.audit.enabled() {
@@ -1505,7 +1704,7 @@ impl WriterActor {
         let mut previous_hash = self
             .audit
             .previous_hash()
-            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            .map_err(|error| { tracing::error!(error = ?error, code = "audit-unavailable", "store operation failed; collapsed cause logged"); crate::transaction::durability_failure("audit-unavailable") })?;
         let mut append = |zone: String,
                           operation_id: String,
                           correlation_id: String,
@@ -1534,10 +1733,10 @@ impl WriterActor {
                 outcome,
                 error_code,
             )
-            .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+            .map_err(|error| { tracing::error!(error = ?error, code = "audit-record-invalid", "store operation failed; collapsed cause logged"); crate::transaction::durability_failure("audit-record-invalid") })?;
             self.audit
                 .append_before_commit(&record)
-                .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+                .map_err(|error| { tracing::error!(error = ?error, code = "audit-unavailable", "store operation failed; collapsed cause logged"); crate::transaction::durability_failure("audit-unavailable") })?;
             previous_hash = record.record_hash().clone();
             Ok(())
         };
@@ -1648,6 +1847,7 @@ impl WriterActor {
             }
         }
         let mut intents = self.audit_intents.lock().map_err(|_| {
+            tracing::error!("audit intent registry poisoned; audit sweep aborted");
             crate::transaction::durability_failure("audit-intent-registry-poisoned")
         })?;
         for sequence in sequences {
@@ -1677,7 +1877,7 @@ impl WriterActor {
         let fanout = self
             .watch_coordinator
             .lock()
-            .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "watch-coordinator-poisoned", "store operation failed; collapsed cause logged"); crate::transaction::integrity("watch-coordinator-poisoned") })?
             .dispatch(shared);
         if fanout != 0 {
             self.signals.record_shared_batch();
@@ -1997,15 +2197,15 @@ impl ReadPool {
             Arc::clone(&self.queue_permits[worker]).acquire_owned(),
         )
         .await
-        .map_err(|_| timeout())?
-        .map_err(|_| crate::transaction::integrity("read-pool-closed"))?;
+        .map_err(|_| { tracing::warn!(code = "read-deadline-elapsed", "read deadline elapsed; timed out before completing read stage"); timeout() })?
+        .map_err(|error| { tracing::warn!(error = ?error, code = "read-pool-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-pool-closed") })?;
         let permit = tokio::time::timeout_at(
             admission_deadline,
             Arc::clone(&self.permits).acquire_owned(),
         )
         .await
-        .map_err(|_| timeout())?
-        .map_err(|_| crate::transaction::integrity("read-pool-closed"))?;
+        .map_err(|_| { tracing::warn!(code = "read-deadline-elapsed", "read deadline elapsed; timed out before completing read stage"); timeout() })?
+        .map_err(|error| { tracing::warn!(error = ?error, code = "read-pool-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-pool-closed") })?;
         let (response, receiver) = oneshot::channel();
         let (worker_started, worker_started_receiver) = oneshot::channel();
         let wait_for_worker_completion = hold.is_some();
@@ -2031,27 +2231,27 @@ impl ReadPool {
         if wait_for_worker_completion {
             worker_started_receiver
                 .await
-                .map_err(|_| crate::transaction::integrity("read-start-closed"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "read-start-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-start-closed") })?;
         } else {
             tokio::time::timeout_at(admission_deadline, worker_started_receiver)
                 .await
-                .map_err(|_| timeout())?
-                .map_err(|_| crate::transaction::integrity("read-start-closed"))?;
+                .map_err(|_| { tracing::warn!(code = "read-deadline-elapsed", "read deadline elapsed; timed out before completing read stage"); timeout() })?
+                .map_err(|error| { tracing::warn!(error = ?error, code = "read-start-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-start-closed") })?;
         }
         #[cfg(not(test))]
         tokio::time::timeout_at(admission_deadline, worker_started_receiver)
             .await
-            .map_err(|_| timeout())?
-            .map_err(|_| crate::transaction::integrity("read-start-closed"))?;
+            .map_err(|_| { tracing::warn!(code = "read-deadline-elapsed", "read deadline elapsed; timed out before completing read stage"); timeout() })?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "read-start-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-start-closed") })?;
         let result = if wait_for_worker_completion {
             receiver
                 .await
-                .map_err(|_| crate::transaction::integrity("read-response-closed"))?
+                .map_err(|error| { tracing::warn!(error = ?error, code = "read-response-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-response-closed") })?
         } else {
             tokio::time::timeout_at(admission_deadline, receiver)
                 .await
-                .map_err(|_| timeout())?
-                .map_err(|_| crate::transaction::integrity("read-response-closed"))?
+                .map_err(|_| { tracing::warn!(code = "read-deadline-elapsed", "read deadline elapsed; timed out before completing read stage"); timeout() })?
+                .map_err(|error| { tracing::warn!(error = ?error, code = "read-response-closed", "store operation failed; collapsed cause logged"); crate::transaction::integrity("read-response-closed") })?
         };
         let outcome = if result.is_ok() { "ok" } else { "error" };
         // Caller-observed latency: the store is expected to answer reads
@@ -2649,7 +2849,7 @@ fn stored_metadata_resource_from_frame(
         return Err(crate::transaction::integrity("value-frame-length-mismatch"));
     }
     let value: serde_json::Value = serde_json::from_slice(&frame[7..])
-        .map_err(|_| crate::transaction::integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("stored-resource-envelope-invalid") })?;
     let canonical_json = value
         .get("canonical_json")
         .and_then(serde_json::Value::as_array)
@@ -2677,7 +2877,7 @@ fn stored_metadata_resource_from_frame(
         .as_deref()
         .map(|value| {
             ResourceUid::parse(value.to_owned())
-                .map_err(|_| crate::transaction::integrity("stored-resource-owner-uid-invalid"))
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-owner-uid-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("stored-resource-owner-uid-invalid") })
         })
         .transpose()?;
     let owner_generation = value
@@ -2686,12 +2886,13 @@ fn stored_metadata_resource_from_frame(
         .map(|value| {
             d2b_contracts_resource::v3::ResourceGeneration::new(value)
                 .map_err(|_| {
+                    tracing::warn!(code = "stored-resource-owner-generation-invalid", "store operation failed; collapsed cause logged");
                     crate::transaction::integrity("stored-resource-owner-generation-invalid")
                 })
         })
         .transpose()?;
     let resource: serde_json::Value = serde_json::from_slice(&canonical_json)
-        .map_err(|_| crate::transaction::integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("stored-resource-envelope-invalid") })?;
     let metadata = resource
         .get("metadata")
         .cloned()
@@ -2720,7 +2921,7 @@ fn stored_metadata_resource_from_frame(
         "metadata": metadata,
         "type": resource_type,
     }))
-    .map_err(|_| crate::transaction::integrity("stored-resource-metadata-invalid"))?;
+    .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-metadata-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("stored-resource-metadata-invalid") })?;
     Ok((
         StoredResource {
             resource_ref: resource_ref.clone(),
@@ -2780,7 +2981,7 @@ fn decode_list_cursor(value: &str) -> Result<ListCursor, StoreError> {
         .next()
         .ok_or_else(|| crate::transaction::integrity("list-cursor-invalid"))?
         .parse()
-        .map_err(|_| crate::transaction::integrity("list-cursor-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "list-cursor-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("list-cursor-invalid") })?;
     let selector_digest = parts
         .next()
         .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -2820,9 +3021,9 @@ fn hex_decode(value: &str) -> Result<Vec<u8>, StoreError> {
         .chunks_exact(2)
         .map(|pair| {
             let text = std::str::from_utf8(pair)
-                .map_err(|_| crate::transaction::integrity("list-cursor-invalid"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "list-cursor-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("list-cursor-invalid") })?;
             u8::from_str_radix(text, 16)
-                .map_err(|_| crate::transaction::integrity("list-cursor-invalid"))
+                .map_err(|error| { tracing::warn!(error = ?error, code = "list-cursor-invalid", "store operation failed; collapsed cause logged"); crate::transaction::integrity("list-cursor-invalid") })
         })
         .collect()
 }
@@ -2900,7 +3101,7 @@ fn read_schema(
         .open_table(API_SCHEMAS)
         .map_err(crate::transaction::integrity)?;
     let key = crate::transaction::api_schema_key_for_type(&request.resource_type)
-        .map_err(|_| not_found())?;
+        .map_err(|_| { tracing::warn!(resource_type = %request.resource_type, "schema lookup missed; rejected as not found"); not_found() })?;
     let bytes = table
         .get(key.as_slice())
         .map_err(crate::transaction::integrity)?
@@ -2912,7 +3113,7 @@ fn read_schema(
     }
     let canonical_json = decoded.canonical_json().to_vec();
     let payload_digest = crate::transaction::api_schema_digest_for_type(&request.resource_type)
-        .map_err(|_| not_found())?;
+        .map_err(|_| { tracing::warn!(resource_type = %request.resource_type, "schema lookup missed; rejected as not found"); not_found() })?;
     Ok(StoredSchema {
         resource_type: request.resource_type,
         canonical_json,

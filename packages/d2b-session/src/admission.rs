@@ -1104,7 +1104,13 @@ impl SessionCancellationDriver for SessionDriverHandle {
         Box::pin(async move {
             completion?
                 .await
-                .map_err(|_| SessionError::new(SessionErrorCode::SessionDisconnected))?
+                .map_err(|error| {
+                    tracing::debug!(
+                        error = %error,
+                        "session cancellation outcome unavailable: driver dropped the reply"
+                    );
+                    SessionError::new(SessionErrorCode::SessionDisconnected)
+                })?
         })
     }
 }

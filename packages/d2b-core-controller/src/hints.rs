@@ -608,6 +608,14 @@ impl FairAdmission {
         let removed = queue.hints.len();
         self.total -= removed;
         self.controllers.retain(|queued| queued != controller);
+        if removed > 0 {
+            tracing::warn!(
+                zone = controller.zone().as_str(),
+                controller = controller.controller_ref().to_canonical_string(),
+                removed,
+                "pending hints dropped: controller lease withdrawn",
+            );
+        }
         removed
     }
 
