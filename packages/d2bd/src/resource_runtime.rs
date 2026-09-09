@@ -3693,6 +3693,18 @@ impl DaemonSharedProviderEffects {
         let value = self.guest_provider_resource(kind, context, resource).await?;
         for dependency in dependencies {
             if !Self::related_guest_dependency(&value, dependency)? {
+                // Bring-up observability: a Guest held on an unready
+                // dependency is invisible otherwise — log which
+                // dependency holds it.
+                tracing::warn!(
+                    guest = %resource.key().resource_ref().to_canonical_string(),
+                    dependency = %dependency
+                        .resource()
+                        .key()
+                        .resource_ref()
+                        .to_canonical_string(),
+                    "guest held on unready dependency",
+                );
                 return Ok(SharedProviderEffectResult::phase(
                     SharedProviderEffectPhase::Pending,
                 ));
