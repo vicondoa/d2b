@@ -742,7 +742,17 @@ impl WriterHandle {
             .map_err(|_| crate::transaction::integrity("writer-closed"))?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("watch-response-closed"))?
+            .map_err(|_| {
+                // Mirror authority_prepare/authority_update: a dropped watch
+                // response is a writer stall or restart under the sustained
+                // commit stream — transient, the runner retries via its watch
+                // recovery (relist), not a source-plane corruption.
+                crate::transaction::error(
+                    d2b_resource_store::StoreErrorKind::Timeout,
+                    None,
+                    "watch-response-closed",
+                )
+            })?
     }
 
     pub(crate) async fn acknowledge_watch(
