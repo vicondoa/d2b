@@ -1104,6 +1104,45 @@ fn provider_status_candidate(
         .get("status")
         .cloned()
         .ok_or(CoreReconcileError)?;
+    // Damping: a candidate whose phase is unchanged and whose
+    // providerReadiness carries no false→true readiness edge is observation
+    // churn (detail reshuffles among already-true fields, true→false
+    // flickers while dependencies settle) and must not trigger a write —
+    // controllers recompute the same readiness bools on every pass, and
+    // writing them re-triggered the runner until the dependencies settled.
+    // Phase changes and false→true edges are significant progress and
+    // always write.
+    let edges_to_true = |candidate_readiness: &serde_json::Value,
+                         stored_readiness: &serde_json::Value|
+     -> bool {
+        candidate_readiness
+            .as_object()
+            .is_some_and(|readiness| {
+                readiness
+                    .iter()
+                    .any(|(field, value)| {
+                        matches!(value, serde_json::Value::Bool(true))
+                            && !stored_readiness
+                                .get(field)
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false)
+                    })
+            })
+    };
+    let damped = candidate.get("phase") == current.get("phase")
+        && !edges_to_true(
+            candidate
+                .get("resource")
+                .and_then(|resource| resource.get("providerReadiness"))
+                .unwrap_or(&serde_json::Value::Null),
+            current
+                .get("resource")
+                .and_then(|resource| resource.get("providerReadiness"))
+                .unwrap_or(&serde_json::Value::Null),
+        );
+    if damped {
+        return Ok(None);
+    }
     if current == serde_json::Value::Object(candidate.clone()) {
         return Ok(None);
     }
@@ -1439,6 +1478,16 @@ mod tests {
             "artifactReady": true,
             "registrationReady": true,
         });
+        provider_resource_snapshot_with(readiness, phase, observed_generation, generation)
+    }
+
+    fn provider_resource_snapshot_with(
+        readiness: serde_json::Value,
+        phase: &str,
+        observed_generation: u64,
+        generation: u64,
+    ) -> ResourceSnapshot {
+        let readiness = readiness;
         let canonical = serde_json::json!({
             "status": {
                 "resource": { "providerReadiness": readiness },
@@ -1491,6 +1540,82 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "a phase regression must produce a status write"
+        );
+    }
+
+    #[test]
+    fn provider_status_damping_suppresses_churn_but_writes_progress() {
+        let observation = ProviderObservation {
+            package_present: true,
+            config_valid: true,
+            graph_valid: true,
+            conformance_valid: true,
+            required_dependencies_ready: true,
+            required_components_ready: true,
+            optional_components_degraded: false,
+            components_drained: false,
+        };
+
+        // (a) Same phase, readiness true→true (the stored status carries an
+        // extra already-true detail field the candidate reshuffles away):
+        // observation churn — no candidate write.
+        let stored = provider_resource_snapshot_with(
+            serde_json::json!({
+                "artifactReady": true,
+                "componentsReady": true,
+                "dependenciesReady": true,
+                "descriptorReady": true,
+                "registrationReady": true,
+                "optionalDetail": true,
+            }),
+            "Pending",
+            3,
+            3,
+        );
+        assert_eq!(
+            provider_status_candidate(&stored, ProviderPhase::Pending, observation).unwrap(),
+            None,
+            "true→true detail churn must not produce a status write"
+        );
+
+        // (b) Readiness false→true edge: meaningful progress — write.
+        let stored = provider_resource_snapshot_with(
+            serde_json::json!({
+                "artifactReady": false,
+                "componentsReady": true,
+                "dependenciesReady": true,
+                "descriptorReady": true,
+                "registrationReady": true,
+            }),
+            "Pending",
+            3,
+            3,
+        );
+        assert!(
+            provider_status_candidate(&stored, ProviderPhase::Pending, observation)
+                .unwrap()
+                .is_some(),
+            "a false→true readiness edge must produce a status write"
+        );
+
+        // (c) Phase change: always write, even with identical readiness.
+        let stored = provider_resource_snapshot_with(
+            serde_json::json!({
+                "artifactReady": true,
+                "componentsReady": true,
+                "dependenciesReady": true,
+                "descriptorReady": true,
+                "registrationReady": true,
+            }),
+            "Ready",
+            3,
+            3,
+        );
+        assert!(
+            provider_status_candidate(&stored, ProviderPhase::Pending, observation)
+                .unwrap()
+                .is_some(),
+            "a phase change must produce a status write regardless of readiness"
         );
     }
 
