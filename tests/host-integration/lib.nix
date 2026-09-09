@@ -507,19 +507,11 @@ rec {
           # runners.
           virtualisation.memorySize = 3072;
           virtualisation.diskSize = 8192;
+          # The daemon's redb writer thread, the daemon async runtime, the
+          # broker, and three controllers all need real CPU. The 1-vCPU
+          # default serializes them and starves every 250ms handshake.
+          virtualisation.cores = 3;
           boot.kernelModules = [ "br_netfilter" "tun" "vhost_net" ];
-          # The store writer fsyncs every commit; on the emulated disk
-          # that costs ~700ms per write and starves bring-up. The test
-          # VM is ephemeral, so back the d2b state tree with tmpfs and
-          # drop fsync latency to zero.
-          virtualisation.fileSystems."/var/lib/d2b" = {
-            device = "tmpfs";
-            fsType = "tmpfs";
-            options = [
-              "mode=0755"
-              "size=512m"
-            ];
-          };
 
           users.users.alice = {
             isNormalUser = true;
