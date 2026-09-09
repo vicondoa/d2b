@@ -571,6 +571,22 @@ rec {
         # a fast, reliable boot.
         (lib.mkIf writableStore {
           virtualisation.useBootLoader = true;
+          # The guest store-view hardlinks /nix/store into /var/lib/d2b, so
+          # both must stay on one filesystem - a separate state disk would
+          # break the hardlink farm with EXDEV. Instead, drop the root
+          # drive's cache to unsafe: every redb commit's fsync becomes a
+          # host page-cache no-op instead of a ~700-900ms stall, and the
+          # fixture VM is ephemeral, so the lost durability is irrelevant.
+          virtualisation.qemu.drives = lib.mkForce [
+            {
+              name = "root";
+              file = ''"$NIX_DISK_IMAGE"'';
+              driveExtraOpts.cache = "unsafe";
+              driveExtraOpts.werror = "report";
+              deviceExtraOpts.bootindex = "1";
+              deviceExtraOpts.serial = "root";
+            }
+          ];
         })
         # The state disk keeps /var/lib/d2b off the emulated root disk:
         # cache=unsafe (host fsync no-op), noatime + nobarrier mounts.
