@@ -4850,7 +4850,6 @@ fn assignment_matches(record: &AssignmentRecord, fence: &ResourceAssignmentFence
         && record.controller_role == fence.controller_role.to_canonical_string()
         && record.target == fence.target.to_canonical_string()
         && record.session_generation == fence.session_generation.get()
-        && record.epoch == fence.epoch
         && record.phase == "assigned"
 }
 
@@ -4867,10 +4866,25 @@ fn assignment_replacement_allowed(
     record: &AssignmentRecord,
     fence: &ResourceAssignmentFence,
 ) -> bool {
-    // Core's registry makes drain/release the authority for a newer epoch.
-    // The store serializes that successor with the resource write, replacing
-    // the old assignment before either writer can observe a later revision.
-    record.resource_uid == fence.resource_uid.as_str() && fence.epoch > record.epoch
+    // Succession without assignment epochs, mirroring the resolver-side
+    // generation comparisons: the same resource identity may be re-fenced
+    // only by a writer that is not older on any authority axis (provider,
+    // controller, or reconnect session generation) and is either strictly
+    // newer on one (a reconnect, provider, or controller succession, which
+    // may also drift the role/target binding) or keeps the exact role/target
+    // binding (re-fencing the same writer, including over a drained or
+    // revoked phase). The fence's fresh resource revision, validated by the
+    // caller, serializes concurrent writers.
+    record.resource_uid == fence.resource_uid.as_str()
+        && fence.provider_generation.get() >= record.provider_generation
+        && fence.controller_generation.get() >= record.controller_generation
+        && fence.session_generation.get() >= record.session_generation
+        && (fence.provider_generation.get() > record.provider_generation
+            || fence.controller_generation.get() > record.controller_generation
+            || fence.session_generation.get() > record.session_generation
+            || (Some(&fence.controller_role)
+                == ResourceRef::parse(&record.controller_role).ok().as_ref()
+                && fence.target.to_canonical_string() == record.target))
 }
 
 fn operation_digests(verified: &VerifiedWrite) -> Result<[String; 2], StoreError> {
@@ -6401,7 +6415,7 @@ mod tests {
         successor.add_finalizers = vec![FinalizerId::parse("core.controller-successor").unwrap()];
         successor.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(4),
-            epoch: 2,
+            session_generation: ReconnectGeneration::new(5).unwrap(),
             scope: ResourceAssignmentScope::Primary,
             ..fence
         });
@@ -6545,7 +6559,7 @@ mod tests {
     }
 
     #[test]
-    fn assignment_fences_reject_lower_epoch_inside_multi_mutation_batch() {
+    fn assignment_fences_reject_lower_authority_generation_inside_multi_mutation_batch() {
         let (_directory, database, _identity) = fixture();
         let target = ResourceRef::parse("Host/host-system").unwrap();
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
@@ -6594,7 +6608,7 @@ mod tests {
             vec![FinalizerId::parse("core.controller-epoch-successor").unwrap()];
         successor.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(2),
-            epoch: 2,
+            session_generation: ReconnectGeneration::new(5).unwrap(),
             scope: ResourceAssignmentScope::Primary,
             ..fence.clone()
         });
@@ -7776,11 +7790,11 @@ mod tests {
         let owner_revision = ZoneRevision::new(2);
         let owner_generation = ResourceGeneration::new(1).unwrap();
         let child_target = ResourceRef::parse("Process/rejected").unwrap();
-        let mut successor_epoch = create_mutation_with_body(
-            ResourceRef::parse("Process/successor-epoch").unwrap(),
-            process_body("successor-epoch", Some(&owner_ref)),
+        let mut successor_child = create_mutation_with_body(
+            ResourceRef::parse("Process/successor-session").unwrap(),
+            process_body("successor-session", Some(&owner_ref)),
         );
-        successor_epoch.owner = Some(owner_ref.clone());
+        successor_child.owner = Some(owner_ref.clone());
         let mut successor_fence = owner_child_fence(
             owner_ref.clone(),
             owner_uid.clone(),
@@ -7788,13 +7802,13 @@ mod tests {
             owner_generation,
             target.clone(),
         );
-        successor_fence.epoch = 2;
-        successor_epoch.assignment = Some(successor_fence);
+        successor_fence.session_generation = ReconnectGeneration::new(5).unwrap();
+        successor_child.assignment = Some(successor_fence);
         let rejected = apply_group(
             &database,
             vec![verified(
                 "failure-successor-child",
-                successor_epoch,
+                successor_child,
                 owner_uid.clone(),
             )],
         )

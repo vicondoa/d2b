@@ -590,7 +590,6 @@ impl RedbRegisteredControllerApi {
             || fence.provider_generation.get() == 0
             || fence.controller_generation.get() == 0
             || fence.session_generation.get() == 0
-            || fence.epoch == 0
         {
             return Err(SourceError::Integrity);
         }
@@ -1029,7 +1028,6 @@ impl RedbRegisteredControllerApi {
                     || fence.provider_generation.get() == 0
                     || fence.controller_generation.get() == 0
                     || fence.session_generation.get() == 0
-                    || fence.epoch == 0
                 {
                     return Err(SourceError::Integrity);
                 }

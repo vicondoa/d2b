@@ -1113,8 +1113,7 @@ async fn system_core_projection_still_enforces_assignment_session_and_role_fence
     let bad_fence = ResourceAssignmentFence {
         resource_revision: first.revision,
         controller_role: ResourceRef::parse("Process/other-controller").unwrap(),
-        session_generation: ReconnectGeneration::new(5).unwrap(),
-        ..fence
+        ..fence.clone()
     };
     let second_operation = "system-core-wrong-fence";
     let error = store
@@ -1134,6 +1133,33 @@ async fn system_core_projection_still_enforces_assignment_session_and_role_fence
         .unwrap_err();
     assert_eq!(error.reason_code(), "stale-assignment");
     assert!(!store.audit_outbox_pending(second_operation).await.unwrap());
+
+    // Succession without epochs: same-session role drift and a regressing
+    // reconnect session are both rejected; only a strictly newer authority
+    // axis (or the exact role/target binding) may re-fence.
+    let stale_session_fence = ResourceAssignmentFence {
+        resource_revision: first.revision,
+        session_generation: ReconnectGeneration::new(3).unwrap(),
+        ..fence
+    };
+    let third_operation = "system-core-stale-session-fence";
+    let stale_session_error = store
+        .commit_verified(issuer.seal(update_seal_body_for_type_as(
+            third_operation,
+            first.resources[0].resource_ref.clone(),
+            ResourceMutationKind::UpdateStatus,
+            first.revision,
+            Some(first.resources[0].uid.clone()),
+            Some(update_status_body(&first.resources[0].canonical_json, "Ready")),
+            "Provider/system-core",
+            Some(stale_session_fence),
+            Vec::new(),
+            Vec::new(),
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(stale_session_error.reason_code(), "stale-assignment");
+    assert!(!store.audit_outbox_pending(third_operation).await.unwrap());
     store.shutdown().await.unwrap();
 }
 

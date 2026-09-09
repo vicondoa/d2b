@@ -2502,7 +2502,7 @@ pub(crate) async fn start(
                     ) {
                         return Err(SourceError::Integrity);
                     }
-                    if stored.epoch == authority.epoch && stored.resource_revision != revision {
+                    if stored.resource_revision != revision {
                         return Err(SourceError::Conflict(stored.resource_revision));
                     }
                 }
@@ -2514,7 +2514,7 @@ pub(crate) async fn start(
                     controller_role: authority.controller_role.clone(),
                     target: authority.target.clone(),
                     session_generation: authority.session_generation,
-                    epoch: authority.epoch,
+                    epoch: crate::resource_runtime::ASSIGNMENT_EPOCH,
                     scope: ResourceAssignmentScope::Primary,
                 })
             })

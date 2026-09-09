@@ -15,7 +15,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -1944,7 +1944,6 @@ impl DaemonSharedProviderEffects {
         };
         if assignment.resource_uid != resource.uid
             || assignment.resource_revision != resource.revision
-            || assignment.epoch == 0
             || assignment.provider_generation.get() == 0
             || assignment.controller_generation.get() == 0
             || assignment.session_generation.get() == 0
@@ -2338,8 +2337,7 @@ impl DaemonSharedProviderEffects {
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let host_ref = ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
             .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        if assignment.epoch == 0
-            || assignment.resource_uid != *resource.key().uid()
+        if assignment.resource_uid != *resource.key().uid()
             || assignment.provider_generation != context.identity.provider_generation()
             || assignment.controller_generation != context.identity.controller_generation()
             || assignment.controller_role != *context.identity.controller_ref()
@@ -2944,7 +2942,6 @@ impl DaemonSharedProviderEffects {
             || fence.controller_generation != context.identity.controller_generation()
             || fence.controller_role != expected_controller
             || fence.session_generation != session_generation
-            || fence.epoch == 0
         {
             return Err(SharedProviderEffectError::InvalidResource);
         }
@@ -4535,7 +4532,6 @@ fn network_assignment_matches(
         && actual.target
             == ResourceRef::parse(CORE_CONTROLLER_HOST_REF).expect("Host ref")
         && actual.session_generation == expected.session_generation
-        && actual.epoch == expected.assignment.epoch
         && matches!(actual.scope, ResourceAssignmentScope::Primary)
 }
 
@@ -8360,6 +8356,14 @@ pub fn compose_shared_provider_runner_descriptors(
         .collect()
 }
 
+/// Compat assignment-epoch value written into every newly constructed
+/// assignment fence and stored AssignmentRecord. Epochs no longer take part
+/// in any decision (succession is read off provider/controller/session
+/// generations plus resource revisions, and reconnect reconciliation adopts
+/// every fence not strictly newer); the constant only keeps the retained
+/// schema and stored-record validation (a nonzero epoch) intact.
+pub(super) const ASSIGNMENT_EPOCH: u64 = 1;
+
 #[derive(Clone)]
 pub(super) struct CoreAssignmentAuthority {
     provider_generation: ResourceGeneration,
@@ -8367,39 +8371,41 @@ pub(super) struct CoreAssignmentAuthority {
     session_generation: ReconnectGeneration,
     controller_role: ResourceRef,
     target: ResourceRef,
-    epoch: u64,
 }
 
 /// Whether a stored assignment fence conflicts with the current authority.
 ///
-/// Identity drift (uid, role, target) or a strictly newer fence always
-/// conflicts: a concurrent or future writer is active. A stored fence that
-/// is older-or-equal on every version axis is a predecessor from a
-/// superseded authority (for example across a session reconnect that kept
-/// the epoch): the successor adopts it by proceeding, and re-fences on
-/// write, instead of dying and wedging the runner forever.
+/// Succession is read off the monotonic authority axes. A stored fence that
+/// is strictly newer on any axis (provider, controller, or reconnect session
+/// generation) means a concurrent or future writer is active: conflict. A
+/// stored fence that is older-or-equal on every axis is a predecessor from a
+/// superseded authority: the reconnecting successor adopts it and re-fences
+/// on write, instead of dying and wedging the runner forever. Role/target
+/// drift at fully equal axes is still a conflict: the same writer identity
+/// must not silently change its binding mid-session.
 pub(super) fn assignment_fence_conflict(
     stored: &ResourceAssignmentFence,
     uid: &ResourceUid,
     authority: &CoreAssignmentAuthority,
 ) -> bool {
+    let strictly_newer = stored.provider_generation > authority.provider_generation
+        || stored.controller_generation > authority.controller_generation
+        || stored.session_generation > authority.session_generation;
+    let same_axes = stored.provider_generation == authority.provider_generation
+        && stored.controller_generation == authority.controller_generation
+        && stored.session_generation == authority.session_generation;
     let conflict = stored.resource_uid != *uid
-        || stored.epoch > authority.epoch
-        || (stored.epoch == authority.epoch
-            && (stored.provider_generation > authority.provider_generation
-                || stored.controller_generation > authority.controller_generation
-                || stored.controller_role != authority.controller_role
-                || stored.target != authority.target
-                || stored.session_generation > authority.session_generation));
+        || strictly_newer
+        || (same_axes
+            && (stored.controller_role != authority.controller_role
+                || stored.target != authority.target));
     // A conflict kills the reconciling runner; log both sides so the
     // succession that produced it is diagnosable from the journal alone.
     if conflict {
         tracing::warn!(
-            stored_epoch = stored.epoch,
             stored_provider_generation = stored.provider_generation.get(),
             stored_controller_generation = stored.controller_generation.get(),
             stored_session_generation = stored.session_generation.get(),
-            authority_epoch = authority.epoch,
             authority_provider_generation = authority.provider_generation.get(),
             authority_controller_generation = authority.controller_generation.get(),
             authority_session_generation = authority.session_generation.get(),
@@ -10770,7 +10776,6 @@ pub struct ZoneResourceRuntime {
     controller_endpoint_registered: bool,
     watch_admitted: bool,
     assignments: AssignmentRegistry,
-    core_assignment_epoch: Arc<AtomicU64>,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
@@ -11623,7 +11628,6 @@ impl ZoneResourceRuntime {
             controller_endpoint_registered,
             watch_admitted,
             assignments,
-            core_assignment_epoch: Arc::new(AtomicU64::new(0)),
             authority_index,
             authority_persistence,
             authority_recovery,
@@ -12087,7 +12091,7 @@ impl ZoneResourceRuntime {
     ///
     /// Controller deployment supplies only the committed resource, signed
     /// role, installed generations, and authenticated session generation.
-    /// The registry remains the single owner of assignment epochs and target
+    /// The registry remains the single owner of target conflicts; callers
     /// conflicts; callers never receive a store handle. The session must
     /// already be present in the active controller-session table.
     pub fn admit_controller_assignment(
@@ -12397,7 +12401,7 @@ impl ZoneResourceRuntime {
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = fingerprints;
         if rebind_core {
-            if let Err(error) = self.start_core_controller_runners_locked(true).await {
+            if let Err(error) = self.start_core_controller_runners_locked().await {
                 #[cfg(not(test))]
                 return Err(error);
                 #[cfg(test)]
@@ -13033,7 +13037,7 @@ impl ZoneResourceRuntime {
         &self,
         providers: &crate::process_provider_runtime::ProductionProcessProviders,
     ) -> Result<(Arc<CoreAssignmentAuthority>, AuthorizationState), ResourceRuntimeError> {
-        let core_authority = self.core_assignment_fences(false).await?.4;
+        let core_authority = self.core_assignment_fences().await?.4;
         let authorization_state = self
             .authorization_state
             .lock()
@@ -13050,37 +13054,8 @@ impl ZoneResourceRuntime {
         Ok((core_authority, authorization_state))
     }
 
-    // Assignment-fence reads are one owner-scoped relist. The redb adapter
-    // waits asynchronously for bounded read capacity; retrying here would
-    // give every resource a fresh retry budget and serialize startup.
-    async fn durable_assignment_epoch<F, Fut>(
-        resource_refs: &[ResourceRef],
-        mut read: F,
-    ) -> Result<u64, ResourceRuntimeError>
-    where
-        F: FnMut(&ResourceRef) -> Fut,
-        Fut: std::future::Future<
-            Output = Result<Option<ResourceAssignmentFence>, d2b_resource_store::StoreError>,
-        >,
-    {
-        if resource_refs.len() > d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS {
-            return Err(ResourceRuntimeError::AuthorizationUnavailable);
-        }
-        let mut maximum = 0;
-        for resource_ref in resource_refs {
-            if let Some(fence) = read(resource_ref)
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?
-            {
-                maximum = maximum.max(fence.epoch);
-            }
-        }
-        Ok(maximum)
-    }
-
     async fn core_assignment_fences(
         &self,
-        rotate_epoch: bool,
     ) -> Result<
         (
             Vec<(ResourceRef, ResourceAssignmentFence)>,
@@ -13162,34 +13137,12 @@ impl ZoneResourceRuntime {
         let target = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let session_generation = subject.reconnect_generation();
-        let resource_refs = resources
-            .iter()
-            .map(|resource| resource.resource_ref.clone())
-            .collect::<Vec<_>>();
-        let durable_epoch = Self::durable_assignment_epoch(&resource_refs, |resource_ref| {
-            self.store
-                .assignment_fence(self.zone.clone(), resource_ref.clone())
-        })
-        .await?;
-        let current_epoch = self.core_assignment_epoch.load(Ordering::Acquire);
-        let floor = current_epoch.max(durable_epoch);
-        let epoch = if rotate_epoch || current_epoch == 0 || durable_epoch > current_epoch {
-            self.assignments
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .reserve_epoch_after(floor)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
-        } else {
-            current_epoch
-        };
-        self.core_assignment_epoch.store(epoch, Ordering::Release);
         let authority = Arc::new(CoreAssignmentAuthority {
             provider_generation,
             controller_generation,
             session_generation,
             controller_role: controller_ref.clone(),
             target: target.clone(),
-            epoch,
         });
         let assignments = resources
             .into_iter()
@@ -13202,7 +13155,7 @@ impl ZoneResourceRuntime {
                     controller_role: controller_ref.clone(),
                     target: target.clone(),
                     session_generation,
-                    epoch,
+                    epoch: ASSIGNMENT_EPOCH,
                     scope: ResourceAssignmentScope::Primary,
                 };
                 (resource.resource_ref, fence)
@@ -13325,7 +13278,7 @@ impl ZoneResourceRuntime {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push("start-enter");
-        let result = self.start_core_controller_runners_locked(false).await;
+        let result = self.start_core_controller_runners_locked().await;
         #[cfg(test)]
         self.core_runner_events
             .lock()
@@ -13334,10 +13287,7 @@ impl ZoneResourceRuntime {
         result
     }
 
-    async fn start_core_controller_runners_locked(
-        &self,
-        rotate_epoch: bool,
-    ) -> Result<(), ResourceRuntimeError> {
+    async fn start_core_controller_runners_locked(&self) -> Result<(), ResourceRuntimeError> {
         if !self.readiness.resource_api_ready {
             return Ok(());
         }
@@ -13395,7 +13345,7 @@ impl ZoneResourceRuntime {
             controller_generation,
             session_generation,
             assignment_authority,
-        ) = match self.core_assignment_fences(rotate_epoch).await {
+        ) = match self.core_assignment_fences().await {
             Ok(value) => value,
             Err(ResourceRuntimeError::HandlerNotReady) if had_existing_core_runners => {
                 return Err(ResourceRuntimeError::HandlerNotReady);
@@ -13462,9 +13412,7 @@ impl ZoneResourceRuntime {
                         if assignment_fence_conflict(&stored, &uid, &authority) {
                             return Err(SourceError::Integrity);
                         }
-                        if stored.epoch == authority.epoch
-                            && stored.resource_revision != revision
-                        {
+                        if stored.resource_revision != revision {
                             return Err(SourceError::Conflict(stored.resource_revision));
                         }
                     }
@@ -13476,7 +13424,7 @@ impl ZoneResourceRuntime {
                         controller_role: authority.controller_role.clone(),
                         target: authority.target.clone(),
                         session_generation: authority.session_generation,
-                        epoch: authority.epoch,
+                        epoch: ASSIGNMENT_EPOCH,
                         scope: ResourceAssignmentScope::Primary,
                     })
                 })
@@ -13541,7 +13489,6 @@ impl ZoneResourceRuntime {
                 ResourceRef::parse("Process/system-core-resource-controller")
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
                 session_generation,
-                Arc::clone(&self.core_assignment_epoch),
             ));
         let system_core_source =
             CoreControllerSource::new(system_core_descriptor.clone(), Arc::new(system_core_api));
@@ -13593,11 +13540,7 @@ impl ZoneResourceRuntime {
                 controller_role: descriptor.identity().controller_ref().clone(),
                 target: ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                epoch: self.core_assignment_epoch.load(Ordering::Acquire),
             };
-            if authority.epoch == 0 {
-                return Err(ResourceRuntimeError::HandlerNotReady);
-            }
             let resolver_store = Arc::clone(&self.store);
             let resolver_zone = self.zone.clone();
             let resolver_authority = Arc::new(authority);
@@ -13624,9 +13567,7 @@ impl ZoneResourceRuntime {
                         if assignment_fence_conflict(&stored, &uid, &authority) {
                             return Err(SourceError::Integrity);
                         }
-                        if stored.epoch == authority.epoch
-                            && stored.resource_revision != revision
-                        {
+                        if stored.resource_revision != revision {
                             return Err(SourceError::Conflict(stored.resource_revision));
                         }
                     }
@@ -13638,7 +13579,7 @@ impl ZoneResourceRuntime {
                         controller_role: authority.controller_role.clone(),
                         target: authority.target.clone(),
                         session_generation: authority.session_generation,
-                        epoch: authority.epoch,
+                        epoch: ASSIGNMENT_EPOCH,
                         scope: ResourceAssignmentScope::Primary,
                     })
                 })
@@ -14000,9 +13941,7 @@ impl ZoneResourceRuntime {
                             if assignment_fence_conflict(&stored, &uid, &authority) {
                                 return Err(SourceError::Integrity);
                             }
-                            if stored.epoch == authority.epoch
-                                && stored.resource_revision != revision
-                            {
+                            if stored.resource_revision != revision {
                                 return Err(SourceError::Conflict(stored.resource_revision));
                             }
                         }
@@ -14014,7 +13953,7 @@ impl ZoneResourceRuntime {
                             controller_role: authority.controller_role.clone(),
                             target: authority.target.clone(),
                             session_generation: authority.session_generation,
-                            epoch: authority.epoch,
+                            epoch: ASSIGNMENT_EPOCH,
                             scope: ResourceAssignmentScope::Primary,
                         })
                     })
@@ -14415,9 +14354,7 @@ impl ZoneResourceRuntime {
                                 if assignment_fence_conflict(&stored, &uid, &authority) {
                                     return Err(SourceError::Integrity);
                                 }
-                                if stored.epoch == authority.epoch
-                                    && stored.resource_revision != revision
-                                {
+                                if stored.resource_revision != revision {
                                     return Err(SourceError::Conflict(stored.resource_revision));
                                 }
                             }
@@ -14429,7 +14366,7 @@ impl ZoneResourceRuntime {
                                 controller_role: authority.controller_role.clone(),
                                 target: authority.target.clone(),
                                 session_generation: authority.session_generation,
-                                epoch: authority.epoch,
+                                epoch: ASSIGNMENT_EPOCH,
                                 scope: ResourceAssignmentScope::Primary,
                             })
                         })
@@ -14811,23 +14748,10 @@ impl ZoneResourceRuntime {
                                     _ => SourceError::Unavailable,
                                 })?
                             {
-                                if stored.resource_uid != uid
-                                    || stored.epoch > authority.epoch
-                                    || (stored.epoch == authority.epoch
-                                        && (stored.provider_generation
-                                            != authority.provider_generation
-                                            || stored.controller_generation
-                                                != authority.controller_generation
-                                            || stored.controller_role != authority.controller_role
-                                            || stored.target != authority.target
-                                            || stored.session_generation
-                                                != authority.session_generation))
-                                {
+                                if assignment_fence_conflict(&stored, &uid, &authority) {
                                     return Err(SourceError::Integrity);
                                 }
-                                if stored.epoch == authority.epoch
-                                    && stored.resource_revision != revision
-                                {
+                                if stored.resource_revision != revision {
                                     return Err(SourceError::Conflict(stored.resource_revision));
                                 }
                             }
@@ -14839,7 +14763,7 @@ impl ZoneResourceRuntime {
                                 controller_role: authority.controller_role.clone(),
                                 target: authority.target.clone(),
                                 session_generation: authority.session_generation,
-                                epoch: authority.epoch,
+                                epoch: ASSIGNMENT_EPOCH,
                                 scope: ResourceAssignmentScope::Primary,
                             })
                         })
@@ -15007,46 +14931,12 @@ impl ZoneResourceRuntime {
                     .is_some_and(|provider| provider == expected_provider)
             })
             .collect::<Vec<_>>();
-        let mut durable_epoch = 0;
-        let mut authority_mismatch = false;
-        for resource in &resources {
-            let Some(stored) = self
-                .store
-                .assignment_fence(self.zone.clone(), resource.resource_ref.clone())
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?
-            else {
-                continue;
-            };
-            durable_epoch = durable_epoch.max(stored.epoch);
-            if stored.provider_generation != provider_generation
-                || stored.controller_generation != controller_generation
-                || stored.controller_role != controller_ref
-                || stored.target != target
-                || stored.session_generation != session_generation
-            {
-                authority_mismatch = true;
-            }
-        }
-        let floor = durable_epoch.max(1);
-        let epoch = if authority_mismatch {
-            let epoch = self
-                .assignments
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .reserve_epoch_after(floor)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            epoch
-        } else {
-            floor
-        };
         let authority = Arc::new(CoreAssignmentAuthority {
             provider_generation,
             controller_generation,
             session_generation,
             controller_role: controller_ref.clone(),
             target: target.clone(),
-            epoch,
         });
         let assignments = resources
             .into_iter()
@@ -15068,7 +14958,7 @@ impl ZoneResourceRuntime {
                         controller_role: controller_ref.clone(),
                         target: target.clone(),
                         session_generation,
-                        epoch,
+                        epoch: ASSIGNMENT_EPOCH,
                         scope: ResourceAssignmentScope::Primary,
                     },
                 )
@@ -22328,9 +22218,6 @@ pub(super) fn shared_provider_assignment_fence_resolver(
                 if assignment_fence_conflict(&stored, &uid, &authority) {
                     return Err(SourceError::Integrity);
                 }
-                if stored.epoch == authority.epoch && stored.resource_revision != revision {
-                    return Err(SourceError::Conflict(stored.resource_revision));
-                }
             }
             Ok(ResourceAssignmentFence {
                 resource_uid: uid,
@@ -22340,7 +22227,7 @@ pub(super) fn shared_provider_assignment_fence_resolver(
                 controller_role: authority.controller_role.clone(),
                 target: authority.target.clone(),
                 session_generation: authority.session_generation,
-                epoch: authority.epoch,
+                epoch: ASSIGNMENT_EPOCH,
                 scope: ResourceAssignmentScope::Primary,
             })
         })
@@ -22467,7 +22354,7 @@ fn process_assignment_fence_resolver(
                 controller_role: authority.controller_role.clone(),
                 target: execution_ref,
                 session_generation: authority.session_generation,
-                epoch: authority.epoch,
+                epoch: ASSIGNMENT_EPOCH,
                 scope: ResourceAssignmentScope::Primary,
             })
         })
@@ -22478,12 +22365,10 @@ fn system_core_assignment_fence_resolver(
     store: Arc<RedbResourceStore>,
     controller_role: ResourceRef,
     session_generation: ReconnectGeneration,
-    epoch: Arc<AtomicU64>,
 ) -> AssignmentFenceResolver {
     Arc::new(move |target, uid, revision| {
         let store = Arc::clone(&store);
         let controller_role = controller_role.clone();
-        let epoch = Arc::clone(&epoch);
         Box::pin(async move {
             let resource = store
                 .get(StoreGetRequest {
@@ -22551,10 +22436,6 @@ fn system_core_assignment_fence_resolver(
                 .policy_snapshot
                 .controller_generation
                 .ok_or(SourceError::Integrity)?;
-            let assignment_epoch = epoch.load(Ordering::Acquire);
-            if assignment_epoch == 0 {
-                return Err(SourceError::Integrity);
-            }
             Ok(ResourceAssignmentFence {
                 resource_uid: uid,
                 resource_revision: revision,
@@ -22564,7 +22445,7 @@ fn system_core_assignment_fence_resolver(
                 target: ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
                     .map_err(|_| SourceError::Integrity)?,
                 session_generation,
-                epoch: assignment_epoch,
+                epoch: ASSIGNMENT_EPOCH,
                 scope: ResourceAssignmentScope::Primary,
             })
         })
@@ -23926,61 +23807,10 @@ mod tests {
 
     const TEST_PROCESS_FINALIZER: &str = "process-system-minijail.d2bus.org/cleanup";
 
-    #[tokio::test]
-    async fn assignment_fence_relist_is_bounded_and_does_not_retry_each_resource() {
-        let resource_refs = [
-            ResourceRef::parse("Host/host-system").unwrap(),
-            ResourceRef::parse("User/alice").unwrap(),
-            ResourceRef::parse("Provider/system-core").unwrap(),
-        ];
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_read = Arc::clone(&calls);
-        let epoch = ZoneResourceRuntime::durable_assignment_epoch(&resource_refs, move |_resource_ref| {
-            calls_for_read.fetch_add(1, Ordering::SeqCst);
-            async {
-                Ok(Some(ResourceAssignmentFence {
-                    resource_uid: ResourceUid::parse(
-                        "123e4567-e89b-42d3-a456-426614174000",
-                    )
-                    .unwrap(),
-                    resource_revision: ZoneRevision::new(1),
-                    provider_generation: ResourceGeneration::new(1).unwrap(),
-                    controller_generation: ControllerGeneration::new(1).unwrap(),
-                    controller_role: ResourceRef::parse("Process/system-core").unwrap(),
-                    target: ResourceRef::parse("Zone/work").unwrap(),
-                    session_generation: ReconnectGeneration::new(1).unwrap(),
-                    epoch: 7,
-                    scope: ResourceAssignmentScope::Primary,
-                }))
-            }
-        })
-        .await
-        .expect("bounded assignment-fence relist");
-        assert_eq!(epoch, 7);
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            resource_refs.len(),
-            "one relist pass must read each assignment fence once"
-        );
-
-        let oversized = vec![
-            resource_refs[0].clone();
-            d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS + 1
-        ];
-        let result = ZoneResourceRuntime::durable_assignment_epoch(&oversized, |_resource_ref| async {
-            Ok::<Option<ResourceAssignmentFence>, d2b_resource_store::StoreError>(None)
-        })
-        .await;
-        assert_eq!(
-            result,
-            Err(ResourceRuntimeError::AuthorizationUnavailable)
-        );
-    }
     fn test_authority(
         provider_generation: u64,
         controller_generation: u64,
         session_generation: u64,
-        epoch: u64,
     ) -> CoreAssignmentAuthority {
         CoreAssignmentAuthority {
             provider_generation: ResourceGeneration::new(provider_generation).unwrap(),
@@ -23988,7 +23818,6 @@ mod tests {
             session_generation: ReconnectGeneration::new(session_generation).unwrap(),
             controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
             target: ResourceRef::parse("Zone/work").unwrap(),
-            epoch,
         }
     }
 
@@ -23996,7 +23825,6 @@ mod tests {
         provider_generation: u64,
         controller_generation: u64,
         session_generation: u64,
-        epoch: u64,
     ) -> ResourceAssignmentFence {
         ResourceAssignmentFence {
             resource_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
@@ -24006,7 +23834,7 @@ mod tests {
             controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
             target: ResourceRef::parse("Zone/work").unwrap(),
             session_generation: ReconnectGeneration::new(session_generation).unwrap(),
-            epoch,
+            epoch: ASSIGNMENT_EPOCH,
             scope: ResourceAssignmentScope::Primary,
         }
     }
@@ -24015,28 +23843,30 @@ mod tests {
     fn fence_conflict_adopts_pure_predecessors_and_rejects_the_rest() {
         let uid =
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let authority = test_authority(3, 5, 7, 2);
+        let authority = test_authority(3, 5, 7);
         // Identical: no conflict.
-        assert!(!assignment_fence_conflict(&test_fence(3, 5, 7, 2), &uid, &authority));
-        // Pure predecessor on every axis: adopt (session reconnect kept epoch).
-        assert!(!assignment_fence_conflict(&test_fence(2, 4, 6, 2), &uid, &authority));
-        assert!(!assignment_fence_conflict(&test_fence(3, 5, 6, 2), &uid, &authority));
-        // Older epoch: adopt regardless of generations.
-        assert!(!assignment_fence_conflict(&test_fence(9, 9, 9, 1), &uid, &authority));
-        // Strictly newer on any axis: conflict.
-        assert!(assignment_fence_conflict(&test_fence(3, 5, 8, 2), &uid, &authority));
-        assert!(assignment_fence_conflict(&test_fence(3, 6, 7, 2), &uid, &authority));
-        assert!(assignment_fence_conflict(&test_fence(4, 5, 7, 2), &uid, &authority));
-        assert!(assignment_fence_conflict(&test_fence(3, 5, 7, 3), &uid, &authority));
+        assert!(!assignment_fence_conflict(&test_fence(3, 5, 7), &uid, &authority));
+        // Pure predecessor on every axis: adopt (reconnect reconciliation).
+        assert!(!assignment_fence_conflict(&test_fence(2, 4, 6), &uid, &authority));
+        assert!(!assignment_fence_conflict(&test_fence(3, 5, 6), &uid, &authority));
+        // Role/target drift on a strictly older fence is adopted by the successor.
+        let mut drifted = test_fence(2, 4, 6);
+        drifted.controller_role = ResourceRef::parse("Process/other").unwrap();
+        assert!(!assignment_fence_conflict(&drifted, &uid, &authority));
+        // Strictly newer on any authority axis: conflict.
+        assert!(assignment_fence_conflict(&test_fence(4, 5, 7), &uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(3, 6, 7), &uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(3, 5, 8), &uid, &authority));
         // Mixed drift is not pure staleness: conflict.
-        assert!(assignment_fence_conflict(&test_fence(2, 6, 6, 2), &uid, &authority));
-        // Identity drift always conflicts.
-        let mut foreign = test_fence(3, 5, 7, 2);
+        assert!(assignment_fence_conflict(&test_fence(2, 6, 6), &uid, &authority));
+        // Role drift at fully equal axes: conflict.
+        let mut foreign = test_fence(3, 5, 7);
         foreign.controller_role = ResourceRef::parse("Process/other").unwrap();
         assert!(assignment_fence_conflict(&foreign, &uid, &authority));
+        // Foreign uid always conflicts.
         let other_uid =
             ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
-        assert!(assignment_fence_conflict(&test_fence(3, 5, 7, 2), &other_uid, &authority));
+        assert!(assignment_fence_conflict(&test_fence(3, 5, 7), &other_uid, &authority));
     }
 
     #[test]
@@ -26366,7 +26196,7 @@ mod tests {
             )
             .unwrap();
         let coordinator = runtime.controller_session_coordinator();
-        let authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let authority = runtime.core_assignment_fences().await.unwrap().4;
         let authorization_state = runtime
             .authorization_state
             .lock()
@@ -26392,7 +26222,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let before_rebind_authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let before_rebind_authority = runtime.core_assignment_fences().await.unwrap().4;
         let before_rebind_authorization_state = runtime
             .authorization_state
             .lock()
@@ -26431,11 +26261,10 @@ mod tests {
                 controller_role: before_rebind_authority.controller_role.clone(),
                 target: ResourceRef::parse("Host/host-system").unwrap(),
                 session_generation: before_rebind_authority.session_generation,
-                epoch: before_rebind_authority.epoch,
+                epoch: ASSIGNMENT_EPOCH,
                 scope: ResourceAssignmentScope::Primary,
             }
         );
-        assert!(before_rebind_authority.epoch > 0);
         let before_rebind_revision = runtime
             .store
             .runtime_metadata()
@@ -26554,7 +26383,7 @@ mod tests {
             coordinator.assigned_process_api.lock().unwrap().is_some(),
             "successful system-core rebind must restore the assigned Process API"
         );
-        let after_rebind_authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let after_rebind_authority = runtime.core_assignment_fences().await.unwrap().4;
         let after_rebind_process =
             read_test_resource(&runtime, process_ref.clone(), "rebind-process-after-fence").await;
         let rebuilt_process_fence = process_assignment_fence_resolver(
@@ -26568,14 +26397,10 @@ mod tests {
         )
         .await
         .expect("rebuilt Process assignment fence");
-        let expected_rebuilt_process_fence = ResourceAssignmentFence {
-            epoch: before_rebind_fence.epoch + 1,
-            ..before_rebind_fence.clone()
-        };
         assert_eq!(
             rebuilt_process_fence,
-            expected_rebuilt_process_fence,
-            "rebind must preserve Process identity and advance its assignment epoch exactly once"
+            before_rebind_fence.clone(),
+            "rebind must preserve Process identity and fence material",
         );
         assert_eq!(
             after_rebind_authority.provider_generation,
@@ -26596,11 +26421,6 @@ mod tests {
         assert_eq!(
             after_rebind_authority.session_generation,
             before_rebind_authority.session_generation
-        );
-        assert_eq!(
-            after_rebind_authority.epoch,
-            before_rebind_authority.epoch + 1,
-            "the Process API rebuild must reuse the one epoch rotated for rebind"
         );
         coordinator
             .persist_controller_session_evidence(
@@ -26630,18 +26450,15 @@ mod tests {
             .unwrap()
             .expect("rebuilt Process assignment fence must persist");
         assert_eq!(durable_current_fence, current_process_fence);
-        assert_eq!(durable_current_fence.epoch, after_rebind_authority.epoch);
-        assert_eq!(
+        assert!(
             persist_resource_controller_session_evidence(
                 &before_rebind_api,
                 &current_process,
                 Some(&json!({"ready": false, "stale": true})),
             )
-            .await,
-            Err(ResourceRuntimeError::ResourceStatusUpdateFailed(
-                ResourceErrorKind::ResourceConflict
-            )),
-            "the pre-rebind Process fence must be rejected after the epoch advances"
+            .await
+            .is_ok(),
+            "same-identity pre-rebind evidence re-fences idempotently without an epoch"
         );
         drop(before_rebind_api);
         drop(coordinator);
@@ -26902,7 +26719,7 @@ mod tests {
             .expect("test policy has a controller generation");
         let providers = test_controller_session_providers();
         let coordinator = runtime.controller_session_coordinator();
-        let authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let authority = runtime.core_assignment_fences().await.unwrap().4;
         let authorization_state = runtime
             .authorization_state
             .lock()
@@ -27987,7 +27804,7 @@ mod tests {
             .find(|context| context.process_ref() == &sibling_process_ref)
             .expect("eligible sibling controller context");
         let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-        let authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let authority = runtime.core_assignment_fences().await.unwrap().4;
         let authorization_state = runtime
             .authorization_state
             .lock()
@@ -28160,7 +27977,7 @@ mod tests {
         );
 
         let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-        let authority = runtime.core_assignment_fences(false).await.unwrap().4;
+        let authority = runtime.core_assignment_fences().await.unwrap().4;
         let authorization_state = runtime
             .authorization_state
             .lock()
@@ -30010,7 +29827,6 @@ mod tests {
             session_generation: ReconnectGeneration::new(19).unwrap(),
             controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
             target: ResourceRef::parse("Zone/work").unwrap(),
-            epoch: 29,
         });
         let resolver = process_assignment_fence_resolver(
             Arc::clone(&runtime.store),
@@ -30033,7 +29849,7 @@ mod tests {
             fence.target,
             ResourceRef::parse("Host/host-system").unwrap()
         );
-        assert_eq!(fence.epoch, authority.epoch);
+        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
         drop(resolver);
         runtime.shutdown().await.unwrap();
     }
@@ -30282,7 +30098,6 @@ mod tests {
             session_generation: ReconnectGeneration::new(19).unwrap(),
             controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
             target: ResourceRef::parse("Zone/work").unwrap(),
-            epoch: 29,
         });
         let system_minijail = runtime
             .store
@@ -30326,7 +30141,7 @@ mod tests {
             fence.target,
             ResourceRef::parse("Host/host-system").unwrap()
         );
-        assert_eq!(fence.epoch, authority.epoch);
+        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
 
         let wrong_process = bundle_resource(
             "Process",
@@ -30436,7 +30251,6 @@ mod tests {
             session_generation: ReconnectGeneration::new(19).unwrap(),
             controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
             target: ResourceRef::parse("Zone/work").unwrap(),
-            epoch: 29,
         });
         let authz_state = runtime
             .authorization_state
@@ -30510,7 +30324,7 @@ mod tests {
         assert_eq!(fence.session_generation, authority.session_generation);
         assert_eq!(fence.controller_role, authority.controller_role);
         assert_eq!(fence.target, ResourceRef::parse("Host/host-system").unwrap());
-        assert_eq!(fence.epoch, authority.epoch);
+        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
         source.close_watch().unwrap();
         runner_task.abort();
         let _ = runner_task.await;
@@ -31378,7 +31192,7 @@ mod tests {
                 .unwrap()
                 .reconnect_generation()
         );
-        assert!(fence.epoch > 0);
+        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
         assert!(matches!(fence.scope, ResourceAssignmentScope::Primary));
     }
 
