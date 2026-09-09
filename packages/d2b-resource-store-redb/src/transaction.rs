@@ -5338,7 +5338,7 @@ fn conflict(current_revision: u64, ordinal: u32, reason: &'static str) -> StoreE
     )
 }
 
-fn error(
+pub(crate) fn error(
     kind: StoreErrorKind,
     current_revision: Option<ZoneRevision>,
     reason: &'static str,

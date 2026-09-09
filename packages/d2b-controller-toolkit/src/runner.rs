@@ -1755,8 +1755,7 @@ impl OwnedWorkers {
             let _permit = permit;
             let clock = Arc::clone(&runtime.clock);
             let now_tick = clock.now_tick();
-            let deadline_tick =
-                phase_deadline(clock.as_ref(), runtime.config.deadline_tick);
+            let deadline_tick = phase_deadline(clock.as_ref(), runtime.config.deadline_tick);
             let work_config = RunnerConfig {
                 deadline_tick,
                 ..runtime.config
@@ -1896,9 +1895,7 @@ fn spawn_watch_after_delay<S>(
     S: ControllerSource,
 {
     watchers.spawn(async move {
-        let retry_at = clock
-            .now_tick()
-            .saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
+        let retry_at = clock.now_tick().saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
         tokio::select! {
             _ = shutdown.cancelled() => Err(WatchFailure::Fatal),
             _ = clock.sleep_until(retry_at) => {
@@ -2009,7 +2006,14 @@ async fn wait_for_source_retry(
     let retry_at = clock.now_tick().saturating_add(
         SOURCE_RETRY_BACKOFF_TICKS.saturating_mul(u64::try_from(attempt).unwrap_or(u64::MAX)),
     );
-    match bounded_phase(clock, deadline_tick, cancellation, clock.sleep_until(retry_at)).await {
+    match bounded_phase(
+        clock,
+        deadline_tick,
+        cancellation,
+        clock.sleep_until(retry_at),
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(stop) => Err(phase_runner_error(stop)),
     }
@@ -2030,10 +2034,7 @@ where
     for attempt in 0..attempts {
         match bounded_source(clock, deadline_tick, cancellation, operation()).await {
             Ok(value) => return Ok(value),
-            Err(error)
-                if retryable_runner_source_error(&error)
-                    && attempt + 1 < attempts =>
-            {
+            Err(error) if retryable_runner_source_error(&error) && attempt + 1 < attempts => {
                 wait_for_source_retry(
                     clock,
                     deadline_tick,
@@ -2054,9 +2055,7 @@ fn schedule_queue_item(
     item: ScheduledQueueItem,
 ) {
     requeues.spawn(async move {
-        let retry_at = clock
-            .now_tick()
-            .saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
+        let retry_at = clock.now_tick().saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
         clock.sleep_until(retry_at).await;
         item
     });
@@ -2913,6 +2912,32 @@ fn post_commit_source_failure(
     }
 }
 
+/// Map a failed post-pass effect-state record to a worker outcome.
+///
+/// The durable effect has already landed when this runs; the operation
+/// record is pass bookkeeping keyed by the effect claim, and a later pass
+/// with the same claim can legitimately re-report an outcome that would
+/// regress a row an earlier pass already advanced. Killing the runner for
+/// that record wedges reconciliation forever, so transient source errors
+/// keep the exhaustion semantics while every other rejection is logged
+/// and the pass finishes. `None` means the pass continues.
+fn complete_effect_record_outcome(
+    context: &ReconcileContext,
+    clock: &dyn MonotonicClock,
+    error: SourceError,
+    operation: &'static str,
+) -> Option<WorkerOutcome> {
+    if matches!(error, SourceError::Timeout | SourceError::Backpressure) {
+        return Some(persistence_exhausted(context, clock));
+    }
+    tracing::warn!(
+        operation,
+        error = %error,
+        "controller source rejected effect completion record"
+    );
+    None
+}
+
 async fn persist_result<S>(
     source: &S,
     context: &ReconcileContext,
@@ -3034,13 +3059,15 @@ where
                     };
                 }
                 if !context.is_expedited() {
-                    if let Err(error) = source.complete_effect(context, &result).await {
-                        return post_commit_source_failure(
+                    if let Err(error) = source.complete_effect(context, &result).await
+                        && let Some(outcome) = complete_effect_record_outcome(
                             context,
                             clock,
                             error,
                             "complete_effect_after_commit",
-                        );
+                        )
+                    {
+                        return outcome;
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
@@ -3081,13 +3108,15 @@ where
                     };
                 }
                 if !context.is_expedited() {
-                    if let Err(error) = source.complete_effect(context, &result).await {
-                        return post_commit_source_failure(
+                    if let Err(error) = source.complete_effect(context, &result).await
+                        && let Some(outcome) = complete_effect_record_outcome(
                             context,
                             clock,
                             error,
                             "complete_effect_after_pending_commit",
-                        );
+                        )
+                    {
+                        return outcome;
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
@@ -3163,8 +3192,11 @@ where
         };
     }
     if !context.is_expedited() {
-        if let Err(error) = source.complete_effect(context, &result).await {
-            return post_commit_source_failure(context, clock, error, "complete_effect");
+        if let Err(error) = source.complete_effect(context, &result).await
+            && let Some(outcome) =
+                complete_effect_record_outcome(context, clock, error, "complete_effect")
+        {
+            return outcome;
         }
     }
     if result.disposition().is_terminal()
@@ -4600,8 +4632,7 @@ mod tests {
     fn transient_source_backpressure_retries_one_resource_without_blocking_a_sibling() {
         let first = key("first", 1);
         let second = key("second", 2);
-        let (reconciler, _entered, source, watch_tx) =
-            harness(vec![first.clone(), second], 2);
+        let (reconciler, _entered, source, watch_tx) = harness(vec![first.clone(), second], 2);
         reconciler.block_handlers.store(false, Ordering::SeqCst);
         source.inject_fresh_backpressure(first, 1);
         let runner = run_in_thread(Arc::clone(&reconciler), Arc::clone(&source));
@@ -4648,17 +4679,22 @@ mod tests {
             )))))
             .unwrap();
         wait_for_counter(&observer, RunnerCounter::QueueRejected);
-        assert!(observer
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .any(|observation| {
-                observation.counter == Some(RunnerCounter::QueueRejected)
-                    && observation.outcome == RunnerOutcome::Retrying
-                    && observation.reason == RunnerObservationReason::Backpressure
-            }));
-        assert!(!runner.is_finished(), "watch backpressure must not kill the runner");
+        assert!(
+            observer
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .any(|observation| {
+                    observation.counter == Some(RunnerCounter::QueueRejected)
+                        && observation.outcome == RunnerOutcome::Retrying
+                        && observation.reason == RunnerObservationReason::Backpressure
+                })
+        );
+        assert!(
+            !runner.is_finished(),
+            "watch backpressure must not kill the runner"
+        );
 
         reconciler.release(1);
         entered.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -4809,11 +4845,8 @@ mod tests {
         source.inject_fresh_backpressure(target, 1);
         let mut runner_config = config();
         runner_config.max_attempts = 1;
-        let runner = run_with_config_in_thread(
-            Arc::clone(&reconciler),
-            Arc::clone(&source),
-            runner_config,
-        );
+        let runner =
+            run_with_config_in_thread(Arc::clone(&reconciler), Arc::clone(&source), runner_config);
 
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
@@ -5377,7 +5410,13 @@ mod tests {
         .unwrap();
 
         let clock = TokioClock::default();
-        let outcome = block_on(persist_result(source.as_ref(), &context, &clock, result, None));
+        let outcome = block_on(persist_result(
+            source.as_ref(),
+            &context,
+            &clock,
+            result,
+            None,
+        ));
         assert!(matches!(
             outcome,
             WorkerOutcome::Done {
@@ -5646,7 +5685,10 @@ mod tests {
         let runner = run_in_thread(Arc::clone(&reconciler), Arc::clone(&source));
 
         wait_for(&reconciler.execute_effect_calls, 2);
-        assert!(!runner.is_finished(), "watch must remain live after bounded recovery");
+        assert!(
+            !runner.is_finished(),
+            "watch must remain live after bounded recovery"
+        );
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
         let report = runner

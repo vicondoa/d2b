@@ -1253,6 +1253,7 @@ impl RedbRegisteredControllerApi {
             operation_class,
             context.target().uid(),
             context.generation(),
+            context.revision(),
             plan.effect_ids(),
             assignment,
         );
@@ -1533,6 +1534,14 @@ impl RedbRegisteredControllerApi {
         revision: ZoneRevision,
         state: d2b_resource_store_redb::AuthorityOperationState,
     ) -> Result<(), SourceError> {
+        // The operation row is created `pending` when the effect claim is
+        // prepared, so a pass outcome that is still pending has nothing to
+        // record. Re-recording pending on a row that an earlier pass with
+        // the same effect claim already advanced is a rejected ledger
+        // transition: it would quarantine the store and kill the runner.
+        if state == d2b_resource_store_redb::AuthorityOperationState::Pending {
+            return Ok(());
+        }
         if let Some(capability) = self.effect_capability(operation_id)? {
             capability
                 .record_effect(state)
@@ -2851,6 +2860,7 @@ fn effect_claim_digest(
     operation_class: &str,
     resource_uid: &ResourceUid,
     generation: ResourceGeneration,
+    revision: ZoneRevision,
     effect_ids: &[String],
     assignment: Option<&ResourceAssignmentFence>,
 ) -> String {
@@ -2858,6 +2868,7 @@ fn effect_claim_digest(
     append_text(&mut material, operation_class);
     append_text(&mut material, resource_uid.as_str());
     material.extend_from_slice(&generation.get().to_be_bytes());
+    material.extend_from_slice(&revision.get().to_be_bytes());
     for effect_id in effect_ids {
         append_text(&mut material, effect_id);
     }
@@ -5356,6 +5367,7 @@ mod tests {
             "reconcile",
             &stored.uid,
             stored.generation,
+            stored.revision,
             &effect_ids,
             Some(&assignment),
         );
@@ -5450,6 +5462,7 @@ mod tests {
             "reconcile",
             &resource_uid,
             ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
             &effect_ids,
             None,
         );
@@ -5693,7 +5706,14 @@ mod tests {
     }
 
     #[test]
-    fn effect_identity_ignores_resource_revisions_but_keeps_assignment_fences() {
+    fn effect_identity_binds_claims_to_revisions_and_keeps_assignment_fences() {
+        // The claim digest is identity(effect, pass revision). Redelivery of
+        // the same event at the same revision re-owns the same ledger row
+        // (idempotent re-prepare), while a pass observing a newer revision is
+        // a new effect and must claim a fresh row: reusing a row that an
+        // earlier pass already advanced produced rejected ledger transitions
+        // and killed the reconciling runner with a fatal source integrity
+        // error.
         let resource_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let target = ResourceRef::parse("Host/system").unwrap();
         let controller = ResourceRef::parse("Process/controller").unwrap();
@@ -5709,43 +5729,63 @@ mod tests {
             scope: ResourceAssignmentScope::Primary,
         };
         let effects = vec!["effect-a".to_owned(), "effect-b".to_owned()];
+        let generation = ResourceGeneration::new(6).unwrap();
         let first = effect_claim_digest(
             "reconcile",
             &resource_uid,
-            ResourceGeneration::new(6).unwrap(),
+            generation,
+            ZoneRevision::new(7),
             &effects,
             Some(&fence),
         );
-        fence.resource_revision = ZoneRevision::new(99);
-        let second = effect_claim_digest(
+        // Same-revision redelivery re-claims the identical row.
+        let redelivered = effect_claim_digest(
             "reconcile",
             &resource_uid,
-            ResourceGeneration::new(6).unwrap(),
+            generation,
+            ZoneRevision::new(7),
             &effects,
             Some(&fence),
         );
-        assert_eq!(first, second);
+        assert_eq!(first, redelivered);
+
+        // A newer pass revision is a new claim and must not re-own a row an
+        // earlier revision may have already advanced.
+        let newer_revision = effect_claim_digest(
+            "reconcile",
+            &resource_uid,
+            generation,
+            ZoneRevision::new(8),
+            &effects,
+            Some(&fence),
+        );
+        assert_ne!(first, newer_revision);
 
         fence.scope = ResourceAssignmentScope::OwnerChild {
             owner_ref: ResourceRef::parse("Host/owner").unwrap(),
             owner_uid: resource_uid.clone(),
             owner_revision: ZoneRevision::new(7),
-            owner_generation: ResourceGeneration::new(6).unwrap(),
+            owner_generation: generation,
         };
         let owner_first = effect_claim_digest(
             "reconcile",
             &resource_uid,
-            ResourceGeneration::new(6).unwrap(),
+            generation,
+            ZoneRevision::new(7),
             &effects,
             Some(&fence),
         );
+        // The owner's own revision drift inside the child scope metadata does
+        // not participate in claim identity: the claim is bound to the pass
+        // revision of the reconciled target, which is explicit above.
         if let ResourceAssignmentScope::OwnerChild { owner_revision, .. } = &mut fence.scope {
             *owner_revision = ZoneRevision::new(99);
         }
         let owner_second = effect_claim_digest(
             "reconcile",
             &resource_uid,
-            ResourceGeneration::new(6).unwrap(),
+            generation,
+            ZoneRevision::new(7),
             &effects,
             Some(&fence),
         );
@@ -5755,7 +5795,8 @@ mod tests {
         let changed_assignment = effect_claim_digest(
             "reconcile",
             &resource_uid,
-            ResourceGeneration::new(6).unwrap(),
+            generation,
+            ZoneRevision::new(7),
             &effects,
             Some(&fence),
         );
@@ -5766,6 +5807,7 @@ mod tests {
                 "reconcile",
                 &resource_uid,
                 ResourceGeneration::new(7).unwrap(),
+                ZoneRevision::new(7),
                 &effects,
                 Some(&fence),
             )

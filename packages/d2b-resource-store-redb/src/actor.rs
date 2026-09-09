@@ -582,7 +582,19 @@ impl WriterHandle {
             .map_err(|_| crate::transaction::integrity("writer-closed"))?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("authority-response-closed"))?
+            .map_err(|_| {
+                // The writer actor dropped the response without processing
+                // the command (a stalled or restarted writer). The operation
+                // row, if the actor created it, stays `pending` and the claim
+                // is resumable, so this is a transient store condition — the
+                // caller must retry the claim, not treat the store as
+                // corrupt.
+                crate::transaction::error(
+                    d2b_resource_store::StoreErrorKind::Timeout,
+                    None,
+                    "authority-response-closed",
+                )
+            })?
     }
 
     pub(crate) async fn authority_update(
