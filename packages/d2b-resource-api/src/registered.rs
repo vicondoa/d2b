@@ -2957,7 +2957,19 @@ fn source_error(error: StoreError, fallback: ZoneRevision) -> SourceError {
         StoreErrorKind::InternalIntegrityFailure
         | StoreErrorKind::StoreIntegrityFailure
         | StoreErrorKind::ResourceSchemaInvalid
-        | StoreErrorKind::ResourceRefInvalid => SourceError::Integrity,
+        | StoreErrorKind::ResourceRefInvalid => {
+            // Engine-level failures (redb I/O, durability, read lifetime) are
+            // transient load artifacts of the storage backend, not resource
+            // plane corruption: under a sustained commit stream they surface
+            // sporadically and must requeue, not kill the reconciling runner.
+            // Genuine contract violations carry specific non-engine reason
+            // codes and stay Integrity.
+            if error.reason_code().starts_with("redb-") {
+                SourceError::Unavailable
+            } else {
+                SourceError::Integrity
+            }
+        }
         _ => SourceError::Unavailable,
     }
 }

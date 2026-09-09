@@ -615,7 +615,16 @@ impl WriterHandle {
             .map_err(|_| crate::transaction::integrity("writer-closed"))?;
         receiver
             .await
-            .map_err(|_| crate::transaction::integrity("authority-response-closed"))?
+            .map_err(|_| {
+                // Mirror authority_prepare: a dropped response is a writer
+                // stall or restart, and the operation row stays resumable —
+                // transient, not corruption.
+                crate::transaction::error(
+                    d2b_resource_store::StoreErrorKind::Timeout,
+                    None,
+                    "authority-response-closed",
+                )
+            })?
     }
 
     pub(crate) async fn ingest_broker_evidence(
