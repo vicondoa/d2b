@@ -2692,7 +2692,25 @@ pub(crate) fn apply_group_with_hook(
     }
 
     let mut write = database.begin_write().map_err(integrity)?;
-    set_full_durability(&mut write)?;
+    // Durability classes: the authority-operation ledger and the generation
+    // publication must never lose an fsync (their rows are the fencing
+    // contract), so any group containing those keeps Durability::Immediate.
+    // Status-class groups (UpdateStatus/UpdateMetadata projection writes)
+    // are recomputed by the owning runner on its next pass, so during
+    // bring-up their commits may use relaxed durability: measured on the
+    // host-integration VM, 520 Immediate fsyncs during one 180s bring-up
+    // window (at 100-500ms each on the emulated disk) starved the runners'
+    // read deadlines and cascaded into startup integrity failures
+    // (hostrun 57/61/65/73/75/76).
+    let all_status_class = group.iter().all(|verified| {
+        verified
+            .mutations
+            .iter()
+            .all(|mutation| mutation.mutation.kind == ResourceMutationKind::UpdateStatus)
+    });
+    if !all_status_class {
+        set_full_durability(&mut write)?;
+    }
     let mut meta = read_meta_in_write(&write)?;
     let Some(revision) = meta.current_revision.checked_add(1) else {
         return Err(integrity("zone-revision-exhausted"));
