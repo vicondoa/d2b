@@ -508,6 +508,18 @@ rec {
           virtualisation.memorySize = 3072;
           virtualisation.diskSize = 8192;
           boot.kernelModules = [ "br_netfilter" "tun" "vhost_net" ];
+          # The store writer fsyncs every commit; on the emulated disk
+          # that costs ~700ms per write and starves bring-up. The test
+          # VM is ephemeral, so back the d2b state tree with tmpfs and
+          # drop fsync latency to zero.
+          virtualisation.fileSystems."/var/lib/d2b" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+            options = [
+              "mode=0755"
+              "size=512m"
+            ];
+          };
 
           users.users.alice = {
             isNormalUser = true;
