@@ -22307,6 +22307,11 @@ pub(super) fn shared_provider_assignment_fence_resolver(
         let allowed_types = allowed_types.clone();
         Box::pin(async move {
             if !allowed_types.contains(target.resource_type()) {
+                tracing::warn!(
+                    target = %target.to_canonical_string(),
+                    allowed = ?allowed_types,
+                    "assignment fence rejected non-owned resource type",
+                );
                 return Err(SourceError::Integrity);
             }
             if let Some(stored) = store
