@@ -1040,6 +1040,11 @@ impl WriterActor {
             match command {
                 WriterCommand::Commit(request) => {
                     self.enqueue(*request);
+                    // Coalesce window: submitters that await their own
+                    // response never queue behind each other, so groups
+                    // would run at size 1 and every commit would pay a
+                    // full fsync. Give concurrent writers a brief window
+                    // to land before flushing.
                     while self.scheduler.len < WRITE_QUEUE_CAPACITY {
                         match self.receiver.try_recv() {
                             Ok(WriterCommand::Commit(request)) => self.enqueue(*request),
@@ -1048,6 +1053,27 @@ impl WriterActor {
                                 break;
                             }
                             Err(_) => break,
+                        }
+                    }
+                    if self.scheduler.len < WRITE_QUEUE_CAPACITY {
+                        // The writer thread is dedicated; a short sleep
+                        // here coalesces concurrent submitters without
+                        // touching the async runtime.
+                        let deadline = Instant::now() + std::time::Duration::from_millis(20);
+                        while Instant::now() < deadline
+                            && self.scheduler.len < WRITE_QUEUE_CAPACITY
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                            match self.receiver.try_recv() {
+                                Ok(WriterCommand::Commit(request)) => {
+                                    self.enqueue(*request);
+                                }
+                                Ok(control) => {
+                                    deferred = Some(control);
+                                    break;
+                                }
+                                Err(_) => break,
+                            }
                         }
                     }
                     self.flush();
