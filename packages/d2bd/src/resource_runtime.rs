@@ -31386,7 +31386,20 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         let mut plane = Arc::try_unwrap(plane).expect("test plane has one owner");
-        plane.shutdown().await.unwrap();
+        // Runner tasks outlive the test body (detached respawn loops) and
+        // their final store requests may still own a runtime reference when
+        // teardown starts. Drain briefly instead of panicking on the first
+        // live owner: the runners never hold the runtime beyond one request.
+        for _ in 0..250 {
+            match plane.shutdown().await {
+                Ok(()) => return,
+                Err(ResourceRuntimeError::LiveRequestOwners) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("fixture plane shutdown failed: {error:?}"),
+            }
+        }
+        panic!("fixture plane still had live request owners after the drain window");
     }
 
     #[tokio::test]
