@@ -402,9 +402,24 @@ impl ChangeRecord {
             return SuppressionDecision::SuppressIrrelevant;
         }
         if self.own_status_only && !self.owner_consumer_exists && !self.dependency_consumer_exists {
-            return SuppressionDecision::SuppressOwnConvergedStatus;
+            // The runner's own status write is only a same-revision echo when
+            // the resource has fully caught up (generation == observed
+            // generation, current controller, no outstanding condition work).
+            // A status write that lags its generation carries information the
+            // pass that wrote it has NOT finished acting on — dropping it
+            // wedged multi-pass controllers at their first written phase
+            // forever (third-pass wedge), so it must requeue instead.
+            if self.generation.get() == self.observed_generation.get()
+                && self.controller_generation_current
+                && !self.conditions_require_work
+                && !self.unknown_requires_observation
+            {
+                return SuppressionDecision::SuppressOwnConvergedStatus;
+            }
+            return SuppressionDecision::Dispatch;
         }
-        if self.own_status_only && (self.owner_consumer_exists || self.dependency_consumer_exists) {
+        if self.own_status_only && (self.owner_consumer_exists || self.dependency_consumer_exists)
+        {
             return SuppressionDecision::Dispatch;
         }
         if self.generation.get() == self.observed_generation.get()
@@ -884,7 +899,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn converged_self_status_is_suppressed_only_without_consumers() {
         let mut record = change(BTreeSet::from([CoreTriggerReason::ExecutionStatusChanged]));
@@ -894,6 +908,31 @@ mod tests {
         );
         record.owner_consumer_exists = true;
         assert_eq!(record.suppression(), SuppressionDecision::Dispatch);
+    }
+
+    #[test]
+    fn self_status_lagging_observed_generation_requeues_the_pass() {
+        // The runner wrote a status that has not caught up with the resource
+        // generation: the pass that wrote it has more work (the third-pass
+        // wedge). The self-echo must requeue, not dead-drop.
+        let mut record = change(BTreeSet::from([CoreTriggerReason::ExecutionStatusChanged]));
+        record.observed_generation = ObservedGeneration::new(1);
+        assert_eq!(record.suppression(), SuppressionDecision::Dispatch);
+
+        // A stale controller generation is likewise not converged self-echo.
+        let mut stale_controller = change(BTreeSet::from([
+            CoreTriggerReason::ExecutionStatusChanged,
+        ]));
+        stale_controller.controller_generation_current = false;
+        assert_eq!(
+            stale_controller.suppression(),
+            SuppressionDecision::Dispatch
+        );
+
+        // Outstanding condition work requeues even at equal generations.
+        let mut conditions = change(BTreeSet::from([CoreTriggerReason::ExecutionStatusChanged]));
+        conditions.conditions_require_work = true;
+        assert_eq!(conditions.suppression(), SuppressionDecision::Dispatch);
     }
 
     #[test]
