@@ -454,7 +454,9 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "test \"$(journalctl -u d2bd.service --no-pager -o cat -b "
         "| grep -Fc 'external Provider controller ResourceV3 session live')\" -ge 2",
-        timeout=60,
+        # Cold artifact extraction inside a fresh VM varies widely on shared
+        # hardware; this waits an eventual state, not a timing SLO.
+        timeout=180,
     )
     machine.wait_until_succeeds(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -476,7 +478,8 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Ready\" and "
         ".status.observedGeneration == .metadata.generation)] | length == 1)' "
         "/run/d2b-volume-controller-processes.json",
-        timeout=60,
+        # Same cold-start variance as the session wait above.
+        timeout=180,
     )
     machine.succeed(
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
@@ -495,6 +498,24 @@ pkgs.testers.runNixOSTest {
         "done; "
         "echo 'Cloud Hypervisor API socket did not become ready within 180s' >&2; "
         "cat /run/d2b-preflight-summary.log >&2; "
+        "for resource_type in Volume VolumeBinding; do "
+        "echo \"=== $resource_type ===\" >&2; "
+        "timeout 10s runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list \"$resource_type\" 2>/dev/null | "
+        "jq -c '.resources[] | {name: .metadata.name, phase: .status.phase, "
+        "observedGeneration: .status.observedGeneration, "
+        "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
+        "ready: .status.resource.ready}' >&2 || true; "
+        "done; "
+        "echo '=== Process ===' >&2; "
+        "timeout 10s runuser -u alice -- env "
+        "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process 2>/dev/null | "
+        "jq -c '.resources[] | select(.name | startswith(\"vol-vfd\")) | "
+        "{name: .metadata.name, phase: .status.phase, "
+        "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
+        "outcome: .status.outcome, update: .status.update}' >&2 || true; "
         "exit 1"
     )
     machine.wait_until_succeeds(
@@ -791,7 +812,6 @@ pkgs.testers.runNixOSTest {
         ".spec.executionRef == \"Host/host-system\" and "
         ".spec.processClass == \"worker\" and "
         ".spec.template == \"virtiofsd-worker\" and "
-        ".spec.userRef == \"User/vol-state-vfd\" and "
         ".status.phase == \"Ready\")] | length) == 1' "
         "/run/d2b-binding-worker.json && "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "

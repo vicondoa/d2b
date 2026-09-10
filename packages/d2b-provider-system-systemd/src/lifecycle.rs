@@ -1,6 +1,7 @@
 //! Bounded systemd Provider lifecycle policy.
 
 use d2b_contracts_resource::v3::process::EphemeralProcessSpec;
+use tracing::warn;
 use d2b_process_conformance::{ProcessExitClass, ProcessOutcome};
 
 /// Provider-level systemd settings.
@@ -100,6 +101,11 @@ impl RestartPolicy {
             return false;
         }
         if self.attempts >= self.max_restarts {
+            warn!(
+                attempts = self.attempts,
+                max_restarts = self.max_restarts,
+                "restart budget exhausted; not restarting failed process"
+            );
             return false;
         }
         self.attempts += 1;

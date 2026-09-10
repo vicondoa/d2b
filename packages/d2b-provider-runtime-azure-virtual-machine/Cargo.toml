@@ -12,6 +12,7 @@ workspace = true
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 base64 = "0.22"
+tracing = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -354,7 +354,15 @@ pub fn mark_core_handlers(
                     phase
                 }),
             )
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    handler = ?kind,
+                    reason = "core handler status update refused",
+                    error = ?error,
+                    "core handler status update failed",
+                );
+                ResourceRuntimeError::HandlerNotReady
+            })?;
     }
     Ok(())
 }
@@ -365,6 +373,12 @@ pub fn local_user_subject_context(
     operation_id: &str,
 ) -> Result<AuthenticatedSubjectContext, ResourceRuntimeError> {
     if resolved_user.zone != *zone {
+        tracing::warn!(
+            zone = zone.as_str(),
+            subject = resolved_user.subject_ref().to_canonical_string(),
+            reason = "resolved zone user belongs to a different zone",
+            "local user subject context refused",
+        );
         return Err(ResourceRuntimeError::IdentityUnbound);
     }
     let zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
@@ -510,6 +524,14 @@ pub fn compile_committed_policy_with_subjects(
         || snapshot.api_catalog_revision == 0
         || snapshot.active_configuration_revision.get() == 0
     {
+        tracing::warn!(
+            zone = zone.as_str(),
+            policy_revision = snapshot.policy_revision,
+            api_catalog_revision = snapshot.api_catalog_revision,
+            configuration_revision = snapshot.active_configuration_revision.get(),
+            reason = "policy snapshot carries unset revisions; committed policy is unavailable",
+            "committed policy unavailable",
+        );
         return Err(ResourceRuntimeError::PolicyUnavailable);
     }
     let catalog = ApiCatalog::with_extensions(
@@ -518,7 +540,15 @@ pub fn compile_committed_policy_with_subjects(
             .filter(|resource_type| resource_type.as_str().contains(".d2bus.org."))
             .cloned(),
     )
-    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    .map_err(|error| {
+        tracing::warn!(
+            zone = zone.as_str(),
+            reason = "resource API catalog construction failed while compiling committed policy",
+            error = ?error,
+            "committed policy compilation failed",
+        );
+        ResourceRuntimeError::AuthorizationUnavailable
+    })?;
     let mut resource_types = STANDARD_RESOURCE_TYPES
         .iter()
         .map(|name| ResourceTypeName::parse(*name))
@@ -632,6 +662,13 @@ pub fn compile_committed_policy_with_subjects(
                 )
                 .is_some()
             {
+                tracing::warn!(
+                    zone = zone.as_str(),
+                    resource = resource.resource_ref.to_canonical_string(),
+                    uid = resource.uid.as_str(),
+                    reason = "duplicate subject resource in the committed policy snapshot",
+                    "committed policy compilation failed",
+                );
                 return Err(ResourceRuntimeError::AuthorizationUnavailable);
             }
         }
@@ -648,10 +685,24 @@ pub fn compile_committed_policy_with_subjects(
         match resource.resource_ref.resource_type().as_str() {
             "Role" => {
                 if resource.resource_ref == role_ref {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        resource = resource.resource_ref.to_canonical_string(),
+                        reason = "committed Role collides with the reserved system-core runtime role",
+                        "committed policy compilation failed",
+                    );
                     return Err(ResourceRuntimeError::AuthorizationUnavailable);
                 }
-                let role_spec = serde_json::from_slice::<RoleSpec>(&spec)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let role_spec = serde_json::from_slice::<RoleSpec>(&spec).map_err(|error| {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        resource = resource.resource_ref.to_canonical_string(),
+                        reason = "committed Role spec is not decodable",
+                        error = ?error,
+                        "committed policy compilation failed",
+                    );
+                    ResourceRuntimeError::AuthorizationUnavailable
+                })?;
                 roles.push(
                     CompiledRole::from_spec(
                         resource.resource_ref.clone(),
@@ -663,8 +714,18 @@ pub fn compile_committed_policy_with_subjects(
                 );
             }
             "RoleBinding" => {
-                let binding_spec = serde_json::from_slice::<RoleBindingSpec>(&spec)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let binding_spec = serde_json::from_slice::<RoleBindingSpec>(&spec).map_err(
+                    |error| {
+                        tracing::warn!(
+                            zone = zone.as_str(),
+                            resource = resource.resource_ref.to_canonical_string(),
+                            reason = "committed RoleBinding spec is not decodable",
+                            error = ?error,
+                            "committed policy compilation failed",
+                        );
+                        ResourceRuntimeError::AuthorizationUnavailable
+                    },
+                )?;
                 binding_spec
                     .validate_zone(zone)
                     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
@@ -683,10 +744,29 @@ pub fn compile_committed_policy_with_subjects(
                         let spec = envelope.spec().base().to_canonical_bytes();
                         serde_json::from_slice::<RoleSpec>(&spec).ok()
                     })
-                    .ok_or(ResourceRuntimeError::AuthorizationUnavailable)?;
+                    .ok_or_else(|| {
+                        tracing::warn!(
+                            zone = zone.as_str(),
+                            resource = resource.resource_ref.to_canonical_string(),
+                            role = binding_spec.role_ref().to_canonical_string(),
+                            reason = "committed RoleBinding references a missing, deleted, or undecodable Role",
+                            "committed policy compilation failed",
+                        );
+                        ResourceRuntimeError::AuthorizationUnavailable
+                    })?;
                 binding_spec
                     .validate_scope_against_role(&role)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                    .map_err(|error| {
+                        tracing::warn!(
+                            zone = zone.as_str(),
+                            resource = resource.resource_ref.to_canonical_string(),
+                            role = binding_spec.role_ref().to_canonical_string(),
+                            reason = "committed RoleBinding scope does not match its role",
+                            error = ?error,
+                            "committed policy compilation failed",
+                        );
+                        ResourceRuntimeError::AuthorizationUnavailable
+                    })?;
                 let resolved_subjects = binding_spec
                     .subjects()
                     .iter()
@@ -710,7 +790,16 @@ pub fn compile_committed_policy_with_subjects(
                         resolved_subjects,
                         RelayGrantAuthority::None,
                     )
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+                    .map_err(|error| {
+                        tracing::warn!(
+                            zone = zone.as_str(),
+                            resource = resource.resource_ref.to_canonical_string(),
+                            reason = "committed RoleBinding could not be compiled",
+                            error = ?error,
+                            "committed policy compilation failed",
+                        );
+                        ResourceRuntimeError::AuthorizationUnavailable
+                    })?,
                 );
             }
             _ => {}
@@ -767,10 +856,25 @@ fn validated_stored_resource_envelope(
     zone: &ZoneId,
 ) -> Result<ResourceEnvelope, ResourceRuntimeError> {
     if resource.zone != *zone {
+        tracing::warn!(
+            zone = zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            reason = "policy resource belongs to a different zone",
+            "policy resource validation failed",
+        );
         return Err(ResourceRuntimeError::AuthorizationUnavailable);
     }
-    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|error| {
+        tracing::warn!(
+            zone = zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            uid = resource.uid.as_str(),
+            reason = "policy resource row is not a decodable resource envelope",
+            error = ?error,
+            "policy resource validation failed",
+        );
+        ResourceRuntimeError::AuthorizationUnavailable
+    })?;
     if envelope.resource_type() != resource.resource_ref.resource_type()
         || envelope.metadata().zone() != zone
         || envelope.metadata().name() != resource.resource_ref.name()
@@ -782,6 +886,13 @@ fn validated_stored_resource_envelope(
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?
             != resource.payload_digest
     {
+        tracing::warn!(
+            zone = zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            uid = resource.uid.as_str(),
+            reason = "policy resource envelope identity or payload digest does not match its stored row",
+            "policy resource validation failed",
+        );
         return Err(ResourceRuntimeError::AuthorizationUnavailable);
     }
     Ok(envelope)
@@ -805,7 +916,14 @@ pub fn unix_transport(
 ) -> Result<UnixSeqpacketTransport, ResourceRuntimeError> {
     let expected_peer = socket
         .acceptor_peer_credentials()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "unix transport setup failed: acceptor peer credentials unavailable",
+                error = ?error,
+                "unix transport setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let credits = CreditScopeSet::new(
         CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
         CreditPool::new(64).map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
@@ -825,7 +943,14 @@ pub fn unix_transport(
         resolver,
         PeerIdentityPolicy::inherited_socketpair(expected_peer),
     )
-    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
+    .map_err(|error| {
+        tracing::warn!(
+            reason = "unix transport setup failed: transport construction failed",
+            error = ?error,
+            "unix transport setup failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })
 }
 
 pub async fn register_system_core_session(
@@ -843,17 +968,50 @@ pub async fn register_system_core_session(
     ResourceRuntimeError,
 > {
     let policy = system_core_endpoint_policy();
-    let (initiator_fd, responder_fd) =
-        prearmed_seqpacket_pair().map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-    let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-    let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-    let verified_peer = VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().map_err(|error| {
+        tracing::warn!(
+            reason = "system-core session setup failed: prearmed seqpacket socket pair could not be created",
+            error = ?error,
+            "system-core session setup failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })?;
+    let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).map_err(|error| {
+        tracing::warn!(
+            reason = "system-core session setup failed: prearmed initiator socket could not be adopted",
+            error = ?error,
+            "system-core session setup failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })?;
+    let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).map_err(|error| {
+        tracing::warn!(
+            reason = "system-core session setup failed: prearmed responder socket could not be adopted",
+            error = ?error,
+            "system-core session setup failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })?;
+    let verified_peer = VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).map_err(
+        |error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: initiator peer credentials could not be verified",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        },
+    )?;
     registrar
         .install_system_core_subject(&verified_peer)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: system-core subject installation refused",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let initiator = unix_transport(initiator_socket, &policy)?;
     let responder = unix_transport(responder_socket, &policy)?;
     let (initiator, responder) = tokio::join!(
@@ -870,11 +1028,32 @@ pub async fn register_system_core_session(
             std::time::Instant::now(),
         ),
     );
-    let initiator = initiator.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-    let responder = responder.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    let initiator = initiator.map_err(|error| {
+        tracing::warn!(
+            reason = "system-core session setup failed: initiator handshake failed",
+            error = ?error,
+            "system-core session handshake failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })?;
+    let responder = responder.map_err(|error| {
+        tracing::warn!(
+            reason = "system-core session setup failed: responder handshake failed",
+            error = ?error,
+            "system-core session handshake failed",
+        );
+        ResourceRuntimeError::AuthenticationUnavailable
+    })?;
     let acceptor = registrar
         .component_session_acceptor(policy.clone(), verified_peer)
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: component session acceptor could not be created",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let candidate = acceptor
         .admit(
             initiator,
@@ -886,11 +1065,24 @@ pub async fn register_system_core_session(
             1,
         )
         .await
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: session admission refused",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let controller_generation = authz_state
         .snapshot
         .controller_generation
-        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                reason = "system-core session setup failed: policy snapshot carries no controller generation",
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let subject_context = candidate
         .route_binding()
         .context()
@@ -898,17 +1090,37 @@ pub async fn register_system_core_session(
         .with_controller_generation(controller_generation);
     let subject = authorizer
         .issue_authenticated_subject(subject_context.clone(), authz_state.clone())
-        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: authenticated subject issuance failed",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthorizationUnavailable
+        })?;
     let service = Arc::new(
-        ResourceBusAdapter::bind_component_session(api, subject)
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+        ResourceBusAdapter::bind_component_session(api, subject).map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: resource API component session bind failed",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::ResourceApiBindFailed
+        })?,
     );
     let status_client = Arc::new(service.client());
     let services = Arc::clone(&service).ttrpc_services();
     let ingress = registrar
         .register_component_session(candidate)
         .await
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                reason = "system-core session setup failed: component session registration refused",
+                error = ?error,
+                "system-core session setup failed",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let service_task = tokio::spawn(serve_ttrpc_services(
         Arc::new(responder.into_driver()),
         services,
@@ -1016,8 +1228,22 @@ pub fn runtime_authorizer(
             .filter(|resource_type| resource_type.as_str().contains(".d2bus.org."))
             .cloned(),
     )
-    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-    NativeAuthorizer::new(catalog, None).map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+    .map_err(|error| {
+        tracing::warn!(
+            reason = "resource API catalog construction failed while building the runtime authorizer",
+            error = ?error,
+            "runtime authorizer construction failed",
+        );
+        ResourceRuntimeError::AuthorizationUnavailable
+    })?;
+    NativeAuthorizer::new(catalog, None).map_err(|error| {
+        tracing::warn!(
+            reason = "native authorizer construction failed",
+            error = ?error,
+            "runtime authorizer construction failed",
+        );
+        ResourceRuntimeError::AuthorizationUnavailable
+    })
 }
 
 /// Immutable User identity resolved from one Zone store and the host NSS
@@ -1076,10 +1302,26 @@ pub(crate) fn resolve_zone_user_from_resources(
             continue;
         }
         if resource.zone != *zone {
+            tracing::warn!(
+                zone = zone.as_str(),
+                peer_uid,
+                resource = resource.resource_ref.to_canonical_string(),
+                reason = "user row belongs to a different zone",
+                "zone user resolution refused",
+            );
             return Err(ResourceRuntimeError::IdentityUnbound);
         }
-        let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-            .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+        let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|error| {
+            tracing::warn!(
+                zone = zone.as_str(),
+                peer_uid,
+                resource = resource.resource_ref.to_canonical_string(),
+                reason = "user row is not a decodable resource envelope",
+                error = ?error,
+                "zone user resolution refused",
+            );
+            ResourceRuntimeError::IdentityUnbound
+        })?;
         if envelope.resource_type().as_str() != "User"
             || envelope.metadata().zone() != zone
             || envelope.metadata().name() != resource.resource_ref.name()
@@ -1087,17 +1329,41 @@ pub(crate) fn resolve_zone_user_from_resources(
             || envelope.metadata().generation() != resource.generation
             || envelope.metadata().revision() != resource.revision
         {
+            tracing::warn!(
+                zone = zone.as_str(),
+                peer_uid,
+                resource = resource.resource_ref.to_canonical_string(),
+                reason = "user row envelope identity does not match its stored row",
+                "zone user resolution refused",
+            );
             return Err(ResourceRuntimeError::IdentityUnbound);
         }
         let user_spec =
             serde_json::from_slice::<UserSpec>(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        peer_uid,
+                        resource = resource.resource_ref.to_canonical_string(),
+                        reason = "user row spec is not decodable",
+                        error = ?error,
+                        "zone user resolution refused",
+                    );
+                    ResourceRuntimeError::IdentityUnbound
+                })?;
         if nss_uid(user_spec.os_username().as_str()) != Some(peer_uid) {
             continue;
         }
         if envelope.status().phase() != ResourcePhase::Ready
             || envelope.status().observed_generation().get() != resource.generation.get()
         {
+            tracing::warn!(
+                zone = zone.as_str(),
+                peer_uid,
+                resource = resource.resource_ref.to_canonical_string(),
+                reason = "matching user is not Ready with a current observed generation",
+                "zone user resolution refused",
+            );
             return Err(ResourceRuntimeError::IdentityUnbound);
         }
         matches.push(ResolvedZoneUser {
@@ -1112,6 +1378,13 @@ pub(crate) fn resolve_zone_user_from_resources(
     if matches.len() == 1 {
         return Ok(matches.pop().expect("one resolved User match is present"));
     }
+    tracing::warn!(
+        zone = zone.as_str(),
+        peer_uid,
+        match_count = matches.len(),
+        reason = "peer uid does not resolve to exactly one Ready User in the zone store",
+        "zone user resolution refused",
+    );
     Err(ResourceRuntimeError::IdentityUnbound)
 }
 
@@ -1285,6 +1558,12 @@ pub fn committed_policy_subject_fingerprints_with_retained(
             .insert(resource.resource_ref.clone(), resource)
             .is_some()
         {
+            tracing::warn!(
+                resource = resource.resource_ref.to_canonical_string(),
+                uid = resource.uid.as_str(),
+                reason = "duplicate resource ref in the policy snapshot while fingerprinting subjects",
+                "policy subject fingerprinting failed",
+            );
             return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
     }
@@ -1303,9 +1582,27 @@ pub fn committed_policy_subject_fingerprints_with_retained(
         }
         let spec =
             serde_json::from_slice::<RoleBindingSpec>(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        spec.validate_zone(envelope.metadata().zone())
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        zone = binding.zone.as_str(),
+                        resource = binding.resource_ref.to_canonical_string(),
+                        uid = binding.uid.as_str(),
+                        reason = "RoleBinding spec is not decodable while fingerprinting subjects",
+                        error = ?error,
+                        "policy subject fingerprinting failed",
+                    );
+                    ResourceRuntimeError::AuthorizationUnavailable
+                })?;
+        spec.validate_zone(envelope.metadata().zone()).map_err(|error| {
+            tracing::warn!(
+                zone = envelope.metadata().zone().as_str(),
+                resource = binding.resource_ref.to_canonical_string(),
+                reason = "RoleBinding zone validation failed while fingerprinting subjects",
+                error = ?error,
+                "policy subject fingerprinting failed",
+            );
+            ResourceRuntimeError::AuthorizationUnavailable
+        })?;
         for subject_ref in spec.subjects() {
             let key = (binding.resource_ref.clone(), subject_ref.clone());
             authored_subjects.insert(key.clone(), (binding.uid.clone(), binding.generation));
@@ -1350,6 +1647,12 @@ pub fn refreshed_policy_subject_fingerprints(
     let fingerprints = committed_policy_subject_fingerprints_with_retained(resources, previous)?;
     for (key, current) in &fingerprints {
         if !policy_subject_fingerprint_allows_refresh(previous.get(key), current) {
+            tracing::warn!(
+                binding = key.0.to_canonical_string(),
+                subject = key.1.to_canonical_string(),
+                reason = "subject identity changed without a RoleBinding identity or generation change; grant refresh refused",
+                "policy subject refresh refused",
+            );
             return Err(ResourceRuntimeError::IdentityUnbound);
         }
     }
@@ -1691,10 +1994,21 @@ async fn plan_zone_resource_bundle(
         );
         ResourceRuntimeError::HandlerNotReady
     })?;
-    let bundle_zone_uid = bundle
-        .zone_uid()
-        .ok_or(ResourceRuntimeError::IdentityUnbound)?;
+    let bundle_zone_uid = bundle.zone_uid().ok_or_else(|| {
+        tracing::warn!(
+            zone = zone.as_str(),
+            reason = "verified resource bundle carries no zone uid",
+            "resource bundle zone uid missing",
+        );
+        ResourceRuntimeError::IdentityUnbound
+    })?;
     if store.identity().zone() != zone || store.identity().zone_uid() != bundle_zone_uid {
+        tracing::error!(
+            zone = zone.as_str(),
+            store_zone = store.identity().zone().as_str(),
+            reason = "resource bundle does not match the bound zone store identity",
+            "resource bundle zone identity mismatch",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     let metadata = retry_transient_store_read(
@@ -1775,8 +2089,18 @@ async fn plan_zone_resource_bundle(
             resource.metadata().name().clone(),
         );
         if let Some(current) = existing.get(&resource_ref) {
-            let current_envelope = ResourceEnvelope::from_json(&current.canonical_json)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            let current_envelope = ResourceEnvelope::from_json(&current.canonical_json).map_err(
+                |error| {
+                    tracing::error!(
+                        zone = zone.as_str(),
+                        resource = resource_ref.to_canonical_string(),
+                        reason = "existing configured resource row is not a decodable envelope",
+                        error = ?error,
+                        "resource bundle planning failed",
+                    );
+                    ResourceRuntimeError::HandlerNotReady
+                },
+            )?;
             if current_envelope.metadata().managed_by() != ManagedBy::Configuration
                 || current_envelope
                     .metadata()
@@ -1809,18 +2133,57 @@ async fn plan_zone_resource_bundle(
                 .canonical_bytes()
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
             if desired_spec != current_spec {
-                let payload = update_resource_payload(&current.canonical_json, resource)?;
+                let payload =
+                    update_resource_payload(&current.canonical_json, resource).map_err(|error| {
+                        tracing::error!(
+                            zone = zone.as_str(),
+                            resource = resource_ref.to_canonical_string(),
+                            reason = "bundle update payload could not be constructed from the stored row",
+                            error = ?error,
+                            "resource bundle planning failed",
+                        );
+                        error
+                    })?;
                 mutations.push(update_mutation(
                     zone,
                     &resource_ref,
                     current_envelope.metadata().uid(),
                     current_envelope.metadata().revision(),
                     payload,
-                )?);
+                )
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = zone.as_str(),
+                        resource = resource_ref.to_canonical_string(),
+                        reason = "bundle update mutation could not be constructed",
+                        error = ?error,
+                        "resource bundle planning failed",
+                    );
+                    error
+                })?);
             }
         } else {
-            let payload = create_resource_payload(zone, resource, active_configuration_generation)?;
-            mutations.push(create_mutation(zone, resource, payload)?);
+            let payload = create_resource_payload(zone, resource, active_configuration_generation)
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = zone.as_str(),
+                        resource = resource_ref.to_canonical_string(),
+                        reason = "bundle create payload could not be constructed",
+                        error = ?error,
+                        "resource bundle planning failed",
+                    );
+                    error
+                })?;
+            mutations.push(create_mutation(zone, resource, payload).map_err(|error| {
+                tracing::error!(
+                    zone = zone.as_str(),
+                    resource = resource_ref.to_canonical_string(),
+                    reason = "bundle create mutation could not be constructed",
+                    error = ?error,
+                    "resource bundle planning failed",
+                );
+                error
+            })?);
         }
     }
     Ok(mutations)
@@ -1846,8 +2209,23 @@ fn fixed_bootstrap_provider_resources(
                     CanonicalJsonValue::String(value) => Some(value.as_str()),
                     _ => None,
                 })
-                .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        provider = provider_name,
+                        reason = "bootstrap Provider bundle resource carries no artifactId",
+                        "fixed bootstrap provider planning failed",
+                    );
+                    ResourceRuntimeError::HandlerNotReady
+                })?;
             if artifact_id != provider_name {
+                tracing::warn!(
+                    zone = zone.as_str(),
+                    provider = provider_name,
+                    artifact_id,
+                    reason = "bootstrap Provider artifactId does not match its fixed identity",
+                    "fixed bootstrap provider planning failed",
+                );
                 return Err(ResourceRuntimeError::HandlerNotReady);
             }
             continue;
@@ -1886,10 +2264,21 @@ fn reject_stale_guest_network_rows(
             )
         })
         .collect::<BTreeSet<_>>();
-    if existing.keys().any(|resource_ref| {
-        matches!(resource_ref.resource_type().as_str(), "Guest" | "Network")
-            && !desired.contains(resource_ref)
-    }) {
+    let stale = existing
+        .keys()
+        .filter(|resource_ref| {
+            matches!(resource_ref.resource_type().as_str(), "Guest" | "Network")
+                && !desired.contains(resource_ref)
+        })
+        .map(|resource_ref| resource_ref.to_canonical_string())
+        .collect::<Vec<_>>();
+    if !stale.is_empty() {
+        tracing::error!(
+            zone = bundle.zone.as_str(),
+            stale_resources = ?stale,
+            reason = "zone store holds Guest or Network rows that are not in the verified bundle",
+            "stale guest or network rows rejected",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     Ok(())
@@ -1900,9 +2289,20 @@ pub fn resource_bundle_materialization_operation_id(
     bundle: &ResourceBundle,
 ) -> Result<String, ResourceRuntimeError> {
     if &bundle.zone != zone {
+        tracing::warn!(
+            zone = zone.as_str(),
+            bundle_zone = bundle.zone.as_str(),
+            reason = "resource bundle belongs to a different zone than the materialization target",
+            "resource bundle materialization identity refused",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     if bundle.zone_uid().is_none() {
+        tracing::warn!(
+            zone = zone.as_str(),
+            reason = "resource bundle carries no zone uid",
+            "resource bundle materialization identity refused",
+        );
         return Err(ResourceRuntimeError::IdentityUnbound);
     }
     Ok(format!(
@@ -1919,6 +2319,11 @@ pub async fn validate_zone_self_resource(
     store_uid: &ResourceUid,
 ) -> Result<(), ResourceRuntimeError> {
     if store.identity().zone_uid() != zone_uid || store.identity().store_uid() != store_uid {
+        tracing::error!(
+            zone = zone.as_str(),
+            reason = "zone store identity does not match the expected zone or store uid",
+            "zone self-resource validation failed",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     let request = StoreListRequest {
@@ -1954,14 +2359,40 @@ fn validate_zone_self_resource_rows(
     resources: &[StoredResource],
 ) -> Result<(), ResourceRuntimeError> {
     if resources.len() != 1 {
+        tracing::error!(
+            zone = zone.as_str(),
+            row_count = resources.len(),
+            reason = "zone self-resource validation expected exactly one Zone row",
+            "zone self-resource validation failed",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
-    let resource = resources
-        .first()
-        .ok_or(ResourceRuntimeError::HandlerNotReady)?;
-    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let resource = resources.first().ok_or_else(|| {
+        tracing::error!(
+            zone = zone.as_str(),
+            reason = "zone self-resource validation found no Zone row",
+            "zone self-resource validation failed",
+        );
+        ResourceRuntimeError::HandlerNotReady
+    })?;
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|error| {
+        tracing::error!(
+            zone = zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            reason = "zone self-resource row is not a decodable envelope",
+            error = ?error,
+            "zone self-resource validation failed",
+        );
+        ResourceRuntimeError::HandlerNotReady
+    })?;
     if envelope.resource_type().as_str() != "Zone" {
+        tracing::error!(
+            zone = zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            resource_type = envelope.resource_type().as_str(),
+            reason = "zone self-resource row has the wrong resource type",
+            "zone self-resource validation failed",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     validate_self_resource(
@@ -1974,7 +2405,15 @@ fn validate_zone_self_resource_rows(
         envelope.metadata().finalizers(),
         resources.len(),
     )
-    .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    .map_err(|error| {
+        tracing::error!(
+            zone = zone.as_str(),
+            reason = "zone self-resource contract validation failed",
+            error = ?error,
+            "zone self-resource validation failed",
+        );
+        ResourceRuntimeError::HandlerNotReady
+    })
 }
 
 fn create_resource_payload(
@@ -2908,6 +3347,14 @@ async fn persist_resource_status_candidate(
         ));
     }
     if response.resource.is_none() {
+        tracing::warn!(
+            zone = resource.zone.as_str(),
+            resource = resource.resource_ref.to_canonical_string(),
+            uid = resource.uid.as_str(),
+            scope = operation_scope,
+            reason = "public status update response carried no resource row",
+            "public status update returned no resource",
+        );
         return Err(ResourceRuntimeError::StoreReadFailed);
     }
     Ok(())

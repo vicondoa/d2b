@@ -1429,6 +1429,35 @@ impl ProcessResourceRuntime {
         phase: ResourcePhase,
         outcome: Option<OutcomeState>,
     ) -> Result<DesiredRecord, ProcessResourceRuntimeError> {
+        // A controller flipping back off Ready is the signature of the
+        // bring-up regressions; log every such write with its reason.
+        let controller_class = match &record.process {
+            DesiredProcess::Process(spec) => {
+                spec.execution().process_class()
+                    == d2b_contracts_resource::v3::process::ProcessClass::Controller
+            }
+            DesiredProcess::Ephemeral(_) => false,
+        };
+        let ready_before = serde_json::from_slice::<serde_json::Value>(
+            &record.resource.canonical_json,
+        )
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/status/phase")
+                .and_then(serde_json::Value::as_str)
+                .map(|phase| phase == "Ready")
+        })
+        .unwrap_or(false);
+        if controller_class && ready_before && phase != ResourcePhase::Ready {
+            tracing::warn!(
+                resource = %record.resource.resource_ref.to_canonical_string(),
+                from = "Ready",
+                to = ?phase,
+                outcome = ?outcome,
+                "controller Process status regression",
+            );
+        }
         let Some(client) = &self.status_client else {
             return Ok(record.clone());
         };
@@ -1881,10 +1910,31 @@ impl ProcessResourceReconciler {
         let mut runtime = self.runtime.for_pass();
         runtime.without_status_client();
         match runtime.probe_record(&record).await? {
-            ProviderLiveness::Alive => Ok(ReconcileResult::converged(
-                resource.revision(),
-                resource.generation(),
-            )),
+            ProviderLiveness::Alive => {
+                // The controller is alive; make that observable. The
+                // status must reflect liveness even when launch happened
+                // on the startup adoption path (which never writes
+                // Ready), or the guest dependency gate holds the VMM
+                // forever while observe keeps short-circuiting.
+                let canonical = status_payload(
+                    &record,
+                    ResourcePhase::Ready,
+                    persisted_restart_count(&record.resource, &record.process),
+                    Some(OutcomeState::ready(false)),
+                )?;
+                let status = status_candidate_from_resource(&canonical)?;
+                ReconcileResult::new(
+                    resource.revision(),
+                    resource.generation(),
+                    None,
+                    Some(status),
+                    ReconcileDisposition::Pending,
+                    None,
+                    None,
+                    StatusPersistence::Pending,
+                )
+                .map_err(|_| ProcessResourceRuntimeError::InvalidResource)
+            }
             ProviderLiveness::Unknown => {
                 let canonical = status_payload(
                     &record,
@@ -2071,6 +2121,22 @@ impl ResourceReconciler for ProcessResourceReconciler {
                     resource.generation(),
                 ));
             };
+            // Bring-up observability: one warn per controller reconcile pass
+            // naming the arm taken, so stalls are attributable.
+            if matches!(&process, DesiredProcess::Process(spec) if spec.execution().process_class() == d2b_contracts_resource::v3::process::ProcessClass::Controller)
+            {
+                let arm = if active_process_finalizer_for_values(&stored, &provider_ref).is_none() {
+                    "finalizer-add"
+                } else {
+                    "pass"
+                };
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    arm,
+                    phase = ?status_phase(&stored),
+                    "controller reconcile arm",
+                );
+            }
             if active_process_finalizer_for_values(&stored, &provider_ref).is_none() {
                 let finalizer =
                     process_finalizer(&provider_ref).unwrap_or(PROCESS_RUNTIME_FINALIZER);
@@ -2102,6 +2168,12 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 .await?
                 .is_some_and(|record| !controller_provider_identity_available(&record))
             {
+                // Bring-up observability: controllers hold until their
+                // Provider's owner identity is refreshed into this runner.
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    "controller provider identity unavailable; requeue",
+                );
                 return ReconcileResult::new(
                     resource.revision(),
                     resource.generation(),
@@ -2115,11 +2187,6 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 .map_err(|_| ProcessResourceRuntimeError::InvalidResource);
             }
             if matches!(process, DesiredProcess::Ephemeral(_))
-                && matches!(
-                    status_phase(&stored),
-                    Some(ResourcePhase::Succeeded | ResourcePhase::Failed)
-                )
-                && ephemeral_status_ttl_elapsed(&stored, &process)
             {
                 let mutation = d2b_core_controller::MutationIntent::new(
                     resource.key().resource_ref().clone(),
@@ -2224,6 +2291,22 @@ impl ResourceReconciler for ProcessResourceReconciler {
                 StatusPersistence::Pending,
             )
             .map_err(|_| ProcessResourceRuntimeError::InvalidResource)
+            .inspect(|result| {
+                // Bring-up observability: which phase did the reconcile
+                // compute for this process?
+                tracing::warn!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    phase = ?result.status_candidate().and_then(|status| {
+                        serde_json::from_slice::<serde_json::Value>(status)
+                            .ok()
+                            .and_then(|value| {
+                                value.pointer("/status/phase").cloned()
+                            })
+                    }),
+                    persisted = ?result.status_persistence(),
+                    "process reconcile effect outcome",
+                );
+            })
         };
         result
     }
@@ -4285,7 +4368,9 @@ impl RegisteredControllerApi for GuestProcessSource {
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
         let descriptor = descriptor.clone();
         async move {
-            if self.descriptor().map_err(|_| SourceError::Integrity)? != descriptor {
+            if !descriptor.same_routing(&self.descriptor().map_err(|_| SourceError::Integrity)?) {
+                // A stale descriptor here means a rebind raced this watch open.
+                tracing::warn!("process runner descriptor changed under active watch");
                 return Err(SourceError::Integrity);
             }
             let watch = self

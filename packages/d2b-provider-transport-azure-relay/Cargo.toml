@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
+tracing = "0.1"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 urlencoding = "2"
 webpki-roots = "0.26"

@@ -77,10 +77,21 @@ impl ZoneBootstrapIdentity {
         provider: BootstrapProvider,
     ) -> Result<Self, ZoneAdmissionError> {
         if expected_uid == 0 {
+            tracing::warn!(
+                provider = provider.resource_name(),
+                expected_uid = expected_uid,
+                "zone bootstrap admission refused: expected peer UID is invalid"
+            );
             return Err(ZoneAdmissionError::InvalidPeerUid);
         }
         let observed_uid = peer.credentials().uid().as_raw();
         if observed_uid != expected_uid {
+            tracing::warn!(
+                provider = provider.resource_name(),
+                expected_uid = expected_uid,
+                observed_uid = observed_uid,
+                "zone bootstrap admission refused: peer UID mismatch"
+            );
             return Err(ZoneAdmissionError::PeerUidMismatch);
         }
         Ok(Self {

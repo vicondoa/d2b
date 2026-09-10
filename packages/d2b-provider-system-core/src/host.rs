@@ -25,6 +25,7 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use std::{collections::BTreeSet, future::Future, future::ready};
 
+use tracing::{debug, warn};
 use d2b_contracts_resource::v3::execution_policy::{BudgetSpec, ExecutionDomain};
 use d2b_contracts_resource::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
@@ -331,8 +332,21 @@ impl HostReconciler {
         provider_ref: &ResourceRef,
         spec: &HostSpec,
     ) -> Result<HostStatusReport, SystemCoreError> {
-        ownership::require_resource_type(host_ref, HOST_RESOURCE_TYPE)?;
+        ownership::require_resource_type(host_ref, HOST_RESOURCE_TYPE).map_err(|error| {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                error = %error,
+                "assignment rejected: host resource type not owned by system-core"
+            );
+            error
+        })?;
         if provider_ref.to_canonical_string() != crate::PROVIDER_REF {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                "assignment rejected: host providerRef mismatch"
+            );
             return Err(SystemCoreError::ProviderRefMismatch);
         }
         let policy = spec.policy();
@@ -342,6 +356,11 @@ impl HostReconciler {
         if policy.allowed_domains().contains(&ExecutionDomain::User)
             && policy.default_user_ref().is_none()
         {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                "assignment rejected: user domain host requires a default user ref"
+            );
             return Err(SystemCoreError::UserRefRequired);
         }
         let isolation_posture = spec.isolation_posture();
@@ -391,9 +410,20 @@ impl HostReconciler {
     ) -> Result<(), SystemCoreError> {
         let object = submitted
             .as_object()
-            .ok_or(SystemCoreError::StatusNotAnObject)?;
+            .ok_or(SystemCoreError::StatusNotAnObject)
+            .inspect_err(|_| {
+                warn!(
+                    provider = crate::PROVIDER_NAME,
+                    "host status submission rejected: value is not an object"
+                );
+            })?;
         for reserved in NO_ISOLATION_STATUS_FIELDS {
             if object.contains_key(reserved) {
+                warn!(
+                    provider = crate::PROVIDER_NAME,
+                    field = reserved,
+                    "host status submission rejected: operator-supplied reconciler-owned field"
+                );
                 return Err(SystemCoreError::OperatorSuppliedStatusField);
             }
         }
@@ -421,15 +451,33 @@ impl HostReconciler {
             required.insert(HostCapabilityClass::CgroupV2);
         }
         if !required.is_subset(snapshot.capabilities()) {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                "host capability probe missing required capabilities"
+            );
             return Err(SystemCoreError::CapabilityMissing);
         }
         if requires_minijail {
-            snapshot.minijail_gate().validate()?;
+            snapshot.minijail_gate().validate().map_err(|error| {
+                warn!(
+                    provider = crate::PROVIDER_NAME,
+                    host = %host_ref.to_canonical_string(),
+                    error = %error,
+                    "minijail platform gate rejected host posture"
+                );
+                error
+            })?;
         }
         if spec.policy().admits_user_domain() && !snapshot.user_manager_available() {
             // User-manager unavailability is a degraded observation, not a
             // reason to claim a user-capable Host is Ready. System-only Hosts
             // remain Ready when no user manager is required.
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                "user manager unavailable; reporting host degraded"
+            );
             status.phase = ResourcePhase::Degraded;
         }
         Ok(HostObservationReport {
@@ -461,17 +509,46 @@ impl HostReconciler {
     ) -> Result<HostObservationReport, SystemCoreError> {
         let mut capabilities = BTreeSet::new();
         for capability in HostCapabilityClass::ALL {
-            if port.probe(capability).await? {
+            if port
+                .probe(capability)
+                .await
+                .map_err(|error| {
+                    warn!(
+                        provider = crate::PROVIDER_NAME,
+                        host = %host_ref.to_canonical_string(),
+                        capability = ?capability,
+                        error = %error,
+                        "host capability probe failed"
+                    );
+                    error
+                })?
+            {
                 capabilities.insert(capability);
             }
         }
-        let metadata = port.metadata().await?;
+        let metadata = port.metadata().await.map_err(|error| {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                host = %host_ref.to_canonical_string(),
+                error = %error,
+                "host probe metadata collection failed"
+            );
+            error
+        })?;
         let snapshot = HostProbeSnapshot::new(
             capabilities,
             metadata.kernel_release,
             metadata.os_name,
             metadata.user_manager_available,
-            port.platform().await?,
+            port.platform().await.map_err(|error| {
+                warn!(
+                    provider = crate::PROVIDER_NAME,
+                    host = %host_ref.to_canonical_string(),
+                    error = %error,
+                    "host platform probe failed"
+                );
+                error
+            })?,
             metadata.active_process_count,
         )?;
         self.reconcile_observed(
@@ -491,6 +568,10 @@ impl HostReconciler {
         aggregate: &BudgetReservation,
     ) -> Result<(), SystemCoreError> {
         if aggregate.exceeds(host_budget) {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                "host budget overcommit rejected"
+            );
             Err(SystemCoreError::BudgetOvercommit)
         } else {
             Ok(())

@@ -269,6 +269,7 @@ impl GatewayGuestZoneLinkRuntime {
         transcript: &[u8],
     ) -> Result<RelayComponentSessionTransport, GatewayGuestZoneLinkError> {
         let credential_role = Self::credential_role(role);
+        let credential_for_log = credential_ref.clone();
         let request = crate::ScopedCredentialRequest::new(
             zone,
             credential_ref,
@@ -277,22 +278,53 @@ impl GatewayGuestZoneLinkRuntime {
             binding,
             deadline_ms,
         )
-        .map_err(|_| GatewayGuestZoneLinkError::CredentialUnavailable)?;
+        .map_err(|_| {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                credential = %credential_for_log,
+                "zone link rejected: scoped credential request invalid"
+            );
+            GatewayGuestZoneLinkError::CredentialUnavailable
+        })?;
         let connection = self
             .provider
             .open_scoped(request)
             .await
-            .map_err(GatewayGuestZoneLinkError::from)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    reason = ?error,
+                    "zone link relay carriage open failed"
+                );
+                GatewayGuestZoneLinkError::from(error)
+            })?;
         let proof = RelayEnrollmentProof::authenticate(
             verifier,
             transcript,
             &connection.enrollment_challenge(),
         )
-        .map_err(|_| GatewayGuestZoneLinkError::TransportUnavailable)?;
+        .map_err(|_| {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                "zone link enrollment refused: enrollment proof rejected"
+            );
+            GatewayGuestZoneLinkError::TransportUnavailable
+        })?;
         connection
             .enroll(proof)
             .await
-            .map_err(GatewayGuestZoneLinkError::from)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    reason = ?error,
+                    "zone link enrollment handshake failed"
+                );
+                GatewayGuestZoneLinkError::from(error)
+            })?;
         Ok(RelayComponentSessionTransport::from_connection(connection))
     }
 

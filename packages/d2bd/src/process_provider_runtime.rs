@@ -41,7 +41,7 @@ use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate
 use d2b_provider_system_systemd::SystemdProcessProvider;
 use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
-use d2b_session_unix::{PeerCredentials, prearmed_seqpacket_pair};
+use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
 use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
 use d2bd_runtime::vm_start_support::{
     is_durable_wayland_process_node, is_guest_owned_process_node,
@@ -661,25 +661,37 @@ pub(crate) struct ControllerBootstrapEndpoint {
 }
 
 impl ControllerBootstrapEndpoint {
-    pub(crate) fn into_parts(
-        self,
+    /// Duplicate the pre-armed bootstrap socket so each establish attempt
+    /// wraps its own descriptor while the marker keeps the original open.
+    pub(crate) fn daemon_socket(
+        &self,
+    ) -> Result<SeqpacketSocket, &'static str> {
+        let dup = self
+            .daemon_endpoint
+            .try_clone()
+            .map_err(|_| "provider-controller-bootstrap-dup")?;
+        SeqpacketSocket::from_parent_prearmed(dup)
+            .map_err(|_| "provider-controller-bootstrap-wrap")
+    }
+
+    /// Borrow the optional credential handoff and backend lease carried
+    /// beside the bootstrap socket.
+    pub(crate) fn handles(
+        &self,
     ) -> (
-        OwnedFd,
         Option<CredentialDeliveryKeyHandoff>,
         Option<Arc<dyn GuestCredentialBackendLease>>,
-        ControllerBootstrapContext,
     ) {
         (
-            self.daemon_endpoint,
-            self.delivery_key_handoff,
-            self.backend_lease,
-            self.context,
+            self.delivery_key_handoff.clone(),
+            self.backend_lease.clone(),
         )
     }
 
     pub(crate) fn context(&self) -> &ControllerBootstrapContext {
         &self.context
     }
+
 }
 
 enum ControllerBootstrapMarker {
@@ -1050,6 +1062,11 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        // XXX-host-bringup: temporary spawn visibility; remove once green.
+        tracing::warn!(
+            template = %spec.execution().template().as_str(),
+            "resource launch started",
+        );
         let context = context
             .with_execution_ref(spec.execution().execution_ref())
             .with_user_ref(spec.execution().user_ref());
@@ -1225,7 +1242,7 @@ impl ProductionProcessProviders {
                     return Err(error);
                 }
             };
-            if let Err(error) = self.remember_controller_bootstrap(ControllerBootstrapEndpoint {
+                if let Err(error) = self.remember_controller_bootstrap(ControllerBootstrapEndpoint {
                 daemon_endpoint,
                 delivery_key_handoff,
                 backend_lease,
@@ -1332,7 +1349,12 @@ impl ProductionProcessProviders {
         target_readiness_digest: ConfigurationDigest,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        self.validate_controller_target(resource)?;
+        // Spawn attempts are rare; log each with its target for startup tracing.
+        tracing::warn!(
+            process = %resource.process_ref().to_canonical_string(),
+            provider = %resource.process_provider_ref().to_canonical_string(),
+            "controller launch started",
+        );
         let provider = managed_provider_from_ref(resource.process_provider_ref())?;
         let zone_uid = self
             .bundle
@@ -2168,6 +2190,33 @@ impl ProductionProcessProviders {
             ControllerBootstrapMarker::Active(context.clone()),
         );
         true
+    }
+
+    /// Return a bootstrap whose establishment failed transiently to the
+    /// Pending state, so the next reconcile pass retries with the same
+    /// pre-armed socket. The controller retries its send for as long as
+    /// it lives; without this, one failed receive orphans it forever.
+    pub(crate) fn rearm_controller_bootstrap(
+        &self,
+        endpoint: ControllerBootstrapEndpoint,
+    ) -> bool {
+        let Ok(mut markers) = self.controller_bootstrap.lock() else {
+            return false;
+        };
+        let key = (
+            endpoint.context().zone().clone(),
+            endpoint.context().process_ref().clone(),
+        );
+        if matches!(
+            markers.get(&key),
+            Some(ControllerBootstrapMarker::Establishing(current))
+                if *current == *endpoint.context()
+        ) {
+            markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn fail_controller_bootstrap(&self, context: &ControllerBootstrapContext) -> bool {
@@ -3416,6 +3465,25 @@ fn resource_ticket(
             user_ref.as_deref(),
             execution.template().as_str(),
             Some("Provider/credential-managed-identity"),
+        )
+    } else if context
+        .owner_ref
+        .as_ref()
+        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
+    {
+        // Binding-owned serving workers resolve through the owning
+        // Provider's signed serving template, not the guest VMM chain.
+        if execution.template().as_str()
+            != d2b_provider_volume_virtiofs::WORKER_TEMPLATE
+        {
+            return Err("provider-ticket:template-not-found".to_owned());
+        }
+        bundle.find_provider_component_intent_for_template(
+            &execution_ref,
+            execution_domain,
+            user_ref.as_deref(),
+            execution.template().as_str(),
+            Some("Provider/volume-virtiofs"),
         )
     } else if let Some(owner) = context
         .owner_ref

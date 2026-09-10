@@ -389,6 +389,11 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             return Err(QemuMediaError::InvalidState);
         }
         let Some(device) = dependencies.device.as_ref() else {
+            tracing::debug!(
+                resource = %self.guest_ref,
+                provider = "runtime-qemu-media",
+                "reconcile deferred: Device dependency not observed yet"
+            );
             self.phase = QemuMediaPhase::Pending;
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 500 });
         };
@@ -397,37 +402,85 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             || !dependencies.runtime_volume_ready
             || (self.settings.display_window && !dependencies.display_ready)
         {
+            tracing::debug!(
+                resource = %self.guest_ref,
+                provider = "runtime-qemu-media",
+                network_ready = dependencies.network_ready,
+                media_ready = dependencies.media_ready,
+                runtime_volume_ready = dependencies.runtime_volume_ready,
+                display_ready = dependencies.display_ready,
+                "reconcile deferred: dependencies not ready"
+            );
             self.phase = QemuMediaPhase::Pending;
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 500 });
         }
         let expected_process = PROCESS_TEMPLATE;
         DeviceAdmission::validate(&self.guest_ref, device, expected_process, "qemu-media/v1")
-            .map_err(QemuMediaError::Device)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    resource = %self.guest_ref,
+                    provider = "runtime-qemu-media",
+                    code = error.code(),
+                    "device admission rejected for guest"
+                );
+                QemuMediaError::Device(error)
+            })?;
         if !self.authority_reserved {
             effect.reserve_device_authority(device.authority_key, &self.guest_ref)?;
             self.authority_reserved = true;
         }
 
-        let observed = effect.observe()?;
+        let observed = effect.observe().map_err(|error| {
+            tracing::warn!(
+                resource = %self.guest_ref,
+                provider = "runtime-qemu-media",
+                code = error.code(),
+                "process observation effect failed during reconcile"
+            );
+            error
+        })?;
         let identity = match observed {
             Some(candidate) => {
                 let Some(expected) = self.expected_identity.as_ref() else {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "adoption refused: observed process without durable expected identity"
+                    );
                     self.phase = QemuMediaPhase::Degraded;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 };
                 if verify_identity(expected, &candidate) != AdoptionOutcome::Adopted {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "adoption refused: observed process identity does not match expected identity"
+                    );
                     self.phase = QemuMediaPhase::Degraded;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
                 self.phase = QemuMediaPhase::Starting;
                 if !self.pidfd_opened {
-                    effect.open_pidfd(&candidate)?;
+                    effect.open_pidfd(&candidate).map_err(|error| {
+                        tracing::warn!(
+                            resource = %self.guest_ref,
+                            provider = "runtime-qemu-media",
+                            code = error.code(),
+                            "pidfd open failed for adopted process"
+                        );
+                        error
+                    })?;
                     self.pidfd_opened = true;
                 }
                 candidate
             }
             None => {
                 if self.expected_identity.is_some() {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "adoption refused: expected process vanished before identity verification"
+                    );
                     self.phase = QemuMediaPhase::Failed;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
@@ -437,14 +490,47 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     dependencies.media_refs.clone(),
                     dependencies.display_ref.clone(),
                 )?;
-                let candidate = effect.launch(&ticket)?;
+                let candidate = effect.launch(&ticket).map_err(|error| {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        code = error.code(),
+                        "process launch failed for guest"
+                    );
+                    error
+                })?;
                 if !candidate.matches_process_token(expected_process) {
-                    let _ = effect.stop(&candidate);
+                    if let Err(stop_error) = effect.stop(&candidate) {
+                        tracing::warn!(
+                            resource = %self.guest_ref,
+                            provider = "runtime-qemu-media",
+                            code = stop_error.code(),
+                            "stop failed while quarantining launched process with wrong template token"
+                        );
+                    }
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "launched process rejected: process template token mismatch"
+                    );
                     self.phase = QemuMediaPhase::Failed;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
                 if let Err(error) = effect.open_pidfd(&candidate) {
-                    let _ = effect.stop(&candidate);
+                    if let Err(stop_error) = effect.stop(&candidate) {
+                        tracing::warn!(
+                            resource = %self.guest_ref,
+                            provider = "runtime-qemu-media",
+                            code = stop_error.code(),
+                            "stop failed while cleaning up process after pidfd failure"
+                        );
+                    }
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        code = error.code(),
+                        "pidfd open failed for freshly launched process"
+                    );
                     self.phase = QemuMediaPhase::Failed;
                     return Err(error);
                 }
@@ -459,15 +545,29 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             if self.initial_qmp_wait_pending
                 && dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds
             {
+                tracing::warn!(
+                    resource = %self.guest_ref,
+                    provider = "runtime-qemu-media",
+                    elapsed_seconds = dependencies.qmp_elapsed_seconds,
+                    "QMP readiness timeout elapsed; stopping guest process"
+                );
                 self.initial_qmp_wait_pending = false;
                 self.phase = QemuMediaPhase::Failed;
-                if effect.stop(&identity).is_ok() && matches!(effect.observe(), Ok(None)) {
+                let stopped = effect.stop(&identity);
+                if stopped.is_ok() && matches!(effect.observe(), Ok(None)) {
                     self.process_stopped = true;
                     if self.authority_reserved && !self.authority_released {
                         effect.release_device_authority()?;
                         self.authority_released = true;
                         self.authority_reserved = false;
                     }
+                } else if let Err(error) = stopped {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        code = error.code(),
+                        "process stop failed after QMP readiness timeout"
+                    );
                 }
                 return Err(QemuMediaError::QmpNotReady);
             }
@@ -485,16 +585,34 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         };
         match qmp_status {
             QmpVmStatus::Stopped => {
+                tracing::warn!(
+                    resource = %self.guest_ref,
+                    provider = "runtime-qemu-media",
+                    "guest QMP status is Stopped; marking generation failed"
+                );
                 self.phase = QemuMediaPhase::Failed;
                 return Err(QemuMediaError::QmpNotReady);
             }
             QmpVmStatus::Paused if !self.settings.pause_at_boot => {
-                effect.continue_guest()?;
+                effect.continue_guest().map_err(|error| {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        code = error.code(),
+                        "failed to resume unexpectedly paused guest"
+                    );
+                    error
+                })?;
             }
             QmpVmStatus::Paused => {
                 self.initial_pause_observed = true;
             }
             QmpVmStatus::Running if self.settings.pause_at_boot && !self.initial_pause_observed => {
+                tracing::warn!(
+                    resource = %self.guest_ref,
+                    provider = "runtime-qemu-media",
+                    "guest running before boot pause observed; QMP readiness rejected"
+                );
                 self.phase = QemuMediaPhase::Degraded;
                 return Err(QemuMediaError::QmpNotReady);
             }
@@ -519,14 +637,32 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             effect.close_media_effects()?;
             self.media_closed = true;
         }
-        let observed = effect.observe()?;
+        let observed = effect.observe().map_err(|error| {
+            tracing::warn!(
+                resource = %self.guest_ref,
+                provider = "runtime-qemu-media",
+                code = error.code(),
+                "process observation effect failed during finalization"
+            );
+            error
+        })?;
         if self.expected_identity.is_none() && observed.is_some() {
+            tracing::warn!(
+                resource = %self.guest_ref,
+                provider = "runtime-qemu-media",
+                "finalization refused: unexpected process without durable expected identity"
+            );
             self.phase = QemuMediaPhase::Degraded;
             return Err(QemuMediaError::AdoptionAmbiguous);
         }
         if let Some(identity) = self.expected_identity.as_ref() {
             if let Some(candidate) = observed {
                 if verify_identity(identity, &candidate) != AdoptionOutcome::Adopted {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "finalization refused: observed process identity does not match expected identity"
+                    );
                     self.phase = QemuMediaPhase::Degraded;
                     return Err(QemuMediaError::AdoptionAmbiguous);
                 }
@@ -535,10 +671,23 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     self.pidfd_opened = true;
                 }
                 if !self.process_stopped {
-                    effect.stop(identity)?;
+                    effect.stop(identity).map_err(|error| {
+                        tracing::warn!(
+                            resource = %self.guest_ref,
+                            provider = "runtime-qemu-media",
+                            code = error.code(),
+                            "process stop failed during finalization"
+                        );
+                        error
+                    })?;
                     self.process_stopped = true;
                 }
                 if effect.observe()?.is_some() {
+                    tracing::warn!(
+                        resource = %self.guest_ref,
+                        provider = "runtime-qemu-media",
+                        "finalization incomplete: process still observed after stop"
+                    );
                     self.phase = QemuMediaPhase::Degraded;
                     return Err(QemuMediaError::FinalizationIncomplete);
                 }

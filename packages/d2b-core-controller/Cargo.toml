@@ -26,6 +26,7 @@ d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tracing = "0.1"
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]

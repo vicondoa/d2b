@@ -173,6 +173,11 @@ where
         deadline_remaining_ms: u32,
     ) -> Result<AcaDeploymentResponse, AcaServiceError> {
         if deadline_remaining_ms == 0 {
+            tracing::warn!(
+                method = ?method,
+                provider = "runtime-azure-container-apps",
+                "deployment service request arrived with expired deadline"
+            );
             return Err(AcaServiceError::Effect(
                 crate::AcaControlErrorKind::DeadlineExpired,
             ));
@@ -180,8 +185,22 @@ where
         let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_remaining_ms));
         let permit = timeout_at(deadline, self.in_flight.clone().acquire_owned())
             .await
-            .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired))?
-            .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::Unavailable))?;
+            .map_err(|_| {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "deployment service dispatch deadline expired while waiting for in-flight permit"
+                );
+                AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired)
+            })?
+            .map_err(|_| {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "deployment service in-flight semaphore closed; dispatch rejected"
+                );
+                AcaServiceError::Effect(crate::AcaControlErrorKind::Unavailable)
+            })?;
         let (operation_id, purpose) = request_binding(&request, method)?;
         let context = AcaControlContext::new(operation_id.clone(), deadline_remaining_ms);
         let lease_request = AcaCredentialLeaseRequest::new(
@@ -193,12 +212,42 @@ where
         );
         let lease = timeout_at(deadline, self.leases.acquire(&lease_request))
             .await
-            .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired))?
-            .map_err(|error| AcaServiceError::Effect(error.kind()))?;
+            .map_err(|_| {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "deployment service credential lease acquisition timed out"
+                );
+                AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired)
+            })?
+            .map_err(|error| {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    code = error.kind().code(),
+                    "deployment service credential lease acquisition failed"
+                );
+                AcaServiceError::Effect(error.kind())
+            })?;
         if lease.expires_at_unix_ms() <= self.clock.now_unix_ms()
             || lease.expires_at_unix_ms() < lease_request.requested_expiry_unix_ms()
         {
-            let _ = timeout_at(deadline, self.leases.revoke(&lease)).await;
+            if timeout_at(deadline, self.leases.revoke(&lease))
+                .await
+                .map(|revocation| revocation.is_err())
+                .unwrap_or(true)
+            {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "stale deployment service credential lease revocation failed"
+                );
+            }
+            tracing::warn!(
+                method = ?method,
+                provider = "runtime-azure-container-apps",
+                "deployment service acquired credential lease already expired; dispatch rejected"
+            );
             drop(permit);
             return Err(AcaServiceError::Effect(
                 crate::AcaControlErrorKind::DeadlineExpired,
@@ -209,12 +258,37 @@ where
             self.dispatch_with_lease(method, request, &context, &lease),
         )
         .await
-        .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired))
+        .map_err(|_| {
+            tracing::warn!(
+                method = ?method,
+                provider = "runtime-azure-container-apps",
+                operation = ?context.operation_id(),
+                "deployment service dispatch deadline expired"
+            );
+            AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired)
+        })
         .and_then(|result| result);
         let revoked = timeout_at(deadline, self.leases.revoke(&lease))
             .await
-            .map_err(|_| AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired))
-            .and_then(|result| result.map_err(|error| AcaServiceError::Effect(error.kind())));
+            .map_err(|_| {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "deployment service credential lease cleanup timed out"
+                );
+                AcaServiceError::Effect(crate::AcaControlErrorKind::DeadlineExpired)
+            })
+            .and_then(|result| {
+                result.map_err(|error| {
+                    tracing::warn!(
+                        method = ?method,
+                        provider = "runtime-azure-container-apps",
+                        code = error.kind().code(),
+                        "deployment service credential lease cleanup failed after dispatch"
+                    );
+                    AcaServiceError::Effect(error.kind())
+                })
+            });
         let result = match (response, revoked) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), _) => Err(error),
@@ -256,11 +330,21 @@ where
                         .map_err(|error| AcaServiceError::Effect(error.kind()))?,
                     [record] if record.generation == binding.provider_generation => record.clone(),
                     [_] => {
+                        tracing::warn!(
+                            resource = %binding.guest_uid,
+                            provider = "runtime-azure-container-apps",
+                            "disk image generation conflict during provision"
+                        );
                         return Err(AcaServiceError::Effect(
                             crate::AcaControlErrorKind::Conflict,
                         ));
                     }
                     _ => {
+                        tracing::warn!(
+                            resource = %binding.guest_uid,
+                            provider = "runtime-azure-container-apps",
+                            "ambiguous disk image candidates during provision"
+                        );
                         return Err(AcaServiceError::Effect(
                             crate::AcaControlErrorKind::Ambiguous,
                         ));
@@ -316,7 +400,14 @@ where
                 .await
                 .map(AcaDeploymentResponse::Health)
                 .map_err(|error| AcaServiceError::Effect(error.kind())),
-            _ => Err(AcaServiceError::MethodMismatch),
+            _ => {
+                tracing::warn!(
+                    method = ?method,
+                    provider = "runtime-azure-container-apps",
+                    "deployment service method/request mismatch"
+                );
+                Err(AcaServiceError::MethodMismatch)
+            }
         }
     }
 }

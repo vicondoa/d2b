@@ -552,6 +552,7 @@ fn accept_loop(
     let mut first_client_deadline = first_client_timeout.map(|timeout| Instant::now() + timeout);
     while state.is_not_destroyed() {
         if first_client_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            log::warn!("[d2b-wlproxy] target={identity_label} no client connected within the first-client timeout; exiting");
             let _ = readiness.failed(
                 ProxyReadinessStage::FirstClient,
                 ProxyReadinessFailure::FirstClientTimeout,

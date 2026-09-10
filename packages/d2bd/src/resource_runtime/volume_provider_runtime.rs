@@ -41,8 +41,8 @@ use d2b_core_controller::{
     FinalizeResult, HandlerFailure, ObservationResult, ReconcileContext, ReconcileDisposition,
     ReconcilePlan, ReconcileReason, ReconcileResult, ResourceKey, ResourceMutationBatch,
     ResourceReconciler, ResourceRegistration, ResourceSnapshot, ResyncPolicy, Runner, RunnerConfig,
-    SelectorField, SourceError, StatusPersistence, UpdateAssessment, UpdateAssessmentState,
-    UpgradePlan, UpgradeStage, ValidationResult,
+    RunnerError, SelectorField, SourceError, StatusPersistence, UpdateAssessment,
+    UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
 };
 use d2b_provider_volume_local::{
     ConditionSeverity, EntryCondition, EntryDigest, LayoutPhase, VolumeLayoutEffectPort,
@@ -56,7 +56,7 @@ use d2b_provider_volume_virtiofs::{
 use d2b_resource_api::registered::RedbRegisteredControllerApi;
 use d2b_resource_store::{
     ResourceAssignmentFence, ResourceAssignmentScope, StoreErrorKind, StoreGetRequest,
-    StoreOperationContext, StoreProjection, StoredResource,
+    StoreListRequest, StoreOperationContext, StoreProjection, StoredResource,
 };
 use d2bd_runtime::resource_runtime_support::retry_transient_store_read;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
@@ -267,6 +267,7 @@ impl SharedVolumeResourceKind {
     }
 }
 
+/// The canonical binding reference for guard diagnostics.
 #[derive(Clone)]
 struct SharedVolumeEffectContext {
     identity: ControllerIdentity,
@@ -353,6 +354,109 @@ impl DaemonVolumeProviderEffects {
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(SharedVolumeEffectError::Unavailable)
+    }
+
+    /// Whether the serving provider's controller process is Ready.
+    ///
+    /// Effects hold while the controller is still starting so reconcile
+    /// work is never thrown at a half-started provider. A controller that
+    /// never appears reads as unhealthy; the caller retries.
+    async fn provider_controller_healthy(&self, kind: SharedVolumeResourceKind) -> bool {
+        let runtime = match self.runtime() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                // XXX-host-bringup: temporary; remove once green.
+                tracing::warn!(provider = kind.provider_ref(), "u7 health: no runtime");
+                return false;
+            }
+        };
+        let provider = kind.provider_ref();
+        let mut cursor = None;
+        let mut scanned = 0usize;
+        let mut candidates = Vec::new();
+        loop {
+            let page = match runtime
+                .store
+                .list(StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "u7-controller-health".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "u7-controller-health".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: vec![ResourceTypeName::parse("Process".to_owned())
+                        .expect("process type")],
+                    resource_names: Vec::new(),
+                    filters: vec![d2b_resource_store::StoreFilter {
+                        field: "owner.resourceRef".to_owned(),
+                        values: vec![provider.to_owned()],
+                    }],
+                    page_size: 256,
+                    cursor: cursor.take(),
+                    projection: StoreProjection::Full,
+                })
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    // XXX-host-bringup: temporary; remove once green.
+                    tracing::warn!(
+                        provider = kind.provider_ref(),
+                        error = ?error,
+                        "u7 health: store list failed",
+                    );
+                    return false;
+                }
+            };
+            for resource in &page.resources {
+                scanned += 1;
+                let value = match serde_json::from_slice::<Value>(&resource.canonical_json) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let owner = value
+                    .pointer("/metadata/ownerRef")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let class = value
+                    .pointer("/spec/processClass")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let phase = value
+                    .pointer("/status/phase")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let observed = value.pointer("/status/observedGeneration").and_then(Value::as_u64);
+                let generation = value.pointer("/metadata/generation").and_then(Value::as_u64);
+                if class == "controller" {
+                    candidates.push(format!(
+                        "{}:{}:{}:{:?}:{:?}",
+                        owner, phase, class, observed, generation
+                    ));
+                }
+                if owner == provider
+                    && class == "controller"
+                    && phase == "Ready"
+                    && observed == generation
+                {
+                    return true;
+                }
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        // XXX-host-bringup: temporary; remove once green.
+        tracing::warn!(
+            provider = kind.provider_ref(),
+            scanned,
+            candidates = ?candidates,
+            "u7 health: no healthy controller",
+        );
+        false
     }
 
     fn validate(
@@ -627,7 +731,7 @@ impl DaemonVolumeProviderEffects {
     fn worker_child_specs(
         binding: &StoredBinding,
         _plan: &VirtiofsdWorkerPlan,
-        principal: &BoundedToken,
+        _principal: &BoundedToken,
     ) -> Result<(ResourceRef, Value, ResourceRef, Value), SharedVolumeEffectError> {
         let process_ref = binding
             .worker_process_ref()
@@ -641,7 +745,6 @@ impl DaemonVolumeProviderEffects {
             "domain": "system",
             "processClass": "worker",
             "template": d2b_provider_volume_virtiofs::WORKER_TEMPLATE,
-            "userRef": format!("User/{}", principal.as_str()),
             "desiredLifecycle": "running",
             "sandbox": {
                 "capabilityClasses": [],
@@ -684,8 +787,23 @@ impl DaemonVolumeProviderEffects {
         volume_ref: &ResourceRef,
         spec: &VolumeSpec,
     ) -> Result<Vec<d2b_core_controller::OwnedChildIntent>, SharedVolumeEffectError> {
-        desired_binding_intents(volume_ref.clone(), spec, false)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?
+        let intents = desired_binding_intents(volume_ref.clone(), spec, false)
+            .map_err(|error| {
+                tracing::warn!(
+                    volume = %volume_ref.to_canonical_string(),
+                    error = ?error,
+                    "volume binding intents rejected",
+                );
+                SharedVolumeEffectError::InvalidResource
+            })?;
+        // Attachment minting is infrequent; log the derived count so a
+        // silent zero-intent derivation is diagnosable from the journal.
+        tracing::warn!(
+            volume = %volume_ref.to_canonical_string(),
+            intents = intents.len(),
+            "volume binding intents derived",
+        );
+        intents
             .into_iter()
             .map(|intent| {
                 // Neutral binding payload only (KTD1): access mode and
@@ -820,12 +938,18 @@ impl DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
-        let value = self.validate(SharedVolumeResourceKind::Binding, context, resource)?;
+        let value = self.validate(SharedVolumeResourceKind::Binding, context, resource).map_err(|error| {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "validate", error = ?error, "u7 binding guard rejected");
+            error
+        })?;
         // U4: the reconciler input is the stored binding envelope
         // itself, parsed strictly against the neutral binding contract.
         let binding = match StoredBinding::from_resource_spec(&value) {
             Ok(binding) => binding,
-            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "from_resource_spec", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
         };
         let runtime = self.runtime()?;
         // A binding whose Volume is missing or unparseable can never serve:
@@ -841,7 +965,8 @@ impl DaemonVolumeProviderEffects {
             .await
         {
             Ok(volume_resource) => volume_resource,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-lookup", error = ?error, "u7 binding guard rejected");
                 return Ok(Self::failed_binding_result(
                     resource,
                     d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -849,6 +974,7 @@ impl DaemonVolumeProviderEffects {
             }
         };
         if volume_resource.resource_ref != *binding.spec().volume_ref() {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-ref-mismatch", stored = %volume_resource.resource_ref.to_canonical_string(), wanted = %binding.spec().volume_ref().to_canonical_string(), "u7 binding guard rejected");
             return Ok(Self::failed_binding_result(
                 resource,
                 d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -857,10 +983,14 @@ impl DaemonVolumeProviderEffects {
         // Dependency-only Volume read (AE2): the envelope is parsed and
         // the view resolved; nothing in this path writes the Volume.
         let volume_value = serde_json::from_slice::<Value>(&volume_resource.canonical_json)
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-envelope-decode", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::InvalidResource
+            })?;
         let volume_spec = match Self::volume_spec(&volume_value) {
             Ok(volume_spec) => volume_spec,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "volume-spec", error = ?error, "u7 binding guard rejected");
                 return Ok(Self::failed_binding_result(
                     resource,
                     d2b_provider_volume_virtiofs::VirtiofsBindingError::InvalidBinding,
@@ -873,6 +1003,16 @@ impl DaemonVolumeProviderEffects {
                 &context.operation_id,
             )
             .await
+            .map_err(|error| {
+                // Cardinality: per reconcile pass; a missing Guest keeps
+                // defaulting vcpus, so only note it at debug level.
+                tracing::debug!(
+                    resource = %resource.key().resource_ref().to_canonical_string(),
+                    error = ?error,
+                    "u7 binding: guest resource read failed, defaulting vcpus",
+                );
+                error
+            })
             .ok();
         let vcpu_count = guest_value
             .as_ref()
@@ -881,18 +1021,25 @@ impl DaemonVolumeProviderEffects {
             .and_then(|value| u32::try_from(value).ok())
             .filter(|value| *value > 0)
             .unwrap_or(1);
-        let principal = binding
-            .worker_principal()
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        let principal = binding.worker_principal().map_err(|error| {
+            tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "worker-principal", error = ?error, "u7 binding guard rejected");
+            SharedVolumeEffectError::InvalidResource
+        })?;
         let view = match d2b_provider_volume_virtiofs::resolve_view(&volume_spec, &binding) {
             Ok(view) => view,
-            Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "resolve-view", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
         };
-        let plan =
-            match VirtiofsdWorkerPlan::for_binding(&binding, view, vcpu_count, principal.clone()) {
-                Ok(plan) => plan,
-                Err(reason) => return Ok(Self::failed_binding_result(resource, reason)),
-            };
+        let plan = match VirtiofsdWorkerPlan::for_binding(&binding, view, vcpu_count, principal.clone())
+        {
+            Ok(plan) => plan,
+            Err(reason) => {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "worker-plan", reason = ?reason, "u7 binding guard rejected");
+                return Ok(Self::failed_binding_result(resource, reason));
+            }
+        };
         let store_view_marker_ready = if binding.spec().view().as_str() == "ro-store" {
             let nix_identity =
                 (volume_spec.source().settings().kind() == SourceKind::NixClosure)
@@ -904,12 +1051,16 @@ impl DaemonVolumeProviderEffects {
                     )
                 })
                 .transpose()
-                .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "nix-identity", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::InvalidResource
+                })?;
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
                 && nix_identity
                     .as_ref()
                     .is_none_or(|identity| identity.role != NixClosureVolumeRole::StoreView)
             {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "nix-closure-role", derived_role = ?nix_identity.as_ref().map(|identity| identity.role), "u7 binding guard rejected");
                 return Err(SharedVolumeEffectError::InvalidResource);
             }
             let guest_ref = (volume_spec.source().settings().kind() == SourceKind::NixClosure)
@@ -922,6 +1073,7 @@ impl DaemonVolumeProviderEffects {
             if volume_spec.source().settings().kind() == SourceKind::NixClosure
                 && guest_ref.as_ref() != Some(binding.spec().execution_ref())
             {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "guest-ref-mismatch", derived_guest = ?guest_ref, wanted = ?binding.spec().execution_ref(), "u7 binding guard rejected");
                 return Err(SharedVolumeEffectError::InvalidResource);
             }
             let nix_closure_role = nix_identity
@@ -935,7 +1087,10 @@ impl DaemonVolumeProviderEffects {
                 guest_ref,
                 nix_closure_role,
             )
-            .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "root-resolver-construction", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::Unavailable
+            })?;
             let adapter = AnchoredVolumeEffectAdapter::new(resolver);
             let settings = volume_spec.source().settings();
             let root = adapter
@@ -946,20 +1101,36 @@ impl DaemonVolumeProviderEffects {
                     settings.kind(),
                 )
                 .await
-                .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "resolve-root-for", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::Unavailable
+                })?;
             let guest = BoundedToken::parse(
                 binding.spec().execution_ref().name().as_str().to_owned(),
             )
-            .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+            .map_err(|error| {
+                tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "guest-token-parse", error = ?error, "u7 binding guard rejected");
+                SharedVolumeEffectError::InvalidResource
+            })?;
             let evidence = adapter
                 .observe_store_view_marker(&root, &marker_path(&guest))
                 .await
-                .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(binding = %context.target.resource_ref().to_canonical_string(), guard = "observe-store-view-marker", error = ?error, "u7 binding guard rejected");
+                    SharedVolumeEffectError::Unavailable
+                })?;
             evidence.present && evidence.zero_length
         } else {
             true
         };
         if binding.spec().view().as_str() == "ro-store" && !store_view_marker_ready {
+            // Cardinality: per reconcile pass; Pending repeat is expected
+            // while the store view is still syncing.
+            tracing::debug!(
+                resource = %resource.key().resource_ref().to_canonical_string(),
+                guard = "store-view-marker-absent",
+                "u7 binding: ro-store marker not ready, holding Pending",
+            );
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
                 resource_projection: None,
@@ -978,7 +1149,7 @@ impl DaemonVolumeProviderEffects {
             .map_err(|_| SharedVolumeEffectError::Unavailable)?;
         let converged = crate::binding_child_resource_runtime::reconcile_owned_children(
             &runtime.store,
-            &client,
+            client.as_ref(),
             &self.zone,
             &[crate::binding_child_resource_runtime::OwnedChildOwner {
                 resource: owner.clone(),
@@ -987,7 +1158,14 @@ impl DaemonVolumeProviderEffects {
             }],
         )
         .await
-        .map_err(|_| SharedVolumeEffectError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                resource = %resource.key().resource_ref().to_canonical_string(),
+                error = ?error,
+                "U7 binding child reconciliation failed",
+            );
+            SharedVolumeEffectError::Unavailable
+        })?;
         if !converged.contains(context.target.resource_ref()) {
             return Ok(SharedVolumeEffectResult {
                 phase: SharedVolumeEffectPhase::Pending,
@@ -1005,18 +1183,18 @@ impl DaemonVolumeProviderEffects {
             desired: Some(desired),
             fenced: false,
         };
-        if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
-            return Ok(SharedVolumeEffectResult {
-                phase: SharedVolumeEffectPhase::Pending,
-                resource_projection: None,
-            });
-        }
         let process_ref = binding
             .worker_process_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
         let endpoint_ref = binding
             .endpoint_ref()
             .map_err(|_| SharedVolumeEffectError::InvalidResource)?;
+        if !crate::binding_child_resource_runtime::owned_children_ready(&child_owner, &children) {
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
+        }
         let process_ready = child_phase(&children, &process_ref).as_deref() == Some("Ready");
         let endpoint_ready = child_phase(&children, &endpoint_ref).as_deref() == Some("Ready");
         let zone_token = BoundedToken::parse(self.zone.as_str().to_owned())
@@ -1055,6 +1233,12 @@ impl DaemonVolumeProviderEffects {
         resource: &ResourceSnapshot,
         reason: d2b_provider_volume_virtiofs::VirtiofsBindingError,
     ) -> SharedVolumeEffectResult {
+        // KTD5: rejections stay visible in logs as well as status.
+        tracing::warn!(
+            resource = %resource.key().resource_ref().to_canonical_string(),
+            reason = reason.code(),
+            "u7 binding terminal failure",
+        );
         let projection = VolumeBindingStatusResource {
             ready: false,
             fence: VolumeBindingReadinessFence {
@@ -1275,6 +1459,19 @@ impl SharedVolumeEffectExecutor for DaemonVolumeProviderEffects {
         context: &SharedVolumeEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedVolumeEffectResult, SharedVolumeEffectError> {
+        // XXX-host-bringup: temporary gate visibility; remove once green.
+        let healthy = self.provider_controller_healthy(kind).await;
+        tracing::warn!(
+            provider = kind.provider_ref(),
+            healthy,
+            "u7 controller health gate",
+        );
+        if !healthy {
+            return Ok(SharedVolumeEffectResult {
+                phase: SharedVolumeEffectPhase::Pending,
+                resource_projection: None,
+            });
+        }
         match kind {
             SharedVolumeResourceKind::Volume => self.reconcile_volume(context, resource).await,
             SharedVolumeResourceKind::Binding => self.reconcile_binding(context, resource).await,
@@ -1356,6 +1553,10 @@ impl VirtiofsBindingEffectPort for ChildReadinessPort {
         // controller reconciled, so a write-time fence self-check could
         // never fail.
         if writer.as_str() != "volume-virtiofs" {
+            tracing::warn!(
+                writer = writer.as_str(),
+                "binding status write rejected: unauthorized writer identity",
+            );
             return Err(d2b_provider_volume_virtiofs::VirtiofsBindingError::UnauthorizedWriter);
         }
         Ok(())
@@ -1495,10 +1696,17 @@ impl DaemonVolumeRootResolver {
             .parent()
             .map(|root| root.join("volume-local-markers"))
             .ok_or(d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)?;
-        open_anchored_directory(&marker_root)
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::SourceUnresolved)
+        open_anchored_directory(&marker_root).map_err(|error| {
+            // Cardinality: per distinct marker-root open failure; repeats
+            // while the directory is unopenable.
+            tracing::warn!(
+                resource = %self.volume_ref.to_canonical_string(),
+                error = %error,
+                "U7 volume marker root directory unavailable",
+            );
+            d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
+        })
     }
-
     fn source_unresolved(
         &self,
         stage: &'static str,
@@ -1536,12 +1744,27 @@ impl DaemonVolumeRootResolver {
                 uid: self.state.daemon_uid,
             },
         )
-        .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
+        .map_err(|error| {
+            // Cardinality: per distinct broker dispatch failure.
+            tracing::warn!(
+                resource = %self.volume_ref.to_canonical_string(),
+                error = ?error,
+                "U7 volume store sync broker dispatch failed",
+            );
+            d2b_provider_volume_local::VolumeLocalError::EffectFailed
+        })?;
         match response {
             d2b_contracts_broker::broker_wire::BrokerResponse::StoreSync(response) => Ok(response),
-            _ => Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed),
+            _ => {
+                tracing::warn!(
+                    resource = %self.volume_ref.to_canonical_string(),
+                    "U7 volume store sync broker returned unexpected response type",
+                );
+                Err(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            }
         }
     }
+
 
     fn validate_store_sync_response(
         &self,
@@ -1703,9 +1926,24 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
         nix::unistd::User::from_name(reference.name().as_str())
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+            .map_err(|error| {
+                // Cardinality: per entry per reconcile pass; repeats while
+                // the principal cannot be resolved.
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    error = ?error,
+                    "volume principal lookup failed",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })?
             .map(|user| user.uid.as_raw())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            .ok_or_else(|| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    "volume principal user not found",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })
     }
 
     fn resolve_group(
@@ -1716,9 +1954,22 @@ impl VolumeRootResolver for DaemonVolumeRootResolver {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
         nix::unistd::User::from_name(reference.name().as_str())
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+            .map_err(|error| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    error = ?error,
+                    "volume group lookup failed",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })?
             .map(|user| user.gid.as_raw())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+            .ok_or_else(|| {
+                tracing::debug!(
+                    resource = %reference.to_canonical_string(),
+                    "volume group user not found",
+                );
+                d2b_provider_volume_local::VolumeLocalError::EffectFailed
+            })
     }
 }
 
@@ -2258,20 +2509,35 @@ pub(crate) async fn start(
     let subject_context = runtime
         .core_controller_subject
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller subject lock poisoned");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(super::ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller subject context unavailable");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let authorization_state = runtime
         .authorization_state
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: authorization state lock poisoned");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(super::ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: authorization state unavailable");
+            super::ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let controller_generation = runtime
         .store_metadata
         .policy_snapshot
         .controller_generation
-        .ok_or(super::ResourceRuntimeError::HandlerNotReady)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: controller generation not ready");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
     let session_generation = subject_context.reconnect_generation();
     let (active_registrations, provider_generations) = provider_generations(runtime).await?;
     if active_registrations.is_empty() {
@@ -2283,25 +2549,47 @@ pub(crate) async fn start(
         controller_generation,
         &provider_generations,
         session_generation,
-    )?;
+    )
+    .map_err(|error| {
+        tracing::warn!(
+            zone = runtime.zone.as_str(),
+            error = %error,
+            "u7 runner: descriptor composition failed",
+        );
+        error
+    })?;
     let effects: Arc<dyn SharedVolumeEffectExecutor> = Arc::new(DaemonVolumeProviderEffects::new(
         state,
         runtime.zone.clone(),
     ));
     let mut tasks = Vec::new();
     for (registration, descriptor) in descriptors {
-        let kind = SharedVolumeResourceKind::from_registration(registration)?;
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
-        let controller_ref = ResourceRef::parse(registration.controller_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
+        let kind = SharedVolumeResourceKind::from_registration(registration).map_err(|error| {
+            tracing::warn!(
+                zone = runtime.zone.as_str(),
+                error = %error,
+                "u7 runner: registration did not match a known volume provider kind",
+            );
+            error
+        })?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "u7 runner: provider ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
+        let controller_ref = ResourceRef::parse(registration.controller_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), controller_ref = registration.controller_ref, "u7 runner: controller ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
         let (assignments, authority) = runtime
             .u12_controller_assignments(
                 &descriptor,
                 controller_ref.clone(),
                 *provider_generations
                     .get(&provider_ref)
-                    .ok_or(super::ResourceRuntimeError::HandlerNotReady)?,
+                    .ok_or_else(|| {
+                        tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: provider generation missing");
+                        super::ResourceRuntimeError::HandlerNotReady
+                    })?,
                 controller_generation,
                 session_generation,
             )
@@ -2309,15 +2597,38 @@ pub(crate) async fn start(
         let subject = runtime
             .authorizer
             .issue_authenticated_subject(subject_context.clone(), authorization_state.clone())
-            .map_err(|_| super::ResourceRuntimeError::AuthorizationUnavailable)?;
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: authenticated subject issuance failed");
+                super::ResourceRuntimeError::AuthorizationUnavailable
+            })?;
         let api = runtime
             .api
             .registered_controller_api(subject, authorization_state.clone(), assignments)
-            .map_err(|_| super::ResourceRuntimeError::ResourceApiBindFailed)?;
-        let allowed_types = descriptor
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "u7 runner: resource api bind failed");
+                super::ResourceRuntimeError::ResourceApiBindFailed
+            })?;
+        let mut allowed_types = descriptor
             .resource_types()
             .cloned()
             .collect::<BTreeSet<_>>();
+        if kind == SharedVolumeResourceKind::Binding {
+            // The binding runner commits its own serving children
+            // (virtiofsd worker Process + private Endpoint) as owner-child
+            // mutations; their targets must pass the same fence gate.
+            allowed_types.insert(
+                ResourceTypeName::parse("Process".to_owned()).map_err(|_| {
+                    tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: Process type parse failed");
+                    super::ResourceRuntimeError::HandlerNotReady
+                })?,
+            );
+            allowed_types.insert(
+                ResourceTypeName::parse("Endpoint".to_owned()).map_err(|_| {
+                    tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: Endpoint type parse failed");
+                    super::ResourceRuntimeError::HandlerNotReady
+                })?,
+            );
+        }
         let resolver_store = Arc::clone(&runtime.store);
         let resolver_zone = runtime.zone.clone();
         let resolver_authority = Arc::clone(&authority);
@@ -2339,18 +2650,14 @@ pub(crate) async fn start(
                         _ => SourceError::Unavailable,
                     },
                 )? {
-                    if stored.resource_uid != uid
-                        || stored.epoch > authority.epoch
-                        || (stored.epoch == authority.epoch
-                            && (stored.provider_generation != authority.provider_generation
-                                || stored.controller_generation != authority.controller_generation
-                                || stored.controller_role != authority.controller_role
-                                || stored.target != authority.target
-                                || stored.session_generation != authority.session_generation))
-                    {
+                    if crate::resource_runtime::assignment_fence_conflict(
+                        &stored,
+                        &uid,
+                        &authority,
+                    ) {
                         return Err(SourceError::Integrity);
                     }
-                    if stored.epoch == authority.epoch && stored.resource_revision != revision {
+                    if stored.resource_revision != revision {
                         return Err(SourceError::Conflict(stored.resource_revision));
                     }
                 }
@@ -2362,7 +2669,7 @@ pub(crate) async fn start(
                     controller_role: authority.controller_role.clone(),
                     target: authority.target.clone(),
                     session_generation: authority.session_generation,
-                    epoch: authority.epoch,
+                    epoch: crate::resource_runtime::ASSIGNMENT_EPOCH,
                     scope: ResourceAssignmentScope::Primary,
                 })
             })
@@ -2383,21 +2690,61 @@ pub(crate) async fn start(
             },
         );
         tasks.push(tokio::spawn(async move {
-            if let Err(error) = runner.run().await {
-                tracing::warn!(
-                    error = %error,
-                    failed_resource = ?error.failed_key()
-                        .map(|key| key.resource_ref().to_canonical_string()),
-                    failed_operation = ?error.failed_operation(),
-                    "U7 shared Volume Runner stopped",
-                );
+            // Runner tasks are fire-and-forget; log each start so a silently
+            // missing runner is diagnosable from the journal alone.
+            tracing::warn!(
+                kind = ?kind,
+                "u7 shared volume runner task started",
+            );
+            let mut backoff_ms = 500u64;
+            loop {
+                match runner.run().await {
+                    Ok(_) => {
+                        tracing::warn!(kind = ?kind, "u7 shared volume runner stopped cleanly");
+                        break;
+                    }
+                    Err(error) if matches!(
+                        error.error(),
+                        RunnerError::Source(
+                            SourceError::Timeout
+                                | SourceError::Unavailable
+                                | SourceError::Backpressure
+                        )
+                    ) => {
+                        tracing::warn!(
+                            error = %error,
+                            backoff_ms,
+                            kind = ?kind,
+                            "U7 shared Volume Runner retrying after transient failure",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            backoff_ms,
+                        ))
+                        .await;
+                        backoff_ms = (backoff_ms * 2).min(5_000);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            failed_resource = ?error.failed_key()
+                                .map(|key| key.resource_ref().to_canonical_string()),
+                            failed_operation = ?error.failed_operation(),
+                            kind = ?kind,
+                            "U7 shared Volume Runner stopped",
+                        );
+                        break;
+                    }
+                }
             }
         }));
     }
     let mut slot = runtime
         .u7_runner_tasks
         .lock()
-        .map_err(|_| super::ResourceRuntimeError::WatchUnavailable)?;
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "u7 runner: u7 runner task slot lock poisoned");
+            super::ResourceRuntimeError::WatchUnavailable
+        })?;
     slot.extend(tasks);
     Ok(true)
 }
@@ -2462,8 +2809,10 @@ async fn provider_generations(
     let mut generations = BTreeMap::new();
     let mut active = Vec::new();
     for registration in U7_SHARED_PROVIDER_RUNNERS {
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| super::ResourceRuntimeError::HandlerNotReady)?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "u7 runner: provider ref parse failed");
+            super::ResourceRuntimeError::HandlerNotReady
+        })?;
         let request = StoreGetRequest {
                 operation: StoreOperationContext {
                     operation_id: "u7-provider-generation".to_owned(),
@@ -2496,11 +2845,32 @@ async fn provider_generations(
                     )
                     .await?
                 {
+                    // Cardinality: once per start attempt per registration.
+                    tracing::warn!(
+                        zone = runtime.zone.as_str(),
+                        provider_ref = registration.provider_ref,
+                        "u7 runner: provider resource missing from store while owned resources exist",
+                    );
                     return Err(super::ResourceRuntimeError::ProviderPathUnavailable);
                 }
             }
-            Err(_) => return Err(super::ResourceRuntimeError::StoreReadFailed),
-            _ => return Err(super::ResourceRuntimeError::HandlerNotReady),
+            Err(error) => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    error = ?error,
+                    "u7 runner: provider generation store read failed",
+                );
+                return Err(super::ResourceRuntimeError::StoreReadFailed);
+            }
+            _ => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    "u7 runner: provider resource present but zone or generation not usable",
+                );
+                return Err(super::ResourceRuntimeError::HandlerNotReady);
+            }
         }
     }
     Ok((active, generations))
@@ -2602,6 +2972,61 @@ mod tests {
         let projection: VolumeBindingStatusResource =
             serde_json::from_value(value["status"]["resource"].clone()).expect("projection");
         assert!(!projection.ready);
+    }
+    #[test]
+    fn minted_binding_child_parses_under_strict_serving_contract() {
+        use d2b_provider_volume_local::testing::fixtures;
+        let zone = ZoneId::parse("work").expect("Zone");
+        let volume_ref = ResourceRef::parse("Volume/work-state").expect("volume ref");
+        let volume = fixtures::store_view_volume();
+        let intent = d2b_provider_volume_local::desired_binding_intents(
+            volume_ref.clone(),
+            &volume,
+            false,
+        )
+        .expect("admitted intents")
+        .into_iter()
+        .next()
+        .expect("store-view fixture declares one attachment");
+        // Mirror volume_children: neutral spec plus the serving providerRef.
+        let binding = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
+            intent.volume_ref().clone(),
+            intent.execution_ref().clone(),
+            intent.view().as_str(),
+            intent.access(),
+            intent.mount_path(),
+        )
+        .expect("binding spec");
+        let target = ResourceRef::new(
+            ResourceTypeName::parse(
+                d2b_provider_volume_virtiofs::VOLUME_BINDING_RESOURCE_TYPE.to_owned(),
+            )
+            .expect("binding type"),
+            ResourceName::parse(intent.name().as_str()).expect("binding name"),
+        );
+        let mut binding_spec = serde_json::to_value(&binding).expect("spec json");
+        binding_spec
+            .as_object_mut()
+            .expect("spec object")
+            .insert(
+                "providerRef".to_owned(),
+                Value::String("Provider/volume-virtiofs".to_owned()),
+            );
+        let canonical = DaemonVolumeProviderEffects::child_resource(
+            &zone,
+            &target,
+            &volume_ref,
+            binding_spec,
+        )
+        .expect("binding child payload");
+        let mut value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
+        // The store assigns the UID at mint; the serving parser requires it.
+        value["metadata"]["uid"] =
+            Value::String("123e4567-e89b-42d3-a456-426614174000".to_owned());
+        let stored = d2b_provider_volume_virtiofs::StoredBinding::from_resource_spec(&value)
+            .expect("minted binding parses under the strict contract");
+        assert_eq!(stored.spec().volume_ref(), &volume_ref);
+        assert_eq!(stored.uid().to_canonical_string(), "123e4567-e89b-42d3-a456-426614174000");
     }
 
     fn test_stored_resource(zone: &ZoneId, resource_ref: &ResourceRef) -> StoredResource {

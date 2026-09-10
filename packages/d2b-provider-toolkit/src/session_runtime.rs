@@ -17,6 +17,7 @@ use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
     SessionAuthorizationRequest,
 };
+use tracing::warn;
 
 use crate::{
     ProviderAgentAdapter, ProviderService, ProviderToolkitError,
@@ -131,11 +132,17 @@ where
             biased;
             _ = cancellation.cancelled() => return Ok(()),
             frame = session.receive_ttrpc() => {
-                frame.map_err(|_| ProviderToolkitError::SessionClosed)?
+                frame.map_err(|_| {
+                    warn!("component session receive failed; closing provider session");
+                    ProviderToolkitError::SessionClosed
+                })?
             }
         };
         let route = session.route_binding();
-        let request = codec.decode_request(&frame, &route)?;
+        let request = codec.decode_request(&frame, &route).map_err(|e| {
+            warn!(zone = ?route.zone(), reason = %e, "provider request decode failed; closing provider session");
+            e
+        })?;
         validate_authenticated_provider_request(
             &route,
             request.zone(),
@@ -154,13 +161,29 @@ where
         let response = session
             .authorize(authorization, now_tick())
             .await
-            .map_err(|_| ProviderToolkitError::AuthorizationDenied)?;
-        let response_payload = adapter.dispatch(zone, provider_ref, method, payload)?;
-        let encoded = codec.encode_response(&request_id, &response_payload)?;
+            .map_err(|_| {
+                warn!(zone = ?zone, provider = %provider_ref, method = ?method, "session authorization denied; closing provider session");
+                ProviderToolkitError::AuthorizationDenied
+            })?;
+        let response_payload = adapter
+            .dispatch(zone.clone(), provider_ref.clone(), method.clone(), payload)
+            .map_err(|e| {
+                warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider dispatch failed; closing provider session");
+                e
+            })?;
+        let encoded = codec
+            .encode_response(&request_id, &response_payload)
+            .map_err(|e| {
+                warn!(zone = ?zone, provider = %provider_ref, method = ?method, reason = %e, "provider response encode failed; closing provider session");
+                e
+            })?;
         session
             .send_authorized_ttrpc(response, encoded, now_tick())
             .await
-            .map_err(|_| ProviderToolkitError::SessionClosed)?;
+            .map_err(|_| {
+                warn!(zone = ?zone, provider = %provider_ref, method = ?method, "session send failed; closing provider session");
+                ProviderToolkitError::SessionClosed
+            })?;
     }
 }
 
@@ -171,19 +194,26 @@ fn validate_authenticated_provider_request(
     authorization: &SessionAuthorizationRequest,
     method: &BoundedToken,
 ) -> Result<(), ProviderToolkitError> {
-    let expected_zone = ZonePath::new(vec![
-        ZoneLabelId::parse(route.zone().as_str())
-            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?,
-    ])
-    .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
-    let expected_provider = route
-        .provider_ref()
-        .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+    let expected_zone = ZonePath::new(vec![ZoneLabelId::parse(route.zone().as_str()).map_err(
+        |_| {
+            warn!(zone = ?route.zone(), provider = ?route.provider_ref(), "provider request refused: route zone label is not a valid zone root");
+            ProviderToolkitError::SessionUnauthenticated
+        },
+    )?])
+    .map_err(|_| {
+        warn!(zone = ?route.zone(), provider = ?route.provider_ref(), "provider request refused: route zone is not a valid zone root");
+        ProviderToolkitError::SessionUnauthenticated
+    })?;
+    let expected_provider = route.provider_ref().ok_or_else(|| {
+        warn!(zone = ?route.zone(), "provider request refused: route has no provider reference");
+        ProviderToolkitError::SessionUnauthenticated
+    })?;
     // The codec may decode target metadata for wire diagnostics, but the
     // dispatch target is still derived from the live authenticated route.
     // A frame that tries to retarget another Zone or Provider is refused
     // before authorization or service dispatch.
     if request_zone != &expected_zone || request_provider != expected_provider {
+        warn!(zone = ?request_zone, provider = ?request_provider, "provider request refused: request target retargets a different zone or provider than the bound route");
         return Err(ProviderToolkitError::SessionUnauthenticated);
     }
     if authorization.service() != route.service()
@@ -197,6 +227,7 @@ fn validate_authenticated_provider_request(
             .map(|(_, member)| member)
             != Some(method.as_str())
     {
+        warn!(zone = ?request_zone, provider = ?request_provider, method = ?method, "provider request refused: session authorization does not match route, service, target, or method member");
         return Err(ProviderToolkitError::AuthorizationDenied);
     }
     Ok(())
@@ -223,11 +254,17 @@ where
 {
     entrypoint
         .publish_authenticated_ready(&registration, session_admission, session)
-        .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        .map_err(|_| {
+            warn!("authenticated readiness publication failed; provider runtime will not serve");
+            ProviderRuntimeError::NotAccepting
+        })?;
     let adapter = ProviderAgentAdapter::new(service);
     serve_authenticated_component_session(&adapter, session, codec, cancellation, now_tick)
         .await
-        .map_err(|_| ProviderRuntimeError::SessionLoopFailed)
+        .map_err(|_| {
+            warn!("authenticated provider session loop failed");
+            ProviderRuntimeError::SessionLoopFailed
+        })
 }
 
 /// Route-bound identity check used by generated Provider startup glue.
@@ -241,6 +278,7 @@ pub fn validate_provider_route(
         || route.provider_generation().is_none()
         || route.reconnect_generation().get() == 0
     {
+        warn!(zone = ?route.zone(), provider = %provider_ref, "provider route validation failed: route provider, service, or generation identity mismatch");
         return Err(ProviderRuntimeError::SessionUnauthenticated);
     }
     Ok(())

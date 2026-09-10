@@ -632,14 +632,16 @@ impl ResourceBundle {
                 return Err(ResourceBundleError::ProcessTemplateMismatch);
             }
             if binding.is_dynamic() {
-                if binding.owner_ref().to_canonical_string()
-                    != "Provider/credential-managed-identity"
-                    || binding.template().as_str() != "d2b-managed-identity-agent"
-                    || !binding
-                        .process_ref()
-                        .name()
-                        .as_str()
-                        .starts_with("d2b-mi-agent-template-")
+                // A dynamic template mints synthetic template refs, never a
+                // declared Process resource: the name must carry the
+                // reserved `-template-` marker and its execution target
+                // must exist in this bundle. The owner Provider and
+                // artifact pin are already verified above.
+                if !binding
+                    .process_ref()
+                    .name()
+                    .as_str()
+                    .contains("-template-")
                     || !resources.keys().any(|resource_ref| {
                         resource_ref == binding.execution_ref()
                     })

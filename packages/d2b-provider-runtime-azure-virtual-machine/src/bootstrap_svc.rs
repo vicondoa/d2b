@@ -46,6 +46,11 @@ impl BootstrapService {
         now_unix_ms: u64,
     ) -> Result<(), AzureVmError> {
         if self.state != BootstrapServiceState::Waiting {
+            tracing::warn!(
+                provider = "runtime-azure-virtual-machine",
+                state = ?self.state,
+                "bootstrap enrollment refused: service is not waiting for admission"
+            );
             self.state = BootstrapServiceState::Failed;
             return Err(AzureVmError::BootstrapPskReplayed);
         }
@@ -55,6 +60,11 @@ impl BootstrapService {
                 Ok(())
             }
             Err(error) => {
+                tracing::warn!(
+                    provider = "runtime-azure-virtual-machine",
+                    code = error.code(),
+                    "bootstrap enrollment failed; service failed closed"
+                );
                 self.state = BootstrapServiceState::Failed;
                 Err(error)
             }

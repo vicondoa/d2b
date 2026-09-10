@@ -50,6 +50,7 @@ use d2b_process_conformance::{
     ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider, ProcessProviderProfile,
     ProcessStatusReport, ReadinessExpectation, StopClass, WaitReapOwner,
 };
+use tracing::{debug, warn};
 
 /// The Provider name this controller implements.
 pub const PROVIDER_NAME: &str = "system-systemd";
@@ -90,23 +91,68 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
     }
 
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
-        ticket.validate()?;
-        if ticket.has_controller_launch_binding() {
-            ticket.validate_controller_launch()?;
+        if let Err(error) = ticket.validate() {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                error = %error,
+                "launch ticket validation rejected"
+            );
+            return Err(error);
         }
-        if ticket.has_assignment_binding() {
-            ticket.validate_assignment()?;
+        if ticket.has_controller_launch_binding()
+            && let Err(error) = ticket.validate_controller_launch()
+        {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                error = %error,
+                "controller launch binding validation rejected"
+            );
+            return Err(error);
+        }
+        if ticket.has_assignment_binding()
+            && let Err(error) = ticket.validate_assignment()
+        {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                error = %error,
+                "assignment binding validation rejected"
+            );
+            return Err(error);
         }
         if ticket.selected_provider().as_str() != PROVIDER_NAME {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                selected = ticket.selected_provider().as_str(),
+                "assignment rejected: selected provider mismatch"
+            );
             return Err(ProcessConformanceError::ProviderMismatch);
         }
         if !self.profile.supported_domains().contains(&ticket.domain()) {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: execution domain not supported"
+            );
             return Err(ProcessConformanceError::DomainNotSupported);
         }
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
+            debug!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: operation cancelled"
+            );
             return Err(ProcessConformanceError::Cancelled);
         }
         if ticket.domain() == ExecutionDomain::User && ticket.user_ref().is_none() {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: user domain requires a user ref"
+            );
             return Err(ProcessConformanceError::UserRefRequired);
         }
         Ok(())
@@ -126,7 +172,15 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
             .await
         {
             Ok(()) => error,
-            Err(_) => ProcessConformanceError::StopUnavailable,
+            Err(stop_error) => {
+                warn!(
+                    provider = PROVIDER_NAME,
+                    identity = %launched.identity.to_hex(),
+                    stop_error = %stop_error,
+                    "stop of failed launch unavailable; reporting stop-unavailable"
+                );
+                ProcessConformanceError::StopUnavailable
+            }
         }
     }
 
@@ -141,9 +195,19 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
                 // The fixed adapter's probe is the readiness observation;
                 // it does not open or retain another pidfd.
                 let Some(candidate) = self.port.probe(ticket).await? else {
+                    warn!(
+                        provider = PROVIDER_NAME,
+                        resource = %ticket.process_ref().to_canonical_string(),
+                        "readiness probe found no candidate before deadline"
+                    );
                     return Err(ProcessConformanceError::DeadlineExceeded);
                 };
                 if !self.candidate_matches(ticket, &candidate, identity) {
+                    warn!(
+                        provider = PROVIDER_NAME,
+                        resource = %ticket.process_ref().to_canonical_string(),
+                        "readiness probe candidate identity mismatch"
+                    );
                     return Err(ProcessConformanceError::AdoptionAmbiguous);
                 }
                 Ok(ProcessPhaseClass::Ready)
@@ -199,12 +263,45 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         ticket: &LaunchTicket,
     ) -> Result<ProcessStatusReport, ProcessConformanceError> {
         self.validate(ticket)?;
-        let launched = self.port.launch(ticket).await?;
+        let launched = self.port.launch(ticket).await.map_err(|error| {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                error = %error,
+                "process start failed"
+            );
+            error
+        })?;
         if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
+            warn!(
+                provider = PROVIDER_NAME,
+                identity = %launched.identity.to_hex(),
+                "launched process wait/reap owner mismatch"
+            );
             return Err(ProcessConformanceError::WaitOwnerMismatch);
         }
-        launched.validate(self.profile.required_identity_bindings())?;
-        ticket.validate_process_identity(&launched.identity)?;
+        launched
+            .validate(self.profile.required_identity_bindings())
+            .map_err(|error| {
+                warn!(
+                    provider = PROVIDER_NAME,
+                    identity = %launched.identity.to_hex(),
+                    error = %error,
+                    "launched process identity binding validation failed"
+                );
+                error
+            })?;
+        ticket
+            .validate_process_identity(&launched.identity)
+            .map_err(|error| {
+                warn!(
+                    provider = PROVIDER_NAME,
+                    identity = %launched.identity.to_hex(),
+                    error = %error,
+                    "launched process identity does not match the ticket"
+                );
+                error
+            })?;
         match self.readiness_phase(ticket, launched.identity).await {
             Ok(phase) => Ok(self.report(
                 ticket,
@@ -234,6 +331,12 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
                 .validate_process_identity(&candidate.identity)
                 .is_ok();
         if !identity_ok {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                identity = %candidate.identity.to_hex(),
+                "adoption refused: identity binding verification failed"
+            );
             return Ok(AdoptionOutcome::Quarantined(self.report(
                 ticket,
                 candidate.identity,
@@ -243,7 +346,14 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         }
         let phase = match self.readiness_phase(ticket, candidate.identity).await {
             Ok(phase) => phase,
-            Err(_) => {
+            Err(readiness_error) => {
+                warn!(
+                    provider = PROVIDER_NAME,
+                    resource = %ticket.process_ref().to_canonical_string(),
+                    identity = %candidate.identity.to_hex(),
+                    error = %readiness_error,
+                    "adoption quarantined: readiness probe failed"
+                );
                 return Ok(AdoptionOutcome::Quarantined(self.report(
                     ticket,
                     candidate.identity,
@@ -252,7 +362,15 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
                 )));
             }
         };
-        let _pidfd = self.port.open_pidfd(&candidate).await?;
+        let _pidfd = self.port.open_pidfd(&candidate).await.map_err(|error| {
+            warn!(
+                provider = PROVIDER_NAME,
+                identity = %candidate.identity.to_hex(),
+                error = %error,
+                "pidfd open failed during adoption"
+            );
+            error
+        })?;
         Ok(AdoptionOutcome::Adopted(self.report(
             ticket,
             candidate.identity,
@@ -267,9 +385,21 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
         if identity.is_zero() {
+            warn!(
+                provider = PROVIDER_NAME,
+                "stop rejected: identity unverified"
+            );
             return Err(ProcessConformanceError::IdentityUnverified);
         }
-        self.port.stop(identity, class).await
+        self.port.stop(identity, class).await.map_err(|error| {
+            warn!(
+                provider = PROVIDER_NAME,
+                identity = %identity.to_hex(),
+                error = %error,
+                "process stop failed"
+            );
+            error
+        })
     }
 
     async fn stop_stale(
@@ -279,11 +409,24 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         if candidate.identity.is_zero()
             || candidate.wait_reap_owner != WaitReapOwner::ServiceManager
         {
+            warn!(
+                provider = PROVIDER_NAME,
+                "stale-candidate stop rejected: identity unverified"
+            );
             return Err(ProcessConformanceError::IdentityUnverified);
         }
         self.port.open_pidfd(candidate).await?;
         self.port
             .stop(&candidate.identity, StopClass::Terminate)
             .await
+            .map_err(|error| {
+                warn!(
+                    provider = PROVIDER_NAME,
+                    identity = %candidate.identity.to_hex(),
+                    error = %error,
+                    "stale candidate stop failed"
+                );
+                error
+            })
     }
 }

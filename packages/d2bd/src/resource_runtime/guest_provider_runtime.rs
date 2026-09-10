@@ -14,7 +14,8 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ZoneId, identity::ReconnectGeneration,
 };
 use d2b_core_controller::{
-    ControllerDescriptor, CoreControllerSource, Runner, RunnerConfig,
+    ControllerDescriptor, CoreControllerSource, Runner, RunnerConfig, RunnerError,
+    SourceError,
 };
 use d2b_resource_store::{
     StoreErrorKind, StoreGetRequest, StoreOperationContext, StoreProjection,
@@ -107,20 +108,36 @@ pub(crate) async fn start(
     let subject_context = runtime
         .core_controller_subject
         .lock()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            // Cardinality: once per start attempt.
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: controller subject lock poisoned");
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: controller subject context unavailable");
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let authorization_state = runtime
         .authorization_state
         .lock()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: authorization state lock poisoned");
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?
         .clone()
-        .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: authorization state unavailable");
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
     let controller_generation = runtime
         .store_metadata
         .policy_snapshot
         .controller_generation
-        .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+        .ok_or_else(|| {
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: controller generation not ready");
+            ResourceRuntimeError::HandlerNotReady
+        })?;
     let session_generation = subject_context.reconnect_generation();
     let (active_registrations, provider_generations) = provider_generations(runtime).await?;
     if active_registrations.is_empty() {
@@ -139,17 +156,24 @@ pub(crate) async fn start(
     let mut tasks = Vec::new();
     for (registration, descriptor) in descriptors {
         let kind = SharedProviderResourceKind::from_registration(registration)?;
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let controller_ref = ResourceRef::parse(registration.controller_ref)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "guest runner: provider ref parse failed");
+            ResourceRuntimeError::HandlerNotReady
+        })?;
+        let controller_ref = ResourceRef::parse(registration.controller_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), controller_ref = registration.controller_ref, "guest runner: controller ref parse failed");
+            ResourceRuntimeError::HandlerNotReady
+        })?;
         let (assignments, authority) = runtime
             .u12_controller_assignments(
                 &descriptor,
                 controller_ref.clone(),
                 *provider_generations
                     .get(&provider_ref)
-                    .ok_or(ResourceRuntimeError::HandlerNotReady)?,
+                    .ok_or_else(|| {
+                        tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "guest runner: provider generation missing");
+                        ResourceRuntimeError::HandlerNotReady
+                    })?,
                 controller_generation,
                 session_generation,
             )
@@ -157,11 +181,17 @@ pub(crate) async fn start(
         let subject = runtime
             .authorizer
             .issue_authenticated_subject(subject_context.clone(), authorization_state.clone())
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "guest runner: authenticated subject issuance failed");
+                ResourceRuntimeError::AuthorizationUnavailable
+            })?;
         let api = runtime
             .api
             .registered_controller_api(subject, authorization_state.clone(), assignments)
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
+            .map_err(|_| {
+                tracing::warn!(zone = runtime.zone.as_str(), provider = %provider_ref, "guest runner: resource api bind failed");
+                ResourceRuntimeError::ResourceApiBindFailed
+            })?;
         let api = api.with_assignment_fence_resolver(
             super::shared_provider_assignment_fence_resolver(
                 Arc::clone(&runtime.store),
@@ -178,20 +208,59 @@ pub(crate) async fn start(
                 policy_revision: authorization_state.snapshot.policy_revision,
                 api_revision: authorization_state.snapshot.api_catalog_revision,
                 configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                deadline_tick: 5_000,
-                max_attempts: 3,
+                // Startup phase: register/list_initial/open_watch each wait
+                // on store reads that take 500-750ms under the fsync'd
+                // commit stream (READ_LIFETIME comment in actor.rs). The
+                // deadline must cover ~10 retries with 100ms->1s backoff;
+                // the old 5s tick deadline + 3 attempts exhausted before any
+                // read completed (hostrun73: 30 runner terminations).
+                deadline_tick: 30_000,
+                max_attempts: 10,
             },
         );
         tasks.push(tokio::spawn(async move {
-            if let Err(error) = runner.run().await {
-                tracing::warn!(error = %error, "U6 Guest runtime shared Runner stopped");
+            // Bring-up observability: prove the guest runner lifecycle.
+            tracing::warn!(kind = ?kind, "u6 shared guest runner task started");
+            // Respawn on transient source failures with capped backoff:
+            // a dead guest runner wedges guest reconciliation forever.
+            let mut backoff_ms = 500u64;
+            loop {
+                match runner.run().await {
+                    Ok(_) => {
+                        tracing::warn!(kind = ?kind, "u6 shared guest runner stopped cleanly");
+                        break;
+                    }
+                    Err(error) if matches!(
+                        error.error(),
+                        RunnerError::Source(
+                            SourceError::Timeout
+                                | SourceError::Unavailable
+                                | SourceError::Backpressure
+                        )
+                    ) => {
+                        tracing::warn!(
+                            error = %error,
+                            backoff_ms,
+                            "U6 Guest runtime shared Runner retrying after transient failure",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        backoff_ms = (backoff_ms * 2).min(5_000);
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "U6 Guest runtime shared Runner stopped");
+                        break;
+                    }
+                }
             }
         }));
     }
     let mut slot = runtime
         .u6_runner_tasks
         .lock()
-        .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+        .map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), "guest runner: u6 runner task slot lock poisoned");
+            ResourceRuntimeError::WatchUnavailable
+        })?;
     slot.extend(tasks);
     Ok(true)
 }
@@ -208,8 +277,10 @@ async fn provider_generations(
     let mut generations = BTreeMap::new();
     let mut active = Vec::new();
     for registration in U6_SHARED_PROVIDER_RUNNERS {
-        let provider_ref = ResourceRef::parse(registration.provider_ref)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let provider_ref = ResourceRef::parse(registration.provider_ref).map_err(|_| {
+            tracing::warn!(zone = runtime.zone.as_str(), provider_ref = registration.provider_ref, "guest runner: provider ref parse failed");
+            ResourceRuntimeError::HandlerNotReady
+        })?;
         let request = StoreGetRequest {
                 operation: StoreOperationContext {
                     operation_id: "u6-provider-generation".to_owned(),
@@ -242,11 +313,32 @@ async fn provider_generations(
                     )
                     .await?;
                 if owned_guest_exists {
+                    // Cardinality: once per start attempt per registration.
+                    tracing::warn!(
+                        zone = runtime.zone.as_str(),
+                        provider_ref = registration.provider_ref,
+                        "guest runner: provider resource missing from store while owned resources exist",
+                    );
                     return Err(ResourceRuntimeError::ProviderPathUnavailable);
                 }
             }
-            Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
-            _ => return Err(ResourceRuntimeError::HandlerNotReady),
+            Err(error) => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    error = ?error,
+                    "guest runner: provider generation store read failed",
+                );
+                return Err(ResourceRuntimeError::StoreReadFailed);
+            }
+            _ => {
+                tracing::warn!(
+                    zone = runtime.zone.as_str(),
+                    provider_ref = registration.provider_ref,
+                    "guest runner: provider resource present but zone or generation not usable",
+                );
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
         }
     }
     Ok((active, generations))

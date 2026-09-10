@@ -270,21 +270,54 @@ where
     ) -> Result<OpenTransportResponse, ServiceError> {
         self.reap_released().await;
         if session.state() != crate::SessionState::Ready {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                "transport open rejected: session not Ready"
+            );
             return Err(ServiceError::SessionNotReady);
         }
         if !session.matches(&self.expected_identity) {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                "transport open rejected: session identity mismatch"
+            );
             return Err(ServiceError::SessionIdentityMismatch);
         }
-        request.validate()?;
+        request.validate().map_err(|error| {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                reason = ?error,
+                "transport open rejected: request validation failed"
+            );
+            error
+        })?;
         if request
             .session_generation
             .is_some_and(|generation| generation != session.generation())
         {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                "transport open rejected: session generation fence mismatch"
+            );
             return Err(ServiceError::SessionGenerationMismatch);
         }
-        let permit = Arc::clone(&self.slots)
-            .try_acquire_owned()
-            .map_err(|_| ServiceError::ProviderOverloaded)?;
+        let permit = Arc::clone(&self.slots).try_acquire_owned().map_err(|_| {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                "transport open rejected: provider concurrency budget exhausted"
+            );
+            ServiceError::ProviderOverloaded
+        })?;
         let deadline = Instant::now() + Duration::from_millis(u64::from(request.deadline_ms));
         let effect_stream = timeout(
             remaining_until(deadline),
@@ -296,8 +329,25 @@ where
             ),
         )
         .await
-        .map_err(|_| ServiceError::Effect(VsockEffectError::DeadlineExceeded))?
-        .map_err(ServiceError::Effect)?;
+        .map_err(|_| {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                "transport effect open deadline exceeded"
+            );
+            ServiceError::Effect(VsockEffectError::DeadlineExceeded)
+        })?
+        .map_err(|error| {
+            tracing::warn!(
+                provider = "transport-vsock",
+                endpoint = %request.endpoint_id,
+                binding = %request.binding_id,
+                reason = ?error,
+                "transport effect open failed"
+            );
+            ServiceError::Effect(error)
+        })?;
         let (stream_id, named_stream) =
             match timeout(remaining_until(deadline), self.streams.open_named_stream()).await {
                 Ok(Ok(value)) => value,
@@ -306,6 +356,13 @@ where
                         timeout(remaining_until(deadline), self.effect.close(effect_stream))
                             .await
                             .is_ok_and(|result| result.is_ok());
+                    tracing::warn!(
+                        provider = "transport-vsock",
+                        endpoint = %request.endpoint_id,
+                        binding = %request.binding_id,
+                        close_confirmed = closed,
+                        "named stream open failed; effect stream closed"
+                    );
                     return Err(if closed {
                         ServiceError::StreamUnavailable
                     } else {
@@ -317,6 +374,13 @@ where
                         timeout(remaining_until(deadline), self.effect.close(effect_stream))
                             .await
                             .is_ok_and(|result| result.is_ok());
+                    tracing::warn!(
+                        provider = "transport-vsock",
+                        endpoint = %request.endpoint_id,
+                        binding = %request.binding_id,
+                        close_confirmed = closed,
+                        "named stream open deadline exceeded; effect stream closed"
+                    );
                     return Err(if closed {
                         ServiceError::Effect(VsockEffectError::DeadlineExceeded)
                     } else {
@@ -545,7 +609,12 @@ where
                 if request.include_bytes
                     || !matches!(event, TransportEvent::BytesTransferred { .. })
                 {
-                    let _ = sender.try_send(event);
+                    if sender.try_send(event).is_err() {
+                        tracing::debug!(
+                            provider = "transport-vsock",
+                            "transport event history dropped for a full observer channel"
+                        );
+                    }
                 }
             }
             entry
@@ -572,7 +641,12 @@ where
             } else {
                 TransportEvent::Released
             };
-            let _ = sender.try_send(event);
+            if sender.try_send(event).is_err() {
+                tracing::debug!(
+                    provider = "transport-vsock",
+                    "completed transport event dropped for a full observer channel"
+                );
+            }
             return Ok(receiver);
         }
         Err(ServiceError::UnknownTransportHandle)
@@ -652,8 +726,14 @@ async fn emit_event(
     active.retain(|(include_bytes, sender)| {
         if !*include_bytes && matches!(event, TransportEvent::BytesTransferred { .. }) {
             true
+        } else if sender.try_send(event).is_err() {
+            tracing::debug!(
+                provider = "transport-vsock",
+                "transport event dropped for a full or closed subscriber channel"
+            );
+            false
         } else {
-            sender.try_send(event).is_ok()
+            true
         }
     });
 }

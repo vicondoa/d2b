@@ -182,7 +182,13 @@ where
                     stats.record(from_left, from_right);
                     BridgeExit::PeerClosed
                 }
-                Err(_) => BridgeExit::IoError,
+                Err(_) => {
+                    tracing::debug!(
+                        provider = "transport-vsock",
+                        "bridge copy failed with an IO error"
+                    );
+                    BridgeExit::IoError
+                }
             }
         }
         changed = stop.changed() => {

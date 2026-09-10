@@ -243,7 +243,13 @@ impl fmt::Debug for LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        let _ = self.release_in_place();
+        if let Err(error) = self.release_in_place() {
+            tracing::warn!(
+                volume = %self.spec.resource_uid().as_str(),
+                reason = %error,
+                "OFD lock release failed on drop; volume exclusivity may be violated",
+            );
+        }
     }
 }
 

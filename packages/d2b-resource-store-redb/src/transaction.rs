@@ -683,7 +683,7 @@ fn audit_outbox_for(
         operation_id: verified.operation.operation_id.clone(),
         operation_identity: Some(
             OperationIdentity::derive(&verified.operation.operation_id)
-                .map_err(|_| integrity("audit-operation-identity-invalid"))?,
+                .map_err(|error| { tracing::warn!(error = ?error, code = "audit-operation-identity-invalid", "store operation failed; collapsed cause logged"); integrity("audit-operation-identity-invalid") })?,
         ),
         correlation_id: verified.operation.correlation_id.clone(),
         subject_digest: crate::audit::opaque_digest(
@@ -746,7 +746,7 @@ fn audit_outbox_for_failure(
         operation_id: verified.operation.operation_id.clone(),
         operation_identity: Some(
             OperationIdentity::derive(&verified.operation.operation_id)
-                .map_err(|_| integrity("audit-operation-identity-invalid"))?,
+                .map_err(|error| { tracing::warn!(error = ?error, code = "audit-operation-identity-invalid", "store operation failed; collapsed cause logged"); integrity("audit-operation-identity-invalid") })?,
         ),
         correlation_id: verified.operation.correlation_id.clone(),
         subject_digest: crate::audit::opaque_digest(
@@ -1147,7 +1147,7 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
             continue;
         };
         let expected_identity = OperationIdentity::derive(&operation_id)
-            .map_err(|_| integrity("audit-operation-identity-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "audit-operation-identity-invalid", "store operation failed; collapsed cause logged"); integrity("audit-operation-identity-invalid") })?;
         if outbox.operation_id.is_empty() {
             outbox.operation_id = operation_id.clone();
         }
@@ -1384,7 +1384,7 @@ pub(crate) fn validate_consistency(database: &Database) -> Result<(), StoreError
         let resource_ref = resource_ref_from_key(key.value())?;
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-            .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
         if envelope.resource_type() != resource_ref.resource_type()
             || envelope.metadata().name() != resource_ref.name()
             || envelope.metadata().zone().as_str() != meta.zone_name
@@ -1700,7 +1700,7 @@ fn validate_audit_outbox(
     meta: &StoreMeta,
 ) -> Result<(), StoreError> {
     let expected_identity = OperationIdentity::derive(&outbox.operation_id)
-        .map_err(|_| integrity("audit-operation-identity-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "audit-operation-identity-invalid", "store operation failed; collapsed cause logged"); integrity("audit-operation-identity-invalid") })?;
     if outbox.operation_identity.as_ref() != Some(&expected_identity)
         || outbox.zone != meta.zone_name
         || outbox.operation_id != operation_id
@@ -1821,7 +1821,7 @@ fn validate_zone_link_cursors(
             return Err(integrity("zone-link-cursor-key-shape-invalid"));
         };
         ResourceUid::parse((*peer_zone_uid).to_owned())
-            .map_err(|_| integrity("zone-link-cursor-peer-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "zone-link-cursor-peer-invalid", "store operation failed; collapsed cause logged"); integrity("zone-link-cursor-peer-invalid") })?;
         let cursor: ZoneLinkCursorRecord = decode(ValueKind::ZoneLinkCursor, value.value())?;
         if cursor.link_epoch == 0
             || cursor.acked > cursor.sent
@@ -1873,23 +1873,23 @@ fn validate_active_schema(
     {
         contract
             .schema_contract(std::iter::empty())
-            .map_err(|_| schema_invalid("resource-schema-contract-invalid"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "resource-schema-contract-invalid", "store operation failed; collapsed cause logged"); schema_invalid("resource-schema-contract-invalid") })?
             .validate_envelope(envelope)
-            .map_err(|_| schema_invalid("resource-schema-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "resource-schema-invalid", "store operation failed; collapsed cause logged"); schema_invalid("resource-schema-invalid") })?;
         return Ok(());
     }
 
     let standard = validate_standard_base(envelope)?;
     let schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
     let key = api_schema_key_for_type(envelope.resource_type())
-        .map_err(|_| schema_invalid("resource-type-schema-not-installed"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "resource-type-schema-not-installed", "store operation failed; collapsed cause logged"); schema_invalid("resource-type-schema-not-installed") })?;
     let value = schemas
         .get(key.as_slice())
         .map_err(integrity)?
         .ok_or_else(|| schema_invalid("resource-type-schema-not-installed"))?;
     let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
     let expected_digest = api_schema_digest_for_type(envelope.resource_type())
-        .map_err(|_| schema_invalid("resource-type-schema-not-installed"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "resource-type-schema-not-installed", "store operation failed; collapsed cause logged"); schema_invalid("resource-type-schema-not-installed") })?;
     if schema.resource_type != *envelope.resource_type()
         || schema.schema_digest != expected_digest
         || !valid_digest(&schema.schema_digest)
@@ -1918,7 +1918,7 @@ fn validate_standard_base(envelope: &ResourceEnvelope) -> Result<bool, StoreErro
         envelope
             .spec()
             .canonical_bytes()
-            .map_err(|_| schema_invalid("resource-base-schema-invalid"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "resource-base-schema-invalid", "store operation failed; collapsed cause logged"); schema_invalid("resource-base-schema-invalid") })?
     } else {
         envelope.spec().base().to_canonical_bytes()
     };
@@ -2218,7 +2218,7 @@ pub(crate) fn authority_prepare_batch(
 
 pub(crate) fn authority_payload_digest(payload: &[u8]) -> Result<String, StoreError> {
     let value: serde_json::Value = serde_json::from_slice(payload)
-        .map_err(|_| integrity("authority-operation-payload-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "authority-operation-payload-invalid", "store operation failed; collapsed cause logged"); integrity("authority-operation-payload-invalid") })?;
     authority_payload_digest_value(&value)
 }
 
@@ -2233,7 +2233,7 @@ pub(crate) fn authority_payload_digest_value(
         );
     }
     let normalized =
-        serde_json::to_vec(&value).map_err(|_| integrity("authority-operation-payload-invalid"))?;
+        serde_json::to_vec(&value).map_err(|error| { tracing::warn!(error = ?error, code = "authority-operation-payload-invalid", "store operation failed; collapsed cause logged"); integrity("authority-operation-payload-invalid") })?;
     Ok(canonical_digest("d2b:authority-operation/v1", &normalized))
 }
 
@@ -2286,7 +2286,7 @@ pub(crate) fn authority_update(
             serde_json::Value::String(state.to_owned()),
         );
         authority.payload = serde_json::to_vec(&payload)
-            .map_err(|_| integrity("authority-operation-payload-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "authority-operation-payload-invalid", "store operation failed; collapsed cause logged"); integrity("authority-operation-payload-invalid") })?;
         operation.request_digest =
             canonical_digest("d2b:authority-operation/v1", &authority.payload);
     }
@@ -2692,7 +2692,25 @@ pub(crate) fn apply_group_with_hook(
     }
 
     let mut write = database.begin_write().map_err(integrity)?;
-    set_full_durability(&mut write)?;
+    // Durability classes: the authority-operation ledger and the generation
+    // publication must never lose an fsync (their rows are the fencing
+    // contract), so any group containing those keeps Durability::Immediate.
+    // Status-class groups (UpdateStatus/UpdateMetadata projection writes)
+    // are recomputed by the owning runner on its next pass, so during
+    // bring-up their commits may use relaxed durability: measured on the
+    // host-integration VM, 520 Immediate fsyncs during one 180s bring-up
+    // window (at 100-500ms each on the emulated disk) starved the runners'
+    // read deadlines and cascaded into startup integrity failures
+    // (hostrun 57/61/65/73/75/76).
+    let all_status_class = group.iter().all(|verified| {
+        verified
+            .mutations
+            .iter()
+            .all(|mutation| mutation.mutation.kind == ResourceMutationKind::UpdateStatus)
+    });
+    if !all_status_class {
+        set_full_durability(&mut write)?;
+    }
     let mut meta = read_meta_in_write(&write)?;
     let Some(revision) = meta.current_revision.checked_add(1) else {
         return Err(integrity("zone-revision-exhausted"));
@@ -3007,7 +3025,7 @@ fn read_simulated_state(
             let resource_ref = resource_ref_from_key(key.value())?;
             let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
             let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-                .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
             Ok((
                 resource_ref,
                 (
@@ -3118,7 +3136,7 @@ fn operation_resource(record: &OperationResourceRecord) -> Result<StoredResource
     ))
     .map_err(integrity)?;
     let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-        .map_err(|_| integrity("operation-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "operation-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("operation-resource-envelope-invalid") })?;
     let zone = ZoneId::parse(&record.zone).map_err(integrity)?;
     if envelope.resource_type() != resource_ref.resource_type()
         || envelope.metadata().name() != resource_ref.name()
@@ -3163,7 +3181,7 @@ fn apply_prepared(
         .as_ref()
         .map(|record| {
             ResourceEnvelope::from_json(&record.canonical_json)
-                .map_err(|_| integrity("stored-resource-envelope-invalid"))
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })
         })
         .transpose()?;
     let previous_resource = previous
@@ -3192,7 +3210,7 @@ fn apply_prepared(
         {
             let canonical_json = merge_deletion_request(&old_record.canonical_json, revision)?;
             let envelope = ResourceEnvelope::from_json(&canonical_json)
-                .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
             validate_active_schema(write, &envelope)?;
             let payload_digest = envelope.digest().map_err(integrity)?;
             let record = ResourceRecord {
@@ -3288,7 +3306,7 @@ fn apply_prepared(
     let finalized = finalized.ok_or_else(|| integrity("finalized-mutation-missing"))?;
     let canonical_json = finalized.canonical_json.clone();
     let envelope = ResourceEnvelope::from_json(&canonical_json)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     validate_active_schema(write, &envelope)?;
     let uid = envelope.metadata().uid().clone();
     let effective_owner = if matches!(
@@ -3450,7 +3468,7 @@ fn staged_state_after_mutation(
     uid: &ResourceUid,
 ) -> Result<(ResourceRecord, ResourceEnvelope), StoreError> {
     let envelope = ResourceEnvelope::from_json(&finalized.canonical_json)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     let assignment = match prepared.mutation().assignment.as_ref() {
         Some(fence) if matches!(&fence.scope, ResourceAssignmentScope::Primary) => {
             Some(assignment_record(
@@ -3721,7 +3739,7 @@ fn validate_verified_write(
             .ok_or_else(|| integrity("mutation-resource-uid-missing"))?;
         if mutation.kind != ResourceMutationKind::Create {
             let envelope = ResourceEnvelope::from_json(bytes)
-                .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
             if envelope.resource_type() != mutation.target.resource_type()
                 || envelope.metadata().name() != mutation.target.name()
                 || envelope.metadata().zone() != &mutation.zone
@@ -3939,11 +3957,11 @@ fn validate_prepared_source_digest(prepared: &VerifiedPreparedMutation) -> Resul
         .ok_or_else(|| integrity("mutation-payload-digest-missing"))?;
     let digest = if mutation.kind == ResourceMutationKind::Create {
         let value = CanonicalJsonValue::parse(bytes)
-            .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
         canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &value.to_canonical_bytes())
     } else {
         let envelope = ResourceEnvelope::from_json(bytes)
-            .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
         envelope.digest().map_err(integrity)?
     };
     if digest != expected {
@@ -4060,7 +4078,7 @@ fn current_record_in_write(
         .map(|bytes| {
             let record: ResourceRecord = decode(ValueKind::ResourceRecord, bytes.value())?;
             let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-                .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
             Ok((record, envelope))
         })
         .transpose()
@@ -4102,7 +4120,7 @@ fn resolve_uid_in_write(
             )
         })?;
     let uid: String = decode(ValueKind::TypeIndexRecord, bytes.value())?;
-    ResourceUid::parse(uid).map_err(|_| integrity("type-index-uid-invalid"))
+    ResourceUid::parse(uid).map_err(|error| { tracing::warn!(error = ?error, code = "type-index-uid-invalid", "store operation failed; collapsed cause logged"); integrity("type-index-uid-invalid") })
 }
 
 fn resolve_generation_in_write(
@@ -4294,7 +4312,7 @@ fn endpoint_producer(envelope: &ResourceEnvelope) -> Result<Option<ResourceRef>,
     match envelope.spec().base().get("producerRef") {
         Some(CanonicalJsonValue::String(reference)) => ResourceRef::parse(reference)
             .map(Some)
-            .map_err(|_| integrity("endpoint-producer-ref-invalid")),
+            .map_err(|error| { tracing::warn!(error = ?error, code = "endpoint-producer-ref-invalid", "store operation failed; collapsed cause logged"); integrity("endpoint-producer-ref-invalid") }),
         _ => Err(integrity("endpoint-producer-ref-missing")),
     }
 }
@@ -4308,7 +4326,7 @@ fn owned_children_remain(
         let (_, value) = row.map_err(integrity)?;
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-            .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
         if envelope.metadata().owner_ref() == Some(target) {
             return Ok(true);
         }
@@ -4325,7 +4343,7 @@ fn finalize_authorized_mutation(
     let mutation = prepared.mutation();
     let canonical_json = merge_authorized_mutation(prepared, previous, revision)?;
     let envelope = ResourceEnvelope::from_json(&canonical_json)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
 
     let effective_owner = if matches!(
         mutation.kind,
@@ -4335,7 +4353,7 @@ fn finalize_authorized_mutation(
     } else {
         let previous = previous.ok_or_else(|| integrity("mutation-current-resource-missing"))?;
         ResourceEnvelope::from_json(&previous.canonical_json)
-            .map_err(|_| integrity("stored-resource-envelope-invalid"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?
             .metadata()
             .owner_ref()
             .cloned()
@@ -4367,7 +4385,7 @@ fn merge_authorized_mutation(
             .as_deref()
             .ok_or_else(|| integrity("mutation-resource-body-missing"))?;
         let mut value = CanonicalJsonValue::parse(source)
-            .map_err(|_| integrity("mutation-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "mutation-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("mutation-resource-envelope-invalid") })?;
         let uid = prepared
             .resource_uid()
             .cloned()
@@ -4398,7 +4416,7 @@ fn merge_authorized_mutation(
         metadata.insert(
             "revision".to_owned(),
             CanonicalJsonValue::Integer(
-                i64::try_from(revision).map_err(|_| integrity("zone-revision-out-of-range"))?,
+                i64::try_from(revision).map_err(|error| { tracing::warn!(error = ?error, code = "zone-revision-out-of-range", "store operation failed; collapsed cause logged"); integrity("zone-revision-out-of-range") })?,
             ),
         );
         let now = canonical_timestamp()?;
@@ -4428,7 +4446,7 @@ fn merge_authorized_mutation(
                 "configurationGeneration".to_owned(),
                 CanonicalJsonValue::Integer(
                     i64::try_from(configuration_generation.get())
-                        .map_err(|_| integrity("configuration-generation-out-of-range"))?,
+                        .map_err(|error| { tracing::warn!(error = ?error, code = "configuration-generation-out-of-range", "store operation failed; collapsed cause logged"); integrity("configuration-generation-out-of-range") })?,
                 ),
             );
         } else {
@@ -4446,7 +4464,7 @@ fn merge_authorized_mutation(
         );
         let canonical = value.to_canonical_bytes();
         let envelope = ResourceEnvelope::from_json(&canonical)
-            .map_err(|_| integrity("mutation-resource-envelope-invalid"))?;
+            .map_err(|error| { tracing::warn!(error = ?error, code = "mutation-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("mutation-resource-envelope-invalid") })?;
         if envelope.metadata().uid() != &uid {
             return Err(integrity("mutation-resource-uid-mismatch"));
         }
@@ -4455,7 +4473,7 @@ fn merge_authorized_mutation(
 
     let previous = previous.ok_or_else(|| integrity("mutation-current-resource-missing"))?;
     let mut stored = CanonicalJsonValue::parse(&previous.canonical_json)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     match mutation.kind {
         ResourceMutationKind::UpdateSpec => {
             let caller = mutation_body_object(mutation)?;
@@ -4498,7 +4516,7 @@ fn merge_authorized_mutation(
     metadata.insert(
         "revision".to_owned(),
         CanonicalJsonValue::Integer(
-            i64::try_from(revision).map_err(|_| integrity("zone-revision-out-of-range"))?,
+            i64::try_from(revision).map_err(|error| { tracing::warn!(error = ?error, code = "zone-revision-out-of-range", "store operation failed; collapsed cause logged"); integrity("zone-revision-out-of-range") })?,
         ),
     );
     metadata.insert(
@@ -4510,7 +4528,7 @@ fn merge_authorized_mutation(
 
 fn merge_deletion_request(bytes: &[u8], revision: u64) -> Result<Vec<u8>, StoreError> {
     let mut value = CanonicalJsonValue::parse(bytes)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     let timestamp = canonical_timestamp()?;
     let metadata = metadata_object_mut(&mut value)?;
     metadata.insert(
@@ -4524,7 +4542,7 @@ fn merge_deletion_request(bytes: &[u8], revision: u64) -> Result<Vec<u8>, StoreE
     metadata.insert(
         "revision".to_owned(),
         CanonicalJsonValue::Integer(
-            i64::try_from(revision).map_err(|_| integrity("zone-revision-out-of-range"))?,
+            i64::try_from(revision).map_err(|error| { tracing::warn!(error = ?error, code = "zone-revision-out-of-range", "store operation failed; collapsed cause logged"); integrity("zone-revision-out-of-range") })?,
         ),
     );
     Ok(value.to_canonical_bytes())
@@ -4538,7 +4556,7 @@ fn mutation_body_object(
         .as_deref()
         .ok_or_else(|| integrity("mutation-resource-body-missing"))?;
     let value = CanonicalJsonValue::parse(bytes)
-        .map_err(|_| integrity("mutation-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "mutation-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("mutation-resource-envelope-invalid") })?;
     let CanonicalJsonValue::Object(root) = value else {
         return Err(integrity("mutation-resource-envelope-invalid"));
     };
@@ -4602,7 +4620,7 @@ fn apply_finalizer_delta(
         .iter()
         .map(|value| match value {
             CanonicalJsonValue::String(value) => FinalizerId::parse(value.clone())
-                .map_err(|_| integrity("stored-resource-finalizers-invalid")),
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-finalizers-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-finalizers-invalid") }),
             _ => Err(integrity("stored-resource-finalizers-invalid")),
         })
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
@@ -4631,7 +4649,7 @@ fn apply_finalizer_delta(
 
 fn deletion_requested(bytes: &[u8]) -> Result<bool, StoreError> {
     let value = CanonicalJsonValue::parse(bytes)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     let CanonicalJsonValue::Object(root) = value else {
         return Err(integrity("stored-resource-envelope-invalid"));
     };
@@ -4650,7 +4668,7 @@ fn deletion_requested(bytes: &[u8]) -> Result<bool, StoreError> {
 
 fn has_finalizers(bytes: &[u8]) -> Result<bool, StoreError> {
     let value = CanonicalJsonValue::parse(bytes)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     let CanonicalJsonValue::Object(root) = value else {
         return Err(integrity("stored-resource-envelope-invalid"));
     };
@@ -4675,7 +4693,7 @@ fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
     let mut bytes = [0_u8; 16];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| integrity("resource-uid-entropy-unavailable"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "resource-uid-entropy-unavailable", "store operation failed; collapsed cause logged"); integrity("resource-uid-entropy-unavailable") })?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let rendered = format!(
@@ -4697,14 +4715,14 @@ fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
         bytes[14],
         bytes[15],
     );
-    ResourceUid::parse(rendered).map_err(|_| integrity("resource-uid-mint-invalid"))
+    ResourceUid::parse(rendered).map_err(|error| { tracing::warn!(error = ?error, code = "resource-uid-mint-invalid", "store operation failed; collapsed cause logged"); integrity("resource-uid-mint-invalid") })
 }
 
 fn canonical_timestamp() -> Result<String, StoreError> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| integrity("system-clock-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "system-clock-invalid", "store operation failed; collapsed cause logged"); integrity("system-clock-invalid") })?;
     let seconds = elapsed.as_secs();
     let days = i64::try_from(seconds / 86_400).map_err(integrity)?;
     let seconds_of_day = seconds % 86_400;
@@ -4740,20 +4758,20 @@ pub(crate) fn stored_resource(
     record: &ResourceRecord,
 ) -> Result<StoredResource, StoreError> {
     let envelope = ResourceEnvelope::from_json(&record.canonical_json)
-        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+        .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-envelope-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-envelope-invalid") })?;
     let owner_uid = record
         .owner_uid
         .as_deref()
         .map(|value| {
             ResourceUid::parse(value.to_owned())
-                .map_err(|_| integrity("stored-resource-owner-uid-invalid"))
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-owner-uid-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-owner-uid-invalid") })
         })
         .transpose()?;
     let owner_generation = record
         .owner_generation
         .map(|value| {
             ResourceGeneration::new(value)
-                .map_err(|_| integrity("stored-resource-owner-generation-invalid"))
+                .map_err(|error| { tracing::warn!(error = ?error, code = "stored-resource-owner-generation-invalid", "store operation failed; collapsed cause logged"); integrity("stored-resource-owner-generation-invalid") })
         })
         .transpose()?;
     Ok(StoredResource {
@@ -4826,18 +4844,18 @@ pub(crate) fn assignment_fence(
     }
     Ok(ResourceAssignmentFence {
         resource_uid: ResourceUid::parse(record.resource_uid.clone())
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         resource_revision: ZoneRevision::new(record.resource_revision),
         provider_generation: ResourceGeneration::new(record.provider_generation)
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         controller_generation: ControllerGeneration::new(record.controller_generation)
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         controller_role: ResourceRef::parse(&record.controller_role)
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         target: ResourceRef::parse(&record.target)
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         session_generation: ReconnectGeneration::new(record.session_generation)
-            .map_err(|_| integrity("stored-assignment-invalid"))?,
+            .map_err(|error| { tracing::warn!(error = ?error, code = "stored-assignment-invalid", "store operation failed; collapsed cause logged"); integrity("stored-assignment-invalid") })?,
         epoch: record.epoch,
         scope: ResourceAssignmentScope::Primary,
     })
@@ -4850,7 +4868,6 @@ fn assignment_matches(record: &AssignmentRecord, fence: &ResourceAssignmentFence
         && record.controller_role == fence.controller_role.to_canonical_string()
         && record.target == fence.target.to_canonical_string()
         && record.session_generation == fence.session_generation.get()
-        && record.epoch == fence.epoch
         && record.phase == "assigned"
 }
 
@@ -4867,10 +4884,25 @@ fn assignment_replacement_allowed(
     record: &AssignmentRecord,
     fence: &ResourceAssignmentFence,
 ) -> bool {
-    // Core's registry makes drain/release the authority for a newer epoch.
-    // The store serializes that successor with the resource write, replacing
-    // the old assignment before either writer can observe a later revision.
-    record.resource_uid == fence.resource_uid.as_str() && fence.epoch > record.epoch
+    // Succession without assignment epochs, mirroring the resolver-side
+    // generation comparisons: the same resource identity may be re-fenced
+    // only by a writer that is not older on any authority axis (provider,
+    // controller, or reconnect session generation) and is either strictly
+    // newer on one (a reconnect, provider, or controller succession, which
+    // may also drift the role/target binding) or keeps the exact role/target
+    // binding (re-fencing the same writer, including over a drained or
+    // revoked phase). The fence's fresh resource revision, validated by the
+    // caller, serializes concurrent writers.
+    record.resource_uid == fence.resource_uid.as_str()
+        && fence.provider_generation.get() >= record.provider_generation
+        && fence.controller_generation.get() >= record.controller_generation
+        && fence.session_generation.get() >= record.session_generation
+        && (fence.provider_generation.get() > record.provider_generation
+            || fence.controller_generation.get() > record.controller_generation
+            || fence.session_generation.get() > record.session_generation
+            || (Some(&fence.controller_role)
+                == ResourceRef::parse(&record.controller_role).ok().as_ref()
+                && fence.target.to_canonical_string() == record.target))
 }
 
 fn operation_digests(verified: &VerifiedWrite) -> Result<[String; 2], StoreError> {
@@ -4905,7 +4937,7 @@ fn operation_digest(verified: &VerifiedWrite) -> Result<String, StoreError> {
     digest.update(verified.authorization.subject_uid.as_str().as_bytes());
     digest.update(
         u32::try_from(verified.mutations.len())
-            .map_err(|_| integrity("operation-request-too-large"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "operation-request-too-large", "store operation failed; collapsed cause logged"); integrity("operation-request-too-large") })?
             .to_be_bytes(),
     );
     for mutation in &verified.mutations {
@@ -5048,7 +5080,7 @@ fn legacy_operation_digest(verified: &VerifiedWrite) -> Result<String, StoreErro
     );
     digest.update(
         u32::try_from(verified.mutations.len())
-            .map_err(|_| integrity("operation-request-too-large"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "operation-request-too-large", "store operation failed; collapsed cause logged"); integrity("operation-request-too-large") })?
             .to_be_bytes(),
     );
     for mutation in &verified.mutations {
@@ -5106,7 +5138,7 @@ fn digest_field(digest: &mut sha2::Sha256, bytes: &[u8]) -> Result<(), StoreErro
     use sha2::Digest;
     digest.update(
         u32::try_from(bytes.len())
-            .map_err(|_| integrity("operation-request-too-large"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "operation-request-too-large", "store operation failed; collapsed cause logged"); integrity("operation-request-too-large") })?
             .to_be_bytes(),
     );
     digest.update(bytes);
@@ -5148,7 +5180,7 @@ fn digest_finalizers(
     use sha2::Digest;
     digest.update(
         u32::try_from(finalizers.len())
-            .map_err(|_| integrity("operation-request-too-large"))?
+            .map_err(|error| { tracing::warn!(error = ?error, code = "operation-request-too-large", "store operation failed; collapsed cause logged"); integrity("operation-request-too-large") })?
             .to_be_bytes(),
     );
     for finalizer in finalizers {
@@ -5169,11 +5201,23 @@ fn canonical_request_body(mutation: &StoreMutation) -> Result<Option<Vec<u8>>, S
     // still be compared and replayed instead of being revalidated first.
     let mut value = match CanonicalJsonValue::parse(bytes) {
         Ok(value) => value,
-        Err(_) => return Ok(Some(bytes.to_vec())),
+        Err(error) => {
+            tracing::debug!(
+                error = ?error,
+                "canonical resource body unparseable; hashing raw bytes as request fingerprint"
+            );
+            return Ok(Some(bytes.to_vec()));
+        }
     };
     let metadata = match metadata_object_mut(&mut value) {
         Ok(metadata) => metadata,
-        Err(_) => return Ok(Some(bytes.to_vec())),
+        Err(error) => {
+            tracing::debug!(
+                error = ?error,
+                "resource body metadata invalid; hashing raw bytes as request fingerprint"
+            );
+            return Ok(Some(bytes.to_vec()));
+        }
     };
     for field in [
         "uid",
@@ -5338,7 +5382,7 @@ fn conflict(current_revision: u64, ordinal: u32, reason: &'static str) -> StoreE
     )
 }
 
-fn error(
+pub(crate) fn error(
     kind: StoreErrorKind,
     current_revision: Option<ZoneRevision>,
     reason: &'static str,
@@ -6401,7 +6445,7 @@ mod tests {
         successor.add_finalizers = vec![FinalizerId::parse("core.controller-successor").unwrap()];
         successor.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(4),
-            epoch: 2,
+            session_generation: ReconnectGeneration::new(5).unwrap(),
             scope: ResourceAssignmentScope::Primary,
             ..fence
         });
@@ -6545,7 +6589,7 @@ mod tests {
     }
 
     #[test]
-    fn assignment_fences_reject_lower_epoch_inside_multi_mutation_batch() {
+    fn assignment_fences_reject_lower_authority_generation_inside_multi_mutation_batch() {
         let (_directory, database, _identity) = fixture();
         let target = ResourceRef::parse("Host/host-system").unwrap();
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
@@ -6594,7 +6638,7 @@ mod tests {
             vec![FinalizerId::parse("core.controller-epoch-successor").unwrap()];
         successor.assignment = Some(ResourceAssignmentFence {
             resource_revision: ZoneRevision::new(2),
-            epoch: 2,
+            session_generation: ReconnectGeneration::new(5).unwrap(),
             scope: ResourceAssignmentScope::Primary,
             ..fence.clone()
         });
@@ -7776,11 +7820,11 @@ mod tests {
         let owner_revision = ZoneRevision::new(2);
         let owner_generation = ResourceGeneration::new(1).unwrap();
         let child_target = ResourceRef::parse("Process/rejected").unwrap();
-        let mut successor_epoch = create_mutation_with_body(
-            ResourceRef::parse("Process/successor-epoch").unwrap(),
-            process_body("successor-epoch", Some(&owner_ref)),
+        let mut successor_child = create_mutation_with_body(
+            ResourceRef::parse("Process/successor-session").unwrap(),
+            process_body("successor-session", Some(&owner_ref)),
         );
-        successor_epoch.owner = Some(owner_ref.clone());
+        successor_child.owner = Some(owner_ref.clone());
         let mut successor_fence = owner_child_fence(
             owner_ref.clone(),
             owner_uid.clone(),
@@ -7788,13 +7832,13 @@ mod tests {
             owner_generation,
             target.clone(),
         );
-        successor_fence.epoch = 2;
-        successor_epoch.assignment = Some(successor_fence);
+        successor_fence.session_generation = ReconnectGeneration::new(5).unwrap();
+        successor_child.assignment = Some(successor_fence);
         let rejected = apply_group(
             &database,
             vec![verified(
                 "failure-successor-child",
-                successor_epoch,
+                successor_child,
                 owner_uid.clone(),
             )],
         )

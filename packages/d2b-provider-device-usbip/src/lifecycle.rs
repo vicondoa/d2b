@@ -248,31 +248,68 @@ impl ServiceLifecycle {
         port: &mut P,
     ) -> Result<(), ServiceLifecycleError> {
         if request_zone != self.zone_uid {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                zone = %request_zone.to_canonical_string(),
+                reason = "activation request originated from another Zone",
+                "usbip service activation refused: wrong zone",
+            );
             return Err(ServiceLifecycleError::WrongZone);
         }
         if !zone_opted_in {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "owning Zone did not opt into USBIP",
+                "usbip service activation refused: zone not opted in",
+            );
             return Err(ServiceLifecycleError::ZoneNotOptedIn);
         }
         if self.ready_for_bindings() {
             return Ok(());
         }
         if matches!(self.phase, ServicePhase::Closed) {
+            tracing::debug!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "service is closed",
+                "usbip service activation refused: invalid state",
+            );
             return Err(ServiceLifecycleError::InvalidState);
         }
 
         self.phase = ServicePhase::ReservingAuthority;
         if self.physical.is_none() {
-            self.physical = Some(port.reserve_physical(&self.service_uid)?);
+            self.physical = Some(port.reserve_physical(&self.service_uid).map_err(|error| {
+                tracing::warn!(
+                    service = %self.service_uid.to_canonical_string(),
+                    error = %error,
+                    "usbip physical authority reservation failed during activation",
+                );
+                error
+            })?);
         }
         if self.relay.is_none() {
-            self.relay = Some(port.reserve_relay(&self.service_uid)?);
+            self.relay = Some(port.reserve_relay(&self.service_uid).map_err(|error| {
+                tracing::warn!(
+                    service = %self.service_uid.to_canonical_string(),
+                    error = %error,
+                    "usbip relay authority reservation failed during activation",
+                );
+                error
+            })?);
         }
         if self.binding.is_none() {
             let physical = self
                 .physical
                 .as_ref()
                 .ok_or(ServiceLifecycleError::InvalidState)?;
-            self.binding = Some(port.bind_owned(physical)?);
+            self.binding = Some(port.bind_owned(physical).map_err(|error| {
+                tracing::warn!(
+                    service = %self.service_uid.to_canonical_string(),
+                    error = %error,
+                    "usbip owned bus binding failed during activation",
+                );
+                error
+            })?);
         }
         self.phase = ServicePhase::Bound;
         Ok(())
@@ -291,19 +328,36 @@ impl ServiceLifecycle {
         }
         self.phase = ServicePhase::Releasing;
         if let Some(binding) = self.binding.as_ref() {
-            port.unbind_owned(binding)?;
+            port.unbind_owned(binding).map_err(|error| {
+                tracing::warn!(
+                    service = %self.service_uid.to_canonical_string(),
+                    error = %error,
+                    "usbip owned bus unbind failed during service finalize",
+                );
+                error
+            })?;
             self.binding = None;
         }
         if let Some(relay) = self.relay.take()
             && let Err(error) = port.release_relay(relay.clone())
         {
             self.relay = Some(relay);
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                error = %error,
+                "usbip relay authority release failed during service finalize",
+            );
             return Err(error);
         }
         if let Some(physical) = self.physical.take()
             && let Err(error) = port.release_physical(physical.clone())
         {
             self.physical = Some(physical);
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                error = %error,
+                "usbip physical authority release failed during service finalize",
+            );
             return Err(error);
         }
         self.phase = ServicePhase::Closed;
@@ -600,12 +654,27 @@ impl BindingLifecycle {
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
         if !self.is_same_zone() {
+            tracing::warn!(
+                binding = %self.identity.as_resource_uid().to_canonical_string(),
+                reason = "binding and service are not in the same Zone",
+                "usbip binding activation refused: wrong zone",
+            );
             return Err(BindingLifecycleError::WrongZone);
         }
         if self.phase == BindingPhase::Quarantined {
+            tracing::debug!(
+                binding = %self.identity.as_resource_uid().to_canonical_string(),
+                reason = "binding is quarantined",
+                "usbip binding activation refused: quarantine",
+            );
             return Err(BindingLifecycleError::Quarantined);
         }
         if !service.ready_for_bindings() {
+            tracing::debug!(
+                binding = %self.identity.as_resource_uid().to_canonical_string(),
+                reason = "service has not finished its physical bind lifecycle",
+                "usbip binding activation deferred: service not ready",
+            );
             return Err(BindingLifecycleError::ServiceNotReady);
         }
         if matches!(self.phase, BindingPhase::Attached) {
@@ -613,31 +682,72 @@ impl BindingLifecycle {
         }
         self.phase = BindingPhase::Attaching;
         if self.slot.is_none() {
-            self.slot = Some(port.acquire_slot(&self.identity)?);
+            self.slot = Some(port.acquire_slot(&self.identity).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip service slot acquisition failed during binding activation",
+                );
+                error
+            })?);
         }
         if self.proxy.is_none() {
             let slot = self
                 .slot
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            self.proxy = Some(port.start_proxy(&self.identity, slot)?);
+            self.proxy = Some(port.start_proxy(&self.identity, slot).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip private proxy start failed during binding activation",
+                );
+                error
+            })?);
         }
         if self.attach.is_none() {
             let proxy = self
                 .proxy
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            let identity = port.ensure_attach_process(&self.identity, proxy)?;
-            match port.observe_attach_process(&self.identity, &identity)? {
+            let identity =
+                port.ensure_attach_process(&self.identity, proxy).map_err(|error| {
+                    tracing::warn!(
+                        binding = %self.identity.as_resource_uid().to_canonical_string(),
+                        error = %error,
+                        "usbip attach process start failed during binding activation",
+                    );
+                    error
+                })?;
+            match port
+                .observe_attach_process(&self.identity, &identity)
+                .map_err(|error| {
+                    tracing::warn!(
+                        binding = %self.identity.as_resource_uid().to_canonical_string(),
+                        error = %error,
+                        "usbip attach process observation failed during binding activation",
+                    );
+                    error
+                })? {
                 AttachmentObservation::Matching { slot, proxy } => {
                     self.slot = Some(slot);
                     self.proxy = Some(proxy);
                     self.attach = Some(identity);
                 }
                 AttachmentObservation::Missing | AttachmentObservation::NotReady => {
+                    tracing::debug!(
+                        binding = %self.identity.as_resource_uid().to_canonical_string(),
+                        reason = "attach process not yet observed",
+                        "usbip binding activation deferred: transient",
+                    );
                     return Err(BindingLifecycleError::Transient);
                 }
                 AttachmentObservation::StaleIdentity => {
+                    tracing::warn!(
+                        binding = %self.identity.as_resource_uid().to_canonical_string(),
+                        reason = "attach process identity is stale",
+                        "usbip binding activation refused: quarantine",
+                    );
                     self.phase = BindingPhase::Quarantined;
                     return Err(BindingLifecycleError::Quarantined);
                 }
@@ -655,9 +765,23 @@ impl BindingLifecycle {
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
         if !self.is_same_zone() {
+            tracing::warn!(
+                binding = %self.identity.as_resource_uid().to_canonical_string(),
+                reason = "binding and service are not in the same Zone",
+                "usbip binding adoption refused: wrong zone",
+            );
             return Err(BindingLifecycleError::WrongZone);
         }
-        match port.observe_attach_process(&self.identity, &identity)? {
+        match port
+            .observe_attach_process(&self.identity, &identity)
+            .map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip attach process observation failed during adoption",
+                );
+                error
+            })? {
             AttachmentObservation::Matching { slot, proxy } => {
                 self.slot = Some(slot);
                 self.proxy = Some(proxy);
@@ -665,16 +789,31 @@ impl BindingLifecycle {
                 self.phase = BindingPhase::Attached;
             }
             AttachmentObservation::Missing => {
+                tracing::debug!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    reason = "attach process is missing after restart",
+                    "usbip binding adoption missing",
+                );
                 self.attach = None;
                 self.slot = None;
                 self.proxy = None;
                 self.phase = BindingPhase::WaitingForService;
             }
             AttachmentObservation::NotReady => {
+                tracing::debug!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    reason = "attach process is not ready after restart",
+                    "usbip binding adoption deferred: not ready",
+                );
                 self.attach = None;
                 self.phase = BindingPhase::Attaching;
             }
             AttachmentObservation::StaleIdentity => {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    reason = "persisted attach identity is stale",
+                    "usbip binding adoption refused: quarantine",
+                );
                 self.attach = None;
                 self.phase = BindingPhase::Quarantined;
             }
@@ -689,6 +828,11 @@ impl BindingLifecycle {
             return Ok(());
         }
         if self.phase == BindingPhase::Quarantined {
+            tracing::debug!(
+                binding = %self.identity.as_resource_uid().to_canonical_string(),
+                reason = "binding is quarantined",
+                "usbip binding finalize refused: quarantine",
+            );
             return Err(BindingLifecycleError::Quarantined);
         }
         self.phase = BindingPhase::Releasing;
@@ -697,16 +841,44 @@ impl BindingLifecycle {
                 .proxy
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            port.delete_guest_endpoint(&self.identity, proxy)?;
-            port.delete_attach_process(&self.identity, identity)?;
+            port.delete_guest_endpoint(&self.identity, proxy).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip guest endpoint deletion failed during binding finalize",
+                );
+                error
+            })?;
+            port.delete_attach_process(&self.identity, identity).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip attach process deletion failed during binding finalize",
+                );
+                error
+            })?;
             self.attach = None;
         }
         if let Some(proxy) = self.proxy.as_ref() {
-            port.close_proxy(&self.identity, proxy)?;
+            port.close_proxy(&self.identity, proxy).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip private proxy close failed during binding finalize",
+                );
+                error
+            })?;
             self.proxy = None;
         }
         if let Some(slot) = self.slot.as_ref() {
-            port.release_slot(&self.identity, slot)?;
+            port.release_slot(&self.identity, slot).map_err(|error| {
+                tracing::warn!(
+                    binding = %self.identity.as_resource_uid().to_canonical_string(),
+                    error = %error,
+                    "usbip service slot release failed during binding finalize",
+                );
+                error
+            })?;
             self.slot = None;
         }
         self.phase = BindingPhase::Closed;
@@ -754,6 +926,10 @@ impl UsbipSupervisor {
     /// Add one Binding that is already validated to reference this Service.
     pub fn add_binding(&mut self, binding: BindingLifecycle) -> Result<(), BindingLifecycleError> {
         if binding.service_zone_uid != self.service.zone_uid || !binding.is_same_zone() {
+            tracing::warn!(
+                reason = "binding and service are not in the same Zone",
+                "usbip supervisor refused binding registration: wrong zone",
+            );
             return Err(BindingLifecycleError::WrongZone);
         }
         self.bindings.push(binding);
@@ -766,10 +942,14 @@ impl UsbipSupervisor {
         index: usize,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
-        let binding = self
-            .bindings
-            .get_mut(index)
-            .ok_or(BindingLifecycleError::AdmissionDenied)?;
+        let binding = self.bindings.get_mut(index).ok_or_else(|| {
+            tracing::warn!(
+                index,
+                reason = "binding index is out of range",
+                "usbip supervisor refused binding activation",
+            );
+            BindingLifecycleError::AdmissionDenied
+        })?;
         binding.activate(&self.service, port)
     }
 
@@ -781,10 +961,14 @@ impl UsbipSupervisor {
         identity: AttachProcessIdentity,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
-        let binding = self
-            .bindings
-            .get_mut(index)
-            .ok_or(BindingLifecycleError::AdmissionDenied)?;
+        let binding = self.bindings.get_mut(index).ok_or_else(|| {
+            tracing::warn!(
+                index,
+                reason = "binding index is out of range",
+                "usbip supervisor refused binding adoption",
+            );
+            BindingLifecycleError::AdmissionDenied
+        })?;
         binding.adopt(identity, port)
     }
 
@@ -795,10 +979,14 @@ impl UsbipSupervisor {
         index: usize,
         port: &mut P,
     ) -> Result<(), BindingLifecycleError> {
-        let binding = self
-            .bindings
-            .get_mut(index)
-            .ok_or(BindingLifecycleError::AdmissionDenied)?;
+        let binding = self.bindings.get_mut(index).ok_or_else(|| {
+            tracing::warn!(
+                index,
+                reason = "binding index is out of range",
+                "usbip supervisor refused binding finalize",
+            );
+            BindingLifecycleError::AdmissionDenied
+        })?;
         binding.finalize(port)
     }
 
@@ -810,13 +998,21 @@ impl UsbipSupervisor {
     ) -> Result<(), SupervisorFinalizeError> {
         self.service.phase = ServicePhase::DrainingBindings;
         for binding in &mut self.bindings {
-            binding
-                .finalize(port)
-                .map_err(SupervisorFinalizeError::Binding)?;
+            binding.finalize(port).map_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "usbip binding finalize failed during supervisor drain",
+                );
+                SupervisorFinalizeError::Binding(error)
+            })?;
         }
-        self.service
-            .finalize_after_bindings_drain(port)
-            .map_err(SupervisorFinalizeError::Service)
+        self.service.finalize_after_bindings_drain(port).map_err(|error| {
+            tracing::warn!(
+                error = %error,
+                "usbip service finalize failed during supervisor drain",
+            );
+            SupervisorFinalizeError::Service(error)
+        })
     }
 }
 

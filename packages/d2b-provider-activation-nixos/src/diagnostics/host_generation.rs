@@ -35,9 +35,18 @@ pub fn authorize_request(
         role,
         HostGenerationCallerRole::Lifecycle | HostGenerationCallerRole::Admin
     ) {
+        tracing::debug!(
+            role = ?role,
+            "host-generation handoff request rejected: caller lacks lifecycle authority",
+        );
         return Err(HandoffError::InvalidTransition);
     }
     if caller_target != &request.target {
+        tracing::debug!(
+            target = %caller_target.to_canonical_string(),
+            expected = %request.target.to_canonical_string(),
+            "host-generation handoff request rejected: caller target mismatch",
+        );
         return Err(HandoffError::TargetFingerprintMismatch);
     }
     Ok(())
@@ -66,12 +75,27 @@ impl HostGenerationCoordinator {
         generation: u64,
         fingerprint: [u8; 32],
     ) -> Result<(), HandoffError> {
-        self.handoff.validate_target(generation, fingerprint)
+        let result = self.handoff.validate_target(generation, fingerprint);
+        if let Err(error) = &result {
+            tracing::debug!(
+                generation,
+                %error,
+                "host-generation target closure evidence rejected",
+            );
+        }
+        result
     }
 
     /// Preserve the source after a refused or failed effect.
     pub fn rollback(&mut self) -> Result<(), HandoffError> {
-        self.handoff.rollback()
+        let result = self.handoff.rollback();
+        if let Err(error) = &result {
+            tracing::warn!(
+                %error,
+                "host-generation rollback refused; source preservation uncertain",
+            );
+        }
+        result
     }
 
     /// Whether the source remains usable.

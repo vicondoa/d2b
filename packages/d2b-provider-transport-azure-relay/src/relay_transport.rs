@@ -1159,7 +1159,12 @@ where
 {
     fn drop(&mut self) {
         if let Some(lease) = self.lease.take() {
-            let _ = spawn_bounded_revoke(Arc::clone(&self.credentials), lease);
+            if spawn_bounded_revoke(Arc::clone(&self.credentials), lease).is_none() {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    "credential lease best-effort revocation dropped: no tokio runtime on guard drop"
+                );
+            }
         }
     }
 }
@@ -1179,8 +1184,22 @@ where
         )
         .await
         {
-            Ok(result) => result,
-            Err(_) => Err(crate::RelayCredentialError::Unavailable),
+            Ok(result) => {
+                if result.is_err() {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        "credential lease revocation failed during cleanup"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    "credential lease revocation timed out during cleanup"
+                );
+                Err(crate::RelayCredentialError::Unavailable)
+            }
         }
     }))
 }
@@ -1194,9 +1213,21 @@ fn retry_or_close(
         ReconnectDecision::RetryAfter(delay)
             if Duration::from_millis(u64::from(delay)) <= remaining =>
         {
+            tracing::debug!(
+                provider = "transport-azure-relay",
+                delay_ms = delay,
+                "relay reconnect scheduled after carriage failure"
+            );
             RetryResult::Retry(Duration::from_millis(u64::from(delay)))
         }
-        ReconnectDecision::RetryAfter(_) | ReconnectDecision::Closed => RetryResult::Return(error),
+        ReconnectDecision::RetryAfter(_) | ReconnectDecision::Closed => {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                reason = %error,
+                "relay reconnect budget exhausted; abandoning session"
+            );
+            RetryResult::Return(error)
+        }
         ReconnectDecision::OpenNow => RetryResult::Retry(Duration::ZERO),
     }
 }
@@ -1277,20 +1308,50 @@ where
         let binding = request.binding().clone();
         let deadline_ms = request.deadline_ms();
         if deadline_ms == 0 {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                "relay session open rejected: request deadline already expired"
+            );
             return Err(RelayTransportError::DeadlineExpired);
         }
         if request.execution_ref() != &self.config.execution_ref {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                role = ?role,
+                "relay session open rejected: execution boundary mismatch"
+            );
             return Err(RelayTransportError::CredentialBindingMismatch);
         }
         let generation_attempt = self.generation_fence.begin(&binding)?;
         let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_ms));
         let session_permit = timeout_at(deadline, self.session_slots.clone().acquire_owned())
             .await
-            .map_err(|_| RelayTransportError::DeadlineExpired)?
-            .map_err(|_| RelayTransportError::Unavailable)?;
+            .map_err(|_| {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    "relay session open deadline expired while waiting for a session slot"
+                );
+                RelayTransportError::DeadlineExpired
+            })?
+            .map_err(|_| {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    "relay session slots closed; open rejected"
+                );
+                RelayTransportError::Unavailable
+            })?;
         let credential_role = credential_role(role);
         loop {
             if !generation_attempt.eligible() {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    "relay session open rejected: stale generation fence"
+                );
                 return Err(RelayTransportError::StaleGeneration);
             }
             let remaining_ms = deadline
@@ -1305,11 +1366,26 @@ where
                 .map_err(map_credential_error)?;
             let lease = match timeout_at(deadline, self.credentials.read_credential(&request)).await
             {
-                Err(_) => return Err(RelayTransportError::DeadlineExpired),
+                Err(_) => {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        role = ?role,
+                        binding = ?binding,
+                        "relay credential read deadline expired"
+                    );
+                    return Err(RelayTransportError::DeadlineExpired);
+                }
                 Ok(Ok(lease)) => lease,
                 Ok(Err(error)) => {
                     let mapped = map_credential_error(error);
                     if !matches!(mapped, RelayTransportError::CredentialUnavailable) {
+                        tracing::warn!(
+                            provider = "transport-azure-relay",
+                            role = ?role,
+                            binding = ?binding,
+                            reason = %mapped,
+                            "relay credential read rejected"
+                        );
                         return Err(mapped);
                     }
                     match retry_or_close(
@@ -1331,6 +1407,12 @@ where
             let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
                 Ok(duration) => duration.as_millis() as u64,
                 Err(_) => {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        role = ?role,
+                        binding = ?binding,
+                        "system clock before Unix epoch; relay session open rejected"
+                    );
                     return Err(revoke_or(
                         RelayTransportError::CredentialExpired,
                         lease_guard.revoke(deadline).await,
@@ -1349,6 +1431,13 @@ where
                 } else {
                     RelayTransportError::CredentialExpired
                 };
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    reason = %reason,
+                    "relay credential lease rejected for session open"
+                );
                 return Err(revoke_or(reason, lease_guard.revoke(deadline).await));
             }
 
@@ -1365,12 +1454,27 @@ where
             .await
             {
                 Ok(result) => result,
-                Err(_) => Err(RelayTransportError::DeadlineExpired),
+                Err(_) => {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        role = ?role,
+                        binding = ?binding,
+                        "relay websocket connect deadline expired"
+                    );
+                    Err(RelayTransportError::DeadlineExpired)
+                }
             };
             let revoke_result = lease_guard.revoke(deadline).await;
             let socket = match socket_result {
                 Ok(socket) => socket,
                 Err(error) => {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        role = ?role,
+                        binding = ?binding,
+                        reason = %error,
+                        "relay websocket connect failed"
+                    );
                     revoke_result?;
                     if !matches!(error, RelayTransportError::Unavailable) {
                         return Err(error);
@@ -1391,12 +1495,26 @@ where
                 }
             };
             if let Err(error) = revoke_result {
+                tracing::warn!(
+                    provider = "transport-azure-relay",
+                    role = ?role,
+                    binding = ?binding,
+                    reason = %error,
+                    "credential revocation failed after connect; closing socket"
+                );
                 let _ = socket.close().await;
                 return Err(error);
             }
             let generation_lease = match generation_attempt.commit() {
                 Ok(lease) => lease,
                 Err(error) => {
+                    tracing::warn!(
+                        provider = "transport-azure-relay",
+                        role = ?role,
+                        binding = ?binding,
+                        reason = %error,
+                        "relay generation fence commit failed; closing socket"
+                    );
                     let _ = socket.close().await;
                     return Err(error);
                 }

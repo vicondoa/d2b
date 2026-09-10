@@ -108,6 +108,10 @@ impl ManagedIdentityCredentialProvider {
             if Self::active_lease_count(&leases).saturating_sub(active_for_owner)
                 >= self.config.max_leases() as usize
             {
+                tracing::debug!(
+                    resource = %key,
+                    "managed-identity acquire rejected: lease capacity reached",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
@@ -264,6 +268,12 @@ impl ManagedIdentityCredentialProvider {
                 inspection.state,
                 CredentialOutcomeCode::Success,
             )?;
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                state = ?inspection.state,
+                "managed-identity lease not active at refresh inspection",
+            );
             return Err(error_for_state(inspection.state));
         }
         if Self::is_expired(inspection.expires_at_unix_ms, Self::now_unix_ms()) {
@@ -273,9 +283,19 @@ impl ManagedIdentityCredentialProvider {
                 CredentialLeaseState::Expired,
                 CredentialOutcomeCode::Success,
             )?;
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity lease expired at refresh inspection",
+            );
             return Err(expired());
         }
         if inspection.rotation_generation != record.metadata.rotation_generation {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity refresh rotation generation mismatch",
+            );
             return Err(invariant());
         }
         let grant = await_client(self.client.refresh_lease(&lease), deadline).await?;
@@ -401,6 +421,11 @@ impl ManagedIdentityCredentialProvider {
         metadata.state = inspection.state;
         metadata.source_version = inspection.source_version;
         if inspection.rotation_generation < metadata.rotation_generation {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity inspection rotation generation regressed",
+            );
             return Err(invariant());
         }
         metadata.rotation_generation = inspection.rotation_generation;
@@ -472,6 +497,10 @@ impl ManagedIdentityCredentialProvider {
             if Self::active_lease_count(&leases).saturating_sub(active_for_owner)
                 >= self.config.max_leases() as usize
             {
+                tracing::debug!(
+                    resource = %key,
+                    "managed-identity acquire rejected: lease capacity reached",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
@@ -596,6 +625,11 @@ impl ManagedIdentityCredentialProvider {
         deadline: std::time::Instant,
         error: CredentialServiceError,
     ) -> CredentialServiceError {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            resource = %request.credential_ref().to_canonical_string(),
+            "managed-identity committed lease could not be recorded; cleaning up or tracking unresolved",
+        );
         if Self::poll_client_sync(self.client.revoke_lease(lease), deadline).is_ok() {
             return error;
         }
@@ -619,9 +653,21 @@ impl ManagedIdentityCredentialProvider {
                 } else {
                     records.push(unresolved);
                 }
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %request.credential_ref().to_canonical_string(),
+                    "managed-identity uncommitted lease cleanup deferred to cleanup-only record",
+                );
                 error
             }
-            Err(_) => invariant(),
+            Err(_) => {
+                tracing::error!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %request.credential_ref().to_canonical_string(),
+                    "managed-identity lease store poisoned while tracking unresolved lease",
+                );
+                invariant()
+            }
         }
     }
 
@@ -634,6 +680,11 @@ impl ManagedIdentityCredentialProvider {
         deadline: std::time::Instant,
         error: CredentialServiceError,
     ) -> CredentialServiceError {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            resource = %request.credential_ref().to_canonical_string(),
+            "managed-identity committed lease could not be recorded; cleaning up or tracking unresolved",
+        );
         if await_client(self.client.revoke_lease(lease), deadline)
             .await
             .is_ok()
@@ -660,9 +711,21 @@ impl ManagedIdentityCredentialProvider {
                 } else {
                     records.push(unresolved);
                 }
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %request.credential_ref().to_canonical_string(),
+                    "managed-identity uncommitted lease cleanup deferred to cleanup-only record",
+                );
                 error
             }
-            Err(_) => invariant(),
+            Err(_) => {
+                tracing::error!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %request.credential_ref().to_canonical_string(),
+                    "managed-identity lease store poisoned while tracking unresolved lease",
+                );
+                invariant()
+            }
         }
     }
 
@@ -718,6 +781,12 @@ impl ManagedIdentityCredentialProvider {
                 inspection.state,
                 CredentialOutcomeCode::Success,
             )?;
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                state = ?inspection.state,
+                "managed-identity lease not active at refresh inspection",
+            );
             return Err(error_for_state(inspection.state));
         }
         if Self::is_expired(inspection.expires_at_unix_ms, Self::now_unix_ms()) {
@@ -727,9 +796,19 @@ impl ManagedIdentityCredentialProvider {
                 CredentialLeaseState::Expired,
                 CredentialOutcomeCode::Success,
             )?;
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity lease expired at refresh inspection",
+            );
             return Err(expired());
         }
         if inspection.rotation_generation != record.metadata.rotation_generation {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity refresh rotation generation mismatch",
+            );
             return Err(invariant());
         }
         let grant = Self::poll_client_sync(self.client.refresh_lease(&lease), deadline)?;
@@ -870,6 +949,11 @@ impl ManagedIdentityCredentialProvider {
         metadata.state = inspection.state;
         metadata.source_version = inspection.source_version;
         if inspection.rotation_generation < metadata.rotation_generation {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "managed-identity inspection rotation generation regressed",
+            );
             return Err(invariant());
         }
         metadata.rotation_generation = inspection.rotation_generation;

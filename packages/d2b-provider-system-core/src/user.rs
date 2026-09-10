@@ -23,6 +23,7 @@
 //! single matching property as identity.
 
 use std::collections::BTreeSet;
+use tracing::{debug, warn};
 use std::fmt;
 
 use d2b_contracts_resource::v3::ResourceRef;
@@ -219,8 +220,21 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<UserStatusReport, SystemCoreError> {
-        ownership::require_resource_type(user_ref, USER_RESOURCE_TYPE)?;
+        ownership::require_resource_type(user_ref, USER_RESOURCE_TYPE).map_err(|error| {
+            warn!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                error = %error,
+                "assignment rejected: user resource type not owned by system-core"
+            );
+            error
+        })?;
         let Some(discovered) = self.port.discover(user_ref, spec).await? else {
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                "user discovery found no local record; reporting pending"
+            );
             return Ok(self.report(
                 user_ref,
                 ResourcePhase::Pending,
@@ -244,8 +258,18 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
         // established as this User at all.
         let established = BTreeSet::from([UserBinding::NssRecord, UserBinding::PrimaryGroup]);
         let (phase, condition) = if discovered.observed.covers(&established) {
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                "user identity drifted; reporting degraded"
+            );
             (ResourcePhase::Degraded, UserDiscoveryCondition::Drifted)
         } else {
+            debug!(
+                provider = crate::PROVIDER_NAME,
+                user = %user_ref.to_canonical_string(),
+                "user identity unverified; reporting unknown"
+            );
             (ResourcePhase::Unknown, UserDiscoveryCondition::Unverified)
         };
         Ok(self.report(user_ref, phase, condition, Some(discovered.identity)))

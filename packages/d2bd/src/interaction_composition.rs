@@ -920,7 +920,12 @@ where
         ) && self.ensure_clipboard().is_err()
         {
             let RegisteredInteractionSession { ingress, .. } = session;
-            let _ = self.registrar.revoke(ingress).await;
+            if let Err(error) = self.registrar.revoke(ingress).await {
+                tracing::warn!(
+                    error = %error,
+                    "interaction session admission rollback: registrar revoke failed"
+                );
+            }
             return Err(InteractionAdmissionError::ServiceUnavailable);
         }
         self.sessions.insert(session_key.clone(), session);
@@ -1093,6 +1098,10 @@ where
         let request = match TtrpcRequest::parse_from_bytes(payload) {
             Ok(request) => request,
             Err(_) => {
+                tracing::debug!(
+                    stream_id = stream_id,
+                    "interaction request malformed; responding with error code"
+                );
                 self.send_component_response(
                     session_key,
                     encode_interaction_response(
@@ -1173,6 +1182,11 @@ where
         let lease = match ingress.begin_local_invoke(route, operation).await {
             Ok(lease) => lease,
             Err(_) => {
+                tracing::warn!(
+                    stream_id = stream_id,
+                    service = %service,
+                    "interaction ingress rejected local invoke; responding with session unavailable"
+                );
                 self.send_component_response(
                     session_key,
                     encode_interaction_response(
@@ -5659,10 +5673,30 @@ where
         let frame = tokio::select! {
             frame = request_receiver.recv() => match frame {
                 Ok(frame) => frame,
-                Err(_) => break,
+                Err(_) => {
+                    tracing::debug!(
+                        service = %service,
+                        "interaction request receiver closed; ending session loop"
+                    );
+                    break;
+                }
             },
             control = session_driver.receive_control() => match control {
-                Ok(d2b_session::SessionEvent::Close(_)) | Err(_) => break,
+                Ok(d2b_session::SessionEvent::Close(_)) => {
+                    tracing::debug!(
+                        service = %service,
+                        "interaction session closed by peer; ending session loop"
+                    );
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        service = %service,
+                        "interaction session control error; ending session loop"
+                    );
+                    break;
+                }
                 Ok(_) => continue,
             },
             _ = tokio::time::sleep(Duration::from_millis(50)) => {

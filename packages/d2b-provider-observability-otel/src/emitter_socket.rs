@@ -3,6 +3,7 @@
 use crate::ingress_policy::{Ingress, IngressOutcome, IngressPolicyGate};
 use d2b_contracts_provider::v3::{redact_parsed_frame, validate_raw_frame};
 use rustix::fs::{Mode, fchmod, fstat};
+use tracing::debug;
 use std::{
     collections::VecDeque,
     fs, io,
@@ -134,6 +135,10 @@ impl EmitterSocket {
             match self.socket.recv(&mut bytes) {
                 Ok(size) => {
                     if size > MAX_COMPACT_FRAME_BYTES {
+                        debug!(
+                            provider = "observability-otel",
+                            "oversize emitter datagram dropped"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                         drained += 1;
                         continue;
@@ -142,6 +147,10 @@ impl EmitterSocket {
                     let frame = match validate_raw_frame(&bytes) {
                         Ok(frame) => frame,
                         Err(_) => {
+                            debug!(
+                                provider = "observability-otel",
+                                "malformed emitter datagram dropped"
+                            );
                             self.dropped = self.dropped.saturating_add(1);
                             drained += 1;
                             continue;
@@ -156,16 +165,28 @@ impl EmitterSocket {
                             .0,
                         IngressOutcome::Accepted
                     ) {
+                        debug!(
+                            provider = "observability-otel",
+                            "emitter datagram rejected by ingress policy"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                         drained += 1;
                         continue;
                     }
                     let Some(bytes) = redact_parsed_frame(frame).ok() else {
+                        debug!(
+                            provider = "observability-otel",
+                            "emitter datagram dropped during redaction"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                         drained += 1;
                         continue;
                     };
                     if bytes.len() > self.capacity_bytes {
+                        debug!(
+                            provider = "observability-otel",
+                            "emitter datagram exceeds receiver capacity"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                         drained += 1;
                         continue;
@@ -175,6 +196,10 @@ impl EmitterSocket {
                             break;
                         };
                         self.queued_bytes = self.queued_bytes.saturating_sub(oldest.bytes.len());
+                        debug!(
+                            provider = "observability-otel",
+                            "queued emitter frame evicted for byte budget"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                     }
                     while self.frames.len() >= MAX_RETAINED_FRAMES {
@@ -182,6 +207,10 @@ impl EmitterSocket {
                             break;
                         };
                         self.queued_bytes = self.queued_bytes.saturating_sub(oldest.bytes.len());
+                        debug!(
+                            provider = "observability-otel",
+                            "queued emitter frame evicted for frame budget"
+                        );
                         self.dropped = self.dropped.saturating_add(1);
                     }
                     self.queued_bytes += bytes.len();

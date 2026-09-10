@@ -25,8 +25,8 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::identity::{Locality, SessionPurpose, TransportBinding};
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-
 use crate::error::ProviderToolkitError;
+use tracing::warn;
 
 /// The `ResourceType` a Provider agent's own resource reference must name.
 pub const PROVIDER_RESOURCE_TYPE: &str = "Provider";
@@ -123,18 +123,23 @@ impl ProviderAgentBootstrap {
         binding: AllocatorSessionBinding,
     ) -> Result<ProviderAgentIdentity, ProviderToolkitError> {
         if binding.provider_ref.resource_type().as_str() != PROVIDER_RESOURCE_TYPE {
+            warn!(zone = ?binding.zone, provider = %binding.provider_ref, "bootstrap binding refused: reference is not a Provider resource");
             return Err(ProviderToolkitError::BootstrapRefWrongType);
         }
         if binding.provider_ref != self.expected_provider {
+            warn!(zone = ?binding.zone, provider = %binding.provider_ref, expected_provider = %self.expected_provider, "bootstrap binding refused: allocator named a different Provider than this agent was built to be");
             return Err(ProviderToolkitError::BootstrapProviderMismatch);
         }
         if binding.zone != self.expected_zone {
+            warn!(zone = ?binding.zone, provider = %binding.provider_ref, expected_zone = ?self.expected_zone, "bootstrap binding refused: allocator placed the agent in a different Zone than this entrypoint accepts");
             return Err(ProviderToolkitError::BootstrapZoneMismatch);
         }
         if binding.session_purpose != self.accepted_purpose {
+            warn!(zone = ?binding.zone, provider = %binding.provider_ref, "bootstrap binding refused: session purpose is not accepted by this entrypoint");
             return Err(ProviderToolkitError::BootstrapPurposeMismatch);
         }
         if binding.transport.locality() != Locality::Local {
+            warn!(zone = ?binding.zone, provider = %binding.provider_ref, "bootstrap binding refused: session transport is not local");
             return Err(ProviderToolkitError::BootstrapLocalityRejected);
         }
         Ok(ProviderAgentIdentity {

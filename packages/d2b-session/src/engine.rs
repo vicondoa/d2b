@@ -187,8 +187,27 @@ impl<T: OwnedTransport> SessionEngine<T> {
         })
         .await
         {
-            Ok(result) => result,
-            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_identity.purpose.as_str(),
+                        service = metric_identity.service.as_str(),
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (generation discovery)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_identity.purpose.as_str(),
+                    service = metric_identity.service.as_str(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (generation discovery)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
         };
         record_establishment(
             metrics.as_ref(),
@@ -256,8 +275,27 @@ impl<T: OwnedTransport> SessionEngine<T> {
         )
         .await
         {
-            Ok(result) => result,
-            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_policy.purpose.as_str(),
+                        service = metric_policy.service.as_str(),
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (initiator)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_policy.purpose.as_str(),
+                    service = metric_policy.service.as_str(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (initiator)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
         };
         record_establishment(
             metrics.as_ref(),
@@ -340,8 +378,29 @@ impl<T: OwnedTransport> SessionEngine<T> {
         )
         .await
         {
-            Ok(result) => result,
-            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_policy.purpose.as_str(),
+                        service = metric_policy.service.as_str(),
+                        minimum_generation = minimum_generation,
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (responder generation floor)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_policy.purpose.as_str(),
+                    service = metric_policy.service.as_str(),
+                    minimum_generation = minimum_generation,
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (responder generation floor)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
         };
         record_establishment(
             Arc::new(NoopMetrics).as_ref(),
@@ -370,8 +429,27 @@ impl<T: OwnedTransport> SessionEngine<T> {
         )
         .await
         {
-            Ok(result) => result,
-            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_policy.purpose.as_str(),
+                        service = metric_policy.service.as_str(),
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (responder)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_policy.purpose.as_str(),
+                    service = metric_policy.service.as_str(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (responder)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
         };
         record_establishment(
             metrics.as_ref(),
@@ -1387,7 +1465,9 @@ impl<T: OwnedTransport> SessionEngine<T> {
             CloseReason::InternalInvariant,
             Remediation::ReplaceGeneration,
         );
-        let _ = self.transport.close().await;
+        if let Err(error) = self.transport.close().await {
+            tracing::debug!(error = %error, "session transport close failed during teardown");
+        }
     }
 }
 

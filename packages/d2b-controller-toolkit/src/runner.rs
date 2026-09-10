@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeMap, HashSet},
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -562,7 +565,13 @@ pub struct RunnerConfig {
 
 const WATCH_RECOVERY_MAX_RETRIES: usize = 3;
 const FAILURE_PERSISTENCE_MAX_ATTEMPTS: usize = 3;
-const SOURCE_RETRY_BACKOFF_TICKS: u64 = 1;
+/// Backoff between startup source-call retries: attempt * 100ms, capped by
+/// the runner deadline. Measured store reads take 500-750ms under the
+/// fsync'd commit stream (actor.rs READ_LIFETIME comment), so the old
+/// attempt*1ms backoff exhausted the startup retry budget before any read
+/// could complete (hostrun73: 30 runner terminations at accept_effect and
+/// startup).
+const SOURCE_RETRY_BACKOFF_TICKS: u64 = 100;
 
 /// Successful loop summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -827,10 +836,55 @@ where
         let shutdown = Cancellation::default();
         let run_shutdown = shutdown.clone();
         let observer = Arc::clone(&self.observer);
+        let completed = Arc::new(AtomicBool::new(false));
+        let run_completed = Arc::clone(&completed);
         RunnerFuture {
             shutdown,
+            completed,
             inner: Box::pin(async move {
                 let result = runner.run_inner(run_shutdown, &mut startup).await;
+                run_completed.store(true, Ordering::Release);
+                let report_fields = match &result {
+                    Ok(report) => (
+                        report.dispatched,
+                        report.handler_failures,
+                        report.persistence_uncertain,
+                        report.relists,
+                    ),
+                    Err(failure) => (
+                        failure.report.dispatched,
+                        failure.report.handler_failures,
+                        failure.report.persistence_uncertain,
+                        failure.report.relists,
+                    ),
+                };
+                match &result {
+                    Ok(_) => tracing::debug!(
+                        dispatched = report_fields.0,
+                        handler_failures = report_fields.1,
+                        persistence_uncertain = report_fields.2,
+                        relists = report_fields.3,
+                        "runner loop completed after watch close and drain",
+                    ),
+                    Err(failure) if failure.error() == RunnerError::Cancelled => tracing::warn!(
+                        dispatched = report_fields.0,
+                        handler_failures = report_fields.1,
+                        persistence_uncertain = report_fields.2,
+                        relists = report_fields.3,
+                        error = %failure,
+                        "runner cancelled before draining",
+                    ),
+                    Err(failure) => tracing::error!(
+                        dispatched = report_fields.0,
+                        handler_failures = report_fields.1,
+                        persistence_uncertain = report_fields.2,
+                        relists = report_fields.3,
+                        failed_key = failure.failed_key.as_ref().map(|key| key.resource_ref().to_canonical_string()),
+                        failed_operation = failure.failed_operation,
+                        error = %failure,
+                        "runner loop terminated with failure",
+                    ),
+                }
                 observer.observe(RunnerObservation {
                     counter: None,
                     lane: None,
@@ -908,7 +962,13 @@ where
         )
         .await
         .map_err(phase_runner_error)?
-        .map_err(|_| RunnerError::Controller)?;
+        .map_err(|error| {
+            tracing::error!(
+                error = %error,
+                "controller reconciler describe failed during startup",
+            );
+            RunnerError::Controller
+        })?;
         if self.config.max_attempts == 0 {
             return Err(RunnerError::InvalidDescriptor);
         }
@@ -1021,7 +1081,15 @@ where
                     return Err(RunnerError::Cancelled);
                 }
                 completion = workers.join_next(), if !workers.is_empty() => {
-                    let completion = completion.ok_or(RunnerError::TaskFailed)??;
+                    let completion = match completion {
+                        Some(joined) => joined?,
+                        None => {
+                            tracing::error!(
+                                "runner worker join set closed unexpectedly; runner cannot continue",
+                            );
+                            return Err(RunnerError::TaskFailed);
+                        }
+                    };
                     let key = completion.work.key().clone();
                     match completion.outcome {
                         WorkerOutcome::Done { checkpointed, status_pending, requeue_at } => {
@@ -1049,6 +1117,13 @@ where
                             generation,
                             reason,
                         } => {
+                            tracing::debug!(
+                                key = %key.resource_ref().to_canonical_string(),
+                                key_zone = %key.zone().as_str(),
+                                attempt = completion.work.attempt(),
+                                reason = ?reason,
+                                "controller resource requeued for retry",
+                            );
                             if completion.work.attempt()
                                 >= descriptor_attempt_bound(
                                     &descriptor,
@@ -1076,6 +1151,12 @@ where
                                 match persistence {
                                     FailurePersistence::Persisted
                                     | FailurePersistence::Skipped => {
+                                        tracing::warn!(
+                                            key = %key.resource_ref().to_canonical_string(),
+                                            key_zone = %key.zone().as_str(),
+                                            reason = ?persisted_reason,
+                                            "controller resource attempts exhausted; failure recorded",
+                                        );
                                         queue.finish(&key)?;
                                         if reason != ReconcileReason::SourceBackpressure {
                                             report.handler_failures += 1;
@@ -1126,6 +1207,12 @@ where
                                                 workers.len(),
                                             );
                                         } else {
+                                            tracing::warn!(
+                                                key = %key.resource_ref().to_canonical_string(),
+                                                key_zone = %key.zone().as_str(),
+                                                reason = ?persisted_reason,
+                                                "controller resource attempts exhausted without persistence operation; failure recorded",
+                                            );
                                             queue.finish(&key)?;
                                             if reason != ReconcileReason::SourceBackpressure {
                                                 report.handler_failures += 1;
@@ -1247,9 +1334,24 @@ where
                     );
                 }
                 scheduled = requeues.join_next(), if !requeues.is_empty() => {
-                    let scheduled = scheduled
-                        .ok_or(RunnerError::TaskFailed)?
-                        .map_err(|_| RunnerError::TaskFailed)?;
+                    let scheduled = match scheduled {
+                        Some(joined) => match joined {
+                            Ok(item) => item,
+                            Err(join_error) => {
+                                tracing::error!(
+                                    error = %join_error,
+                                    "runner requeue task failed to join; runner cannot continue",
+                                );
+                                return Err(RunnerError::TaskFailed);
+                            }
+                        },
+                        None => {
+                            tracing::error!(
+                                "runner requeue join set closed unexpectedly; runner cannot continue",
+                            );
+                            return Err(RunnerError::TaskFailed);
+                        }
+                    };
                     match scheduled {
                         ScheduledQueueItem::PersistenceRetry {
                             key,
@@ -1273,6 +1375,12 @@ where
                                     queue.finish(&key)?;
                                 }
                                 FailurePersistence::Uncertain => {
+                                    tracing::debug!(
+                                        key = %key.resource_ref().to_canonical_string(),
+                                        key_zone = %key.zone().as_str(),
+                                        reason = ?reason,
+                                        "failure projection persistence still uncertain; rescheduled",
+                                    );
                                     schedule_queue_item(
                                         &mut requeues,
                                         Arc::clone(&self.clock),
@@ -1304,6 +1412,11 @@ where
                                 }
                                 Err(QueueError::Backpressure
                                 | QueueError::ExpeditedBackpressure) => {
+                                    tracing::debug!(
+                                        key = %key.resource_ref().to_canonical_string(),
+                                        key_zone = %key.zone().as_str(),
+                                        "retry requeue deferred by queue backpressure; rescheduled",
+                                    );
                                     schedule_queue_item(
                                         &mut requeues,
                                         Arc::clone(&self.clock),
@@ -1323,10 +1436,20 @@ where
                             generation,
                         } => {
                             if generation != watch_generation {
+                                tracing::debug!(
+                                    key = %key.resource_ref().to_canonical_string(),
+                                    key_zone = %key.zone().as_str(),
+                                    "stale scheduled watch item dropped after relist",
+                                );
                                 continue;
                             }
                             let deferred_key = (key.clone(), expedited);
                             let Some(hint) = deferred_watch_hints.remove(&deferred_key) else {
+                                tracing::warn!(
+                                    key = %key.resource_ref().to_canonical_string(),
+                                    key_zone = %key.zone().as_str(),
+                                    "scheduled watch item lost its deferred hint; dropped",
+                                );
                                 scheduled_watch_keys.remove(&deferred_key);
                                 continue;
                             };
@@ -1361,12 +1484,33 @@ where
                     );
                 }
                 watched = watchers.join_next(), if !watchers.is_empty() => {
-                    let watched = watched
-                        .ok_or(RunnerError::TaskFailed)?
-                        .map_err(|_| RunnerError::TaskFailed)?;
+                    let watched = match watched {
+                        Some(joined) => match joined {
+                            Ok(event) => event,
+                            Err(join_error) => {
+                                tracing::error!(
+                                    error = %join_error,
+                                    "runner watch task failed to join; runner cannot continue",
+                                );
+                                return Err(RunnerError::TaskFailed);
+                            }
+                        },
+                        None => {
+                            tracing::error!(
+                                "runner watch join set closed unexpectedly; runner cannot continue",
+                            );
+                            return Err(RunnerError::TaskFailed);
+                        }
+                    };
                     match watched {
                 Ok(WatchEvent::Hint(hint)) => {
                     if !descriptor_owns_key(&descriptor, &hint.key) {
+                        tracing::warn!(
+                            key = %hint.key.resource_ref().to_canonical_string(),
+                            key_zone = %hint.key.zone().as_str(),
+                            watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                            "runner dropped watch hint outside its descriptor",
+                        );
                         return Err(RunnerError::Source(SourceError::Integrity));
                     }
                     let lane = hint.lane;
@@ -1446,6 +1590,9 @@ where
                     watch_closed = true;
                 }
                 Err(WatchFailure::Backpressure) => {
+                    tracing::debug!(
+                        "watch receive failed with backpressure; reopening after delay",
+                    );
                     observe_counter(
                         self.observer.as_ref(),
                         RunnerCounter::WatchFailure,
@@ -1495,6 +1642,11 @@ where
                                 if retryable_runner_source_error(&error)
                                     && recovery_retries < WATCH_RECOVERY_MAX_RETRIES =>
                             {
+                                tracing::debug!(
+                                    error = %error,
+                                    attempt = recovery_retries + 1,
+                                    "controller source relist failed during watch recovery; retrying",
+                                );
                                 recovery_retries += 1;
                                 wait_for_source_retry(
                                     self.clock.as_ref(),
@@ -1523,6 +1675,11 @@ where
                                 if retryable_runner_source_error(&error)
                                     && recovery_retries < WATCH_RECOVERY_MAX_RETRIES =>
                             {
+                                tracing::debug!(
+                                    error = %error,
+                                    attempt = recovery_retries + 1,
+                                    "controller source watch reopen failed during recovery; retrying",
+                                );
                                 recovery_retries += 1;
                                 wait_for_source_retry(
                                     self.clock.as_ref(),
@@ -1571,6 +1728,10 @@ where
                         queue.resource_count(),
                         workers.len(),
                     );
+                    tracing::warn!(
+                        watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                        "runner watch failed fatally",
+                    );
                     return Err(RunnerError::Source(SourceError::Integrity));
                 }
                     }
@@ -1584,6 +1745,8 @@ where
 pub struct RunnerFuture {
     shutdown: Cancellation,
     inner: Pin<Box<dyn Future<Output = Result<RunnerReport, RunnerFailure>> + Send>>,
+    /// Telemetry-only marker: set once the inner loop produces a final result.
+    completed: Arc<AtomicBool>,
 }
 
 impl RunnerFuture {
@@ -1603,6 +1766,11 @@ impl Future for RunnerFuture {
 
 impl Drop for RunnerFuture {
     fn drop(&mut self) {
+        if !self.completed.load(Ordering::Acquire) {
+            tracing::warn!(
+                "runner future dropped before producing a final outcome; shutdown requested",
+            );
+        }
         self.shutdown.cancel();
     }
 }
@@ -1641,6 +1809,12 @@ fn initial_hints(
         .into_iter()
         .map(|resource| {
             if !descriptor_owns_key(descriptor, &resource.key) {
+                tracing::warn!(
+                    key = %resource.key.resource_ref().to_canonical_string(),
+                    key_zone = %resource.key.zone().as_str(),
+                    watched_types = ?descriptor.resource_types().map(|resource_type| resource_type.as_str()).collect::<Vec<_>>(),
+                    "runner dropped relist snapshot outside its descriptor",
+                );
                 return Err(RunnerError::Source(SourceError::Integrity));
             }
             let canonical = resource.key.resource_ref().to_canonical_string();
@@ -1739,8 +1913,7 @@ impl OwnedWorkers {
             let _permit = permit;
             let clock = Arc::clone(&runtime.clock);
             let now_tick = clock.now_tick();
-            let deadline_tick =
-                phase_deadline(clock.as_ref(), runtime.config.deadline_tick);
+            let deadline_tick = phase_deadline(clock.as_ref(), runtime.config.deadline_tick);
             let work_config = RunnerConfig {
                 deadline_tick,
                 ..runtime.config
@@ -1775,6 +1948,11 @@ impl OwnedWorkers {
                 }
                 Err(PhaseStop::Cancelled) => {
                     cancellation.cancel();
+                    tracing::warn!(
+                        key = %work.key().resource_ref().to_canonical_string(),
+                        key_zone = %work.key().zone().as_str(),
+                        "worker pass cancelled; recording failed projection",
+                    );
                     WorkerOutcome::Terminal {
                         projection: failure_projection(
                             work.key().clone(),
@@ -1819,7 +1997,16 @@ impl OwnedWorkers {
             .tasks
             .join_next()
             .await
-            .map(|result| result.map_err(|_| RunnerError::TaskFailed));
+            .map(|result| match result {
+                Ok(completion) => Ok(completion),
+                Err(join_error) => {
+                    tracing::error!(
+                        error = %join_error,
+                        "runner worker task failed to join",
+                    );
+                    Err(RunnerError::TaskFailed)
+                }
+            });
         if let Some(Ok(completion)) = completion.as_ref()
             && let Some(index) = self
                 .cancellations
@@ -1846,6 +2033,12 @@ impl OwnedWorkers {
 
 impl Drop for OwnedWorkers {
     fn drop(&mut self) {
+        if !self.tasks.is_empty() {
+            tracing::warn!(
+                workers = self.tasks.len(),
+                "runner dropped with in-flight worker tasks; aborting without final outcomes",
+            );
+        }
         self.cancel_all();
         self.tasks.abort_all();
     }
@@ -1880,9 +2073,7 @@ fn spawn_watch_after_delay<S>(
     S: ControllerSource,
 {
     watchers.spawn(async move {
-        let retry_at = clock
-            .now_tick()
-            .saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
+        let retry_at = clock.now_tick().saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
         tokio::select! {
             _ = shutdown.cancelled() => Err(WatchFailure::Fatal),
             _ = clock.sleep_until(retry_at) => {
@@ -1993,7 +2184,14 @@ async fn wait_for_source_retry(
     let retry_at = clock.now_tick().saturating_add(
         SOURCE_RETRY_BACKOFF_TICKS.saturating_mul(u64::try_from(attempt).unwrap_or(u64::MAX)),
     );
-    match bounded_phase(clock, deadline_tick, cancellation, clock.sleep_until(retry_at)).await {
+    match bounded_phase(
+        clock,
+        deadline_tick,
+        cancellation,
+        clock.sleep_until(retry_at),
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(stop) => Err(phase_runner_error(stop)),
     }
@@ -2014,10 +2212,12 @@ where
     for attempt in 0..attempts {
         match bounded_source(clock, deadline_tick, cancellation, operation()).await {
             Ok(value) => return Ok(value),
-            Err(error)
-                if retryable_runner_source_error(&error)
-                    && attempt + 1 < attempts =>
-            {
+            Err(error) if retryable_runner_source_error(&error) && attempt + 1 < attempts => {
+                tracing::debug!(
+                    error = %error,
+                    attempt = attempt + 2,
+                    "controller source call failed during startup; retrying",
+                );
                 wait_for_source_retry(
                     clock,
                     deadline_tick,
@@ -2038,9 +2238,7 @@ fn schedule_queue_item(
     item: ScheduledQueueItem,
 ) {
     requeues.spawn(async move {
-        let retry_at = clock
-            .now_tick()
-            .saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
+        let retry_at = clock.now_tick().saturating_add(SOURCE_RETRY_BACKOFF_TICKS);
         clock.sleep_until(retry_at).await;
         item
     });
@@ -2137,6 +2335,12 @@ where
     {
         Ok(fresh) => fresh,
         Err(RunnerError::Source(error)) if retryable_persistence_source_error(error) => {
+            tracing::debug!(
+                key = %target.resource_ref().to_canonical_string(),
+                key_zone = %target.zone().as_str(),
+                error = %error,
+                "failure projection fresh read failed; will retry",
+            );
             return Ok(FailurePersistenceAttempt::Conflict);
         }
         Err(error) => return Err(error),
@@ -2145,11 +2349,23 @@ where
         FreshSnapshot::Present {
             target: current, ..
         } => current,
-        FreshSnapshot::Deleted { .. } => return Ok(FailurePersistenceAttempt::Skipped),
+        FreshSnapshot::Deleted { .. } => {
+            tracing::debug!(
+                key = %target.resource_ref().to_canonical_string(),
+                key_zone = %target.zone().as_str(),
+                "failure projection skipped; resource already deleted",
+            );
+            return Ok(FailurePersistenceAttempt::Skipped);
+        }
     };
     if current.key() != target
         || expected_generation.is_some_and(|generation| current.generation() != generation)
     {
+        tracing::warn!(
+            key = %target.resource_ref().to_canonical_string(),
+            key_zone = %target.zone().as_str(),
+            "failure projection fenced out by generation change; skipped",
+        );
         return Ok(FailurePersistenceAttempt::Skipped);
     }
     let projection = ReconcileProjection::new(
@@ -2183,6 +2399,12 @@ where
     match persistence {
         Ok(()) => Ok(FailurePersistenceAttempt::Persisted),
         Err(RunnerError::Source(error)) if retryable_persistence_source_error(error) => {
+            tracing::debug!(
+                key = %target.resource_ref().to_canonical_string(),
+                key_zone = %target.zone().as_str(),
+                error = %error,
+                "failure projection persist failed; will retry",
+            );
             Ok(FailurePersistenceAttempt::Conflict)
         }
         Err(error) => Err(error),
@@ -2301,6 +2523,15 @@ where
     R: ResourceReconciler,
 {
     let failure = reconciler.classify_error(error);
+    tracing::warn!(
+        key = %key.resource_ref().to_canonical_string(),
+        key_zone = %key.zone().as_str(),
+        revision = ?revision,
+        class = ?failure.class(),
+        reason = ?failure.reason(),
+        error = %error,
+        "controller handler failed for resource",
+    );
     match failure.class() {
         HandlerErrorClass::Retryable => WorkerOutcome::Retry {
             revision,
@@ -2412,7 +2643,13 @@ where
     };
     let mut context = match context_result {
         Ok(context) => context,
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                key = %target.key().resource_ref().to_canonical_string(),
+                key_zone = %target.key().zone().as_str(),
+                error = %error,
+                "reconcile context construction failed",
+            );
             return WorkerOutcome::Terminal {
                 projection: failure_projection(
                     target.key().clone(),
@@ -2466,7 +2703,13 @@ where
             Ok(CommitDecision::Committed(proof)) => {
                 context = match context.bind_committed_proof(proof) {
                     Ok(context) => context,
-                    Err(_) => {
+                    Err(error) => {
+                        tracing::warn!(
+                            key = %target.key().resource_ref().to_canonical_string(),
+                            key_zone = %target.key().zone().as_str(),
+                            error = %error,
+                            "committed proof bind failed for expedited pass",
+                        );
                         return WorkerOutcome::Terminal {
                             projection: failure_projection(
                                 target.key().clone(),
@@ -2479,6 +2722,11 @@ where
                 };
             }
             Ok(CommitDecision::Abort) => {
+                tracing::debug!(
+                    key = %target.key().resource_ref().to_canonical_string(),
+                    key_zone = %target.key().zone().as_str(),
+                    "expedited commit aborted; pass skipped",
+                );
                 return WorkerOutcome::Done {
                     checkpointed: false,
                     status_pending: false,
@@ -2495,6 +2743,12 @@ where
     }
 
     if let ValidationResult::Invalid { reason } = validation {
+        tracing::warn!(
+            key = %target.key().resource_ref().to_canonical_string(),
+            key_zone = %target.key().zone().as_str(),
+            reason = ?reason,
+            "controller rejected resource spec as invalid",
+        );
         let projection = Some(failure_projection(
             target.key().clone(),
             target.revision(),
@@ -2587,6 +2841,11 @@ where
                     || mutation.target() != target.key().resource_ref()
             })
         }) {
+            tracing::warn!(
+                key = %target.key().resource_ref().to_canonical_string(),
+                key_zone = %target.key().zone().as_str(),
+                "finalize handler returned mutations outside finalizer scope; terminal failure recorded",
+            );
             return WorkerOutcome::Terminal {
                 projection: failure_projection(
                     target.key().clone(),
@@ -2669,6 +2928,11 @@ where
             }
         };
         if result.mutation_batch().is_some() {
+            tracing::warn!(
+                key = %target.key().resource_ref().to_canonical_string(),
+                key_zone = %target.key().zone().as_str(),
+                "upgrade handler returned a mutation batch; terminal failure recorded",
+            );
             return WorkerOutcome::Terminal {
                 projection: failure_projection(
                     target.key().clone(),
@@ -2858,6 +3122,11 @@ where
         prepared
     };
     if result.mutation_batch().is_some() {
+        tracing::warn!(
+            key = %target.key().resource_ref().to_canonical_string(),
+            key_zone = %target.key().zone().as_str(),
+            "reconcile handler returned a mutation batch; terminal failure recorded",
+        );
         return WorkerOutcome::Terminal {
             projection: failure_projection(
                 target.key().clone(),
@@ -2878,9 +3147,14 @@ where
 }
 
 fn persistence_exhausted(
-    _context: &ReconcileContext,
+    context: &ReconcileContext,
     _clock: &dyn MonotonicClock,
 ) -> WorkerOutcome {
+    tracing::warn!(
+        key = %context.target().resource_ref().to_canonical_string(),
+        key_zone = %context.target().zone().as_str(),
+        "controller persistence exhausted or pass interrupted; outcome left uncertain",
+    );
     WorkerOutcome::PersistenceExhausted
 }
 
@@ -2895,6 +3169,32 @@ fn post_commit_source_failure(
     } else {
         WorkerOutcome::SourceFailed { error, operation }
     }
+}
+
+/// Map a failed post-pass effect-state record to a worker outcome.
+///
+/// The durable effect has already landed when this runs; the operation
+/// record is pass bookkeeping keyed by the effect claim, and a later pass
+/// with the same claim can legitimately re-report an outcome that would
+/// regress a row an earlier pass already advanced. Killing the runner for
+/// that record wedges reconciliation forever, so transient source errors
+/// keep the exhaustion semantics while every other rejection is logged
+/// and the pass finishes. `None` means the pass continues.
+fn complete_effect_record_outcome(
+    context: &ReconcileContext,
+    clock: &dyn MonotonicClock,
+    error: SourceError,
+    operation: &'static str,
+) -> Option<WorkerOutcome> {
+    if matches!(error, SourceError::Timeout | SourceError::Backpressure) {
+        return Some(persistence_exhausted(context, clock));
+    }
+    tracing::warn!(
+        operation,
+        error = %error,
+        "controller source rejected effect completion record"
+    );
+    None
 }
 
 async fn persist_result<S>(
@@ -2918,6 +3218,11 @@ where
                 .is_err()
         })
     {
+        tracing::warn!(
+            key = %context.target().resource_ref().to_canonical_string(),
+            key_zone = %context.target().zone().as_str(),
+            "handler result failed identity or mutation validation; terminal failure recorded",
+        );
         return WorkerOutcome::Terminal {
             projection: failure_projection(
                 context.target().clone(),
@@ -2965,6 +3270,11 @@ where
             false,
         );
         if result.attach_projection(projection).is_err() {
+            tracing::warn!(
+                key = %context.target().resource_ref().to_canonical_string(),
+                key_zone = %context.target().zone().as_str(),
+                "handler result projection attach failed; terminal failure recorded",
+            );
             return WorkerOutcome::Terminal {
                 projection: failure_projection(
                     context.target().clone(),
@@ -3018,13 +3328,15 @@ where
                     };
                 }
                 if !context.is_expedited() {
-                    if let Err(error) = source.complete_effect(context, &result).await {
-                        return post_commit_source_failure(
+                    if let Err(error) = source.complete_effect(context, &result).await
+                        && let Some(outcome) = complete_effect_record_outcome(
                             context,
                             clock,
                             error,
                             "complete_effect_after_commit",
-                        );
+                        )
+                    {
+                        return outcome;
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
@@ -3065,13 +3377,15 @@ where
                     };
                 }
                 if !context.is_expedited() {
-                    if let Err(error) = source.complete_effect(context, &result).await {
-                        return post_commit_source_failure(
+                    if let Err(error) = source.complete_effect(context, &result).await
+                        && let Some(outcome) = complete_effect_record_outcome(
                             context,
                             clock,
                             error,
                             "complete_effect_after_pending_commit",
-                        );
+                        )
+                    {
+                        return outcome;
                     }
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
@@ -3147,8 +3461,11 @@ where
         };
     }
     if !context.is_expedited() {
-        if let Err(error) = source.complete_effect(context, &result).await {
-            return post_commit_source_failure(context, clock, error, "complete_effect");
+        if let Err(error) = source.complete_effect(context, &result).await
+            && let Some(outcome) =
+                complete_effect_record_outcome(context, clock, error, "complete_effect")
+        {
+            return outcome;
         }
     }
     if result.disposition().is_terminal()
@@ -3225,6 +3542,11 @@ where
             }
         }
     } else if context.is_expedited() {
+        tracing::warn!(
+            key = %context.target().resource_ref().to_canonical_string(),
+            key_zone = %context.target().zone().as_str(),
+            "expedited reconcile produced no status projection",
+        );
         Err(SourceError::Integrity)
     } else {
         Ok(())
@@ -4579,8 +4901,7 @@ mod tests {
     fn transient_source_backpressure_retries_one_resource_without_blocking_a_sibling() {
         let first = key("first", 1);
         let second = key("second", 2);
-        let (reconciler, _entered, source, watch_tx) =
-            harness(vec![first.clone(), second], 2);
+        let (reconciler, _entered, source, watch_tx) = harness(vec![first.clone(), second], 2);
         reconciler.block_handlers.store(false, Ordering::SeqCst);
         source.inject_fresh_backpressure(first, 1);
         let runner = run_in_thread(Arc::clone(&reconciler), Arc::clone(&source));
@@ -4627,17 +4948,22 @@ mod tests {
             )))))
             .unwrap();
         wait_for_counter(&observer, RunnerCounter::QueueRejected);
-        assert!(observer
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .any(|observation| {
-                observation.counter == Some(RunnerCounter::QueueRejected)
-                    && observation.outcome == RunnerOutcome::Retrying
-                    && observation.reason == RunnerObservationReason::Backpressure
-            }));
-        assert!(!runner.is_finished(), "watch backpressure must not kill the runner");
+        assert!(
+            observer
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .any(|observation| {
+                    observation.counter == Some(RunnerCounter::QueueRejected)
+                        && observation.outcome == RunnerOutcome::Retrying
+                        && observation.reason == RunnerObservationReason::Backpressure
+                })
+        );
+        assert!(
+            !runner.is_finished(),
+            "watch backpressure must not kill the runner"
+        );
 
         reconciler.release(1);
         entered.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -4788,11 +5114,8 @@ mod tests {
         source.inject_fresh_backpressure(target, 1);
         let mut runner_config = config();
         runner_config.max_attempts = 1;
-        let runner = run_with_config_in_thread(
-            Arc::clone(&reconciler),
-            Arc::clone(&source),
-            runner_config,
-        );
+        let runner =
+            run_with_config_in_thread(Arc::clone(&reconciler), Arc::clone(&source), runner_config);
 
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
@@ -4836,7 +5159,6 @@ mod tests {
             RunnerError::Source(SourceError::Unavailable)
         );
     }
-
     #[test]
     fn observer_retains_watch_failure_signal_when_runner_returns_error() {
         let (reconciler, _entered, source, watch_tx) = harness(Vec::new(), 1);
@@ -4866,6 +5188,62 @@ mod tests {
         assert!(observations.iter().any(|observation| {
             observation.counter.is_none() && observation.outcome == RunnerOutcome::Failed
         }));
+    }
+    #[test]
+    fn same_routing_ignores_generation_drift_only() {
+        let base = descriptor(
+            identity(),
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(base.same_routing(&base.clone()));
+        let drifted_identity = ControllerIdentity::new(
+            ZoneId::parse("work").unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ControllerGeneration::new(4).unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            ResourceGeneration::new(9).unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ResourceRef::parse("Host/system").unwrap(),
+            None,
+        )
+        .unwrap();
+        let drifted = descriptor(
+            drifted_identity,
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(base.same_routing(&drifted));
+        assert!(drifted.same_routing(&base));
+        let other_zone = ControllerIdentity::new(
+            ZoneId::parse("other").unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ControllerGeneration::new(1).unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+            ResourceRef::parse("Host/system").unwrap(),
+            None,
+        )
+        .unwrap();
+        let zoned = descriptor(
+            other_zone,
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            1,
+            32,
+            2,
+            16,
+        )
+        .unwrap();
+        assert!(!base.same_routing(&zoned));
     }
 
     #[test]
@@ -5301,7 +5679,13 @@ mod tests {
         .unwrap();
 
         let clock = TokioClock::default();
-        let outcome = block_on(persist_result(source.as_ref(), &context, &clock, result, None));
+        let outcome = block_on(persist_result(
+            source.as_ref(),
+            &context,
+            &clock,
+            result,
+            None,
+        ));
         assert!(matches!(
             outcome,
             WorkerOutcome::Done {
@@ -5570,7 +5954,10 @@ mod tests {
         let runner = run_in_thread(Arc::clone(&reconciler), Arc::clone(&source));
 
         wait_for(&reconciler.execute_effect_calls, 2);
-        assert!(!runner.is_finished(), "watch must remain live after bounded recovery");
+        assert!(
+            !runner.is_finished(),
+            "watch must remain live after bounded recovery"
+        );
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
         let report = runner

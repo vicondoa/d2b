@@ -64,14 +64,26 @@ pub fn reject_process_environment_credential_chain(
 /// Enter the supervised Provider runtime through the inherited fd 10 handoff.
 pub fn run_from_fd10() -> i32 {
     if reject_process_environment_credential_chain().is_err() {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "secret-service provider startup aborted: ambient credential-chain environment present",
+        );
         return 1;
     }
     let Ok(provider_ref) = ResourceRef::parse(PROVIDER_REF) else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "secret-service provider startup aborted: provider reference unparseable",
+        );
         return 1;
     };
     let Ok(purpose) =
         d2b_contracts_resource::v3::identity::SessionPurpose::parse("provider-control")
     else {
+        tracing::error!(
+            provider = crate::PROVIDER_REF,
+            "secret-service provider startup aborted: session purpose unparseable",
+        );
         return 1;
     };
     run_provider_from_fd10::<SecretServiceCredentialProvider, RouteCredentialAuthorization, _>(
@@ -104,16 +116,32 @@ fn runtime_provider(
     let provider_ref = route
         .provider_ref()
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service provider session setup rejected: route has no provider reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     let execution_ref = route
         .context()
         .execution_ref()
         .filter(|reference| reference.resource_type().as_str() == "Guest")
         .cloned()
-        .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service provider session setup rejected: route has no Guest execution reference",
+            );
+            ProviderRuntimeError::SessionUnauthenticated
+        })?;
     if route.subject_ref() != &provider_ref
         || route.subject_ref().resource_type().as_str() != "Provider"
     {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            "secret-service provider session setup rejected: route subject is not the provider",
+        );
         return Err(ProviderRuntimeError::SessionUnauthenticated);
     }
     let placement = SecretServicePlacement::new_dynamic(
@@ -121,13 +149,27 @@ fn runtime_provider(
         PlacementBinding::UserAgent,
         execution_ref,
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "secret-service provider session setup rejected: placement invalid",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?;
     let config = SecretServiceConfig::new(
         "allocator-issued-collection",
         MAX_LOCAL_LEASES,
         LockPolicy::FailClosed,
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "secret-service provider session setup rejected: config invalid",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?;
     let collection_alias = config.collection_alias().to_owned();
     let provider = SecretServiceCredentialProviderFactory::new(
         config,
@@ -138,14 +180,34 @@ fn runtime_provider(
             collection_alias,
         }),
     )
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "secret-service provider session setup rejected: factory construction failed",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?
     .with_generation(
         route
             .provider_generation()
-            .ok_or(ProviderRuntimeError::SessionUnauthenticated)?,
+            .ok_or_else(|| {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    "secret-service provider session setup rejected: route has no provider generation",
+                );
+                ProviderRuntimeError::SessionUnauthenticated
+            })?,
     )
     .construct()
-    .map_err(|_| ProviderRuntimeError::SessionUnauthenticated)?;
+    .map_err(|error| {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "secret-service provider session setup rejected: provider construction failed",
+        );
+        ProviderRuntimeError::SessionUnauthenticated
+    })?;
     Ok((Arc::new(provider), Arc::new(RouteCredentialAuthorization)))
 }
 
@@ -161,6 +223,7 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
 
     fn state_for_user(&self, user_ref: &ResourceRef) -> SecretServiceFuture<'_, SecretServiceState> {
         let backend = Arc::clone(&self.backend);
+        let user = user_ref.to_canonical_string();
         let fields = serde_json::json!({
             "collectionAlias": self.collection_alias,
             "userRef": user_ref.to_canonical_string(),
@@ -169,7 +232,15 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
             let response = backend
                 .request("secret-service.state", fields)
                 .await
-                .map_err(|_| SecretServicePortError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "secret-service.state",
+                        user = %user,
+                        %error,
+                        "secret-service backend request failed",
+                    );
+                    SecretServicePortError::Unavailable
+                })?;
             Ok(match response.state() {
                 Some("unlocked") => SecretServiceState::Unlocked,
                 _ => SecretServiceState::Locked,
@@ -182,6 +253,7 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
         request: &SecretServiceLeaseRequest,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseGrant> {
         let backend = Arc::clone(&self.backend);
+        let credential = request.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "collectionAlias": self.collection_alias,
             "userRef": request.user_ref().to_canonical_string(),
@@ -194,7 +266,15 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
             let response = backend
                 .request("secret-service.issue-lease", fields)
                 .await
-                .map_err(|_| SecretServicePortError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "secret-service.issue-lease",
+                        resource = %credential,
+                        %error,
+                        "secret-service backend request failed",
+                    );
+                    SecretServicePortError::Unavailable
+                })?;
             secret_service_grant(response)
         })
     }
@@ -204,6 +284,7 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
         lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseInspection> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "collectionAlias": self.collection_alias,
             "userRef": lease.user_ref().to_canonical_string(),
@@ -214,7 +295,15 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
             let response = backend
                 .request("secret-service.inspect-lease", fields)
                 .await
-                .map_err(|_| SecretServicePortError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "secret-service.inspect-lease",
+                        resource = %credential,
+                        %error,
+                        "secret-service backend request failed",
+                    );
+                    SecretServicePortError::Unavailable
+                })?;
             secret_service_inspection(response)
         })
     }
@@ -224,6 +313,7 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
         lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRenewal> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "collectionAlias": self.collection_alias,
             "userRef": lease.user_ref().to_canonical_string(),
@@ -234,7 +324,15 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
             let response = backend
                 .request("secret-service.refresh-lease", fields)
                 .await
-                .map_err(|_| SecretServicePortError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "secret-service.refresh-lease",
+                        resource = %credential,
+                        %error,
+                        "secret-service backend request failed",
+                    );
+                    SecretServicePortError::Unavailable
+                })?;
             secret_service_grant(response)
         })
     }
@@ -244,6 +342,7 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
         lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
         let backend = Arc::clone(&self.backend);
+        let credential = lease.credential_ref().to_canonical_string();
         let fields = serde_json::json!({
             "collectionAlias": self.collection_alias,
             "userRef": lease.user_ref().to_canonical_string(),
@@ -254,11 +353,26 @@ impl Oo7SecretServicePort for GuestSecretServicePort {
             let response = backend
                 .request("secret-service.revoke-lease", fields)
                 .await
-                .map_err(|_| SecretServicePortError::Unavailable)?;
+                .map_err(|error| {
+                    tracing::warn!(
+                        operation = "secret-service.revoke-lease",
+                        resource = %credential,
+                        %error,
+                        "secret-service backend request failed",
+                    );
+                    SecretServicePortError::Unavailable
+                })?;
             match response.outcome() {
                 Some("revoked") => Ok(SecretServiceLeaseRevocation::Revoked),
                 Some("already-revoked") => Ok(SecretServiceLeaseRevocation::AlreadyRevoked),
-                _ => Err(SecretServicePortError::Unavailable),
+                _ => {
+                    tracing::warn!(
+                        operation = "secret-service.revoke-lease",
+                        resource = %credential,
+                        "secret-service backend revoke outcome unrecognized",
+                    );
+                    Err(SecretServicePortError::Unavailable)
+                }
             }
         })
     }
@@ -335,7 +449,7 @@ pub enum SecretServiceOwner {
     Userd,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OperationKind {
     Acquire,
     Inspect,
@@ -799,10 +913,20 @@ impl SessionAuthority {
         {
             return Err(SessionAuthorityError::InvalidBinding);
         }
-        let capability_id = next_counter(&self.state.next_capability)
-            .map_err(|_| SessionAuthorityError::Exhausted)?;
-        let presentation = next_counter(&self.state.next_presentation)
-            .map_err(|_| SessionAuthorityError::Exhausted)?;
+        let capability_id = next_counter(&self.state.next_capability).map_err(|_| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service session authority capability id space exhausted",
+            );
+            SessionAuthorityError::Exhausted
+        })?;
+        let presentation = next_counter(&self.state.next_presentation).map_err(|_| {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                "secret-service session authority presentation id space exhausted",
+            );
+            SessionAuthorityError::Exhausted
+        })?;
         self.state
             .sessions
             .lock()
@@ -1284,6 +1408,11 @@ impl SecretServiceCredentialProvider {
     }
 
     pub(crate) fn map_port_error(error: SecretServicePortError) -> CredentialServiceError {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            %error,
+            "secret-service port operation failed",
+        );
         let code = match error {
             SecretServicePortError::Locked
             | SecretServicePortError::Missing
@@ -1446,6 +1575,11 @@ impl SecretServiceCredentialProvider {
         if Self::poll_port(self.port.state_for_user(user_ref), deadline)?
             == SecretServiceState::Locked
         {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                user = %user_ref.to_canonical_string(),
+                "secret-service collection locked; provider unavailable",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -1470,6 +1604,11 @@ impl SecretServiceCredentialProvider {
             })?
             .map_err(Self::map_port_error)?;
         if state == SecretServiceState::Locked {
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                user = %user_ref.to_canonical_string(),
+                "secret-service collection locked; provider unavailable",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -1527,6 +1666,12 @@ impl SecretServiceCredentialProvider {
         idempotency_key: &str,
         operation: OperationKind,
     ) -> Result<(), CredentialServiceError> {
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            resource = %credential,
+            operation = ?operation,
+            "secret-service ambiguous credential operation recorded",
+        );
         self.ambiguous_operations
             .lock()
             .map_err(|_| invariant_error())?

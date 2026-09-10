@@ -15,5 +15,6 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
+tracing = "0.1"
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

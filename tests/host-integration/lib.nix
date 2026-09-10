@@ -363,6 +363,10 @@ let
         mkdir -p "$out/bin"
         cp "${controller}" "$out/bin/acceptance-controller"
         chmod 0755 "$out/bin/acceptance-controller"
+        # The binding-owned virtiofsd worker launches from this signed
+        # artifact; the digest-pinned binary rides in the executable set.
+        cp "${pkgs.virtiofsd}/bin/virtiofsd" "$out/bin/virtiofsd"
+        chmod 0755 "$out/bin/virtiofsd"
         ${signer}/bin/python3 - "${manifest}" "$out" <<'PY'
         import hashlib
         import json
@@ -378,8 +382,13 @@ let
         manifest = json.loads(pathlib.Path(manifest_path).read_text())
         binary = (output / "bin/acceptance-controller").read_bytes()
         raw_digest = "sha256:" + hashlib.sha256(binary).hexdigest()
+        virtiofsd = (output / "bin/virtiofsd").read_bytes()
+        virtiofsd_digest = "sha256:" + hashlib.sha256(virtiofsd).hexdigest()
         executable_map = json.dumps(
-            {"acceptance-controller": raw_digest},
+            {
+                "acceptance-controller": raw_digest,
+                "virtiofsd": virtiofsd_digest,
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -487,6 +496,22 @@ rec {
   d2bDaemonNode =
     { extra ? { }, writableStore ? false }:
     { config, pkgs, ... }:
+    let
+      # Dedicated state disk: the redb Zone store pays an fsync per commit
+      # on the emulated root disk, and bring-up write bursts stall the
+      # daemon writer thread ~700-900ms per write. Attaching /var/lib/d2b
+      # as its own virtio drive with cache=unsafe makes guest fsync a host
+      # page-cache no-op; the fixture VM is ephemeral, so the durability
+      # semantics that unsafe drops are irrelevant here.
+      stateDisk = pkgs.runCommand "d2b-state.img"
+        {
+          nativeBuildInputs = [ pkgs.e2fsprogs ];
+        }
+        ''
+          truncate -s 4G "$out"
+          mkfs.ext4 -q -F "$out"
+        '';
+    in
     {
       imports = [
         self.nixosModules.default
@@ -498,6 +523,10 @@ rec {
           # runners.
           virtualisation.memorySize = 3072;
           virtualisation.diskSize = 8192;
+          # The daemon's redb writer thread, the daemon async runtime, the
+          # broker, and three controllers all need real CPU. The 1-vCPU
+          # default serializes them and starves every 250ms handshake.
+          virtualisation.cores = 3;
           boot.kernelModules = [ "br_netfilter" "tun" "vhost_net" ];
 
           users.users.alice = {
@@ -542,6 +571,40 @@ rec {
         # a fast, reliable boot.
         (lib.mkIf writableStore {
           virtualisation.useBootLoader = true;
+          # The guest store-view hardlinks /nix/store into /var/lib/d2b, so
+          # both must stay on one filesystem - a separate state disk would
+          # break the hardlink farm with EXDEV. Instead, drop the root
+          # drive's cache to unsafe: every redb commit's fsync becomes a
+          # host page-cache no-op instead of a ~700-900ms stall, and the
+          # fixture VM is ephemeral, so the lost durability is irrelevant.
+          virtualisation.qemu.drives = lib.mkForce [
+            {
+              name = "root";
+              file = ''"$NIX_DISK_IMAGE"'';
+              driveExtraOpts.cache = "unsafe";
+              driveExtraOpts.werror = "report";
+              deviceExtraOpts.bootindex = "1";
+              deviceExtraOpts.serial = "root";
+            }
+          ];
+        })
+        # The state disk keeps /var/lib/d2b off the emulated root disk:
+        # cache=unsafe (host fsync no-op), noatime + nobarrier mounts.
+        # The writableStore hardlink-farm tests stay on the default
+        # same-fs layout, so this is opt-out for them.
+        (lib.mkIf (! writableStore) {
+          virtualisation.qemu.options = [
+            "-drive"
+            "file=${stateDisk},format=raw,if=virtio,cache=unsafe,aio=threads"
+          ];
+          fileSystems."/var/lib/d2b" = {
+            device = "/dev/vdb";
+            fsType = "ext4";
+            options = [ "noatime" "nobarrier" ];
+            # Up before activation so d2bTestStateDirs lands inside the
+            # mounted filesystem, not under the covered root mountpoint.
+            neededForBoot = true;
+          };
         })
       ];
     };

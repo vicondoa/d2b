@@ -188,6 +188,10 @@ impl EntraCredentialProvider {
             .get(&key)
             .is_some_and(|records| !records.is_empty())
         {
+            tracing::debug!(
+                resource = %key,
+                "entra credential acquire rejected: pending cleanup records present",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -206,6 +210,10 @@ impl EntraCredentialProvider {
         if let Some(ref existing) = existing {
             if existing.pending_acquire_idempotency.as_deref() == Some(request.idempotency_key()) {
             } else if existing.pending_acquire_idempotency.is_some() {
+                tracing::debug!(
+                    resource = %key,
+                    "entra credential acquire rejected: ambiguous acquire in flight",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
@@ -221,11 +229,19 @@ impl EntraCredentialProvider {
                 existing.metadata.state == CredentialLeaseState::Active,
             ));
             if active_after_replacement >= self.config.max_leases() as usize {
+                tracing::debug!(
+                    resource = %key,
+                    "entra credential acquire rejected: lease capacity reached",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
             }
         } else if active_leases >= self.config.max_leases() as usize {
+            tracing::debug!(
+                resource = %key,
+                "entra credential acquire rejected: lease capacity reached",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -257,6 +273,11 @@ impl EntraCredentialProvider {
         {
             Ok(metadata) => metadata,
             Err(error) => {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %key,
+                    "entra credential granted lease metadata rejected; cleaning up uncommitted grant",
+                );
                 self.cleanup_uncommitted_grant_async(
                     request.credential_ref(),
                     request.idempotency_key(),
@@ -328,6 +349,10 @@ impl EntraCredentialProvider {
             return Err(error_for_state(record.metadata.state));
         }
         if record.refresh_attempts >= crate::MAX_REFRESH_ATTEMPTS {
+            tracing::debug!(
+                resource = %key,
+                "entra credential refresh rejected: bounded attempts exhausted",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -362,6 +387,11 @@ impl EntraCredentialProvider {
         };
         if grant.rotation_generation < lease.metadata.rotation_generation {
             self.record_refresh_failure(&key);
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "entra credential refresh rotation generation regressed",
+            );
             return Err(invariant());
         }
         let metadata = match Self::grant_metadata(grant.clone(), request.requested_expiry_unix_ms())
@@ -564,6 +594,10 @@ impl EntraCredentialProvider {
             .get(&key)
             .is_some_and(|records| !records.is_empty())
         {
+            tracing::debug!(
+                resource = %key,
+                "entra credential acquire rejected: pending cleanup records present",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -584,6 +618,10 @@ impl EntraCredentialProvider {
                 // An explicit retry of an ambiguous replacement may ask the
                 // identity Guest to resolve its idempotency key.
             } else if existing.pending_acquire_idempotency.is_some() {
+                tracing::debug!(
+                    resource = %key,
+                    "entra credential acquire rejected: ambiguous acquire in flight",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
@@ -599,11 +637,19 @@ impl EntraCredentialProvider {
                 existing.metadata.state == CredentialLeaseState::Active,
             ));
             if active_after_replacement >= self.config.max_leases() as usize {
+                tracing::debug!(
+                    resource = %key,
+                    "entra credential acquire rejected: lease capacity reached",
+                );
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
             }
         } else if active_leases >= self.config.max_leases() as usize {
+            tracing::debug!(
+                resource = %key,
+                "entra credential acquire rejected: lease capacity reached",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -635,6 +681,11 @@ impl EntraCredentialProvider {
         {
             Ok(metadata) => metadata,
             Err(error) => {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    resource = %key,
+                    "entra credential granted lease metadata rejected; cleaning up uncommitted grant",
+                );
                 self.cleanup_uncommitted_grant(
                     request.credential_ref(),
                     request.idempotency_key(),
@@ -722,6 +773,10 @@ impl EntraCredentialProvider {
             return Err(error_for_state(record.metadata.state));
         }
         if record.refresh_attempts >= crate::MAX_REFRESH_ATTEMPTS {
+            tracing::debug!(
+                resource = %key,
+                "entra credential refresh rejected: bounded attempts exhausted",
+            );
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
@@ -949,6 +1004,11 @@ impl EntraCredentialProvider {
                     .min(crate::MAX_REFRESH_ATTEMPTS);
                 record.health = crate::EntraResourceHealth::Degraded;
             }
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "entra credential inspection rotation generation regressed",
+            );
             return Err(invariant());
         }
         if inspection.state == CredentialLeaseState::Unknown {
@@ -959,6 +1019,11 @@ impl EntraCredentialProvider {
                     .min(crate::MAX_REFRESH_ATTEMPTS);
                 record.health = crate::EntraResourceHealth::Degraded;
             }
+            tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                resource = %key,
+                "entra credential lease state unknown after inspection",
+            );
             return Err(invariant());
         }
         let state = if inspection.state == CredentialLeaseState::Active
@@ -994,9 +1059,15 @@ impl EntraCredentialProvider {
     ) -> Result<(), CredentialServiceError> {
         match Self::poll_client_sync(self.client.state(), deadline)? {
             EntraClientState::Ready => Ok(()),
-            EntraClientState::InteractionRequired => Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::ProviderUnavailable,
-            )),
+            EntraClientState::InteractionRequired => {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    "entra credential login interaction required; provider unavailable",
+                );
+                Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::ProviderUnavailable,
+                ))
+            }
         }
     }
 
@@ -1017,9 +1088,15 @@ impl EntraCredentialProvider {
             .map_err(Self::map_client_error)?
         {
             EntraClientState::Ready => Ok(()),
-            EntraClientState::InteractionRequired => Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::ProviderUnavailable,
-            )),
+            EntraClientState::InteractionRequired => {
+                tracing::warn!(
+                    provider = crate::PROVIDER_REF,
+                    "entra credential login interaction required; provider unavailable",
+                );
+                Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::ProviderUnavailable,
+                ))
+            }
         }
     }
 
@@ -1029,6 +1106,10 @@ impl EntraCredentialProvider {
         {
             record.pending_acquire_idempotency = Some(idempotency_key.to_owned());
             record.health = crate::EntraResourceHealth::Degraded;
+            tracing::debug!(
+                resource = %key,
+                "entra credential ambiguous acquire recorded",
+            );
         }
     }
 
@@ -1058,6 +1139,10 @@ impl EntraCredentialProvider {
             return;
         }
         if let Ok(mut cleanup_leases) = self.cleanup_leases.lock() {
+            tracing::warn!(
+                resource = %credential_ref.to_canonical_string(),
+                "entra credential uncommitted grant cleanup deferred to cleanup records",
+            );
             cleanup_leases
                 .entry(credential_ref.to_canonical_string())
                 .or_default()
@@ -1097,6 +1182,10 @@ impl EntraCredentialProvider {
             return;
         }
         if let Ok(mut cleanup_leases) = self.cleanup_leases.lock() {
+            tracing::warn!(
+                resource = %credential_ref.to_canonical_string(),
+                "entra credential uncommitted grant cleanup deferred to cleanup records",
+            );
             cleanup_leases
                 .entry(credential_ref.to_canonical_string())
                 .or_default()

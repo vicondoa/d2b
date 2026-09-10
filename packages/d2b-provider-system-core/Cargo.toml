@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+tracing = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

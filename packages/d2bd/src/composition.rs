@@ -1238,7 +1238,12 @@ impl ZoneLinkGatewayComposition {
         if had_session
             && self.session_state() == d2b_core_controller::zone_links::ZoneLinkSessionState::Ready
         {
-            let _ = self.apply_event(ZoneLinkEvent::SessionDisconnected);
+            if let Err(error) = self.apply_event(ZoneLinkEvent::SessionDisconnected) {
+                tracing::warn!(
+                    error = %error,
+                    "zone-link session disconnect event rejected by zone-link state machine"
+                );
+            }
         }
         self.gateway_guest
             .lock()
@@ -6781,7 +6786,15 @@ fn admit_gateway_zone_request(
         }
         composition
             .reset_gateway_guest_identity()
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    error = ?error,
+                    guest_ref = %gateway_guest.guest_ref(),
+                    zone = %gateway_guest.zone().as_str(),
+                    "gateway guest identity reset failed; gateway route request denied"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
     }
     if composition.gateway_guest().as_ref() != Some(&gateway_guest) {
         if composition.gateway_guest().is_some() {
@@ -6794,10 +6807,26 @@ fn admit_gateway_zone_request(
             state,
             &gateway_guest,
         ))
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                error = %error,
+                guest_ref = %gateway_guest.guest_ref(),
+                zone = %gateway_guest.zone().as_str(),
+                "guest component session connect failed; gateway route request denied"
+            );
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
         composition
             .bind_gateway_session(session)
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    error = ?error,
+                    guest_ref = %gateway_guest.guest_ref(),
+                    zone = %gateway_guest.zone().as_str(),
+                    "gateway session bind failed; gateway route request denied"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
     }
     let gateway_guest_for_invalidation = gateway_guest.clone();
     let target_zone = composition.child_path().clone();
@@ -6808,7 +6837,15 @@ fn admit_gateway_zone_request(
     let operation_id = gateway_route_operation_id(request, peer_uid, method);
     composition
         .admit_request(&operation_id, target_zone)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(
+                error = ?error,
+                method = %method,
+                operation_id = %operation_id,
+                "gateway route admission denied for child-zone request"
+            );
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     debug_assert!(gateway_forwardable_request(request));
     let session = composition
         .gateway_session()
@@ -15859,10 +15896,32 @@ async fn open_resource_plane(
                 0
             },
         );
-        if let Err(error) = runtime
-            .reconcile_process_resources(Arc::new(state.clone()))
-            .await
-        {
+        // The generation publication above is the write; this startup read
+        // must not race it. Under a fast CPU the read can land before the
+        // published rows are visible, so retry instead of failing the
+        // plane - the resources are committed, the reader is just early.
+        let mut process_resource_startup =
+            Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+        // 30 x 2s: with fast fixture IO the reader outruns the broker's
+        // publication by a wide margin, and 10 attempts (20s) exhausted
+        // before the rows landed. Give the publication a full minute.
+        for attempt in 0..30 {
+            process_resource_startup = runtime
+                .reconcile_process_resources(Arc::new(state.clone()))
+                .await;
+            match &process_resource_startup {
+                Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
+                    tracing::warn!(
+                        zone = %runtime.zone().as_str(),
+                        attempt,
+                        "process resource startup raced publication; retrying",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                _ => break,
+            }
+        }
+        if let Err(error) = process_resource_startup {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             while let Some((_, runtime, _)) = remaining.next() {
@@ -15870,6 +15929,11 @@ async fn open_resource_plane(
             }
             return Err(error);
         }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         if let Err(error) = runtime.start_u10_controller_runners().await {
             tracing::error!(
                 zone = %runtime.zone().as_str(),
@@ -15881,6 +15945,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15897,6 +15966,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15913,6 +15987,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime
@@ -15929,6 +16008,11 @@ async fn open_resource_plane(
             while let Some((_, runtime, _)) = remaining.next() {
                 let _ = runtime.shutdown().await;
             }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
         if let Err(error) = runtime

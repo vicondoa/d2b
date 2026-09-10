@@ -470,6 +470,12 @@ where
         let candidate = match one_candidate(candidates) {
             Ok(candidate) => candidate,
             Err(error) => {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    code = error.code(),
+                    "sandbox candidate resolution failed during reconcile"
+                );
                 self.phase = AcaPhase::Degraded;
                 return Err(error);
             }
@@ -510,8 +516,21 @@ where
             .await?;
         let candidate = match one_candidate(candidates) {
             Ok(Some(candidate)) => candidate,
-            Ok(None) => return Err(AcaControllerError::SandboxUnavailable),
+            Ok(None) => {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    "adoption refused: no matching sandbox found for binding"
+                );
+                return Err(AcaControllerError::SandboxUnavailable);
+            }
             Err(error) => {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    code = error.code(),
+                    "adoption failed while resolving sandbox candidates"
+                );
                 self.phase = AcaPhase::Degraded;
                 return Err(error);
             }
@@ -536,11 +555,23 @@ where
                     self.readiness_retry(AcaSandboxLifecycle::Running)
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        resource = %self.binding.guest_uid,
+                        provider = "runtime-azure-container-apps",
+                        code = error.code(),
+                        "adopted sandbox health probe failed non-retryably"
+                    );
                     self.phase = AcaPhase::Degraded;
                     Err(error)
                 }
             }
         } else {
+            tracing::debug!(
+                resource = %self.binding.guest_uid,
+                provider = "runtime-azure-container-apps",
+                lifecycle = ?candidate.lifecycle,
+                "adopted sandbox not running; deferring readiness"
+            );
             self.phase = AcaPhase::Degraded;
             Ok(AcaReconcileOutcome::Retry {
                 after_ms: self.config.readiness().interval_ms(),
@@ -620,6 +651,11 @@ where
                     self.finalization_stage = AcaFinalizationStage::Delete;
                 }
                 AcaSandboxLifecycle::Unknown => {
+                    tracing::warn!(
+                        resource = %self.binding.guest_uid,
+                        provider = "runtime-azure-container-apps",
+                        "finalization refused: sandbox lifecycle unknown during stop stage"
+                    );
                     self.phase = AcaPhase::Degraded;
                     return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
                 }
@@ -637,6 +673,11 @@ where
                 }
                 Some(AcaSandboxLifecycle::Failed) => AcaFinalizationStage::Delete,
                 Some(AcaSandboxLifecycle::Unknown) => {
+                    tracing::warn!(
+                        resource = %self.binding.guest_uid,
+                        provider = "runtime-azure-container-apps",
+                        "finalization refused: sandbox lifecycle unknown during observe stage"
+                    );
                     self.phase = AcaPhase::Degraded;
                     return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
                 }
@@ -676,6 +717,11 @@ where
                     self.finalization_stage = AcaFinalizationStage::Delete;
                 }
                 Some(AcaSandboxLifecycle::Unknown) => {
+                    tracing::warn!(
+                        resource = %self.binding.guest_uid,
+                        provider = "runtime-azure-container-apps",
+                        "finalization refused: sandbox lifecycle unknown after stop"
+                    );
                     self.phase = AcaPhase::Degraded;
                     return Err(AcaControllerError::Effect(AcaControlErrorKind::Ambiguous));
                 }
@@ -887,6 +933,11 @@ where
         Fut: std::future::Future<Output = Result<T, AcaControlError>>,
     {
         if deadline_remaining_ms == 0 {
+            tracing::warn!(
+                resource = %self.binding.guest_uid,
+                provider = "runtime-azure-container-apps",
+                "operation deadline already expired before credential lease acquisition"
+            );
             return Err(AcaControllerError::Effect(
                 AcaControlErrorKind::DeadlineExpired,
             ));
@@ -901,12 +952,44 @@ where
         let deadline = Instant::now() + Duration::from_millis(u64::from(deadline_remaining_ms));
         let lease = timeout_at(deadline, self.leases.acquire(&request))
             .await
-            .map_err(|_| AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired))?
-            .map_err(|error| AcaControllerError::Effect(error.kind()))?;
+            .map_err(|_| {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    code = AcaControlErrorKind::DeadlineExpired.code(),
+                    "credential lease acquisition timed out before provider call"
+                );
+                AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired)
+            })?
+            .map_err(|error| {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    code = error.kind().code(),
+                    "credential lease acquisition failed"
+                );
+                AcaControllerError::Effect(error.kind())
+            })?;
         if lease.expires_at_unix_ms() <= self.clock.now_unix_ms()
             || lease.expires_at_unix_ms() < request.requested_expiry_unix_ms()
         {
-            let _ = timeout_at(deadline, self.leases.revoke(&lease)).await;
+            if timeout_at(deadline, self.leases.revoke(&lease))
+                .await
+                .map(|revocation| revocation.is_err())
+                .unwrap_or(true)
+            {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    "stale credential lease revocation failed"
+                );
+            }
+            tracing::warn!(
+                resource = %self.binding.guest_uid,
+                provider = "runtime-azure-container-apps",
+                code = AcaControlErrorKind::DeadlineExpired.code(),
+                "acquired credential lease already expired; operation rejected"
+            );
             return Err(AcaControllerError::Effect(
                 AcaControlErrorKind::DeadlineExpired,
             ));
@@ -917,13 +1000,48 @@ where
             call(Arc::clone(&self.control), lease.clone(), context),
         )
         .await
-        .map_err(|_| AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired))
-        .and_then(|result| result.map_err(|error| AcaControllerError::Effect(error.kind())));
+        .map_err(|_| {
+            tracing::warn!(
+                resource = %self.binding.guest_uid,
+                provider = "runtime-azure-container-apps",
+                code = AcaControlErrorKind::DeadlineExpired.code(),
+                purpose = ?purpose,
+                "provider operation deadline expired"
+            );
+            AcaControllerError::Effect(AcaControlErrorKind::DeadlineExpired)
+        })
+        .and_then(|result| {
+            result.map_err(|error| {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    code = error.kind().code(),
+                    purpose = ?purpose,
+                    "provider operation failed"
+                );
+                AcaControllerError::Effect(error.kind())
+            })
+        });
         let revoke = timeout_at(deadline, self.leases.revoke(&lease))
             .await
-            .map_err(|_| AcaControllerError::LeaseCleanup(AcaControlErrorKind::DeadlineExpired))
+            .map_err(|_| {
+                tracing::warn!(
+                    resource = %self.binding.guest_uid,
+                    provider = "runtime-azure-container-apps",
+                    "credential lease cleanup timed out"
+                );
+                AcaControllerError::LeaseCleanup(AcaControlErrorKind::DeadlineExpired)
+            })
             .and_then(|result| {
-                result.map_err(|error| AcaControllerError::LeaseCleanup(error.kind()))
+                result.map_err(|error| {
+                    tracing::warn!(
+                        resource = %self.binding.guest_uid,
+                        provider = "runtime-azure-container-apps",
+                        code = error.kind().code(),
+                        "credential lease cleanup failed after operation"
+                    );
+                    AcaControllerError::LeaseCleanup(error.kind())
+                })
             });
         match (result, revoke) {
             (Ok(value), Ok(())) => Ok(value),
@@ -962,9 +1080,23 @@ where
         }
         self.readiness_attempts = self.readiness_attempts.saturating_add(1);
         if self.readiness_attempts >= self.config.readiness().attempts() {
+            tracing::warn!(
+                resource = %self.binding.guest_uid,
+                provider = "runtime-azure-container-apps",
+                lifecycle = ?lifecycle,
+                attempts = self.readiness_attempts,
+                "readiness attempts exhausted; marking generation failed"
+            );
             self.phase = AcaPhase::Failed;
             return Err(AcaControllerError::ReadinessExhausted);
         }
+        tracing::debug!(
+            resource = %self.binding.guest_uid,
+            provider = "runtime-azure-container-apps",
+            lifecycle = ?lifecycle,
+            attempt = self.readiness_attempts,
+            "readiness retry scheduled for non-ready sandbox"
+        );
         self.phase = match lifecycle {
             AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => AcaPhase::Provisioning,
             AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => AcaPhase::Degraded,

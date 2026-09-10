@@ -428,6 +428,12 @@ where
             return self.poll_operation(operation).await;
         }
         if self.bootstrap_deadline_failed && self.pending_delete_operation_id.is_none() {
+            tracing::warn!(
+                zone = %zone_uid,
+                resource = %guest_uid,
+                provider = "runtime-azure-virtual-machine",
+                "bootstrap deadline previously failed; failing generation"
+            );
             self.phase = AzureVmPhase::Failed;
             if self.bootstrap_extension_present {
                 return self.start_extension_cleanup().await;
@@ -455,13 +461,31 @@ where
             }
             AzureVmState::Running => {
                 let Some(handle) = handle else {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "running VM observed without effect handle"
+                    );
                     return Err(AzureVmError::Ambiguous);
                 };
                 let Some(tags) = tags else {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest missing; refusing foreign or drifted resource"
+                    );
                     self.phase = AzureVmPhase::Failed;
                     return Err(AzureVmError::ArmResourceConflict);
                 };
                 if tags != self.expected_tag_digest {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest mismatch; refusing foreign or drifted resource"
+                    );
                     self.phase = AzureVmPhase::Failed;
                     return Err(AzureVmError::ArmResourceConflict);
                 }
@@ -484,6 +508,13 @@ where
                 Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 })
             }
             AzureVmState::Failed | AzureVmState::Unknown => {
+                tracing::warn!(
+                    zone = %zone_uid,
+                    resource = %guest_uid,
+                    provider = "runtime-azure-virtual-machine",
+                    state = ?state,
+                    "VM provisioning state failed or unknown"
+                );
                 self.phase = AzureVmPhase::Failed;
                 Err(AzureVmError::ArmProvisioningFailed)
             }
@@ -498,16 +529,37 @@ where
         let token = self.arm_token().await?;
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         if state != AzureVmState::Running {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                state = ?state,
+                "adoption refused: VM is not running"
+            );
             return Err(AzureVmError::Transient);
         }
         let Some(handle) = handle else {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                "adoption refused: running VM without effect handle"
+            );
             return Err(AzureVmError::Ambiguous);
         };
         let Some(tags) = tags else {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                "adoption refused: VM tag digest missing"
+            );
             self.phase = AzureVmPhase::Failed;
             return Err(AzureVmError::ArmResourceConflict);
         };
         if tags != self.expected_tag_digest {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                "adoption refused: VM tag digest mismatch"
+            );
             self.phase = AzureVmPhase::Failed;
             return Err(AzureVmError::ArmResourceConflict);
         }
@@ -522,9 +574,20 @@ where
         operation: crate::effect::AzureOperationHandle,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if self.operation.as_ref() != Some(&operation) {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                "poll called with a foreign operation handle"
+            );
             return Err(AzureVmError::InvalidOperationHandle);
         }
         if self.operation_expired() {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                phase = ?self.phase,
+                "long-running operation exceeded maximum age; abandoning"
+            );
             self.clear_operation();
             self.pending_update = None;
             if self.pending_delete_operation_id.is_some() {
@@ -540,6 +603,12 @@ where
                 after_ms: after_ms.max(1),
             }),
             LroStatus::Failed => {
+                tracing::warn!(
+                    resource_group = %self.settings.resource_group,
+                    provider = "runtime-azure-virtual-machine",
+                    phase = ?self.phase,
+                    "long-running operation failed"
+                );
                 if self.phase == AzureVmPhase::PskCleaning {
                     self.clear_operation();
                     self.phase = AzureVmPhase::Failed;
@@ -574,18 +643,39 @@ where
                         let (state, handle, tags) =
                             self.effect.get_vm_state(&self.settings, &token).await?;
                         if state != AzureVmState::Running {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                state = ?state,
+                                "VM not running after provision LRO succeeded"
+                            );
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::ArmProvisioningFailed);
                         }
                         let Some(handle) = handle else {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                "running VM observed without effect handle after provision"
+                            );
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::Ambiguous);
                         };
                         let Some(tags) = tags else {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                "VM tag digest missing after provision; refusing foreign resource"
+                            );
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::ArmResourceConflict);
                         };
                         if tags != self.expected_tag_digest {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                "VM tag digest mismatch after provision; refusing foreign resource"
+                            );
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::ArmResourceConflict);
                         }
@@ -607,6 +697,11 @@ where
                         self.bootstrap_extension_present = false;
                         self.bootstrap_psk = None;
                         if self.bootstrap_deadline_failed {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                "bootstrap deadline failed; refusing to mark VM ready"
+                            );
                             self.phase = AzureVmPhase::Failed;
                             return Err(AzureVmError::BootstrapFailed);
                         }
@@ -618,8 +713,26 @@ where
                         Ok(AzureVmReconcileOutcome::Converged)
                     }
                     AzureVmPhase::Reconfiguring => {
-                        let update = self.pending_update.take().ok_or(AzureVmError::Ambiguous)?;
-                        self.apply_update(update)?;
+                        let update = match self.pending_update.take() {
+                            Some(update) => update,
+                            None => {
+                                tracing::warn!(
+                                    resource_group = %self.settings.resource_group,
+                                    provider = "runtime-azure-virtual-machine",
+                                    "reconfiguration LRO succeeded without pending update"
+                                );
+                                return Err(AzureVmError::Ambiguous);
+                            }
+                        };
+                        if let Err(error) = self.apply_update(update) {
+                            tracing::warn!(
+                                resource_group = %self.settings.resource_group,
+                                provider = "runtime-azure-virtual-machine",
+                                code = error.code(),
+                                "applied update rejected during reconfiguration"
+                            );
+                            return Err(error);
+                        }
                         self.phase = AzureVmPhase::Ready;
                         Ok(AzureVmReconcileOutcome::Converged)
                     }
@@ -646,12 +759,34 @@ where
         update: AzureVmUpdate,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if !matches!(self.phase, AzureVmPhase::Ready) {
+            tracing::warn!(
+                zone = %zone_uid,
+                resource = %guest_uid,
+                provider = "runtime-azure-virtual-machine",
+                phase = ?self.phase,
+                "update rejected: VM is not in Ready phase"
+            );
             return Err(AzureVmError::Transient);
         }
         if self.operation.is_some() || self.pending_update.is_some() {
+            tracing::debug!(
+                zone = %zone_uid,
+                resource = %guest_uid,
+                provider = "runtime-azure-virtual-machine",
+                "update deferred while another operation is in flight"
+            );
             return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 });
         }
-        self.validate_update(&update)?;
+        if let Err(error) = self.validate_update(&update) {
+            tracing::warn!(
+                zone = %zone_uid,
+                resource = %guest_uid,
+                provider = "runtime-azure-virtual-machine",
+                code = error.code(),
+                "update rejected: validation failed"
+            );
+            return Err(error);
+        }
         let handle = self.vm_handle.clone().ok_or(AzureVmError::Ambiguous)?;
         let operation_id =
             idempotency::operation_id(zone_uid, guest_uid, generation, update.operation_class());
@@ -724,14 +859,32 @@ where
             }
             AzureVmState::Running | AzureVmState::Stopped => {
                 let Some(handle) = handle else {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "running VM observed without effect handle during finalization"
+                    );
                     self.phase = AzureVmPhase::Failed;
                     return Err(AzureVmError::Ambiguous);
                 };
                 let Some(tags) = tags else {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest missing during finalization; refusing foreign resource"
+                    );
                     self.phase = AzureVmPhase::Failed;
                     return Err(AzureVmError::ArmResourceConflict);
                 };
                 if tags != self.expected_tag_digest {
+                    tracing::warn!(
+                        zone = %zone_uid,
+                        resource = %guest_uid,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest mismatch during finalization; refusing foreign resource"
+                    );
                     self.phase = AzureVmPhase::Failed;
                     return Err(AzureVmError::ArmResourceConflict);
                 }
@@ -744,6 +897,13 @@ where
                 return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
             }
             AzureVmState::Failed | AzureVmState::Unknown => {
+                tracing::warn!(
+                    zone = %zone_uid,
+                    resource = %guest_uid,
+                    provider = "runtime-azure-virtual-machine",
+                    state = ?state,
+                    "VM state failed or unknown during finalization"
+                );
                 self.phase = AzureVmPhase::Failed;
                 return Err(AzureVmError::Transient);
             }
@@ -785,10 +945,21 @@ where
             .bootstrap_started_at_unix_ms
             .get_or_insert_with(|| self.clock.now_unix_ms());
         if self.clock.now_unix_ms().saturating_sub(started) >= self.settings.bootstrap_deadline_ms {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                "bootstrap PSK delivery deadline elapsed"
+            );
             self.phase = AzureVmPhase::Failed;
             return Err(AzureVmError::BootstrapFailed);
         }
         if self.psk_delivery_attempts >= MAX_PSK_DELIVERY_ATTEMPTS {
+            tracing::warn!(
+                resource_group = %self.settings.resource_group,
+                provider = "runtime-azure-virtual-machine",
+                attempts = self.psk_delivery_attempts,
+                "bootstrap PSK delivery attempts exhausted"
+            );
             self.phase = AzureVmPhase::Failed;
             return Err(AzureVmError::BootstrapFailed);
         }
@@ -820,6 +991,11 @@ where
             if self.clock.now_unix_ms().saturating_sub(started)
                 >= self.settings.bootstrap_deadline_ms
             {
+                tracing::warn!(
+                    resource_group = %self.settings.resource_group,
+                    provider = "runtime-azure-virtual-machine",
+                    "bootstrap enrollment deadline elapsed before guest enrolled"
+                );
                 self.phase = AzureVmPhase::Failed;
                 self.bootstrap_deadline_failed = true;
                 if self.bootstrap_extension_present {
@@ -853,12 +1029,27 @@ where
             }
             AzureVmState::Running | AzureVmState::Stopped => {
                 let Some(handle) = handle else {
+                    tracing::warn!(
+                        resource_group = %self.settings.resource_group,
+                        provider = "runtime-azure-virtual-machine",
+                        "running VM observed without effect handle during pending delete"
+                    );
                     return Err(AzureVmError::Ambiguous);
                 };
                 let Some(tags) = tags else {
+                    tracing::warn!(
+                        resource_group = %self.settings.resource_group,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest missing during pending delete; refusing foreign resource"
+                    );
                     return Err(AzureVmError::ArmResourceConflict);
                 };
                 if tags != self.expected_tag_digest {
+                    tracing::warn!(
+                        resource_group = %self.settings.resource_group,
+                        provider = "runtime-azure-virtual-machine",
+                        "VM tag digest mismatch during pending delete; refusing foreign resource"
+                    );
                     return Err(AzureVmError::ArmResourceConflict);
                 }
                 let operation_id = self
@@ -880,6 +1071,12 @@ where
                 Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 })
             }
             AzureVmState::Failed | AzureVmState::Unknown => {
+                tracing::warn!(
+                    resource_group = %self.settings.resource_group,
+                    provider = "runtime-azure-virtual-machine",
+                    state = ?state,
+                    "VM state failed or unknown during pending delete"
+                );
                 self.phase = AzureVmPhase::Failed;
                 Err(AzureVmError::Transient)
             }
@@ -970,12 +1167,12 @@ where
             AzureVmUpdate::Resize { size } => {
                 self.settings.vm_size = d2b_contracts::OpaqueAzureRef::parse(size)
                     .map_err(|_| AzureVmError::InvalidConfiguration)?;
-            }
-            AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),
-            AzureVmUpdate::DetachDisk { lun } => {
-                self.settings.data_disks.retain(|disk| disk.lun != lun)
-            }
-            AzureVmUpdate::ReplaceTags { tags } => self.settings.azure_tags = tags,
+        }
+        AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),
+        AzureVmUpdate::DetachDisk { lun } => {
+            self.settings.data_disks.retain(|disk| disk.lun != lun)
+        }
+        AzureVmUpdate::ReplaceTags { tags } => self.settings.azure_tags = tags,
         }
         self.settings.validate()?;
         self.expected_tag_digest = TagDigest::from_tags(&self.settings.azure_tags);
@@ -986,5 +1183,14 @@ where
         self.credentials
             .acquire_token("https://management.azure.com/", 30_000)
             .await
+            .map_err(|error| {
+                tracing::warn!(
+                    resource_group = %self.settings.resource_group,
+                    provider = "runtime-azure-virtual-machine",
+                    code = error.code(),
+                    "ARM access token acquisition failed"
+                );
+                error
+            })
     }
 }
