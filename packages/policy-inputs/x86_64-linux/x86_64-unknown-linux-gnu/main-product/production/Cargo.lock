@@ -963,6 +963,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-core-controller",
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider-supervisor",
@@ -975,6 +976,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1013,6 +1015,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1092,6 +1095,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1109,6 +1113,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
 ]
 
 
@@ -1131,6 +1136,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
+ "tracing",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
@@ -1150,6 +1156,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
  "ttrpc",
 ]
 
@@ -1165,6 +1172,7 @@ dependencies = [
  "d2b-provider-toolkit",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1179,6 +1187,7 @@ dependencies = [
  "d2b-provider-toolkit",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1195,6 +1204,7 @@ dependencies = [
  "d2b-session-unix",
  "serde_json",
  "tokio",
+ "tracing",
  "ttrpc",
 ]
 
@@ -1207,6 +1217,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 
@@ -1231,6 +1242,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 
@@ -1247,6 +1259,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 
@@ -1270,6 +1283,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.20",
+ "tracing",
  "uapi",
  "wl-proxy",
 ]
@@ -1288,6 +1302,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tracing",
 ]
 
 
@@ -1303,6 +1318,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1317,6 +1333,7 @@ dependencies = [
  "rustix 0.38.44",
  "serde",
  "serde_json",
+ "tracing",
  "zeroize",
 ]
 
@@ -1348,6 +1365,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
  "zeroize",
 ]
 
@@ -1367,6 +1385,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1381,6 +1400,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1391,6 +1411,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-process-conformance",
+ "tracing",
 ]
 
 
@@ -1414,6 +1435,7 @@ dependencies = [
  "socket2 0.5.10",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1426,6 +1448,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1437,6 +1460,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "serde",
+ "tracing",
 ]
 
 
@@ -1452,6 +1476,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1464,6 +1489,7 @@ dependencies = [
  "d2b-session",
  "d2b-session-unix",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1483,6 +1509,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tracing",
  "ttrpc",
  "zeroize",
 ]
@@ -1511,6 +1538,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "urlencoding",
  "webpki-roots 0.26.11",
  "zeroize",
@@ -1525,6 +1553,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "getrandom 0.3.4",
  "rustix 0.38.44",
+ "tracing",
 ]
 
 
@@ -1540,6 +1569,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1555,6 +1585,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1567,6 +1598,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tracing",
 ]
 
 
@@ -1587,6 +1619,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
  "ttrpc",
 ]
 
@@ -1651,6 +1684,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1671,6 +1705,7 @@ dependencies = [
  "sha2",
  "snow",
  "tokio",
+ "tracing",
  "ttrpc",
  "zeroize",
 ]
@@ -1692,6 +1727,7 @@ dependencies = [
  "rustix 0.38.44",
  "tokio",
  "tokio-vsock",
+ "tracing",
  "uapi",
  "zeroize",
 ]
