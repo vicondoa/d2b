@@ -683,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_virtiofsd_shapes_are_rejected_at_validate() {
-        let mut spec = virtiofsd_endpoint_spec();
+        let spec = virtiofsd_endpoint_spec();
         let replacement = EndpointSpec::new(
             ResourceRef::parse("Provider/volume-virtiofs").expect("provider"),
             ResourceRef::parse("Process/vol-worker").expect("producer"),

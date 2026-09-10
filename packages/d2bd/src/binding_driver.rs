@@ -718,7 +718,7 @@ mod tests {
             }
         }
 
-        fn with_parent(mut self, volume_uid: [u8; 16], spec: &[u8]) -> Self {
+        fn with_parent(self, volume_uid: [u8; 16], spec: &[u8]) -> Self {
             self.rows.lock().push(StoredDesiredResource {
                 key: ResourceKey::new("work", "Volume", "data"),
                 uid: volume_uid,
@@ -1064,7 +1064,7 @@ mod tests {
             .iter()
             .position(|entry| entry.starts_with("delete:Endpoint/"))
             .expect("endpoint child deleted");
-        let worker_delete = order
+        let _worker_delete = order
             .iter()
             .position(|entry| entry.starts_with("delete:Process/"))
             .expect("worker child deleted");

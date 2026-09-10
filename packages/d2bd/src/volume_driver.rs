@@ -594,13 +594,13 @@ mod tests {
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverFailure, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
-    use super::{VolumeDriverArgs, VolumeDriverFactory, VolumeDriverStatus, volume_spec_decoder};
+    use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
 
     // -- fakes ---------------------------------------------------------------
 
@@ -938,7 +938,7 @@ mod tests {
             .iter()
             .position(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .expect("ensure recorded");
-        let binding_spawn = order
+        let _binding_spawn = order
             .iter()
             .position(|entry| entry.starts_with("spawned:VolumeBinding/"))
             .expect("spawn notification recorded");
