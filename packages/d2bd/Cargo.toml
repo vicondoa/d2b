@@ -31,6 +31,7 @@ d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", versi
 d2b-provider-system-systemd = { path = "../d2b-provider-system-systemd", version = "0.0.0-bootstrap" }
 d2b-provider-shell-terminal = { path = "../d2b-provider-shell-terminal", version = "0.0.0-bootstrap" }
 d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap" }
 d2b-provider-config-nixos = { path = "../d2b-provider-config-nixos", version = "0.0.0-bootstrap" }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
@@ -89,9 +90,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "syn
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 
 [dev-dependencies]
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
