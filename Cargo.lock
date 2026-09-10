@@ -1013,6 +1013,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-core-controller",
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider-supervisor",

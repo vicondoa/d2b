@@ -27,5 +27,6 @@ d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 serde_json.workspace = true
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread"] }
