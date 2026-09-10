@@ -22,6 +22,7 @@ pub mod guest_target;
 /// In-memory external/internal watch hub over runtime revisions.
 pub mod watch;
 /// Durable desired-spec store (SQLite, single writer).
+pub mod schema;
 pub mod spec_store;
 /// Resource identity and ownership-edge types.
 pub mod identity;

@@ -1689,6 +1689,10 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "ractor",
  "rusqlite",
+ "rusqlite_migration",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 
@@ -3498,6 +3502,17 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
  "sqlite-wasm-rs",
+]
+
+
+[[package]]
+name = "rusqlite_migration"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03451d4dc523c0a96d9e412c574670b3f5f184c3988b77a435876be25477bbd3"
+dependencies = [
+ "log",
+ "rusqlite",
 ]
 
 

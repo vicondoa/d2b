@@ -79,7 +79,8 @@
       "sha256:8cf550134ab6d12803208f8a8a672b1240a7cb320d46cbd1afb73a8e6b1b14c8",
       "sha256:c9ac53a356282dadf411832494d2ba54f9ab3e789bc6ba3e9b375028cbae51e3",
       "sha256:9dad8798728b429c116e261ab10c9b4c799f3cb9cc0c084bc5139a030b67f685",
-      "sha256:71b004ddd04a02255489972aba35bdc0df3d1ade7ba8993226854f0e05ca110e"
+      "sha256:71b004ddd04a02255489972aba35bdc0df3d1ade7ba8993226854f0e05ca110e",
+      "sha256:307c3e5da2c233d28d9e2a780604bfc094d0ed8519fd948609521e8ad730b396"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

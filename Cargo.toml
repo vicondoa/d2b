@@ -160,3 +160,8 @@ ractor = "0.16"
 # SQLite C sources so no system libsqlite3 is required.
 # First consumed by packages/d2b-resource-runtime (scaffold commit).
 rusqlite = { version = "0.40", features = ["bundled"] }
+# v3 resource-runtime rewrite (U2): embedded schema migrations for the SQLite
+# spec store (persist-then-reopen must apply migrations idempotently without a
+# runtime-side migration runner). Small, auditable migration list only.
+# First consumed by packages/d2b-resource-runtime (this commit).
+rusqlite_migration = "2.6"

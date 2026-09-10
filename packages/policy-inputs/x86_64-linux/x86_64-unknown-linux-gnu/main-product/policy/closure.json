@@ -69,7 +69,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "f09c727d1d57bdde588f9df7feae6368c66cfe9efa3970f48c1b39095fbb85aa",
+  "lock_sha256": "f4a2601ef8f45139e07e27f227b655c7a10a0d4eb3544f70797c4934ba2666d9",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -2157,6 +2157,14 @@
       "version": "0.40.2",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "name": "rusqlite_migration",
+      "version": "2.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "03451d4dc523c0a96d9e412c574670b3f5f184c3988b77a435876be25477bbd3",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -6828,6 +6836,36 @@
       "target": null
     },
     {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "tempfile@3.27.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "thiserror@2.0.20#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
       "to": "d2b-audit@0.0.0-bootstrap#path",
       "kind": "normal",
@@ -8870,6 +8908,18 @@
     {
       "from": "rusqlite@0.40.2#registry+https://github.com/rust-lang/crates.io-index",
       "to": "smallvec@1.15.2#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "log@0.4.33#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "rusqlite@0.40.2#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
