@@ -723,6 +723,8 @@ async fn seed_broker_audited_resource(
         envelope["status"]["resource"]["providerReadiness"] =
             candidate["resource"]["providerReadiness"].clone();
         let submitted_status = envelope["status"].clone();
+        #[allow(unused_variables)]
+        let _ = &submitted_status; // consumed by the FIXED POINT 2 convergence assert below in the bazel -D-warnings build
         let status_body = CanonicalJsonValue::parse(&serde_json::to_vec(&envelope).unwrap())
             .unwrap()
             .to_canonical_bytes();
