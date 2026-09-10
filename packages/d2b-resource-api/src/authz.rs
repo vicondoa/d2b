@@ -238,18 +238,21 @@ pub enum BootstrapPhase {
     Disabled,
 }
 
-/// Trusted store facts from which the one-way bootstrap phase is derived.
-///
-/// The Zone runtime obtains these values from the same redb read snapshot used
-/// for admission.  There is no constructor accepting Nix, environment,
-/// caller, or API policy input.
+
+/// Trusted store facts from which the one-way bootstrap phase is derived
+/// (KTD6): everything here compiles from the manager-backed spec store's
+/// durable rows - the published policy revision (seeded with the Nix bundle
+/// at materialization time), the durable bootstrap Provider rows by fixed
+/// name, and the Zone authority's fixed generations. There is no constructor
+/// accepting Nix, environment, caller, or API policy input beyond these
+/// durable facts.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BootstrapStoreFacts {
-    /// The store's self Zone name.
+    /// The Zone's canonical name.
     zone: ZoneId,
-    /// Durable `store_meta.policy_revision`.
+    /// The durable published policy revision (nonzero once published).
     policy_revision: u64,
-    /// Bootstrap Provider rows present in the `type_index`, by fixed name.
+    /// Durable bootstrap Provider rows, by name.
     bootstrap_provider_uids: BTreeMap<ResourceName, ResourceUid>,
     /// Current fixed core-controller generation.
     controller_generation: ControllerGeneration,
@@ -258,9 +261,10 @@ pub struct BootstrapStoreFacts {
 }
 
 impl BootstrapStoreFacts {
-    /// Construct facts only at the trusted Zone-store adapter boundary.
-    #[allow(dead_code)]
-    pub(crate) fn from_trusted_store(
+    /// Compile the facts at the trusted Zone-runtime boundary: the Zone
+    /// runtime owns the spec store and the bundle resolver, and this
+    /// constructor only binds their already-trusted outputs.
+    pub fn from_durable_spec_facts(
         zone: ZoneId,
         policy_revision: u64,
         bootstrap_provider_uids: BTreeMap<ResourceName, ResourceUid>,
@@ -276,7 +280,6 @@ impl BootstrapStoreFacts {
         }
     }
 }
-
 impl core::fmt::Debug for BootstrapStoreFacts {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -323,6 +326,195 @@ pub fn derive_bootstrap_phase(facts: &BootstrapStoreFacts) -> BootstrapPhase {
 /// The only allowed durable bootstrap publication transition.
 pub const fn bootstrap_policy_transition(old_revision: u64, new_revision: u64) -> bool {
     old_revision == 0 && new_revision == 1
+}
+
+// ---------------------------------------------------------------------------
+// KTD6: the authorization facts compile from the manager-backed spec store's
+// durable Role / RoleBinding / User / Provider rows (with the Nix bundle
+// seeded into those rows at materialization time) - never from redb
+// snapshots.
+// ---------------------------------------------------------------------------
+
+/// Where one durable policy row came from. Bundle provenance means the row
+/// was materialized from the Nix bundle; local provenance means the row was
+/// written through the API or a controller surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableRowProvenance {
+    Bundle,
+    Local,
+}
+
+/// One durable spec row feeding the authorization compile (KTD6): the
+/// resource reference, its canonical envelope bytes, and its provenance.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DurablePolicyRow {
+    pub resource_ref: ResourceRef,
+    pub canonical_json: Vec<u8>,
+    pub provenance: DurableRowProvenance,
+}
+
+impl core::fmt::Debug for DurablePolicyRow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DurablePolicyRow")
+            .field("resource_ref", &"<redacted>")
+            .field("canonical_bytes", &self.canonical_json.len())
+            .field("provenance", &self.provenance)
+            .finish()
+    }
+}
+
+/// The compiled authorization facts for one Zone (KTD6): the installed
+/// policy set (absent while bootstrap is open) and the durable bootstrap
+/// facts the one-way latch derives from.
+#[derive(Clone)]
+pub struct CompiledAuthorizationFacts {
+    pub policy: Option<PolicySet>,
+    pub bootstrap: BootstrapStoreFacts,
+}
+
+impl core::fmt::Debug for CompiledAuthorizationFacts {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CompiledAuthorizationFacts")
+            .field("has_policy", &self.policy.is_some())
+            .field("bootstrap", &self.bootstrap)
+            .finish()
+    }
+}
+
+/// The Zone's durable policy revision derives from the Nix bundle
+/// generation (seeded at materialization time) plus durable row state. Any
+/// durable policy row publishes at least revision 1, and a published
+/// revision never returns to zero - the one-way bootstrap latch
+/// ([`derive_bootstrap_phase`]) stays closed for the lifetime of the Zone
+/// regardless of later bundle generations.
+pub fn published_policy_revision(bundle_generation: u64, durable_policy_rows: usize) -> u64 {
+    let published_by_rows = u64::from(durable_policy_rows > 0);
+    if bundle_generation > published_by_rows {
+        bundle_generation
+    } else {
+        published_by_rows
+    }
+}
+
+/// Parse one durable Role row's evaluator input from its canonical envelope.
+fn durable_role_spec(row: &DurablePolicyRow) -> Result<RoleSpec, AuthorizationPolicyError> {
+    let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&row.canonical_json)
+        .map_err(|_| AuthorizationPolicyError::RoleSchema)?;
+    let spec = value
+        .as_object()
+        .and_then(|object| object.get("spec"))
+        .ok_or(AuthorizationPolicyError::RoleSchema)?;
+    serde_json::from_slice(&spec.to_canonical_bytes()).map_err(|_| AuthorizationPolicyError::RoleSchema)
+}
+
+/// Parse one durable RoleBinding row's evaluator input.
+fn durable_binding_spec(row: &DurablePolicyRow) -> Result<RoleBindingSpec, AuthorizationPolicyError> {
+    let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&row.canonical_json)
+        .map_err(|_| AuthorizationPolicyError::BindingShape)?;
+    let spec = value
+        .as_object()
+        .and_then(|object| object.get("spec"))
+        .ok_or(AuthorizationPolicyError::BindingShape)?;
+    serde_json::from_slice(&spec.to_canonical_bytes())
+        .map_err(|_| AuthorizationPolicyError::BindingShape)
+}
+
+/// Extract a durable User/Provider row's immutable uid from its envelope.
+fn durable_row_uid(row: &DurablePolicyRow) -> Result<ResourceUid, AuthorizationPolicyError> {
+    let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&row.canonical_json)
+        .map_err(|_| AuthorizationPolicyError::BindingShape)?;
+    let uid = value
+        .as_object()
+        .and_then(|object| object.get("metadata"))
+        .and_then(|metadata| metadata.as_object())
+        .and_then(|metadata| metadata.get("uid"))
+        .and_then(|value| match value {
+            d2b_contracts_resource::v3::CanonicalJsonValue::String(value) => Some(value),
+            _ => None,
+        })
+        .ok_or(AuthorizationPolicyError::BindingShape)?;
+    ResourceUid::parse(uid).map_err(|_| AuthorizationPolicyError::BindingShape)
+}
+
+/// Compile the Zone's authorization facts from the durable spec rows
+/// (KTD6): Role rows compile into evaluator projections, RoleBinding rows
+/// bind only the subjects whose durable User/Provider rows still resolve,
+/// bundle-provenance bindings carry Core-generated relay authority, and the
+/// published policy revision (the bundle generation latched by durable row
+/// state) decides whether a policy set exists at all. An empty or never-
+/// published Zone returns no policy set: bootstrap stays derivable from the
+/// durable facts.
+pub fn compile_authorization_facts(
+    catalog: &ApiCatalog,
+    zone: ZoneId,
+    bundle_generation: u64,
+    rows: &[DurablePolicyRow],
+    controller_generation: ControllerGeneration,
+    provider_generation: d2b_contracts_resource::v3::ResourceGeneration,
+) -> Result<CompiledAuthorizationFacts, AuthorizationPolicyError> {
+    let mut roles = Vec::new();
+    let mut bindings = Vec::new();
+    let mut subject_uids: BTreeMap<ResourceRef, ResourceUid> = BTreeMap::new();
+    let mut bootstrap_provider_uids = BTreeMap::new();
+    for row in rows {
+        match row.resource_ref.resource_type().as_str() {
+            "Role" => {
+                let spec = durable_role_spec(row)?;
+                roles.push(CompiledRole::from_spec(
+                    row.resource_ref.clone(),
+                    &spec,
+                    catalog,
+                    row.provenance == DurableRowProvenance::Bundle,
+                )?);
+            }
+            "RoleBinding" => {
+                let spec = durable_binding_spec(row)?;
+                let relay_authority = match row.provenance {
+                    DurableRowProvenance::Bundle => RelayGrantAuthority::CoreGenerated,
+                    DurableRowProvenance::Local => RelayGrantAuthority::DurableLocalAdmin,
+                };
+                bindings.push((spec, relay_authority));
+            }
+            "Provider" | "User" => {
+                let uid = durable_row_uid(row)?;
+                subject_uids.insert(row.resource_ref.clone(), uid.clone());
+                if row.resource_ref.resource_type().as_str() == "Provider" {
+                    bootstrap_provider_uids.insert(row.resource_ref.name().clone(), uid);
+                }
+            }
+            _ => {}
+        }
+    }
+    let policy_revision =
+        published_policy_revision(bundle_generation, roles.len() + bindings.len());
+    let bootstrap = BootstrapStoreFacts::from_durable_spec_facts(
+        zone,
+        policy_revision,
+        bootstrap_provider_uids,
+        controller_generation,
+        provider_generation,
+    );
+    if policy_revision == 0 {
+        return Ok(CompiledAuthorizationFacts { policy: None, bootstrap });
+    }
+    let compiled_bindings = bindings
+        .into_iter()
+        .map(|(spec, relay_authority)| {
+            CompiledRoleBinding::from_spec_with_resolved_subjects(
+                &spec,
+                spec.subjects().iter().filter_map(|subject_ref| {
+                    let uid = subject_uids.get(subject_ref)?;
+                    Some(BoundSubject {
+                        subject_ref: subject_ref.clone(),
+                        subject_uid: uid.clone(),
+                    })
+                }),
+                relay_authority,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let policy = PolicySet::new(catalog, policy_revision, roles, compiled_bindings).map(Some)?;
+    Ok(CompiledAuthorizationFacts { policy, bootstrap })
 }
 
 /// Exact subject binding compiled from one RoleBinding.
