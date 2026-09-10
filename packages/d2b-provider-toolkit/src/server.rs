@@ -223,6 +223,7 @@ impl<S> GeneratedProviderServiceServer<S> {
     /// The `Notify` future is armed before the in-flight count is checked,
     /// closing the final-permit check/await race.
     pub async fn shutdown(&self, timeout: Duration) -> bool {
+        self.state.accepting.store(false, Ordering::Release);
         let drained = tokio::time::timeout(timeout, async {
             loop {
                 let notified = self.state.idle.notified();
