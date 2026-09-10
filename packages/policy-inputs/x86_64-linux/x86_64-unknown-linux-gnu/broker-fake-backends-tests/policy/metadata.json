@@ -4,8 +4,8 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "17062f6423c2b26efe21ec143cef2cf171c18dbd0e58e3197cc45e02d4a7773f",
-  "policyPackageCount": 161,
+  "lockSha256": "f09c727d1d57bdde588f9df7feae6368c66cfe9efa3970f48c1b39095fbb85aa",
+  "policyPackageCount": 162,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -62,6 +62,7 @@
     "event-listener-strategy@0.5.4#registry+https://github.com/rust-lang/crates.io-index",
     "event-listener@5.4.2#registry+https://github.com/rust-lang/crates.io-index",
     "fastrand@2.5.0#registry+https://github.com/rust-lang/crates.io-index",
+    "foldhash@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
     "futures-channel@0.3.34#registry+https://github.com/rust-lang/crates.io-index",
     "futures-core@0.3.34#registry+https://github.com/rust-lang/crates.io-index",
     "futures-executor@0.3.34#registry+https://github.com/rust-lang/crates.io-index",
@@ -169,8 +170,8 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 130,
-  "resolveNodeCount": 376,
+  "productionPackageCount": 131,
+  "resolveNodeCount": 396,
   "roots": [
     "d2b-broker"
   ],

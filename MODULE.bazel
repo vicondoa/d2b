@@ -116,6 +116,12 @@ crate.annotation(
     crate = "aws-lc-sys",
     version = "0.44.0",
 )
+crate.annotation(
+    crate = "libsqlite3-sys",
+    patch_args = ["-p1"],
+    patches = ["//:libsqlite3-sys-cargo-include.patch"],
+    version = "0.38.2",
+)
 use_repo(crate, "crates")
 
 proof_crates = use_extension("@rules_rs//rs:extensions.bzl", "crate")

@@ -1,0 +1,13 @@
+[package]
+name = "d2b-resource-runtime"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ractor.workspace = true
+rusqlite.workspace = true

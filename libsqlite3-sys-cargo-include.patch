@@ -1,0 +1,22 @@
+# libsqlite3-sys 0.38.2 (bundled feature) - Bazel compatibility patch.
+#
+# The build script emits `cargo:include=$CARGO_MANIFEST_DIR/sqlite3` via a
+# compile-time `env!()`, which embeds the absolute sandbox execroot into the
+# compiled build-script binary. Bazel's process_wrapper rejects any compiled
+# output that retains env!("CARGO_MANIFEST_DIR") / env!("OUT_DIR"), so the
+# build fails under `bazel build`. Under Bazel's generated crate graph the
+# `cargo:include` directive is not consumed by anything (dependents get their
+# include paths from the generated BUILD targets), so emitting the relative
+# directory is behavior-preserving there while keeping cargo builds working.
+--- a/build.rs
++++ b/build.rs
+@@ -144,7 +144,7 @@ mod build_bundled {
+             _ => {
+                 super::copy_bindings(lib_name, "bindgen_bundled_version", out_path);
+             }
+         }
+-        println!("cargo:include={}/{lib_name}", env!("CARGO_MANIFEST_DIR"));
++        println!("cargo:include={lib_name}");
+         println!("cargo:rerun-if-changed={lib_name}/sqlite3.c");
+         println!("cargo:rerun-if-changed=sqlite3/wasm32-wasi-vfs.c");
+         let mut cfg = cc::Build::new();

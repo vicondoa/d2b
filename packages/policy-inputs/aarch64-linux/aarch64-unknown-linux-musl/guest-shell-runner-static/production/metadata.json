@@ -4,8 +4,8 @@
   "features": [
     "real-libshpool"
   ],
-  "lockSha256": "17062f6423c2b26efe21ec143cef2cf171c18dbd0e58e3197cc45e02d4a7773f",
-  "policyPackageCount": 138,
+  "lockSha256": "f09c727d1d57bdde588f9df7feae6368c66cfe9efa3970f48c1b39095fbb85aa",
+  "policyPackageCount": 139,
   "policyPackageIds": [
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
     "anstream@1.0.0#registry+https://github.com/rust-lang/crates.io-index",
@@ -42,6 +42,7 @@
     "fastrand@2.5.0#registry+https://github.com/rust-lang/crates.io-index",
     "filetime@0.2.29#registry+https://github.com/rust-lang/crates.io-index",
     "float-cmp@0.10.0#registry+https://github.com/rust-lang/crates.io-index",
+    "foldhash@0.2.0#registry+https://github.com/rust-lang/crates.io-index",
     "funty@2.0.0#registry+https://github.com/rust-lang/crates.io-index",
     "getrandom@0.4.3#registry+https://github.com/rust-lang/crates.io-index",
     "glob@0.3.4#registry+https://github.com/rust-lang/crates.io-index",
@@ -146,8 +147,8 @@
     "wyz@0.5.1#registry+https://github.com/rust-lang/crates.io-index",
     "zmij@1.0.23#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 128,
-  "resolveNodeCount": 421,
+  "productionPackageCount": 129,
+  "resolveNodeCount": 441,
   "roots": [
     "d2b-guest-shell-runner"
   ],
