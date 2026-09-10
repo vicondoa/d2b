@@ -119,10 +119,30 @@ pub enum ResourceError {
     /// results for drivers; `ResourceDeleting` never reaches this variant).
     #[error(transparent)]
     Store(SpecStoreError),
-    /// A call routed to the manager actor failed: its channel closed, the
-    /// request was dropped, or the manager rejected it.
-    #[error("manager rpc: {0}")]
-    ManagerRpc(String),
+    /// Mutation admission rejected the mutation at the manager boundary
+    /// (U3). This is the admission point that replaces the consciously cut
+    /// redb `SealedMutation` seal (KTD2): U8/U10 wire the real subject
+    /// resolution (API caller, bundle identity, owning resource).
+    #[error("admission denied for {principal} on {zone}/{type_name}/{name}: {reason}")]
+    AdmissionDenied {
+        principal: String,
+        zone: String,
+        type_name: String,
+        name: String,
+        reason: String,
+    },
+    /// No provider factory is registered for the resource type (or the
+    /// driver could not be produced): the spec row stays committed and the
+    /// resource recovers on the next manager restart or Ensure.
+    #[error("provider for resource type {type_name}: {message}")]
+    Provider {
+        type_name: String,
+        message: String,
+    },
+     /// A call routed to the manager actor failed: its channel closed, the
+     /// request was dropped, or the manager rejected it.
+     #[error("manager rpc: {0}")]
+     ManagerRpc(String),
     /// A driver reported a failure through the closed classification.
     #[error(transparent)]
     Driver(#[from] DriverFailure),
@@ -134,6 +154,19 @@ pub enum ResourceError {
         type_name: String,
         name: String,
     },
+}
+
+impl From<crate::provider::ProviderDirectoryError> for ResourceError {
+    fn from(error: crate::provider::ProviderDirectoryError) -> Self {
+        match error {
+            crate::provider::ProviderDirectoryError::UnknownType(type_name) => {
+                Self::Provider { type_name: type_name.to_string(), message: "no provider factory registered".to_string() }
+            }
+            crate::provider::ProviderDirectoryError::DuplicateType(type_name) => {
+                Self::Provider { type_name: type_name.to_string(), message: "duplicate provider registration".to_string() }
+            }
+        }
+    }
 }
 
 impl From<SpecStoreError> for ResourceError {

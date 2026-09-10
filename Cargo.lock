@@ -1712,6 +1712,7 @@ dependencies = [
  "ractor",
  "rusqlite",
  "rusqlite_migration",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

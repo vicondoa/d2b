@@ -31,6 +31,17 @@ pub mod error;
 /// Runtime revisions (daemon epoch + sequence) for watch cursors.
 pub mod revision;
 
+// Public runtime surface (U3): the manager is the per-Zone authority, the
+// resource actor is the per-resource authority.
+pub use crate::manager::{
+    AdmissionDecision, AdmissionOp, AllowAll, ChildrenDiff, DesiredResource, ManagerActorEndpoint,
+    MutationAdmission, MutationRequest, MutationSubject, ResourceHandle, ResourceSelector,
+    ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceManagerMsg, ResourceView,
+};
+pub use crate::resource::{
+    DEFAULT_REQUEUE_BACKOFF, ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus,
+};
+
 #[cfg(test)]
 mod smoke_tests {
     /// Scaffold smoke test: the crate compiles and its module tree resolves.

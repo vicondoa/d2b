@@ -13,6 +13,11 @@ ractor.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 thiserror = "2"
+# v3 resource-runtime rewrite (U3): deterministic resource uids (R8) hash
+# the stable `(zone, type, name)` identity so owned-child graphs and
+# adoption identities reconstruct identically after restart.
+# First consumed by packages/d2b-resource-runtime (this commit).
+sha2.workspace = true
 async-trait = "0.1"
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 parking_lot = "0.12"
