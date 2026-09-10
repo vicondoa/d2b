@@ -122,6 +122,7 @@
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
           cp -r ${./packages/d2b-resource-store} $out/packages/d2b-resource-store
           cp -r ${./packages/d2b-resource-store-redb} $out/packages/d2b-resource-store-redb
+          cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
           cp -r ${./packages/d2b-session} $out/packages/d2b-session
           cp -r ${./packages/d2b-session-unix} $out/packages/d2b-session-unix
           cp -r ${./packages/d2b-telemetry} $out/packages/d2b-telemetry
