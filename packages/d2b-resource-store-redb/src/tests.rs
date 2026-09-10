@@ -786,7 +786,7 @@ async fn seed_broker_audited_resource(
         );
 
         // FIXED POINT 2: rebuilding the candidate from the read-back
-        // compares equal — the handler's convergence guard must see no
+        // compares equal - the handler's convergence guard must see no
         // change on the next pass.
         let read_status: serde_json::Value =
             serde_json::from_slice::<serde_json::Value>(&read_back.canonical_json)

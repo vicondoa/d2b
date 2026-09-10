@@ -406,7 +406,7 @@ impl ChangeRecord {
             // the resource has fully caught up (generation == observed
             // generation, current controller, no outstanding condition work).
             // A status write that lags its generation carries information the
-            // pass that wrote it has NOT finished acting on — dropping it
+            // pass that wrote it has NOT finished acting on - dropping it
             // wedged multi-pass controllers at their first written phase
             // forever (third-pass wedge), so it must requeue instead.
             if self.generation.get() == self.observed_generation.get()

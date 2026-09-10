@@ -3703,7 +3703,7 @@ impl DaemonSharedProviderEffects {
         for dependency in dependencies {
             if !Self::related_guest_dependency(&value, dependency)? {
                 // Bring-up observability: a Guest held on an unready
-                // dependency is invisible otherwise — log which
+                // dependency is invisible otherwise - log which
                 // dependency holds it.
                 tracing::warn!(
                     guest = %resource.key().resource_ref().to_canonical_string(),

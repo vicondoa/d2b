@@ -54,7 +54,7 @@ pub const MAX_CONCURRENT_READS: usize = 16;
 ///
 /// Measured on the host-integration VM: store reads take 500-750ms while
 /// the fsync'd commit stream (Durability::Immediate, 106-455ms commits)
-/// saturates the writer — a 250ms ceiling guaranteed Timeout exactly under
+/// saturates the writer - a 250ms ceiling guaranteed Timeout exactly under
 /// the load that matters and cascaded into runner startup integrity
 /// failures (hostrun 57/61/65/73: 236 read-deadline-elapsed, 30 runner
 /// terminations at accept_effect). Reads are allowed to wait out the
@@ -701,7 +701,7 @@ impl WriterHandle {
                 // The writer actor dropped the response without processing
                 // the command (a stalled or restarted writer). The operation
                 // row, if the actor created it, stays `pending` and the claim
-                // is resumable, so this is a transient store condition — the
+                // is resumable, so this is a transient store condition - the
                 // caller must retry the claim, not treat the store as
                 // corrupt.
                 crate::transaction::error(
@@ -742,7 +742,7 @@ impl WriterHandle {
                     "authority update response closed; writer stalled or restarted"
                 );
                 // Mirror authority_prepare: a dropped response is a writer
-                // stall or restart, and the operation row stays resumable —
+                // stall or restart, and the operation row stays resumable -
                 // transient, not corruption.
                 crate::transaction::error(
                     d2b_resource_store::StoreErrorKind::Timeout,
@@ -914,7 +914,7 @@ impl WriterHandle {
                 tracing::warn!("watch registration response closed; writer stalled or restarted");
                 // Mirror authority_prepare/authority_update: a dropped watch
                 // response is a writer stall or restart under the sustained
-                // commit stream — transient, the runner retries via its watch
+                // commit stream - transient, the runner retries via its watch
                 // recovery (relist), not a source-plane corruption.
                 crate::transaction::error(
                     d2b_resource_store::StoreErrorKind::Timeout,
@@ -1280,7 +1280,7 @@ impl WriterActor {
                     // Coalesce window: submitters that await their own
                     // response never queue behind each other, so groups
                     // would run at size 1 and every commit would pay a
-                    // full fsync. Drain everything already ready — the
+                    // full fsync. Drain everything already ready - the
                     // writer thread must never sleep here: a fixed window
                     // paid up to 20ms of latency on every commit and
                     // starved the runners' startup deadlines.

@@ -15899,7 +15899,7 @@ async fn open_resource_plane(
         // The generation publication above is the write; this startup read
         // must not race it. Under a fast CPU the read can land before the
         // published rows are visible, so retry instead of failing the
-        // plane — the resources are committed, the reader is just early.
+        // plane - the resources are committed, the reader is just early.
         let mut process_resource_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
         // 30 x 2s: with fast fixture IO the reader outruns the broker's

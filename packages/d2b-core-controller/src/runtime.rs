@@ -1300,7 +1300,7 @@ fn provider_status_candidate(
     // Damping: a candidate whose phase is unchanged and whose
     // providerReadiness carries no false→true readiness edge is observation
     // churn (detail reshuffles among already-true fields, true→false
-    // flickers while dependencies settle) and must not trigger a write —
+    // flickers while dependencies settle) and must not trigger a write -
     // controllers recompute the same readiness bools on every pass, and
     // writing them re-triggered the runner until the dependencies settled.
     // Phase changes and false→true edges are significant progress and
@@ -1818,7 +1818,7 @@ mod tests {
 
         // (a) Same phase, readiness true→true (the stored status carries an
         // extra already-true detail field the candidate reshuffles away):
-        // observation churn — no candidate write.
+        // observation churn - no candidate write.
         let stored = provider_resource_snapshot_with(
             serde_json::json!({
                 "artifactReady": true,
@@ -1838,7 +1838,7 @@ mod tests {
             "true→true detail churn must not produce a status write"
         );
 
-        // (b) Readiness false→true edge: meaningful progress — write.
+        // (b) Readiness false→true edge: meaningful progress - write.
         let stored = provider_resource_snapshot_with(
             serde_json::json!({
                 "artifactReady": false,
