@@ -11475,7 +11475,13 @@ impl ZoneResourceRuntime {
                     ensure_bootstrap_host_resource(&zone, &store, &status_client).await?;
                 }
                 if let Some(bundle) = desired_bundle.as_ref() {
-                    materialize_zone_resource_bundle(&zone, bundle, &store, &status_client)
+                    // Phase A partition (U10): converted types (Process,
+                    // Volume, VolumeBinding, Endpoint) are served only by the
+                    // v3 resource plane and never materialize into redb; the
+                    // old path sees only unconverted rows.
+                    let old_bundle = crate::resource_plane_v3::old_plane_bundle(bundle)
+                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+                    materialize_zone_resource_bundle(&zone, &old_bundle, &store, &status_client)
                         .await
                         .inspect_err(|error| {
                             tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bundle materialization failed");

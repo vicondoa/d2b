@@ -15874,7 +15874,15 @@ async fn open_resource_plane(
     }
 
     let mut remaining = prepared_runtimes.into_iter();
-    while let Some((_zone, mut runtime, _)) = remaining.next() {
+
+    // v3 resource plane (U9/U10): assemble the new-plane runtime per zone
+    // after generation publication, then flow converted types (Process,
+    // Volume, VolumeBinding, Endpoint) through the per-zone ResourceManager;
+    // unconverted types keep flowing through the old materialization path
+    // above (exclusive per-type partition, no dual-write).
+    let mut v3_planes: BTreeMap<String, crate::resource_plane_v3::ResourcePlaneV3> =
+        BTreeMap::new();
+    while let Some((_zone, mut runtime, materialization_bundle)) = remaining.next() {
         let installed_provider_count = state
             .provider_runtime
             .registered_provider_count()
@@ -16046,6 +16054,58 @@ async fn open_resource_plane(
                 error = %error,
                 "interaction Provider readiness refused; retaining filtered U9 watches for diagnostics",
             );
+        }
+        // v3 resource plane (U9/U10): converted types (Process, Volume,
+        // VolumeBinding, Endpoint) flow through the per-zone ResourceManager
+        // with provenance Nix; unconverted types already flowed through the
+        // old materialization path above. Exclusive per-type partition.
+        {
+            let bundle = &materialization_bundle;
+            let mut inputs = crate::resource_plane_v3::ConstructionInputs::production(
+                &std::sync::Arc::new(state.clone()),
+                _zone.clone(),
+                &d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
+                    &_zone,
+                    bundle,
+                    resolver
+                        .zone_storage_row(_zone.as_str())
+                        .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+                )
+                .map_err(|error| {
+                    tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 plane authority derivation failed");
+                    resource_runtime::ResourceRuntimeError::HandlerNotReady
+                })?,
+                resolver.clone(),
+            )
+            .map_err(|error| {
+                tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 plane inputs construction failed");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })?;
+            inputs.zone = _zone.clone();
+            let plane_v3 = crate::resource_plane_v3::ResourcePlaneV3::open(inputs).await.map_err(|error| {
+                tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })?;
+            plane_v3
+                .complete_initial_load()
+                .await
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+            let report = plane_v3
+                .ingest_nix_bundle(bundle)
+                .await
+                .map_err(|error| {
+                    tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane nix ingestion failed");
+                    resource_runtime::ResourceRuntimeError::HandlerNotReady
+                })?;
+            tracing::info!(
+                zone = %_zone.as_str(),
+                applied = report.applied.len(),
+                removed = report.removed.len(),
+                api_protected = report.api_protected.len(),
+                pass_through = report.pass_through_count,
+                "v3 resource plane nix ingestion complete"
+            );
+            v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
         }
         match plane.insert(runtime) {
             Ok(_) => {}

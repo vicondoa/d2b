@@ -23,6 +23,10 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 notify-rust = "4"
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
+# v3 resource-runtime rewrite (U9): the per-zone manager actor is spawned
+# through the ractor runtime; first consumed by packages/d2bd (this commit).
+ractor.workspace = true
+thiserror = "2"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-zone-routing = { path = "../d2b-zone-routing", version = "0.0.0-bootstrap" }

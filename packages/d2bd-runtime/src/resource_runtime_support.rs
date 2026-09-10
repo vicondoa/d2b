@@ -7,7 +7,11 @@ use std::{
     io::{self, Read},
     os::unix::fs::FileTypeExt,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -296,6 +300,71 @@ impl ZoneRuntimeReadiness {
             && self.provider_path_ready
             && self.authority_ready
             && matches!(self.core_stage, StartupStage::Ready)
+    }
+}
+
+/// Phase A new-plane (v3) readiness checklist (U9, R27). Additive to
+/// [`ZoneRuntimeReadiness`]: the old-plane fields stay until U14 deletes the
+/// old machinery (KTD11) - the redb `store_ready` gate keeps gating the old
+/// plane, the new plane gates on its own checklist only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NewPlaneReadiness {
+    /// The per-zone SQLite spec store opened and migrated.
+    pub spec_store_ready: bool,
+    /// The per-zone manager actor spawned and serving its mailbox.
+    pub manager_started: bool,
+    /// All four converted-type driver factories registered.
+    pub providers_registered: bool,
+    /// The manager's initial durable-row load round-trip completed.
+    pub initial_load_complete: bool,
+}
+
+impl NewPlaneReadiness {
+    pub const fn is_ready(self) -> bool {
+        self.spec_store_ready
+            && self.manager_started
+            && self.providers_registered
+            && self.initial_load_complete
+    }
+}
+
+/// Shared mutable readiness state the plane updates stage by stage (U9).
+#[derive(Debug, Default)]
+pub struct NewPlaneReadinessState {
+    spec_store_ready: AtomicBool,
+    manager_started: AtomicBool,
+    providers_registered: AtomicBool,
+    initial_load_complete: AtomicBool,
+}
+
+impl NewPlaneReadinessState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_spec_store_ready(&self, value: bool) {
+        self.spec_store_ready.store(value, Ordering::SeqCst);
+    }
+
+    pub fn set_manager_started(&self, value: bool) {
+        self.manager_started.store(value, Ordering::SeqCst);
+    }
+
+    pub fn set_providers_registered(&self, value: bool) {
+        self.providers_registered.store(value, Ordering::SeqCst);
+    }
+
+    pub fn set_initial_load_complete(&self, value: bool) {
+        self.initial_load_complete.store(value, Ordering::SeqCst);
+    }
+
+    pub fn snapshot(&self) -> NewPlaneReadiness {
+        NewPlaneReadiness {
+            spec_store_ready: self.spec_store_ready.load(Ordering::SeqCst),
+            manager_started: self.manager_started.load(Ordering::SeqCst),
+            providers_registered: self.providers_registered.load(Ordering::SeqCst),
+            initial_load_complete: self.initial_load_complete.load(Ordering::SeqCst),
+        }
     }
 }
 
