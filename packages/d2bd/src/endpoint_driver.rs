@@ -389,19 +389,19 @@ impl ResourceDriver for EndpointDriver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::Arc;
 
     use d2b_contracts_resource::v3::{
         endpoint::{
-            EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
+            EndpointClass, EndpointConsumerPolicy,
             EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
             EndpointVisibility,
         },
         execution_policy::BoundedToken,
-        ResourceName, ResourceRef,
+        ResourceRef,
     };
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
+        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
         WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{

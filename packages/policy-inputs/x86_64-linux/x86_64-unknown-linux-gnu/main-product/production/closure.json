@@ -69,7 +69,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "f4a2601ef8f45139e07e27f227b655c7a10a0d4eb3544f70797c4934ba2666d9",
+  "lock_sha256": "b2934c5dff80ff578fa4d7f3a9c12add94e6a3db66fc8956c9c375f6abd43cb2",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -6225,6 +6225,12 @@
     },
     {
       "from": "d2b-resource-api@0.0.0-bootstrap#path",
+      "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-api@0.0.0-bootstrap#path",
       "to": "d2b-resource-store-redb@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6393,6 +6399,18 @@
     },
     {
       "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "proc-macro",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "to": "ractor@0.16.5#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6406,6 +6424,12 @@
     {
       "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "to": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

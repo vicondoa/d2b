@@ -68,6 +68,7 @@ d2bd_shared_deps = [
     "//packages/d2b-session-unix:d2b_session_unix",
     "//packages/d2b-resource-store:d2b_resource_store",
     "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    "//packages/d2b-resource-runtime:d2b_resource_runtime",
     "//packages/d2b-contracts-provider:d2b_contracts_provider",
     "//packages/d2b-contracts-resource:d2b_contracts_resource",
     "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",

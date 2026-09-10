@@ -644,14 +644,11 @@ mod tests {
 
     use d2b_contracts_resource::v3::volume::AttachmentAccess;
     use d2b_provider_volume_virtiofs::{SocketIdentity, WORKER_TEMPLATE};
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
-    };
+    use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration};
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverFailure, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;

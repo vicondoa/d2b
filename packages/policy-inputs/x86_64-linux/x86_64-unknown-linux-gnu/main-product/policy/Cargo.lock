@@ -1636,10 +1636,12 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "d2b-resource-runtime",
  "d2b-resource-store",
  "d2b-resource-store-redb",
  "d2b-telemetry",
  "protobuf",
+ "ractor",
  "serde_json",
  "sha2",
  "tempfile",
@@ -1687,9 +1689,12 @@ dependencies = [
 name = "d2b-resource-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "parking_lot",
  "ractor",
  "rusqlite",
  "rusqlite_migration",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

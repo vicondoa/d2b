@@ -589,7 +589,7 @@ mod tests {
     use d2b_contracts_resource::v3::volume::VolumeSpec;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
-        SpecDecoder, WatchId, WatchRegistration,
+        WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,

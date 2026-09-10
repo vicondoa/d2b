@@ -26,3 +26,8 @@ xtask = "run -p xtask --"
 
 [build]
 rustc-wrapper = ".cargo/rustc-wrapper.sh"
+
+# Match Bazel's per-crate `-Dwarnings` (`.bazelrc:6`) so cargo builds fail on
+# the same warnings Bazel does - no split-brain between local builds and the
+# Layer-1 gate.
+rustflags = ["-D", "warnings"]

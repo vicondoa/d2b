@@ -954,7 +954,7 @@ mod tests {
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, ProcessSpec, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+        ControllerGeneration, ProcessSpec, ResourceRef, ResourceUid, ZoneId,
     };
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
@@ -978,7 +978,7 @@ mod tests {
 
     use super::{
         ProcessDriver, ProcessDriverArgs, ProcessDriverFactory, ProcessDriverStatus,
-        ProcessSpecEnvelope, process_spec_decoder,
+        process_spec_decoder,
     };
     use crate::process_provider_runtime::ProviderAdoption;
 
