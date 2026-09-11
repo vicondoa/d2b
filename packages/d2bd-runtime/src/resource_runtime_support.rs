@@ -3593,7 +3593,10 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    /// The retry backoff (5ms then 20ms) is asserted against a paused runtime
+    /// clock advanced only by this test, so the attempt counts cannot be
+    /// overtaken by wall-clock drift while the host is under lane load.
+    #[tokio::test(start_paused = true)]
     async fn startup_store_retry_uses_delayed_async_backoff() {
         let zone = ZoneId::parse("work").unwrap();
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -3618,18 +3621,23 @@ mod tests {
 
         tokio::task::yield_now().await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        tokio::time::sleep(Duration::from_millis(4)).await;
+        // One virtual millisecond short of the first 5ms backoff.
+        tokio::time::advance(Duration::from_millis(4)).await;
         tokio::task::yield_now().await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        // Crossing the first backoff runs exactly one retry, which arms the
+        // second (20ms) backoff.
+        tokio::time::advance(Duration::from_millis(5)).await;
         for _ in 0..3 {
             tokio::task::yield_now().await;
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // Still short of the second backoff: no third attempt yet.
+        tokio::time::advance(Duration::from_millis(10)).await;
         tokio::task::yield_now().await;
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        // Crossing the second backoff yields the successful third attempt.
+        tokio::time::advance(Duration::from_millis(15)).await;
         for _ in 0..3 {
             tokio::task::yield_now().await;
         }
