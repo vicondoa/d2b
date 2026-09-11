@@ -15954,28 +15954,28 @@ async fn open_resource_plane(
         // must not race it. Under a fast CPU the read can land before the
         // published rows are visible, so retry instead of failing the
         // plane - the resources are committed, the reader is just early.
-        let mut process_resource_startup =
+        let mut controller_session_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
         // 30 x 2s: with fast fixture IO the reader outruns the broker's
         // publication by a wide margin, and 10 attempts (20s) exhausted
         // before the rows landed. Give the publication a full minute.
         for attempt in 0..30 {
-            process_resource_startup = runtime
-                .reconcile_process_resources(Arc::new(state.clone()))
+            controller_session_startup = runtime
+                .reconcile_controller_sessions(Arc::new(state.clone()))
                 .await;
-            match &process_resource_startup {
+            match &controller_session_startup {
                 Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
                     tracing::warn!(
                         zone = %runtime.zone().as_str(),
                         attempt,
-                        "process resource startup raced publication; retrying",
+                        "controller session startup raced publication; retrying",
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 _ => break,
             }
         }
-        if let Err(error) = process_resource_startup {
+        if let Err(error) = controller_session_startup {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             while let Some((_, runtime, _)) = remaining.next() {
@@ -17692,8 +17692,6 @@ fn reconcile_display_before_vm_start(
     if result.status.resource.proxy_process_ref.is_none() {
         return Err("display-host-proxy-resource-missing".to_owned());
     }
-    block_on_future(runtime.reconcile_process_resources(Arc::new(state.clone())))
-        .map_err(|_| "display-host-proxy-process-reconcile-failed".to_owned())?;
     Ok(())
 }
 

@@ -33,11 +33,9 @@ use crate::credential_resource_runtime::{
     CredentialSession, CredentialSessionRegistry, ComponentCredentialSession,
     is_credential_provider_ref,
 };
-use crate::process_resource_runtime::{
-    ProcessOwnerIdentityLoader, ProcessProviderIdentityLoader, ProcessResourceReconciler,
-    ProcessResourceRuntime, ProcessResourceRuntimeError, controller_provider_refs,
-    list_process_resources, process_controller_descriptor,
-};
+use crate::process_resource_runtime::{ProcessResourceRuntimeError, list_process_resources};
+#[cfg(test)]
+use crate::process_resource_runtime::process_controller_descriptor;
 use async_trait::async_trait;
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{
@@ -79,7 +77,7 @@ use d2b_core_controller::controller_assignment::{
 };
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::{
-    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ChangeRecord, ControllerIdentity, CoreControllerSource,
+    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ControllerIdentity, CoreControllerSource,
     CoreResourceReconciler, Runner, RunnerConfig, RunnerError, SelectorField, SourceError,
     core_controller_descriptors,
 };
@@ -661,15 +659,6 @@ impl ControllerRunnerFailure {
 
     pub(crate) const fn error(&self) -> RunnerError {
         self.error
-    }
-}
-
-fn store_runner_failure(
-    slot: &Mutex<Option<ControllerRunnerFailure>>,
-    failure: ControllerRunnerFailure,
-) {
-    if let Ok(mut slot) = slot.lock() {
-        *slot = Some(failure);
     }
 }
 
@@ -2874,8 +2863,6 @@ pub struct ZoneResourceRuntime {
     u9_state: Mutex<Option<Arc<crate::ServerState>>>,
     u9_required: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
-    process_controller_required: AtomicBool,
-    process_runner_failure: Arc<Mutex<Option<ControllerRunnerFailure>>>,
     u9_runner_failures: Arc<Mutex<Vec<ControllerRunnerFailure>>>,
     #[cfg(test)]
     core_runner_events: Arc<Mutex<Vec<&'static str>>>,
@@ -2890,8 +2877,6 @@ pub struct ZoneResourceRuntime {
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
-    process_runner_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    process_runner_generation: Mutex<Option<ControllerGeneration>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
     closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<crate::GuestComponentSessionKey>>>,
@@ -3734,8 +3719,6 @@ impl ZoneResourceRuntime {
             u9_state: Mutex::new(None),
             u9_required: AtomicBool::new(false),
             credential_sessions: CredentialSessionRegistry::default(),
-            process_controller_required: AtomicBool::new(false),
-            process_runner_failure: Arc::new(Mutex::new(None)),
             u9_runner_failures: Arc::new(Mutex::new(Vec::new())),
             #[cfg(test)]
             core_runner_events: Arc::new(Mutex::new(Vec::new())),
@@ -3757,8 +3740,6 @@ impl ZoneResourceRuntime {
             authority_recovery,
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
-            process_runner_task: Mutex::new(None),
-            process_runner_generation: Mutex::new(None),
             guest_setup_descriptors: BTreeMap::new(),
             guest_setup_descriptor_catalog_keys: BTreeMap::new(),
             closed_guest_sessions: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
@@ -6700,13 +6681,6 @@ impl ZoneResourceRuntime {
                 );
                 ResourceRuntimeError::CapabilityUnavailable
             })?;
-            if let Err(error) = self.reconcile_process_resources(Arc::clone(&state)).await {
-                tracing::warn!(
-                    zone = %self.zone.as_str(),
-                    error = ?error,
-                    "Cloud Hypervisor dependent Process reconciliation degraded",
-                );
-            }
             match self.reconcile_cloud_hypervisor_endpoints(&guest_ref).await {
                 Ok(CloudHypervisorEndpointOutcome::Ready) => {}
                 Ok(CloudHypervisorEndpointOutcome::Pending) => {
@@ -7092,7 +7066,6 @@ impl ZoneResourceRuntime {
                     DesiredLifecycle::Stopped,
                 )
                 .await?;
-                self.reconcile_process_resources(Arc::clone(&state)).await?;
                 self.update_cloud_hypervisor_process_lifecycle(
                     guest_ref,
                     &process_ref,
@@ -7101,7 +7074,7 @@ impl ZoneResourceRuntime {
                 .await?;
             }
         }
-        self.reconcile_process_resources(state).await
+        Ok(())
     }
 
     async fn cloud_hypervisor_dependencies_ready(
@@ -9881,17 +9854,23 @@ impl ControllerSessionCoordinator {
 }
 
 impl ZoneResourceRuntime {
-    /// Ensure the shared Runner for generic Process and EphemeralProcess
-    /// resources owned by this Zone and refresh controller-session fences.
-    /// Lifecycle effects remain inside the fixed daemon-composed Providers.
-    pub(crate) async fn reconcile_process_resources(
+
+    /// Ensure the per-Zone external-controller session machinery is live and
+    /// refresh its fences.
+    ///
+    /// The generic Process/EphemeralProcess runner this method used to host is
+    /// retired: converted `Process` rows are served exclusively by the new
+    /// plane's Process driver. External Provider controller sessions are still
+    /// established on the old plane until the core-controller conversion, so
+    /// their wake registration, establishment loop, and resource fences stay
+    /// driven from here.
+    pub(crate) async fn reconcile_controller_sessions(
         &self,
         state: Arc<crate::ServerState>,
     ) -> Result<(), ResourceRuntimeError> {
         if !self.readiness.resource_api_ready {
             return Ok(());
         }
-        self.process_controller_required.store(true, Ordering::Release);
         let providers = state
             .provider_runtime
             .process_providers()
@@ -9902,7 +9881,7 @@ impl ZoneResourceRuntime {
         let wake_shutdown = Arc::clone(&self.controller_session_reconcile_shutdown);
         let wake_coordinator = Arc::downgrade(&coordinator);
         let wake_providers = Arc::downgrade(&providers);
-        let (core_authority, authorization_state) = {
+        {
             let _session_guard = self.controller_session_lock.lock().await;
             if self.system_core_rebind_pending.load(Ordering::Acquire) {
                 return Err(ResourceRuntimeError::AuthenticationUnavailable);
@@ -9912,9 +9891,7 @@ impl ZoneResourceRuntime {
                 .lock()
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
                 Some(Arc::clone(&providers));
-            let (core_authority, authorization_state) = self
-                .rebuild_assigned_process_api_locked(&providers)
-                .await?;
+            self.rebuild_assigned_process_api_locked(&providers).await?;
             providers
                 .set_controller_session_waker(
                     self.zone.clone(),
@@ -9939,8 +9916,7 @@ impl ZoneResourceRuntime {
             coordinator
                 .reconcile_controller_sessions_locked(Arc::clone(&providers), false)
                 .await?;
-            (core_authority, authorization_state)
-        };
+        }
         let _guard = self.controller_reconcile_lock.lock().await;
         let resources = list_process_resources(&self.store, &self.zone)
             .await
@@ -9948,345 +9924,6 @@ impl ZoneResourceRuntime {
         coordinator
             .fence_process_resources(&providers, &resources)
             .await?;
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "process-reconcile-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let controller_generation = core_authority.controller_generation;
-        let stale_task = {
-            let mut task = self
-                .process_runner_task
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-            let current_generation = self
-                .process_runner_generation
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-                .to_owned();
-            if task.as_ref().is_some_and(|task| !task.is_finished())
-                && current_generation == Some(controller_generation)
-            {
-                None
-            } else {
-                let stale = task.take();
-                *self
-                    .process_runner_generation
-                    .lock()
-                    .map_err(|_| ResourceRuntimeError::WatchUnavailable)? = None;
-                stale
-            }
-        };
-        if let Some(task) = stale_task {
-            task.abort();
-            let _ = task.await;
-        }
-        let runner_exists = self
-            .process_runner_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .as_ref()
-            .is_some_and(|task| !task.is_finished());
-        if !runner_exists {
-            let controller_ref = ResourceRef::parse(CORE_CONTROLLER_PROCESS_REF)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let provider_ref = ResourceRef::parse(CORE_CONTROLLER_PROVIDER_REF)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let host_ref = ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let identity = ControllerIdentity::new(
-                self.zone.clone(),
-                controller_ref.clone(),
-                controller_generation,
-                provider_ref,
-                core_authority.provider_generation,
-                controller_ref.clone(),
-                host_ref,
-                None,
-            )
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let descriptor = process_controller_descriptor(identity)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let api = self.process_controller_api(
-                providers.mode(),
-                Arc::clone(&core_authority),
-                authorization_state.clone(),
-            )?;
-            let watch_task_slot = Arc::clone(&self.controller_session_reconcile_task);
-            let watch_wake = Arc::clone(&self.controller_session_reconcile_wake);
-            let watch_shutdown = Arc::clone(&self.controller_session_reconcile_shutdown);
-            let watch_coordinator =
-                Arc::downgrade(&self.controller_session_coordinator());
-            let watch_providers = Arc::clone(&providers);
-            let api = api.with_watch_change_observer(Arc::new(move |change: &ChangeRecord| {
-                if matches!(
-                    change.target.resource_ref().resource_type().as_str(),
-                    "Process" | "EphemeralProcess"
-                ) {
-                    if let Some(coordinator) = watch_coordinator.upgrade() {
-                        let _ = schedule_controller_session_reconcile(
-                            Arc::clone(&watch_task_slot),
-                            Arc::clone(&watch_wake),
-                            Arc::clone(&watch_shutdown),
-                            coordinator,
-                            Arc::clone(&watch_providers),
-                        );
-                    }
-                }
-            }));
-            let source = CoreControllerSource::new(descriptor.clone(), Arc::new(api));
-            let controller_provider_identities = load_committed_controller_provider_identities(
-                &self.zone,
-                &self.store,
-                controller_provider_refs(&resources),
-            )
-            .await
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-            let mut runtime =
-                ProcessResourceRuntime::new(self.zone.clone(), Arc::clone(&providers));
-            runtime.set_controller_generation(controller_generation);
-            runtime
-                .set_controller_provider_identities(controller_provider_identities)
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-            runtime.set_provider_identity_loader(Arc::new(
-                CommittedProcessProviderIdentityLoader {
-                    zone: self.zone.clone(),
-                    store: Arc::clone(&self.store),
-                },
-            ));
-            runtime.set_owner_identity_loader(Arc::new(CommittedProcessOwnerIdentityLoader {
-                zone: self.zone.clone(),
-                store: Arc::clone(&self.store),
-            }));
-            runtime.set_lifecycle_identity(
-                self.store_metadata.zone_uid.clone(),
-                store_metadata.policy_snapshot.policy_revision,
-            );
-            let guest_descriptor_digests = self
-                .guest_setup_descriptors
-                .iter()
-                .filter_map(|(guest, bytes)| {
-                    let descriptor = GuestSetupDescriptor::from_canonical_bytes(bytes).ok()?;
-                    let guest_ref = ResourceRef::parse(&format!("Guest/{guest}")).ok()?;
-                    Some((guest_ref, descriptor.descriptor_digest().clone()))
-                })
-                .collect();
-            runtime.set_guest_descriptor_digests(guest_descriptor_digests);
-            let mut owner_uids = BTreeMap::new();
-            for owner_ref in resources.iter().filter_map(|resource| {
-                ResourceEnvelope::from_json(&resource.canonical_json)
-                    .ok()
-                    .and_then(|envelope| envelope.metadata().owner_ref().cloned())
-            }) {
-                let Ok(owner) = self
-                    .committed_resource_value(&owner_ref, "process-owner-identity")
-                    .await
-                else {
-                    tracing::debug!(
-                        owner = %owner_ref.to_canonical_string(),
-                        "process owner identity unavailable; liveness gate degraded",
-                    );
-                    continue;
-                };
-                let Ok(owner_bytes) = serde_json::to_vec(&owner) else {
-                    continue;
-                };
-                let Ok(owner) = ResourceEnvelope::from_json(&owner_bytes) else {
-                    continue;
-                };
-                owner_uids.insert(owner_ref, owner.metadata().uid().clone());
-            }
-            runtime.set_owner_uids(owner_uids);
-            if let Some(identity) = &self.interaction_identity {
-                runtime.set_target_scope(
-                    Some(identity.wayland_session_ref().clone()),
-                    Some(identity.subject_ref().clone()),
-                );
-            } else {
-                runtime.set_target_scope(None, None);
-            }
-            let wake_source = Arc::downgrade(&source);
-            let liveness_task_slot = Arc::clone(&self.controller_session_reconcile_task);
-            let liveness_wake = Arc::clone(&self.controller_session_reconcile_wake);
-            let liveness_shutdown = Arc::clone(&self.controller_session_reconcile_shutdown);
-            let liveness_coordinator =
-                Arc::downgrade(&self.controller_session_coordinator());
-            let liveness_providers = Arc::clone(&providers);
-            runtime.set_liveness_waker(Arc::new(move |key, revision| {
-                if let Some(source) = wake_source.upgrade() {
-                    if let Err(error) = source.dispatch_observation(key, revision) {
-                        tracing::debug!(
-                            error = ?error,
-                            revision = revision.get(),
-                            "liveness observation dispatch failed",
-                        );
-                    }
-                }
-                if let Some(coordinator) = liveness_coordinator.upgrade() {
-                    if let Err(error) = schedule_controller_session_reconcile(
-                        Arc::clone(&liveness_task_slot),
-                        Arc::clone(&liveness_wake),
-                        Arc::clone(&liveness_shutdown),
-                        coordinator,
-                        Arc::clone(&liveness_providers),
-                    ) {
-                        tracing::debug!(
-                            error = ?error,
-                            "controller session reconcile scheduling failed",
-                        );
-                    }
-                }
-            }));
-            runtime.set_status_client(self.status_client()?);
-            let diagnostic_controller = descriptor.identity().controller_ref().clone();
-            let diagnostic_resource_types =
-                descriptor.resource_types().cloned().collect::<Vec<_>>();
-            let handler = ProcessResourceReconciler::new(descriptor, runtime);
-            let runner = Runner::new(
-                handler,
-                source,
-                RunnerConfig {
-                    policy_revision: authorization_state.snapshot.policy_revision,
-                    api_revision: authorization_state.snapshot.api_catalog_revision,
-                    configuration_revision: authorization_state
-                        .snapshot
-                        .active_configuration_revision,
-                    deadline_tick: 30_000,
-                    max_attempts: 10,
-                },
-            );
-            let failure_slot = Arc::clone(&self.process_runner_failure);
-            let startup_failure_slot = Arc::clone(&failure_slot);
-            let callback_controller = diagnostic_controller.clone();
-            let callback_resource_types = diagnostic_resource_types.clone();
-            let (startup_tx, startup_rx) = tokio::sync::oneshot::channel();
-            let startup_tx = Arc::new(tokio::sync::Mutex::new(Some(startup_tx)));
-            let startup_attempt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let task = tokio::spawn(async move {
-                // A transient store timeout during startup must not wedge
-                // the daemon: retry the runner before recording a failure.
-                let mut attempt = 0usize;
-                let result = loop {
-                    let outcome = runner
-                        .run_with_startup({
-                            let startup_tx = Arc::clone(&startup_tx);
-                            let startup_attempt = Arc::clone(&startup_attempt);
-                            let startup_failure_slot = Arc::clone(&startup_failure_slot);
-                            let callback_controller = callback_controller.clone();
-                            let callback_resource_types = callback_resource_types.clone();
-                            move |startup| {
-                                let attempt = startup_attempt.load(
-                                    std::sync::atomic::Ordering::SeqCst,
-                                );
-                                if let Err(error) = startup {
-                                    store_runner_failure(
-                                        &startup_failure_slot,
-                                        ControllerRunnerFailure::new(
-                                            callback_controller.clone(),
-                                            callback_resource_types.clone(),
-                                            error,
-                                        ),
-                                    );
-                                    // Only the final attempt aborts startup.
-                                    if attempt < 3 {
-                                        return;
-                                    }
-                                }
-                                if let Ok(mut slot) = startup_tx.try_lock() {
-                                    if let Some(sender) = slot.take() {
-                                        let _ = sender.send(startup);
-                                    }
-                                }
-                            }
-                        })
-                        .await;
-                    startup_attempt.store(
-                        attempt + 1,
-                        std::sync::atomic::Ordering::SeqCst,
-                    );
-                    let backoff_ms = std::cmp::min(1_000u64 << attempt, 5_000);
-                    if !matches!(
-                        &outcome,
-                        Err(failure) if matches!(
-                            failure.error(),
-                            RunnerError::Source(_)
-                        )
-                    ) {
-                        break outcome;
-                    }
-                    attempt += 1;
-                    tracing::warn!(
-                        attempt,
-                        backoff_ms,
-                        "Process Provider shared runner retrying after transient source failure",
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                };
-                match result {
-                    Ok(report) => tracing::debug!(
-                        dispatched = report.dispatched,
-                        relists = report.relists,
-                        "Process Provider shared runner stopped",
-                    ),
-                    Err(error) => {
-                        let diagnostic = ControllerRunnerFailure::new(
-                            diagnostic_controller,
-                            diagnostic_resource_types,
-                            error.error(),
-                        );
-                        store_runner_failure(&failure_slot, diagnostic.clone());
-                        let report = error.report();
-                        tracing::warn!(
-                            controller = %diagnostic.controller().to_canonical_string(),
-                            resource_types = ?diagnostic
-                                .resource_types()
-                                .iter()
-                                .map(ResourceTypeName::as_str)
-                                .collect::<Vec<_>>(),
-                            error_kind = ?diagnostic.error(),
-                            error = %diagnostic.error(),
-                            dispatched = report.dispatched,
-                            relists = report.relists,
-                            checkpointed = report.checkpointed,
-                            failed_resource = ?error
-                                .failed_key()
-                                .map(|key| key.resource_ref().to_canonical_string()),
-                            failed_operation = ?error.failed_operation(),
-                            "Process Provider shared runner failed",
-                        );
-                    }
-                }
-            });
-            match startup_rx.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(
-                        error = ?error,
-                        "process provider shared runner startup failed",
-                    );
-                    let _ = task.await;
-                    return Err(ResourceRuntimeError::HandlerNotReady);
-                }
-                Err(_) => {
-                    tracing::warn!("process provider shared runner startup channel closed");
-                    let _ = task.await;
-                    return Err(ResourceRuntimeError::HandlerNotReady);
-                }
-            }
-            if let Ok(mut failure) = self.process_runner_failure.lock() {
-                *failure = None;
-            }
-            *self
-                .process_runner_task
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)? = Some(task);
-            *self
-                .process_runner_generation
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)? = Some(controller_generation);
-        }
         schedule_controller_session_reconcile(
             Arc::clone(&self.controller_session_reconcile_task),
             Arc::clone(&self.controller_session_reconcile_wake),
@@ -10437,23 +10074,6 @@ impl ZoneResourceRuntime {
             _ => false,
         };
         if !core_runners_ready {
-            return Some(ResourceRuntimeError::HandlerNotReady);
-        }
-        if self
-            .process_runner_failure
-            .lock()
-            .map(|failure| failure.is_some())
-            .unwrap_or(true)
-        {
-            return Some(ResourceRuntimeError::HandlerNotReady);
-        }
-        if self.process_controller_required.load(Ordering::Acquire)
-            && !self
-                .process_runner_task
-                .try_lock()
-                .map(|task| task.as_ref().is_some_and(|task| !task.is_finished()))
-                .unwrap_or(false)
-        {
             return Some(ResourceRuntimeError::HandlerNotReady);
         }
         if matches!(self.interaction_state, InteractionState::Refused) {
@@ -11153,8 +10773,6 @@ impl ZoneResourceRuntime {
             u6_runner_tasks,
             u9_runner_tasks,
             audio_runtime,
-            process_runner_task,
-            process_runner_generation,
             controller_sessions,
             controller_session_reconcile_task,
             controller_session_reconcile_shutdown,
@@ -11192,14 +10810,6 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         drop(audio_runtime);
-        if let Some(task) = process_runner_task
-            .into_inner()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-        {
-            task.abort();
-            let _ = task.await;
-        }
-        drop(process_runner_generation);
         let controller_session_task = controller_session_reconcile_task
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
@@ -12091,70 +11701,6 @@ async fn load_controller_policy_subjects(
         });
     }
     Ok(subjects)
-}
-
-struct CommittedProcessProviderIdentityLoader {
-    zone: ZoneId,
-    store: Arc<RedbResourceStore>,
-}
-
-#[async_trait]
-impl ProcessProviderIdentityLoader for CommittedProcessProviderIdentityLoader {
-    async fn load(
-        &self,
-        provider_ref: &ResourceRef,
-    ) -> Result<(ResourceUid, ResourceGeneration), ProcessResourceRuntimeError> {
-        let mut identities = load_committed_controller_provider_identities(
-            &self.zone,
-            &self.store,
-            BTreeSet::from([provider_ref.clone()]),
-        )
-        .await
-        .map_err(|_| ProcessResourceRuntimeError::ProviderIdentityUnavailable)?;
-        identities
-            .remove(provider_ref)
-            .ok_or(ProcessResourceRuntimeError::ProviderIdentityUnavailable)
-    }
-}
-
-struct CommittedProcessOwnerIdentityLoader {
-    zone: ZoneId,
-    store: Arc<RedbResourceStore>,
-}
-
-#[async_trait]
-impl ProcessOwnerIdentityLoader for CommittedProcessOwnerIdentityLoader {
-    async fn load(
-        &self,
-        owner_ref: &ResourceRef,
-    ) -> Result<ResourceUid, ProcessResourceRuntimeError> {
-        let operation_id = format!(
-            "process-owner-identity-retry:{}",
-            owner_ref.to_canonical_string()
-        );
-        let request = StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.clone(),
-                    idempotency_key: None,
-                    correlation_id: "process-owner-identity-retry".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: owner_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            };
-        let resource = retry_transient_store_read(&self.zone, &operation_id, || {
-            self.store.get(request.clone())
-        })
-        .await
-            .map_err(|_| ProcessResourceRuntimeError::OwnerIdentityUnavailable)?;
-        if resource.zone != self.zone || resource.resource_ref != *owner_ref {
-            return Err(ProcessResourceRuntimeError::OwnerIdentityUnavailable);
-        }
-        Ok(resource.uid)
-    }
 }
 
 impl ZoneResourceRuntime {
@@ -20720,53 +20266,6 @@ mod tests {
         assert_eq!(
             runtime.require_ready(),
             Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn injected_process_source_failure_blocks_readiness_with_bounded_diagnostic() {
-        let (_directory, mut runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        runtime.set_provider_path_ready(true);
-        runtime
-            .process_controller_required
-            .store(true, Ordering::Release);
-        let controller = ResourceRef::parse("Process/d2b-core-controller").unwrap();
-        let resource_types = [
-            ResourceTypeName::parse("Process").unwrap(),
-            ResourceTypeName::parse("EphemeralProcess").unwrap(),
-        ];
-        store_runner_failure(
-            &runtime.process_runner_failure,
-            ControllerRunnerFailure::new(
-                controller.clone(),
-                resource_types,
-                RunnerError::Source(SourceError::Integrity),
-            ),
-        );
-        assert_eq!(
-            runtime.require_ready(),
-            Err(ResourceRuntimeError::HandlerNotReady)
-        );
-        let failure = runtime
-            .process_runner_failure
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("process failure diagnostic");
-        assert_eq!(failure.controller(), &controller);
-        assert_eq!(
-            failure.resource_types(),
-            &[
-                ResourceTypeName::parse("Process").unwrap(),
-                ResourceTypeName::parse("EphemeralProcess").unwrap()
-            ]
-        );
-        assert_eq!(failure.error(), RunnerError::Source(SourceError::Integrity));
-        assert_eq!(
-            failure.error().to_string(),
-            "controller source failed: resource plane integrity failure"
         );
         runtime.shutdown().await.unwrap();
     }

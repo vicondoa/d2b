@@ -936,6 +936,30 @@ impl ProductionProcessProviders {
         &FIXED_PROCESS_PROVIDER_NAMES
     }
 
+    /// Catalog-bound `Guest` setup descriptor digest for one owner reference.
+    ///
+    /// This is the same value the old runner snapshotted into its
+    /// `set_guest_descriptor_digests` map from the loaded Guest setup
+    /// descriptors; the private guest VMM intent lookup
+    /// (`BundleResolver::find_guest_vmm_intent`) refuses a ticket without it,
+    /// so a controller-owned `Process/<guest>-vmm` row cannot launch until the
+    /// bundle's descriptor digest is bound.
+    pub(crate) fn guest_setup_descriptor_digest(
+        &self,
+        zone: &ZoneId,
+        guest_ref: &ResourceRef,
+    ) -> Option<SchemaFingerprint> {
+        self.bundle
+            .guest_setup_descriptor_bytes(zone.as_str(), guest_ref.name().as_str())
+            .and_then(|bytes| {
+                d2b_provider_runtime_cloud_hypervisor::GuestSetupDescriptor::from_canonical_bytes(
+                    bytes,
+                )
+                .ok()
+                .map(|descriptor| descriptor.descriptor_digest().clone())
+            })
+    }
+
     /// Borrow the fixed mode-bound effect adapter used by controller
     /// launches.
     pub const fn fixed_effect(&self) -> &FixedEffectAdapter {

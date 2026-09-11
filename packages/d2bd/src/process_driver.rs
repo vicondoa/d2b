@@ -34,7 +34,8 @@ use std::{
 
 use d2b_contracts_resource::v3::{
     AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
-    ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+    ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, SchemaFingerprint,
+    ZoneId, ZoneRevision,
     process::{DesiredLifecycle, ProcessClass, ProcessSpec, RestartClass},
 };
 use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, ProcessIdentityDigest};
@@ -380,16 +381,49 @@ impl ProductionProcessDriverEffects {
         self
     }
 
-    /// The provider-layer context for one row, with the committed
-    /// controller-provider identity bound (KTD7).
+    /// The provider-layer context for one row: the committed
+    /// controller-provider identity (KTD7) and, for guest-owned rows, the
+    /// catalog-bound Guest setup descriptor digest.
     fn resource_context<'a>(
         &self,
         identity: &'a ProcessResourceIdentity,
     ) -> ProcessResourceContext<'a> {
-        bind_committed_controller_provider_identity(
+        process_resource_context(
             identity,
             self.committed_provider_identities.as_deref(),
+            |zone, guest| self.providers.guest_setup_descriptor_digest(zone, guest),
         )
+    }
+}
+
+/// Build the provider-layer context for one row: the committed
+/// controller-provider identity (KTD7) first, then the catalog-bound `Guest`
+/// setup descriptor digest for a guest-owned row.
+///
+/// The digest is the old runner's `set_guest_descriptor_digests` input and the
+/// private guest VMM intent lookup (`find_guest_vmm_intent`) refuses a ticket
+/// without it (`provider-ticket:guest-descriptor-unbound`), so a
+/// controller-minted `Process/<guest>-vmm` row cannot launch end to end until
+/// the bundle's descriptor digest is bound. Rows without a Guest owner bind
+/// nothing, and a Guest the bundle carries no descriptor for stays unbound -
+/// the ticket path still refuses closed.
+fn process_resource_context<'a>(
+    identity: &'a ProcessResourceIdentity,
+    committed_provider_identities: Option<&dyn CommittedProviderIdentitySource>,
+    guest_descriptor_digest: impl Fn(&ZoneId, &ResourceRef) -> Option<SchemaFingerprint>,
+) -> ProcessResourceContext<'a> {
+    let context =
+        bind_committed_controller_provider_identity(identity, committed_provider_identities);
+    let Some(guest) = identity
+        .owner_ref
+        .as_ref()
+        .filter(|owner| owner.resource_type().as_str() == "Guest")
+    else {
+        return context;
+    };
+    match guest_descriptor_digest(&identity.zone, guest) {
+        Some(digest) => context.with_guest_descriptor_digest(Some(&digest)),
+        None => context,
     }
 }
 
@@ -1773,6 +1807,87 @@ mod tests {
         let unwired = super::bind_committed_controller_provider_identity(&identity, None);
         assert_eq!(unwired.provider_uid, None);
         assert_eq!(unwired.provider_generation, None);
+    }
+
+    // -- catalog-bound Guest setup descriptor digest -------------------------
+
+    /// The catalog digest the bundle resolves for one guest.
+    fn guest_descriptor_digest() -> super::SchemaFingerprint {
+        super::SchemaFingerprint::parse(format!("sha256:{}", "a".repeat(64)))
+            .expect("guest digest")
+    }
+
+    /// A guest-owned VMM Process row: the shape the private guest VMM intent -
+    /// and its catalog-bound descriptor digest - exists for.
+    fn guest_vmm_row() -> StoredDesiredResource {
+        let mut row = test_row();
+        row.key = ResourceKey::new("work", "Process", "acceptance-guest-vmm");
+        row.metadata =
+            br#"{"annotations":{},"labels":{},"ownerRef":"Guest/acceptance-guest"}"#.to_vec();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"cloud-hypervisor-runner"}"#.to_vec();
+        row
+    }
+
+    async fn guest_vmm_identity(f: &mut Fixture) -> super::ProcessResourceIdentity {
+        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        d.typed
+            .identity(
+                &mut f.ctx,
+                &ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+                DriverOp::Reconcile,
+            )
+            .await
+            .expect("identity")
+    }
+
+    /// The old runner bound the bundle's Guest setup descriptor digest for
+    /// guest-owned rows (`set_guest_descriptor_digests`); the private guest VMM
+    /// intent lookup refuses a ticket without it
+    /// (`provider-ticket:guest-descriptor-unbound`), so the descriptor must
+    /// reach the provider context.
+    #[tokio::test]
+    async fn guest_owned_row_binds_the_catalog_guest_descriptor_digest() {
+        let mut f = fixture(guest_vmm_row());
+        let identity = guest_vmm_identity(&mut f).await;
+        assert_eq!(
+            identity.owner_ref,
+            Some(ResourceRef::parse("Guest/acceptance-guest").expect("owner ref"))
+        );
+        let digest = guest_descriptor_digest();
+        let consulted = std::cell::Cell::new(false);
+        let context = super::process_resource_context(&identity, None, |zone, guest| {
+            consulted.set(true);
+            assert_eq!(zone.as_str(), "work");
+            assert_eq!(guest.name().as_str(), "acceptance-guest");
+            Some(digest.clone())
+        });
+        assert!(
+            consulted.get(),
+            "a guest-owned row must resolve its descriptor from the bundle"
+        );
+        assert_eq!(context.guest_descriptor_digest.as_ref(), Some(&digest));
+    }
+
+    /// Non-guest rows never consult the bundle descriptor source, so the
+    /// context keeps the descriptor slot unbound.
+    #[tokio::test]
+    async fn non_guest_rows_keep_the_guest_descriptor_digest_unbound() {
+        let mut f = fixture(controller_row());
+        let identity = controller_identity(&mut f).await;
+        let context = super::process_resource_context(&identity, None, |_, _| {
+            panic!("a Provider-owned row must not consult a Guest descriptor")
+        });
+        assert_eq!(context.guest_descriptor_digest, None);
+    }
+
+    /// A Guest the bundle retains no descriptor for stays unbound - the
+    /// ticket path still refuses closed instead of inventing a digest.
+    #[tokio::test]
+    async fn missing_catalog_descriptor_keeps_the_guest_digest_unbound() {
+        let mut f = fixture(guest_vmm_row());
+        let identity = guest_vmm_identity(&mut f).await;
+        let context = super::process_resource_context(&identity, None, |_, _| None);
+        assert_eq!(context.guest_descriptor_digest, None);
     }
 
     #[tokio::test]

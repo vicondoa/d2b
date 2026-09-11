@@ -136,17 +136,6 @@ pub(crate) struct ProcessProviderIdentityCache {
 }
 
 impl ProcessProviderIdentityCache {
-    fn replace(
-        &self,
-        identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
-    ) -> Result<(), ProcessResourceRuntimeError> {
-        *self
-            .identities
-            .lock()
-            .map_err(|_| ProcessResourceRuntimeError::ProviderIdentityUnavailable)? = identities;
-        Ok(())
-    }
-
     fn get(&self, provider_ref: &ResourceRef) -> Option<(ResourceUid, ResourceGeneration)> {
         self.identities
             .lock()
@@ -181,17 +170,6 @@ pub(crate) struct ProcessOwnerIdentityCache {
 }
 
 impl ProcessOwnerIdentityCache {
-    fn replace(
-        &self,
-        identities: BTreeMap<ResourceRef, ResourceUid>,
-    ) -> Result<(), ProcessResourceRuntimeError> {
-        *self
-            .identities
-            .lock()
-            .map_err(|_| ProcessResourceRuntimeError::OwnerIdentityUnavailable)? = identities;
-        Ok(())
-    }
-
     fn get(&self, owner_ref: &ResourceRef) -> Option<ResourceUid> {
         self.identities
             .lock()
@@ -503,11 +481,6 @@ fn guest_runtime_process_matches(template: &str, process_name: &str, guest_name:
 }
 
 impl ProcessResourceRuntime {
-    /// Construct a registry over the daemon-owned fixed Providers.
-    pub(crate) fn new(zone: ZoneId, providers: Arc<ProductionProcessProviders>) -> Self {
-        Self::new_for_target(zone, providers, None)
-    }
-
     pub(crate) fn new_for_target(
         zone: ZoneId,
         providers: Arc<ProductionProcessProviders>,
@@ -546,54 +519,8 @@ impl ProcessResourceRuntime {
         self.controller_generation = generation;
     }
 
-    pub(crate) fn set_controller_provider_identities(
-        &self,
-        identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
-    ) -> Result<(), ProcessResourceRuntimeError> {
-        self.controller_provider_identities.replace(identities)
-    }
-
-    pub(crate) fn set_provider_identity_loader(
-        &mut self,
-        loader: Arc<dyn ProcessProviderIdentityLoader>,
-    ) {
-        self.provider_identity_loader = Some(loader);
-    }
-
-    pub(crate) fn set_owner_identity_loader(
-        &mut self,
-        loader: Arc<dyn ProcessOwnerIdentityLoader>,
-    ) {
-        self.owner_identity_loader = Some(loader);
-    }
-
     pub(crate) fn set_guest_execution_binding(&mut self, binding: GuestExecutionBinding) {
         self.guest_execution = Some(binding);
-    }
-
-    pub(crate) fn set_lifecycle_identity(&mut self, zone_uid: ResourceUid, policy_revision: u64) {
-        self.zone_uid = Some(zone_uid);
-        self.policy_revision = Some(policy_revision);
-    }
-
-    pub(crate) fn set_target_scope(
-        &mut self,
-        target_owner_ref: Option<ResourceRef>,
-        target_ref: Option<ResourceRef>,
-    ) {
-        self.target_owner_ref = target_owner_ref;
-        self.target_ref = target_ref;
-    }
-
-    pub(crate) fn set_guest_descriptor_digests(
-        &mut self,
-        descriptors: BTreeMap<ResourceRef, SchemaFingerprint>,
-    ) {
-        self.guest_descriptor_digests = descriptors;
-    }
-
-    pub(crate) fn set_owner_uids(&mut self, owner_uids: BTreeMap<ResourceRef, ResourceUid>) {
-        let _ = self.owner_uids.replace(owner_uids);
     }
 
     pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
@@ -3682,39 +3609,6 @@ pub(crate) async fn list_process_resources_backend<S: ResourceStoreBackend>(
     Ok(resources)
 }
 
-pub(crate) fn controller_provider_refs(resources: &[StoredResource]) -> BTreeSet<ResourceRef> {
-    resources
-        .iter()
-        .filter(|resource| {
-            matches!(
-                resource.resource_ref.resource_type().as_str(),
-                PROCESS_TYPE | EPHEMERAL_PROCESS_TYPE
-            )
-        })
-        .filter_map(|resource| {
-            let envelope = ResourceEnvelope::from_json(&resource.canonical_json).ok()?;
-            let provider = envelope.spec().provider_ref()?.clone();
-            let process = resource.resource_ref.resource_type().as_str() == PROCESS_TYPE;
-            let is_controller = process
-                && serde_json::from_slice::<ProcessSpec>(
-                    &envelope.spec().base().to_canonical_bytes(),
-                )
-                .ok()
-                .is_some_and(|spec| {
-                    spec.execution().process_class()
-                        == d2b_contracts_resource::v3::process::ProcessClass::Controller
-                });
-            if is_controller {
-                let owner = envelope.metadata().owner_ref()?.clone();
-                if owner.resource_type().as_str() == "Provider" {
-                    return Some(owner);
-                }
-            }
-            Some(provider)
-        })
-        .collect()
-}
-
 struct GuestProcessSource {
     zone: ZoneId,
     target_ref: Option<ResourceRef>,
@@ -5645,10 +5539,16 @@ mod tests {
             ResourceGeneration::new(3).expect("process generation"),
         );
         cache
-            .replace(BTreeMap::from([(
-                controller_ref.clone(),
-                controller_identity.clone(),
-            )]))
+            .ensure(
+                &controller_ref,
+                Some(&TestProviderIdentityLoader {
+                    identities: BTreeMap::from([(
+                        controller_ref.clone(),
+                        controller_identity.clone(),
+                    )]),
+                }),
+            )
+            .await
             .expect("initial controller identities");
         assert_eq!(
             cache.get(&controller_ref),
