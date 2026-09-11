@@ -28,8 +28,8 @@ use std::{collections::BTreeMap, collections::HashMap, fmt, sync::Arc};
 use parking_lot::Mutex;
 
 use crate::guest_target::{
-    GuestAdoption, GuestRealizeRequest, GuestTargetControl, GuestTargetError, TargetResourceInstance,
-    TargetInstanceState,
+    GuestAdoption, GuestRealizeRequest, GuestTargetControl, GuestTargetError, TargetControlAssignment,
+    TargetResourceInstance,
 };
 use crate::identity::ResourceKey;
 
@@ -418,6 +418,8 @@ pub enum TargetError {
     StaleSessionGeneration,
     /// A reconnect carried a generation that is not newer than the live one.
     SessionGenerationRegression,
+    /// The target-control peer answered a protocol this host does not speak.
+    ProtocolMismatch,
     /// A session is already live for this guest generation.
     SessionAlreadyConnected,
     /// No assignment is recorded for this resource.
@@ -439,6 +441,7 @@ impl fmt::Display for TargetError {
             Self::SessionGenerationRegression => {
                 formatter.write_str("target-session-generation-regression")
             }
+            Self::ProtocolMismatch => formatter.write_str("target-protocol-mismatch"),
             Self::SessionAlreadyConnected => formatter.write_str("target-session-already-connected"),
             Self::NotAssigned => formatter.write_str("target-not-assigned"),
             Self::NotGuestTarget => formatter.write_str("target-not-a-guest-target"),
@@ -498,10 +501,18 @@ impl TargetBinding {
     }
 
     /// Realize (create or update) the target-local instance through the live
-    /// guest session. Host bindings have no guest path.
-    pub async fn realize(&self, local_handle: &str) -> Result<TargetResourceInstance, TargetError> {
+    /// guest session. The spec is this driver's target-local shape; the host
+    /// resolved it and the target applies exactly it.
+    pub async fn realize(
+        &self,
+        spec: Vec<u8>,
+        spec_digest: &str,
+        local_handle: &str,
+    ) -> Result<TargetResourceInstance, TargetError> {
         let handle = self.guest().ok_or(TargetError::NotGuestTarget)?;
-        self.directory.realize(handle, self.assignment.source(), local_handle).await
+        self.directory
+            .realize(handle, self.assignment.source(), spec, spec_digest, local_handle)
+            .await
     }
 
     /// Observe the target-local instance. [`TargetObservation::Unavailable`]
@@ -773,17 +784,29 @@ impl TargetDirectory {
 
     /// Realize (create or update) the target-local instance of one assigned
     /// resource through its live guest session.
+    ///
+    /// The spec and its commitment are the owning driver's target-local shape:
+    /// the target applies what the host resolved and never invents a
+    /// realization of its own.
     pub async fn realize(
         &self,
         handle: &GuestTargetHandle,
         source: &ResourceKey,
+        spec: Vec<u8>,
+        spec_digest: &str,
         local_handle: &str,
     ) -> Result<TargetResourceInstance, TargetError> {
         let (control, assignment) = self.session_authority(handle, source)?;
+        let session_generation = handle.session_generation().ok_or(TargetError::GuestUnavailable)?;
         let request = GuestRealizeRequest::new(
-            assignment.source.clone(),
-            *assignment.uid(),
-            assignment.desired_generation(),
+            TargetControlAssignment::new(
+                assignment.source.clone(),
+                *assignment.uid(),
+                assignment.desired_generation(),
+                session_generation,
+            ),
+            spec,
+            spec_digest,
             local_handle,
         );
         control.realize(request).await.map_err(Self::map_guest_error)
@@ -802,21 +825,14 @@ impl TargetDirectory {
         handle: &GuestTargetHandle,
         source: &ResourceKey,
     ) -> Result<TargetObservation, TargetError> {
-        let (control, _) = match self.session_authority(handle, source) {
+        let (control, assignment) = match self.session_authority(handle, source) {
             Ok(authority) => authority,
             Err(TargetError::GuestUnavailable) => return Ok(TargetObservation::Unavailable),
             Err(error) => return Err(error),
         };
-        match control.observe(source).await {
-            Ok(None) => Ok(TargetObservation::Absent),
-            Ok(Some(instance)) => Ok(match instance.state() {
-                TargetInstanceState::Realizing => TargetObservation::Realizing {
-                    session_generation: instance.session_generation(),
-                },
-                TargetInstanceState::Ready => {
-                    TargetObservation::Ready { session_generation: instance.session_generation() }
-                }
-            }),
+        let session_generation = handle.session_generation().ok_or(TargetError::GuestUnavailable)?;
+        match control.observe(&Self::control_assignment(&assignment, session_generation)).await {
+            Ok(observation) => Ok(observation),
             Err(GuestTargetError::SessionUnavailable) => Ok(TargetObservation::Unavailable),
             Err(error) => Err(Self::map_guest_error(error)),
         }
@@ -829,8 +845,13 @@ impl TargetDirectory {
         handle: &GuestTargetHandle,
         source: &ResourceKey,
     ) -> Result<bool, TargetError> {
-        let (control, _) = self.session_authority(handle, source)?;
-        control.delete(source).await.map_err(Self::map_guest_error)
+        let (control, assignment) = self.session_authority(handle, source)?;
+        let session_generation = handle.session_generation().ok_or(TargetError::GuestUnavailable)?;
+        control
+            .delete(&Self::control_assignment(&assignment, session_generation))
+            .await
+            .map(|()| true)
+            .map_err(Self::map_guest_error)
     }
 
     /// Re-adopt the target-local realizations of assigned resources after a
@@ -855,7 +876,21 @@ impl TargetDirectory {
             let live = record.live.as_ref().ok_or(TargetError::GuestUnavailable)?;
             (Arc::clone(&live.control), live.session_generation)
         };
-        let adopted = control.adopt(sources).await.map_err(Self::map_guest_error)?;
+        let adopted = {
+            let mut adopted = Vec::with_capacity(sources.len());
+            for source in sources {
+                let assignment = self
+                    .assignment(source)
+                    .ok_or(TargetError::NotAssigned)?;
+                adopted.push(
+                    control
+                        .adopt(&Self::control_assignment(&assignment, session_generation))
+                        .await
+                        .map_err(Self::map_guest_error)?,
+                );
+            }
+            adopted
+        };
         let rebound = GuestTargetHandle {
             reference: handle.reference.clone(),
             session_generation: Some(session_generation),
@@ -911,9 +946,25 @@ impl TargetDirectory {
         }
     }
 
+    /// The wire assignment of one directory record for one session
+    /// generation: the same identity the record carries, plus the generation
+    /// the request belongs to.
+    fn control_assignment(
+        assignment: &TargetAssignment,
+        session_generation: u64,
+    ) -> TargetControlAssignment {
+        TargetControlAssignment::new(
+            assignment.source.clone(),
+            *assignment.uid(),
+            assignment.desired_generation(),
+            session_generation,
+        )
+    }
+
     fn map_guest_error(error: GuestTargetError) -> TargetError {
         match error {
             GuestTargetError::SessionUnavailable => TargetError::GuestUnavailable,
+            GuestTargetError::ProtocolMismatch => TargetError::ProtocolMismatch,
             GuestTargetError::StaleSessionGeneration => TargetError::StaleSessionGeneration,
             GuestTargetError::SessionGenerationRegression => TargetError::SessionGenerationRegression,
         }
@@ -936,6 +987,15 @@ mod tests {
 
     fn guest() -> TargetRef {
         TargetRef::guest("work-vm").expect("guest ref")
+    }
+
+    /// Fixture target-local spec and its commitment.
+    fn spec() -> Vec<u8> {
+        br#"{"providerRef":"Provider/test"}"#.to_vec()
+    }
+
+    fn digest() -> &'static str {
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002"
     }
 
     fn key(type_name: &str, name: &str) -> ResourceKey {
@@ -975,19 +1035,22 @@ mod tests {
 
         async fn observe(
             &self,
-            _source: &ResourceKey,
-        ) -> Result<Option<TargetResourceInstance>, GuestTargetError> {
+            _assignment: &TargetControlAssignment,
+        ) -> Result<TargetObservation, GuestTargetError> {
             Err(GuestTargetError::SessionUnavailable)
         }
 
-        async fn delete(&self, _source: &ResourceKey) -> Result<bool, GuestTargetError> {
+        async fn delete(
+            &self,
+            _assignment: &TargetControlAssignment,
+        ) -> Result<(), GuestTargetError> {
             Err(GuestTargetError::SessionUnavailable)
         }
 
         async fn adopt(
             &self,
-            _sources: &[ResourceKey],
-        ) -> Result<Vec<GuestAdoption>, GuestTargetError> {
+            _assignment: &TargetControlAssignment,
+        ) -> Result<GuestAdoption, GuestTargetError> {
             Err(GuestTargetError::SessionUnavailable)
         }
     }
@@ -1023,7 +1086,7 @@ mod tests {
         let handle = guest_handle(&directory, &elsewhere);
 
         assert_eq!(
-            directory.realize(&handle, &source, "/run/d2b/hosted.sock").await.err(),
+            directory.realize(&handle, &source, spec(), digest(), "/run/d2b/hosted.sock").await.err(),
             Some(TargetError::NotGuestTarget),
             "a locally realized resource carries no guest authority"
         );
@@ -1044,9 +1107,8 @@ mod tests {
         let handle = assignment.target().guest().expect("guest handle").clone();
 
         let first =
-            directory.realize(&handle, &source, "/run/d2b/worker.sock").await.expect("realize");
-        let second = directory
-            .realize(&handle, &source, "/run/d2b/worker.sock")
+            directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
+        let second = directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock")
             .await
             .expect("realize again");
 
@@ -1084,7 +1146,7 @@ mod tests {
         let source = key("Process", "worker");
         directory.assign(&source, &[7; 16], 4, "Guest/work-vm").expect("assign guest");
         let handle = guest_handle(&directory, &source);
-        directory.realize(&handle, &source, "/run/d2b/worker.sock").await.expect("realize");
+        directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
 
         let lost = directory.disconnect_guest(&guest(), 1).expect("disconnect");
 
@@ -1104,7 +1166,7 @@ mod tests {
             "an unanswered target never reports Absent"
         );
         assert_eq!(
-            directory.realize(&handle, &source, "/run/d2b/worker.sock").await.err(),
+            directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock").await.err(),
             Some(TargetError::GuestUnavailable)
         );
         assert_eq!(
@@ -1129,7 +1191,7 @@ mod tests {
             "a target that cannot answer is not a target that answered Absent"
         );
         assert_eq!(
-            directory.realize(&handle, &source, "/run/d2b/worker.sock").await.err(),
+            directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock").await.err(),
             Some(TargetError::GuestUnavailable)
         );
     }
@@ -1142,7 +1204,7 @@ mod tests {
         let source = key("Process", "worker");
         directory.assign(&source, &[7; 16], 4, "Guest/work-vm").expect("assign guest");
         let stale = guest_handle(&directory, &source);
-        directory.realize(&stale, &source, "/run/d2b/worker.sock").await.expect("realize");
+        directory.realize(&stale, &source, spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
         runtime.mark_ready(&source).expect("ready");
         directory.disconnect_guest(&guest(), 1).expect("disconnect");
 
@@ -1186,7 +1248,7 @@ mod tests {
         let source = key("Process", "worker");
         directory.assign(&source, &[7; 16], 4, "Guest/work-vm").expect("assign guest");
         let stale = guest_handle(&directory, &source);
-        directory.realize(&stale, &source, "/run/d2b/worker.sock").await.expect("realize");
+        directory.realize(&stale, &source, spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
 
         runtime.bind_session(2).expect("reconnect");
         let live = directory
@@ -1194,7 +1256,7 @@ mod tests {
             .expect("connect guest");
 
         assert_eq!(
-            directory.realize(&stale, &source, "/run/d2b/worker.sock").await.err(),
+            directory.realize(&stale, &source, spec(), digest(), "/run/d2b/worker.sock").await.err(),
             Some(TargetError::StaleSessionGeneration),
             "the old session cannot realize for the new one"
         );
@@ -1271,9 +1333,8 @@ mod tests {
         directory.assign(&worker, &[7; 16], 4, "Guest/work-vm").expect("assign worker");
         let link_handle = guest_handle(&directory, &link);
         let worker_handle = guest_handle(&directory, &worker);
-        directory.realize(&link_handle, &link, "/run/d2b/edge.sock").await.expect("realize link");
-        directory
-            .realize(&worker_handle, &worker, "/run/d2b/worker.sock")
+        directory.realize(&link_handle, &link, spec(), digest(), "/run/d2b/edge.sock").await.expect("realize link");
+        directory.realize(&worker_handle, &worker, spec(), digest(), "/run/d2b/worker.sock")
             .await
             .expect("realize worker");
 
@@ -1336,8 +1397,7 @@ mod tests {
         let handle = guest_handle(&directory, &source);
         assert_eq!(handle.reference(), &guest_b);
         assert_eq!(
-            directory
-                .realize(&handle, &source, "/run/d2b/worker.sock")
+            directory.realize(&handle, &source, spec(), digest(), "/run/d2b/worker.sock")
                 .await
                 .expect("realize")
                 .session_generation(),
@@ -1358,7 +1418,7 @@ mod tests {
         let handle = guest_handle(&directory, &assigned);
 
         assert_eq!(
-            directory.realize(&handle, &unassigned, "/run/d2b/unassigned.sock").await.err(),
+            directory.realize(&handle, &unassigned, spec(), digest(), "/run/d2b/unassigned.sock").await.err(),
             Some(TargetError::NotAssigned)
         );
         assert_eq!(directory.assignments_for(&guest()), vec![assigned]);
@@ -1378,7 +1438,7 @@ mod tests {
             directory.assign(&source, &[7; 16], 2, "Guest/work-vm").expect("assign guest");
         let binding = TargetBinding::new(Arc::clone(&directory), assignment);
 
-        binding.realize("/run/d2b/worker.sock").await.expect("realize");
+        binding.realize(spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
         assert_eq!(
             binding.observe().await.expect("observe"),
             TargetObservation::Realizing { session_generation: 1 }
@@ -1391,7 +1451,7 @@ mod tests {
             "the binding reflects the live session, not the one it was minted under"
         );
         assert_eq!(
-            binding.realize("/run/d2b/worker.sock").await.err(),
+            binding.realize(spec(), digest(), "/run/d2b/worker.sock").await.err(),
             Some(TargetError::GuestUnavailable)
         );
 
@@ -1403,11 +1463,11 @@ mod tests {
         assert_eq!(rebound.guest().expect("guest handle").session_generation(), Some(2));
         assert!(matches!(outcome.adopted()[0], GuestAdoption::Adopted(_)));
         assert_eq!(
-            binding.realize("/run/d2b/worker.sock").await.err(),
+            binding.realize(spec(), digest(), "/run/d2b/worker.sock").await.err(),
             Some(TargetError::StaleSessionGeneration),
             "the un-adopted binding cannot act for the new session"
         );
-        rebound.realize("/run/d2b/worker.sock").await.expect("realize through the adopted binding");
+        rebound.realize(spec(), digest(), "/run/d2b/worker.sock").await.expect("realize through the adopted binding");
         assert_eq!(runtime.instances().len(), 1);
     }
 
@@ -1421,7 +1481,7 @@ mod tests {
 
         assert_eq!(binding.handle(), TargetHandle::Host);
         assert!(binding.guest().is_none());
-        assert_eq!(binding.realize("/run/d2b/hosted.sock").await.err(), Some(TargetError::NotGuestTarget));
+        assert_eq!(binding.realize(spec(), digest(), "/run/d2b/hosted.sock").await.err(), Some(TargetError::NotGuestTarget));
         assert_eq!(binding.observe().await.err(), Some(TargetError::NotGuestTarget));
         assert_eq!(binding.delete().await.err(), Some(TargetError::NotGuestTarget));
         assert_eq!(binding.adopt().await.err(), Some(TargetError::NotGuestTarget));
