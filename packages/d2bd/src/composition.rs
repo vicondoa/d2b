@@ -3,6 +3,7 @@
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
@@ -15614,6 +15615,91 @@ fn credential_agent_ready_probe(
     })
 }
 
+/// Bounded retry window for the committed Provider identity seed (KTD7):
+/// mirrors the process-resource startup read (`30 x 2s`) that retries the
+/// same generation-publication visibility window.
+const PROVIDER_IDENTITY_SEED_ATTEMPTS: usize = 30;
+const PROVIDER_IDENTITY_SEED_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Resolve the committed `Provider` rows a zone's controller `Process` rows
+/// bind their launch identity from (KTD7).
+///
+/// Returns the identities that resolved plus the refs that never appeared.
+/// Each ref is loaded on its own so a late row cannot void the rows that are
+/// already committed (the loader is all-or-nothing per request), resolved
+/// identities survive retries, and the caller keeps a never-appearing ref
+/// loud instead of substituting an empty map - an empty snapshot would turn
+/// a startup publication race into a terminal identity failure for every
+/// controller row.
+async fn seed_committed_provider_identities<L, F>(
+    provider_refs: BTreeSet<ResourceRef>,
+    attempts: usize,
+    interval: Duration,
+    mut load: L,
+) -> (
+    BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
+    Vec<ResourceRef>,
+)
+where
+    L: FnMut(ResourceRef) -> F,
+    F: Future<
+        Output = Result<
+            (ResourceUid, ResourceGeneration),
+            resource_runtime::ResourceRuntimeError,
+        >,
+    >,
+{
+    let mut resolved = BTreeMap::new();
+    let mut last_error: Option<resource_runtime::ResourceRuntimeError> = None;
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
+        let pending = provider_refs
+            .iter()
+            .filter(|provider_ref| !resolved.contains_key(*provider_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            break;
+        }
+        for provider_ref in pending {
+            match load(provider_ref.clone()).await {
+                Ok(identity) => {
+                    resolved.insert(provider_ref, identity);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if resolved.len() == provider_refs.len() {
+            break;
+        }
+        if attempt + 1 < attempts {
+            tracing::warn!(
+                unresolved = provider_refs.len() - resolved.len(),
+                attempt,
+                "committed Provider identity snapshot raced publication; retrying",
+            );
+            tokio::time::sleep(interval).await;
+        }
+    }
+    let unresolved = provider_refs
+        .iter()
+        .filter(|provider_ref| !resolved.contains_key(*provider_ref))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unresolved.is_empty() {
+        tracing::error!(
+            unresolved = ?unresolved
+                .iter()
+                .map(ResourceRef::to_canonical_string)
+                .collect::<Vec<_>>(),
+            error = ?last_error,
+            "committed Provider identities unresolved after the publication window; \
+             controller rows owned by these Providers cannot bind their launch identity",
+        );
+    }
+    (resolved, unresolved)
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -16048,20 +16134,45 @@ async fn open_resource_plane(
                     ResourceRef::parse(&format!("Provider/{}", row.metadata().name().as_str())).ok()
                 })
                 .collect::<BTreeSet<_>>();
-            let committed_provider_identities = match runtime
-                .committed_provider_identities(provider_refs)
-                .await
-            {
-                Ok(identities) => identities,
-                Err(error) => {
-                    tracing::warn!(
-                        zone = %_zone.as_str(),
-                        error = ?error,
-                        "committed Provider identities unavailable; controller rows stay unbound",
-                    );
-                    BTreeMap::new()
-                }
-            };
+            // KTD7 seeding: the snapshot races generation publication (the
+            // same window the process-resource startup read above retries
+            // through). It must not be laundered into "no committed
+            // identities": an empty map turns the race into
+            // `provider-controller-provider-identity-missing` for every
+            // controller Process, which the Process driver classifies
+            // `IdentityAmbiguous` -> Terminal and exhausts. Late refs are
+            // retried, every resolved identity is retained, and a ref that
+            // never appears stays a loud error naming it.
+            let (committed_provider_identities, unresolved_provider_identities) =
+                seed_committed_provider_identities(
+                    provider_refs,
+                    PROVIDER_IDENTITY_SEED_ATTEMPTS,
+                    PROVIDER_IDENTITY_SEED_INTERVAL,
+                    |provider_ref| {
+                        let runtime = &runtime;
+                        async move {
+                            runtime
+                                .committed_provider_identities(BTreeSet::from([
+                                    provider_ref.clone(),
+                                ]))
+                                .await
+                                .map(|mut identities| {
+                                    identities.remove(&provider_ref).expect(
+                                        "a single requested Provider ref resolves or errors",
+                                    )
+                                })
+                        }
+                    },
+                )
+                .await;
+            if !unresolved_provider_identities.is_empty() {
+                tracing::error!(
+                    zone = %_zone.as_str(),
+                    unresolved = unresolved_provider_identities.len(),
+                    "opening the v3 plane with unseeded Provider identities; \
+                     the controller rows these Providers own cannot bind",
+                );
+            }
             let mut inputs = crate::resource_plane_v3::ConstructionInputs::production(
                 &std::sync::Arc::new(state.clone()),
                 _zone.clone(),
@@ -31904,5 +32015,154 @@ mod broker_dispatch_tests {
         );
 
         let _ = fs::remove_dir_all(&daemon_state_dir);
+    }
+}
+
+#[cfg(test)]
+mod g5_provider_identity_seed_tests {
+    use super::*;
+
+    fn provider(name: &str) -> ResourceRef {
+        ResourceRef::parse(&format!("Provider/{name}")).expect("provider ref")
+    }
+
+    fn identity(digit: char) -> (ResourceUid, ResourceGeneration) {
+        (
+            ResourceUid::parse(format!(
+                "{0}{0}{0}{0}{0}{0}{0}{0}-{0}{0}{0}{0}-4{0}{0}{0}-8{0}{0}{0}-{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}",
+                digit
+            ))
+            .expect("identity uid"),
+            ResourceGeneration::new(3).expect("identity generation"),
+        )
+    }
+
+    fn provider_uid(name: &str) -> ResourceUid {
+        if name == "volume-local" {
+            identity('1').0
+        } else {
+            identity('2').0
+        }
+    }
+
+    /// The race, reproduced deterministically: one Provider row is not yet
+    /// visible on the first evaluation while the rest are. Seeding must wait
+    /// for the late row instead of handing the caller a partial - or worse,
+    /// empty - snapshot; an unbound controller identity is classified
+    /// `IdentityAmbiguous` -> Terminal by the Process driver on its first
+    /// pass.
+    #[tokio::test]
+    async fn late_provider_row_is_seeded_before_the_plane_opens() {
+        let refs = BTreeSet::from([
+            provider("runtime-cloud-hypervisor"),
+            provider("volume-local"),
+        ]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs.clone(),
+            4,
+            Duration::ZERO,
+            |provider_ref| {
+                let call = calls;
+                calls += 1;
+                let name = provider_ref.name().as_str().to_owned();
+                let visible = !(call == 0 && name.starts_with("runtime-cloud-hypervisor"));
+                async move {
+                    if visible {
+                        Ok((
+                            provider_uid(&name),
+                            ResourceGeneration::new(3).expect("identity generation"),
+                        ))
+                    } else {
+                        Err(resource_runtime::ResourceRuntimeError::StoreReadFailed)
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(
+            unresolved.is_empty(),
+            "the late Provider must be seeded, not left unbound for a terminal first pass"
+        );
+        assert_eq!(
+            resolved.len(),
+            refs.len(),
+            "the first identity evaluation after seeding must see every Provider"
+        );
+        assert_eq!(
+            resolved[&provider("runtime-cloud-hypervisor")].0,
+            provider_uid("runtime-cloud-hypervisor"),
+            "the late row is bound once it appears"
+        );
+        assert_eq!(
+            resolved[&provider("volume-local")].0,
+            provider_uid("volume-local"),
+            "the already-committed row survives its sibling's late publication"
+        );
+        assert!(calls >= 3, "the late ref must have been re-evaluated");
+    }
+
+    /// A ref that never appears stays loud, and it must not void the
+    /// identities that did resolve (no empty-map laundering).
+    #[tokio::test]
+    async fn absent_provider_row_keeps_resolved_identities_and_stays_unresolved() {
+        let refs = BTreeSet::from([
+            provider("runtime-cloud-hypervisor"),
+            provider("volume-local"),
+        ]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs,
+            2,
+            Duration::ZERO,
+            |provider_ref| {
+                calls += 1;
+                let name = provider_ref.name().as_str().to_owned();
+                let present = name == "volume-local";
+                async move {
+                    if present {
+                        Ok((provider_uid(&name), ResourceGeneration::new(3).unwrap()))
+                    } else {
+                        Err(resource_runtime::ResourceRuntimeError::StoreReadFailed)
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(calls, 3, "the bounded window is exhausted, then seeding stops");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[&provider("volume-local")].0,
+            provider_uid("volume-local"),
+            "a partially resolved snapshot keeps every resolved identity"
+        );
+        assert_eq!(
+            unresolved,
+            vec![provider("runtime-cloud-hypervisor")],
+            "a ref that never appears stays unresolved (loud), never an empty map"
+        );
+    }
+
+    /// A complete snapshot costs one evaluation per ref and no waiting.
+    #[tokio::test]
+    async fn complete_snapshot_resolves_without_retrying() {
+        let refs = BTreeSet::from([provider("volume-local")]);
+        let mut calls = 0_usize;
+        let (resolved, unresolved) = seed_committed_provider_identities(
+            refs,
+            30,
+            Duration::from_secs(2),
+            |_provider_ref| {
+                calls += 1;
+                async move { Ok((provider_uid("volume-local"), ResourceGeneration::new(3).unwrap())) }
+            },
+        )
+        .await;
+
+        assert_eq!(calls, 1, "a complete snapshot must not wait");
+        assert!(unresolved.is_empty());
+        assert_eq!(resolved.len(), 1);
     }
 }
