@@ -917,6 +917,24 @@ impl From<&EndpointPolicy> for EndpointPolicyIdentity {
 }
 
 impl EndpointPolicyIdentity {
+    /// The one fixed Guest-local enrolled carriage profile, named by purpose:
+    /// the generic target-control session and the ZoneLink gateway's Guest
+    /// carriage carry identical roles, service, noise, transport and evidence
+    /// and differ only in the purpose that names them.
+    fn enrolled_guest_profile(&self, purpose: EndpointPurpose) -> bool {
+        self.purpose == purpose
+            && self.purpose_class == PurposeClass::Enrolled
+            && self.initiator_role == EndpointRole::ZoneController
+            && self.responder_role == EndpointRole::GuestAgent
+            && self.service == ServicePackage::ResourceV3
+            && self.noise_profile == NoiseProfile::Kk25519ChaChaPolySha256
+            && self.transport_binding.transport == TransportClass::NativeVsock
+            && self.transport_binding.locality == Locality::GuestLocal
+            && self.transport_binding.identity_evidence
+                == IdentityEvidenceRequirement::EnrolledStaticKeys
+            && self.attachment_policy == AttachmentPolicy::disabled()
+    }
+
     pub fn validate(&self) -> Result<(), ContractError> {
         self.limits.validate()?;
         self.attachment_policy
@@ -967,17 +985,8 @@ impl EndpointPolicyIdentity {
                 self.transport_binding.transport,
                 TransportClass::UnixStream | TransportClass::UnixSeqpacket
             );
-        let enrolled_guest = self.purpose == EndpointPurpose::ZoneLink
-            && self.purpose_class == PurposeClass::Enrolled
-            && self.initiator_role == EndpointRole::ZoneController
-            && self.responder_role == EndpointRole::GuestAgent
-            && self.service == ServicePackage::ResourceV3
-            && self.noise_profile == NoiseProfile::Kk25519ChaChaPolySha256
-            && self.transport_binding.transport == TransportClass::NativeVsock
-            && self.transport_binding.locality == Locality::GuestLocal
-            && self.transport_binding.identity_evidence
-                == IdentityEvidenceRequirement::EnrolledStaticKeys
-            && self.attachment_policy == AttachmentPolicy::disabled();
+        let enrolled_guest = self.enrolled_guest_profile(EndpointPurpose::ComponentSession)
+            || self.enrolled_guest_profile(EndpointPurpose::ZoneLink);
         if local || enrolled_guest {
             Ok(())
         } else {
@@ -1134,6 +1143,25 @@ impl EndpointPolicy {
                     Locality::GuestLocal,
                 )
             )
+        {
+            return Err(ContractError::InvalidBinding);
+        }
+        Ok(())
+    }
+
+    /// Validate the exact endpoint profile of the generic Guest target-control
+    /// session (R20).
+    ///
+    /// The parent Zone reaches one Guest through an enrolled, attachment-free
+    /// `Noise_KK` Guest-local vsock session that terminates at a `GuestAgent`.
+    /// The session is named for what it is - a ComponentSession - so generic
+    /// Host-to-Guest target traffic does not carry ZoneLink naming; a ZoneLink
+    /// is a consumer of this path, never its owner.
+    pub fn validate_enrolled_guest_session(&self) -> Result<(), ContractError> {
+        let identity = EndpointPolicyIdentity::from(self);
+        identity.validate()?;
+        if self.reconnect_generation == 0
+            || !identity.enrolled_guest_profile(EndpointPurpose::ComponentSession)
         {
             return Err(ContractError::InvalidBinding);
         }

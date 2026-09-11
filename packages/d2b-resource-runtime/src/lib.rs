@@ -42,6 +42,19 @@ pub use crate::resource::{
     DEFAULT_REQUEUE_BACKOFF, ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus,
 };
 
+// Target layer (U13): the Host/Guest directory, the generation-bound guest
+// handle it mints, and the Guest-side target runtime behind the
+// target-control port.
+pub use crate::guest_target::{
+    GuestAdoption, GuestRealizeRequest, GuestTargetControl, GuestTargetError, GuestTargetRuntime,
+    SessionBoundGuestTargetControl, TargetResourceInstance, TargetInstanceState,
+};
+pub use crate::target::{
+    GuestAdoptionOutcome, GuestConnectOutcome, GuestDisconnectOutcome, GuestTargetHandle,
+    HostTargetHandle, ResolvedTarget, TargetAssignment, TargetAvailability, TargetDirectory,
+    TargetError, TargetHandle, TargetKind, TargetObservation, TargetRef,
+};
+
 #[cfg(test)]
 mod smoke_tests {
     /// Scaffold smoke test: the crate compiles and its module tree resolves.

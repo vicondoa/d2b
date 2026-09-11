@@ -546,7 +546,7 @@ pkgs.testers.runNixOSTest {
         "\"guestUid\":\"$guest_uid\","
         "\"zone\":\"work\","
         "\"bootIdentityDigest\":\"sha256:$boot_digest\","
-        "\"purpose\":\"zone-link\","
+        "\"purpose\":\"component-session\","
         "\"schemaFingerprint\":\"sha256:65e20cc53efdd2354931c5cf2ad722612dd9bc4e26e0b238b9048f244db6c737\","
         "\"reconnectGeneration\":1,"
         "\"providerGeneration\":1,"

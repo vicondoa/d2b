@@ -1600,8 +1600,10 @@ mod tests {
             ZoneId::parse("work").expect("zone"),
             crate::guest_mode::BootIdentity::from_kernel_boot_id("u6-test-boot")
                 .expect("boot identity"),
-            d2b_contracts_resource::v3::identity::SessionPurpose::parse("zone-link")
-                .expect("purpose"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
             d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
                 "sha256:{}",
                 "1".repeat(64)

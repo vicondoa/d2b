@@ -206,7 +206,7 @@ async fn disconnected_generation_cannot_be_reused() {
 }
 
 #[tokio::test]
-async fn wrong_zone_link_purpose_role_and_service_fail_closed() {
+async fn wrong_component_session_purpose_role_and_service_fail_closed() {
     for mismatch in ["purpose", "role", "service"] {
         let (runtime, _state_dir) = runtime().await;
         let mut policy = identity(1).endpoint_policy();
