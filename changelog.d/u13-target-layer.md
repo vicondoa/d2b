@@ -17,11 +17,18 @@
 
 - Renamed the generic Guest target-control session purpose away from the
   literal `zone-link` to `component-session`, in the session identity, the
-  enrolled endpoint policy, the generation-discovery profile, and the ZoneLink
-  route admission's Gateway-Guest carriage profile (R20). ZoneLink resource
-  semantics are untouched: ZoneLink traffic keeps its own purpose, roles and
-  transport profiles, and a ZoneLink that runs in a guest consumes the generic
-  target path.
+  enrolled endpoint policy, the generation-discovery profile, the ZoneLink
+  route admission's Gateway-Guest carriage profile, the guest daemon's
+  `--purpose` default, and the `d2b.componentSession.purpose` module option
+  (R20). ZoneLink resource semantics are untouched: ZoneLink traffic keeps its
+  own purpose, roles and transport profiles, and a ZoneLink that runs in a
+  guest consumes the generic target path.
+  **Compatibility:** the purpose is a cross-boundary value (host-published
+  `component-session/guest.json` descriptor, guest daemon `--purpose`, and the
+  Noise endpoint policy on the wire), so host daemon, guest daemon, descriptor
+  and Nix module must move together; a pre-rename descriptor or an old-purpose
+  peer fails closed (guest-mode-purpose-mismatch / handshake purpose-mismatch)
+  rather than downgrading. No wire enum value was added or renumbered.
 
 ### Fixed
 
