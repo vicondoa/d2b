@@ -219,6 +219,18 @@ async fn manager_fixture() -> ManagerFixture {
             Err("no decoder".into())
         }
     }
+    /// Test resolver: no fixture row declares an execution reference, so every
+    /// test resource realizes on the Zone's Host target.
+    struct HostOnlyResolver;
+    impl d2b_resource_runtime::target::TargetResolver for HostOnlyResolver {
+        fn execution_ref(
+            &self,
+            _key: &d2b_resource_runtime::spec_store::ResourceKey,
+            _spec: &[u8],
+        ) -> Option<String> {
+            None
+        }
+    }
     let args = d2b_resource_runtime::ResourceManagerArgs {
         zone: TEST_ZONE.to_owned(),
         store,
@@ -233,6 +245,10 @@ async fn manager_fixture() -> ManagerFixture {
         admission: Arc::new(d2b_resource_runtime::AllowAll),
         decoders: HashMap::new(),
         default_decoder: Arc::new(NoDecoder),
+        targets: Arc::new(d2b_resource_runtime::target::TargetDirectory::new()),
+        host_target: d2b_resource_runtime::target::TargetRef::host("test-host")
+            .expect("host target"),
+        target_resolver: Arc::new(HostOnlyResolver),
         backoff: std::time::Duration::from_millis(200),
     };
     let (actor, _join) = ractor::Actor::spawn(None, d2b_resource_runtime::ResourceManager::new(), args)
