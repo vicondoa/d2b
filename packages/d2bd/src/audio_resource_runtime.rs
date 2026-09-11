@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildSet;
 #[cfg(test)]
 use d2b_contracts_resource::v3::ZoneRevision;
 use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ZoneId};
@@ -29,7 +28,6 @@ use sha2::{Digest, Sha256};
 
 use crate::ServerState;
 use crate::audio_dispatch::{DaemonAudioMediator, audio_capability_for_vm};
-use crate::binding_child_resource_runtime::BindingChildOwner;
 
 pub(crate) const AUDIO_SERVICE_TYPE: &str = "audio.d2bus.org.AudioService";
 pub(crate) const AUDIO_BINDING_TYPE: &str = "audio.d2bus.org.AudioBinding";
@@ -127,7 +125,6 @@ struct AudioBindingRecord {
     lease: d2b_provider_audio_pipewire::AudioLeaseId,
     controller: Option<AudioBindingController<DaemonAudioMediator>>,
     status: AudioBindingStatus,
-    children: Option<BindingChildSet>,
 }
 
 /// One Zone's durable audio controller registry.
@@ -237,11 +234,6 @@ impl AudioResourceRuntime {
         self.services
             .insert(service.resource_ref.to_canonical_string(), service_spec.clone());
         let key = resource.resource_ref.to_canonical_string();
-        let children = AudioBindingController::<DaemonAudioMediator>::child_resources(
-            &resource.resource_ref,
-            &spec,
-        )
-        .map_err(|_| AudioResourceRuntimeError::InvalidRelationship)?;
         if let Some(record) = self.bindings.get_mut(&key)
             && record.spec == spec
             && let Some(controller) = record.controller.as_mut()
@@ -261,7 +253,6 @@ impl AudioResourceRuntime {
                     );
                 }
             }
-            record.children = Some(children);
             return Ok(Some(AudioBindingRuntimeStatus {
                 resource: resource.resource_ref.clone(),
                 status: record.status,
@@ -356,7 +347,6 @@ impl AudioResourceRuntime {
                 lease,
                 controller,
                 status,
-                children: Some(children),
             },
         );
         Ok(Some(AudioBindingRuntimeStatus {
@@ -428,33 +418,6 @@ impl AudioResourceRuntime {
             .collect()
     }
 
-    /// Return the currently declared children for one authored Binding.
-    pub(crate) fn children_for(&self, binding_ref: &ResourceRef) -> Option<&BindingChildSet> {
-        self.bindings
-            .get(&binding_ref.to_canonical_string())
-            .and_then(|record| record.children.as_ref())
-    }
-
-    /// Build one Core-owned child reconciliation owner for an AudioBinding.
-    pub(crate) fn child_owner_for(
-        &self,
-        resource: &StoredResource,
-    ) -> Result<BindingChildOwner, AudioResourceRuntimeError> {
-        let desired = if deletion_requested(resource) {
-            None
-        } else {
-            Some(
-                self.children_for(&resource.resource_ref)
-                    .cloned()
-                    .ok_or(AudioResourceRuntimeError::InvalidRelationship)?,
-            )
-        };
-        Ok(BindingChildOwner {
-            resource: resource.clone(),
-            desired,
-            fenced: false,
-        })
-    }
 }
 
 fn unavailable_status(
@@ -578,67 +541,25 @@ fn decode_spec<T: DeserializeOwned>(
     serde_json::from_value(spec).map_err(|_| AudioResourceRuntimeError::InvalidResource)
 }
 
-#[cfg(test)]
-pub(crate) fn audio_binding_status_projection(
-    resource: &StoredResource,
-    children: &[StoredResource],
-) -> Result<serde_json::Value, AudioResourceRuntimeError> {
-    let spec: AudioBindingSpec = decode_spec(resource)?;
-    let status = unavailable_status(
-        AudioBindingPhase::Degraded,
-        HostAudioReadiness::Unavailable,
-        GuestAudioReadiness::Unavailable,
-    );
-    audio_binding_status_projection_with_status(
-        resource,
-        children,
-        &AudioBindingStatus {
-            channels: d2b_provider_audio_pipewire::AudioBindingChannels {
-                speaker: d2b_provider_audio_pipewire::AudioSpeakerStatus {
-                    grant: spec.grants.speaker,
-                    level: spec.grants.speaker_level,
-                    live_enforced: false,
-                },
-                mic: d2b_provider_audio_pipewire::AudioMicrophoneStatus {
-                    grant: spec.grants.mic,
-                    gain: spec.grants.mic_gain,
-                    live_enforced: false,
-                    arbitration_state: AudioArbitrationState::Inactive,
-                },
-            },
-            ..status
-        },
-    )
-}
-
-pub(crate) fn audio_binding_status_projection_with_status(
-    resource: &StoredResource,
-    children: &[StoredResource],
+/// The `status.resource` projection for one AudioBinding (old
+/// `audio_binding_status_projection_with_status`): the typed channel status
+/// plus the realized Process/Endpoint references the driver owns.
+pub(crate) fn audio_binding_projection(
+    spec: &AudioBindingSpec,
+    realization_refs: &[ResourceRef],
     status: &AudioBindingStatus,
-) -> Result<serde_json::Value, AudioResourceRuntimeError> {
-    let spec: AudioBindingSpec = decode_spec(resource)?;
-    let realization_refs = children
-        .iter()
-        .filter(|child| {
-            matches!(
-                child.resource_ref.resource_type().as_str(),
-                "Process" | "EphemeralProcess" | "Endpoint"
-            ) && !deletion_requested(child)
-                && ResourceEnvelope::from_json(&child.canonical_json)
-                    .ok()
-                    .and_then(|envelope| envelope.metadata().owner_ref().cloned())
-                    .is_some_and(|owner| owner == resource.resource_ref)
-        })
-        .map(|child| child.resource_ref.to_canonical_string())
-        .collect::<Vec<_>>();
+) -> serde_json::Value {
     let typed_status = audio_binding_status_value(*status);
-    Ok(serde_json::json!({
+    serde_json::json!({
         "channels": typed_status["channels"],
         "enforcementPosture": typed_status["enforcementPosture"],
         "lastSetApplied": typed_status["lastSetApplied"],
         "observedServiceRef": spec.service_ref.to_canonical_string(),
         "realizationRefs": realization_refs
-    }))
+            .iter()
+            .map(|reference| reference.to_canonical_string())
+            .collect::<Vec<_>>()
+    })
 }
 
 #[cfg(test)]
@@ -759,11 +680,16 @@ mod tests {
             "dev",
         )
         .unwrap();
-        let resource = stored_audio_resource(
-            "audio.d2bus.org.AudioBinding/work",
-            serde_json::to_value(binding).unwrap(),
+        let mut status = unavailable_status(
+            AudioBindingPhase::Degraded,
+            HostAudioReadiness::Unavailable,
+            GuestAudioReadiness::Unavailable,
         );
-        let projection = audio_binding_status_projection(&resource, &[]).unwrap();
+        status.channels.speaker.grant = binding.grants.speaker;
+        status.channels.speaker.level = binding.grants.speaker_level;
+        status.channels.mic.grant = binding.grants.mic;
+        status.channels.mic.gain = binding.grants.mic_gain;
+        let projection = audio_binding_projection(&binding, &[], &status);
         let names = projection
             .as_object()
             .unwrap()

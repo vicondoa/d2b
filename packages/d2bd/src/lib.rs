@@ -9,6 +9,7 @@ pub mod activation_driver;
 pub(crate) mod shared_provider_driver;
 pub(crate) mod shared_provider_effects;
 pub(crate) mod system_core_driver;
+pub(crate) mod interaction_driver;
 
 pub(crate) mod resource_plane_v3;
 

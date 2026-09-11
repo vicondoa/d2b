@@ -1,17 +1,15 @@
-//! Shared-Runner composition for the U8 host Provider family.
+//! Shared-Runner composition for the Guest runtime Provider family.
 //!
-//! Network and the Device Providers (tpm, usbip, security-key, gpu) run
-//! through one closed, typed effect boundary; every registration row names the
-//! exact controller process, Provider identity, ResourceType, and finalizer it
-//! owns. The same reconciler is the shared Runner adapter for the Guest
-//! runtime Providers, so the registration shape and the effect trait live here
-//! rather than in the orchestrator.
+//! The runtime Providers (cloud-hypervisor, qemu-media, azure container apps,
+//! azure virtual machine) run through one closed, typed effect boundary; every
+//! registration row names the exact controller process, Provider identity,
+//! ResourceType, and finalizer it owns. The registration shape and the effect
+//! trait live here rather than in the orchestrator.
 //!
-//! The interaction (U9) and storage (U7) families keep their own registration
-//! and runner-lifecycle modules; they consume this module's effect executor
-//! and reconciler instead of redeclaring them. The interaction effect arms are
-//! part of this module's single closed trait impl and are not separable from
-//! it.
+//! The U8 host Provider family, the interaction/shell family (U9), and the
+//! storage family (U7) were converted to v3 drivers; their arms left this
+//! module with their reconcilers. What remains is the Guest leg consumed by
+//! `guest_provider_runtime`.
 
 use std::{
     collections::BTreeMap,
@@ -20,8 +18,8 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourceGeneration, ResourceRef,
-    ResourceTypeName, ResourceUid, ZoneId, canonical_digest,
+    CanonicalJsonValue, ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName,
+    ResourceUid, ZoneId,
     identity::{AuthenticatedSubjectContext, ReconnectGeneration},
 };
 use d2b_core_controller::{
@@ -32,22 +30,16 @@ use d2b_core_controller::{
     ResourceRegistration, ResourceSnapshot, ResyncPolicy, SelectorField, StatusPersistence,
     UpdateAssessment, UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
 };
-use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_runtime_azure_container_apps as aca_runtime;
 use d2b_provider_runtime_azure_virtual_machine as azure_vm_runtime;
 use d2b_provider_runtime_qemu_media as qemu_media_runtime;
 use d2b_resource_store::{
-    ResourceAssignmentScope, StoreErrorKind, StoreGetRequest, StoreOperationContext,
-    StoreProjection, StoredResource,
+    StoreGetRequest, StoreOperationContext, StoreProjection, StoredResource,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::ServerState;
-use crate::audio_resource_runtime::{
-    AUDIO_BINDING_TYPE, AudioResourceRuntime, AudioResourceRuntimeError,
-    audio_binding_status_projection_with_status,
-};
 use crate::binding_child_resource_runtime::{
     OneOwnedChildProgress, OwnedChildOwner, reconcile_one_guest_child,
 };
@@ -64,12 +56,6 @@ pub(crate) enum SharedProviderResourceKind {
     QemuMediaGuest,
     AzureContainerAppsGuest,
     AzureVirtualMachineGuest,
-    DisplayWaylandPolicy,
-    DisplayWaylandSession,
-    AudioService,
-    AudioBinding,
-    ShellPool,
-    ShellSession,
 }
 
 impl SharedProviderResourceKind {
@@ -101,36 +87,6 @@ impl SharedProviderResourceKind {
                 "Guest",
                 "Process/azure-vm-controller-process",
             ) => Ok(Self::AzureVirtualMachineGuest),
-            (
-                "Provider/display-wayland",
-                "display-wayland.d2bus.org.WaylandPolicy",
-                "Process/display-wayland-controller",
-            ) => Ok(Self::DisplayWaylandPolicy),
-            (
-                "Provider/display-wayland",
-                "display-wayland.d2bus.org.WaylandSession",
-                "Process/display-wayland-controller",
-            ) => Ok(Self::DisplayWaylandSession),
-            (
-                "Provider/audio-pipewire",
-                "audio.d2bus.org.AudioService",
-                "Process/audio-pipewire-controller",
-            ) => Ok(Self::AudioService),
-            (
-                "Provider/audio-pipewire",
-                "audio.d2bus.org.AudioBinding",
-                "Process/audio-pipewire-controller",
-            ) => Ok(Self::AudioBinding),
-            (
-                "Provider/shell-terminal",
-                "shell-terminal.d2bus.org.ShellPool",
-                "Process/shell-terminal-controller",
-            ) => Ok(Self::ShellPool),
-            (
-                "Provider/shell-terminal",
-                "shell-terminal.d2bus.org.ShellSession",
-                "Process/shell-terminal-controller",
-            ) => Ok(Self::ShellSession),
             _ => Err(ResourceRuntimeError::HandlerNotReady),
         }
     }
@@ -141,12 +97,6 @@ impl SharedProviderResourceKind {
             Self::QemuMediaGuest => "runtime-qemu-media-guest",
             Self::AzureContainerAppsGuest => "runtime-azure-container-apps-guest",
             Self::AzureVirtualMachineGuest => "runtime-azure-virtual-machine-guest",
-            Self::DisplayWaylandPolicy => "display-wayland-policy",
-            Self::DisplayWaylandSession => "display-wayland-session",
-            Self::AudioService => "audio-service",
-            Self::AudioBinding => "audio-binding",
-            Self::ShellPool => "shell-pool",
-            Self::ShellSession => "shell-session",
         }
     }
 
@@ -156,9 +106,6 @@ impl SharedProviderResourceKind {
             Self::QemuMediaGuest => "Provider/runtime-qemu-media",
             Self::AzureContainerAppsGuest => "Provider/runtime-azure-container-apps",
             Self::AzureVirtualMachineGuest => "Provider/runtime-azure-virtual-machine",
-            Self::DisplayWaylandPolicy | Self::DisplayWaylandSession => "Provider/display-wayland",
-            Self::AudioService | Self::AudioBinding => "Provider/audio-pipewire",
-            Self::ShellPool | Self::ShellSession => "Provider/shell-terminal",
         }
     }
 
@@ -168,12 +115,6 @@ impl SharedProviderResourceKind {
             | Self::QemuMediaGuest
             | Self::AzureContainerAppsGuest
             | Self::AzureVirtualMachineGuest => "Guest",
-            Self::DisplayWaylandPolicy => "display-wayland.d2bus.org.WaylandPolicy",
-            Self::DisplayWaylandSession => "display-wayland.d2bus.org.WaylandSession",
-            Self::AudioService => "audio.d2bus.org.AudioService",
-            Self::AudioBinding => "audio.d2bus.org.AudioBinding",
-            Self::ShellPool => "shell-terminal.d2bus.org.ShellPool",
-            Self::ShellSession => "shell-terminal.d2bus.org.ShellSession",
         }
     }
 }
@@ -784,39 +725,6 @@ impl GuestRuntimeController {
 /// Typed Provider effect boundary owned by the d2bd composition root.
 #[async_trait]
 pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
-    /// Reconcile one display-wayland ResourceType.
-    async fn reconcile_display(
-        &self,
-        _kind: SharedProviderResourceKind,
-        _context: &SharedProviderEffectContext,
-        _resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        Err(SharedProviderEffectError::Unavailable)
-    }
-
-    /// Reconcile one audio-pipewire ResourceType.
-    async fn reconcile_audio(
-        &self,
-        _kind: SharedProviderResourceKind,
-        _context: &SharedProviderEffectContext,
-        _resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        Err(SharedProviderEffectError::Unavailable)
-    }
-
-    /// Reconcile one shell-terminal ResourceType.
-    async fn reconcile_shell(
-        &self,
-        _kind: SharedProviderResourceKind,
-        _context: &SharedProviderEffectContext,
-        _resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        Err(SharedProviderEffectError::Unavailable)
-    }
-
     /// Reconcile one Guest through its selected runtime Provider.
     async fn reconcile_guest(
         &self,
@@ -848,40 +756,8 @@ pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
         resource: &ResourceSnapshot,
         dependencies: &[DependencySnapshot],
     ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::CloudHypervisorGuest
-                | SharedProviderResourceKind::QemuMediaGuest
-                | SharedProviderResourceKind::AzureContainerAppsGuest
-                | SharedProviderResourceKind::AzureVirtualMachineGuest
-        ) {
-            self.reconcile_guest_result(kind, context, resource, dependencies)
-                .await
-        } else if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-        ) {
-            self.reconcile_display(kind, context, resource, dependencies)
-                .await
-        } else if matches!(
-            kind,
-            SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-        ) {
-            self.reconcile_audio(kind, context, resource, dependencies)
-                .await
-        } else if matches!(
-            kind,
-            SharedProviderResourceKind::ShellPool | SharedProviderResourceKind::ShellSession
-        ) {
-            self.reconcile_shell(kind, context, resource, dependencies)
-                .await
-        } else {
-            self.reconcile(kind, context, resource, dependencies)
-                .await
-                .map(SharedProviderEffectResult::phase)
-        }
+        self.reconcile_guest_result(kind, context, resource, dependencies)
+            .await
     }
 
     async fn observe_result(
@@ -890,64 +766,7 @@ pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
         context: &SharedProviderEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-                | SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-                | SharedProviderResourceKind::ShellPool
-                | SharedProviderResourceKind::ShellSession
-        ) {
-            self.reconcile_result(kind, context, resource, &[]).await
-        } else {
-            self.observe(kind, context, resource)
-                .await
-                .map(SharedProviderEffectResult::phase)
-        }
-    }
-
-    /// Dispatch the closed Provider kind to its typed effect port.
-    async fn reconcile(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-        dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectPhase, SharedProviderEffectError> {
-        match kind {
-            SharedProviderResourceKind::CloudHypervisorGuest
-            | SharedProviderResourceKind::QemuMediaGuest
-            | SharedProviderResourceKind::AzureContainerAppsGuest
-            | SharedProviderResourceKind::AzureVirtualMachineGuest => self
-                .reconcile_guest(kind, context, resource, dependencies)
-                .await,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-            | SharedProviderResourceKind::DisplayWaylandSession => self
-                .reconcile_display(kind, context, resource, dependencies)
-                .await
-                .map(|result| result.phase),
-            SharedProviderResourceKind::AudioService
-            | SharedProviderResourceKind::AudioBinding => self
-                .reconcile_audio(kind, context, resource, dependencies)
-                .await
-                .map(|result| result.phase),
-            SharedProviderResourceKind::ShellPool
-            | SharedProviderResourceKind::ShellSession => self
-                .reconcile_shell(kind, context, resource, dependencies)
-                .await
-                .map(|result| result.phase),
-        }
-    }
-
-    /// Observe or repair one exact Provider-owned resource.
-    async fn observe(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-    ) -> Result<SharedProviderEffectPhase, SharedProviderEffectError> {
-        self.reconcile(kind, context, resource, &[]).await
+        self.reconcile_result(kind, context, resource, &[]).await
     }
 
     /// Run provider cleanup before the owner finalizer is removed.
@@ -957,28 +776,7 @@ pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
         context: &SharedProviderEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<(), SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::CloudHypervisorGuest
-                | SharedProviderResourceKind::QemuMediaGuest
-                | SharedProviderResourceKind::AzureContainerAppsGuest
-                | SharedProviderResourceKind::AzureVirtualMachineGuest
-        ) {
-            return self.finalize_guest(kind, context, resource).await;
-        }
-        if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-                | SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-                | SharedProviderResourceKind::ShellPool
-                | SharedProviderResourceKind::ShellSession
-        ) {
-            return Ok(());
-        }
-        let _ = (kind, context, resource);
-        Err(SharedProviderEffectError::Unavailable)
+        self.finalize_guest(kind, context, resource).await
     }
 
     /// Finalize one Guest through its selected runtime Provider.
@@ -992,17 +790,6 @@ pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
         Err(SharedProviderEffectError::Unavailable)
     }
 
-    /// Run an accepted upgrade through the typed Provider lifecycle.
-    async fn upgrade(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-        dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectPhase, SharedProviderEffectError> {
-        self.reconcile(kind, context, resource, dependencies).await
-    }
-
     async fn upgrade_result(
         &self,
         kind: SharedProviderResourceKind,
@@ -1010,31 +797,8 @@ pub(crate) trait SharedProviderEffectExecutor: Send + Sync {
         resource: &ResourceSnapshot,
         dependencies: &[DependencySnapshot],
     ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::CloudHypervisorGuest
-                | SharedProviderResourceKind::QemuMediaGuest
-                | SharedProviderResourceKind::AzureContainerAppsGuest
-                | SharedProviderResourceKind::AzureVirtualMachineGuest
-        ) {
-            self.reconcile_result(kind, context, resource, dependencies)
-                .await
-        } else if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-                | SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-                | SharedProviderResourceKind::ShellPool
-                | SharedProviderResourceKind::ShellSession
-        ) {
-            self.reconcile_result(kind, context, resource, dependencies)
-                .await
-        } else {
-            self.upgrade(kind, context, resource, dependencies)
-                .await
-                .map(SharedProviderEffectResult::phase)
-        }
+        self.reconcile_result(kind, context, resource, dependencies)
+            .await
     }
 }
 
@@ -1088,18 +852,6 @@ impl DaemonSharedProviderEffects {
         }
         let value = serde_json::from_slice::<Value>(resource.canonical_json())
             .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-        ) && value
-            .pointer("/spec/providerRef")
-            .and_then(Value::as_str)
-            .map(|provider_ref| provider_ref == "Provider/display-wayland")
-            .unwrap_or(false)
-        {
-            return Ok(value);
-        }
         if value.pointer("/spec/providerRef").and_then(Value::as_str) != Some(kind.provider_ref()) {
             return Err(SharedProviderEffectError::InvalidResource);
         }
@@ -1113,289 +865,6 @@ impl DaemonSharedProviderEffects {
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(SharedProviderEffectError::Unavailable)
-    }
-
-    async fn finalization_resource(
-        &self,
-        runtime: &ZoneResourceRuntime,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-    ) -> Result<StoredResource, SharedProviderEffectError> {
-        if !resource.canonical_json().is_empty() {
-            return Ok(stored_resource_from_snapshot(resource));
-        }
-        let stored = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: context.operation_id.clone(),
-                    idempotency_key: None,
-                    correlation_id: context.operation_id.clone(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: resource.key().resource_ref().clone(),
-                expected_uid: Some(resource.key().uid().clone()),
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        if stored.zone != self.zone
-            || stored.resource_ref != *resource.key().resource_ref()
-            || stored.uid != *resource.key().uid()
-        {
-            return Err(SharedProviderEffectError::InvalidResource);
-        }
-        Ok(stored)
-    }
-
-    async fn fresh_audio_dependency(
-        &self,
-        runtime: &ZoneResourceRuntime,
-        context: &SharedProviderEffectContext,
-        target: &ResourceRef,
-        candidate: Option<&DependencySnapshot>,
-    ) -> Result<StoredResource, SharedProviderEffectError> {
-        let authoritative = match runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: context.operation_id.clone(),
-                    idempotency_key: None,
-                    correlation_id: context.operation_id.clone(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: target.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-        {
-            Ok(resource) => resource,
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
-                return Err(SharedProviderEffectError::InvalidResource);
-            }
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    resource = %target.to_canonical_string(),
-                    "audio dependency authoritative read failed",
-                );
-                return Err(SharedProviderEffectError::Unavailable);
-            }
-        };
-        validate_audio_dependency_identity(&authoritative, target, &self.zone)?;
-        self.validate_audio_assignment(runtime, context, &authoritative, false)
-            .await?;
-
-        let Some(candidate) = candidate else {
-            return Ok(authoritative);
-        };
-        let candidate = stored_resource_from_snapshot(candidate.resource());
-        if validate_audio_dependency_identity(&candidate, target, &self.zone).is_ok()
-            && candidate.uid == authoritative.uid
-            && candidate.generation == authoritative.generation
-            && candidate.revision == authoritative.revision
-        {
-            Ok(candidate)
-        } else {
-            Ok(authoritative)
-        }
-    }
-
-    async fn validate_audio_assignment(
-        &self,
-        runtime: &ZoneResourceRuntime,
-        context: &SharedProviderEffectContext,
-        resource: &StoredResource,
-        owner: bool,
-    ) -> Result<(), SharedProviderEffectError> {
-        let Some(assignment) = runtime
-            .store
-            .assignment_fence(self.zone.clone(), resource.resource_ref.clone())
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?
-        else {
-            return Ok(());
-        };
-        if assignment.resource_uid != resource.uid
-            || assignment.resource_revision != resource.revision
-            || assignment.provider_generation.get() == 0
-            || assignment.controller_generation.get() == 0
-            || assignment.session_generation.get() == 0
-            || !matches!(assignment.scope, ResourceAssignmentScope::Primary)
-        {
-            return Err(SharedProviderEffectError::InvalidResource);
-        }
-        if owner {
-            let zone_target = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-            if assignment.provider_generation != context.identity.provider_generation()
-                || assignment.controller_generation != context.identity.controller_generation()
-                || assignment.controller_role != *context.identity.controller_ref()
-                || assignment.target != zone_target
-            {
-                return Err(SharedProviderEffectError::InvalidResource);
-            }
-            let session_generation = runtime
-                .core_controller_subject
-                .lock()
-                .map_err(|_| SharedProviderEffectError::Unavailable)?
-                .as_ref()
-                .map(|subject| subject.reconnect_generation())
-                .ok_or(SharedProviderEffectError::Unavailable)?;
-            if assignment.session_generation != session_generation {
-                return Err(SharedProviderEffectError::InvalidResource);
-            }
-        }
-        Ok(())
-    }
-
-    async fn finalize_u9(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-    ) -> Result<(), SharedProviderEffectError> {
-        let runtime = self.runtime()?;
-        match kind {
-            SharedProviderResourceKind::DisplayWaylandPolicy => Ok(()),
-            SharedProviderResourceKind::DisplayWaylandSession => {
-                let target = self
-                    .finalization_resource(&runtime, context, resource)
-                    .await?;
-                let envelope = ResourceEnvelope::from_json(&target.canonical_json)
-                    .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let _spec = serde_json::from_slice::<WaylandSessionSpec>(
-                    &envelope.spec().base().to_canonical_bytes(),
-                )
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let owner = crate::binding_child_resource_runtime::OwnedChildOwner {
-                    resource: target,
-                    desired: None,
-                    fenced: false,
-                };
-                let client = runtime
-                    .process_resource_client()
-                    .ok_or(SharedProviderEffectError::Unavailable)?;
-                let converged =
-                    crate::binding_child_resource_runtime::reconcile_owned_children(
-                        &runtime.store,
-                        &client,
-                        &self.zone,
-                        std::slice::from_ref(&owner),
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if converged.contains(resource.key().resource_ref()) {
-                    Ok(())
-                } else {
-                    Err(SharedProviderEffectError::Unavailable)
-                }
-            }
-            SharedProviderResourceKind::AudioService => {
-                let bindings = runtime
-                    .committed_resources_of_type(AUDIO_BINDING_TYPE)
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if bindings.iter().any(|binding| {
-                    binding
-                        .pointer("/spec/serviceRef")
-                        .and_then(Value::as_str)
-                        == Some(resource.key().resource_ref().to_canonical_string().as_str())
-                }) {
-                    Err(SharedProviderEffectError::Unavailable)
-                } else {
-                    Ok(())
-                }
-            }
-            SharedProviderResourceKind::AudioBinding => {
-                let target = self
-                    .finalization_resource(&runtime, context, resource)
-                    .await?;
-                let owner = {
-                    let mut audio = runtime
-                        .audio_runtime
-                        .lock()
-                        .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                    let registry = audio
-                        .get_or_insert_with(|| {
-                            AudioResourceRuntime::new(self.zone.clone(), self.state.clone())
-                        });
-                    registry
-                        .finalize_binding_resource(&target)
-                        .map_err(map_audio_effect_error)?;
-                    registry
-                        .child_owner_for(&target)
-                        .map_err(map_audio_effect_error)?
-                };
-                let client = runtime
-                    .process_resource_client()
-                    .ok_or(SharedProviderEffectError::Unavailable)?;
-                let converged =
-                    crate::binding_child_resource_runtime::reconcile_binding_children(
-                        &runtime.store,
-                        &client,
-                        &self.zone,
-                        std::slice::from_ref(&owner),
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if converged.contains(resource.key().resource_ref()) {
-                    Ok(())
-                } else {
-                    Err(SharedProviderEffectError::Unavailable)
-                }
-            }
-            SharedProviderResourceKind::ShellPool => {
-                let sessions = runtime
-                    .committed_resources_of_type("shell-terminal.d2bus.org.ShellSession")
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let pool_ref = resource.key().resource_ref().to_canonical_string();
-                if sessions.iter().any(|session| {
-                    session
-                        .pointer("/spec/poolRef")
-                        .and_then(Value::as_str)
-                        == Some(pool_ref.as_str())
-                }) {
-                    Err(SharedProviderEffectError::Unavailable)
-                } else {
-                    Ok(())
-                }
-            }
-            SharedProviderResourceKind::ShellSession => {
-                let target = self
-                    .finalization_resource(&runtime, context, resource)
-                    .await?;
-                let owner = crate::binding_child_resource_runtime::OwnedChildOwner {
-                    resource: target,
-                    desired: None,
-                    fenced: false,
-                };
-                let client = runtime
-                    .process_resource_client()
-                    .ok_or(SharedProviderEffectError::Unavailable)?;
-                let converged =
-                    crate::binding_child_resource_runtime::reconcile_owned_children(
-                        &runtime.store,
-                        &client,
-                        &self.zone,
-                        std::slice::from_ref(&owner),
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if converged.contains(resource.key().resource_ref()) {
-                    Ok(())
-                } else {
-                    Err(SharedProviderEffectError::Unavailable)
-                }
-            }
-            _ => Err(SharedProviderEffectError::InvalidResource),
-        }
     }
 
     async fn guest_provider_resource(
@@ -1598,7 +1067,6 @@ impl DaemonSharedProviderEffects {
             SharedProviderResourceKind::CloudHypervisorGuest => {
                 "Process/cloud-hypervisor-controller"
             }
-            _ => return Err(SharedProviderEffectError::InvalidResource),
         })
         .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         if context.identity.controller_ref() != &expected_controller
@@ -2463,7 +1931,6 @@ impl DaemonSharedProviderEffects {
             ),
             SharedProviderResourceKind::AzureVirtualMachineGuest
             | SharedProviderResourceKind::CloudHypervisorGuest => None,
-            _ => return Err(SharedProviderEffectError::InvalidResource),
         };
         let (children_ready, child_mutated) = if let Some(desired) = desired {
             let child_progress = self
@@ -2575,7 +2042,6 @@ impl DaemonSharedProviderEffects {
                     resource_projection: None,
                 })
             }
-            _ => Err(SharedProviderEffectError::InvalidResource),
         }
     }
 
@@ -2618,383 +2084,6 @@ impl DaemonSharedProviderEffects {
 
 #[async_trait]
 impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
-    async fn reconcile_display(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        let _value = self.validate(kind, context, resource)?;
-        if kind == SharedProviderResourceKind::DisplayWaylandPolicy {
-            ResourceEnvelope::from_json(resource.canonical_json())
-                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-            return Ok(SharedProviderEffectResult {
-                phase: SharedProviderEffectPhase::Ready,
-                child_mutated: false,
-                resource_projection: None,
-            });
-        }
-
-        let envelope = ResourceEnvelope::from_json(resource.canonical_json())
-            .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        let spec = serde_json::from_slice::<WaylandSessionSpec>(
-            &envelope.spec().base().to_canonical_bytes(),
-        )
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        if !spec.cross_domain_trusted()
-            || spec.guest_ref().resource_type().as_str() != "Guest"
-            || spec.host_ref().resource_type().as_str() != "Host"
-            || spec.user_ref().resource_type().as_str() != "User"
-        {
-            return Err(SharedProviderEffectError::InvalidResource);
-        }
-        let runtime = self.runtime()?;
-        let identity = runtime
-            .interaction_identity
-            .as_ref()
-            .ok_or(SharedProviderEffectError::Unavailable)?;
-        if identity.wayland_session_ref() != resource.key().resource_ref()
-            || identity.wayland_session_uid() != resource.key().uid()
-            || identity.subject_ref() != spec.guest_ref()
-            || identity.host_execution_ref() != spec.host_ref()
-            || identity.user_ref() != spec.user_ref()
-        {
-            return Err(SharedProviderEffectError::InvalidResource);
-        }
-        for dependency_ref in [
-            spec.guest_ref(),
-            spec.host_ref(),
-            spec.user_ref(),
-            spec.policy_ref(),
-        ] {
-            let dependency = runtime
-                .committed_resource_value(dependency_ref, &context.operation_id)
-                .await
-                .map_err(|_| SharedProviderEffectError::Unavailable)?;
-            if resource_phase(&dependency) != Some("Ready") {
-                return Ok(SharedProviderEffectResult {
-                    phase: SharedProviderEffectPhase::Pending,
-                    child_mutated: false,
-                    resource_projection: None,
-                });
-            }
-        }
-        let client = runtime
-            .process_resource_client()
-            .ok_or(SharedProviderEffectError::Unavailable)?;
-        let owner = stored_resource_from_snapshot(resource);
-        let desired = crate::interaction_composition::display_owned_child_intents(
-            &self.zone,
-            resource.key().resource_ref(),
-            resource.key().uid(),
-            &spec,
-            resource.generation().get(),
-            context.identity.controller_generation().get(),
-        )
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        let owner = crate::binding_child_resource_runtime::OwnedChildOwner {
-            resource: owner,
-            desired: Some(desired),
-            fenced: false,
-        };
-        let converged = crate::binding_child_resource_runtime::reconcile_owned_children(
-            &runtime.store,
-            &client,
-            &self.zone,
-            &[owner.clone()],
-        )
-        .await
-        .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        if !converged.contains(resource.key().resource_ref()) {
-            return Ok(SharedProviderEffectResult {
-                phase: SharedProviderEffectPhase::Pending,
-                child_mutated: true,
-                resource_projection: None,
-            });
-        }
-        let children = crate::binding_child_resource_runtime::list_binding_children(
-            &runtime.store,
-            &self.zone,
-        )
-        .await
-        .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        Ok(SharedProviderEffectResult {
-            phase: if crate::binding_child_resource_runtime::owned_children_ready(
-                &owner, &children,
-            ) {
-                SharedProviderEffectPhase::Ready
-            } else {
-                SharedProviderEffectPhase::Pending
-            },
-            child_mutated: false,
-            resource_projection: Some(display_resource_projection(&owner, &children)),
-        })
-    }
-
-    async fn reconcile_audio(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-        dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        let _ = self.validate(kind, context, resource)?;
-        let runtime = self.runtime()?;
-        let target = stored_resource_from_snapshot(resource);
-        validate_audio_dependency_identity(&target, resource.key().resource_ref(), &self.zone)?;
-        self.validate_audio_assignment(runtime.as_ref(), context, &target, true)
-            .await?;
-        match kind {
-            SharedProviderResourceKind::AudioService => {
-                let mut audio = runtime
-                    .audio_runtime
-                    .lock()
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let registry = audio
-                    .get_or_insert_with(|| AudioResourceRuntime::new(self.zone.clone(), self.state.clone()));
-                registry
-                    .reconcile_service_resource(&target)
-                    .map_err(map_audio_effect_error)?;
-                Ok(SharedProviderEffectResult {
-                    phase: SharedProviderEffectPhase::Ready,
-                    child_mutated: false,
-                    resource_projection: None,
-                })
-            }
-            SharedProviderResourceKind::AudioBinding => {
-                let value = serde_json::from_slice::<Value>(resource.canonical_json())
-                    .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let service_ref = resource_ref_at(&value, "/spec/serviceRef")?;
-                let target_ref = resource_ref_at(&value, "/spec/targetRef")?;
-                let service = self
-                    .fresh_audio_dependency(
-                        &runtime,
-                        context,
-                        &service_ref,
-                        audio_dependency(dependencies, &service_ref),
-                    )
-                    .await?;
-                let guest = self
-                    .fresh_audio_dependency(
-                        &runtime,
-                        context,
-                        &target_ref,
-                        audio_dependency(dependencies, &target_ref),
-                    )
-                    .await?;
-                let service_value = serde_json::from_slice::<Value>(&service.canonical_json)
-                    .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let guest_value = serde_json::from_slice::<Value>(&guest.canonical_json)
-                    .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                if resource_phase(&service_value) != Some("Ready")
-                    || resource_phase(&guest_value) != Some("Ready")
-                {
-                    return Ok(SharedProviderEffectResult {
-                        phase: SharedProviderEffectPhase::Pending,
-                        child_mutated: false,
-                        resource_projection: None,
-                    });
-                }
-                let (status, owner) = {
-                    let mut audio = runtime
-                        .audio_runtime
-                        .lock()
-                        .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                    let registry = audio.get_or_insert_with(|| {
-                        AudioResourceRuntime::new(self.zone.clone(), self.state.clone())
-                    });
-                    let status = registry
-                        .reconcile_binding_resource(&target, &service, &guest)
-                        .map_err(map_audio_effect_error)?
-                        .ok_or(SharedProviderEffectError::InvalidResource)?;
-                    let owner = registry
-                        .child_owner_for(&target)
-                        .map_err(map_audio_effect_error)?;
-                    (status, owner)
-                };
-                let client = runtime
-                    .process_resource_client()
-                    .ok_or(SharedProviderEffectError::Unavailable)?;
-                let converged =
-                    crate::binding_child_resource_runtime::reconcile_binding_children(
-                        &runtime.store,
-                        &client,
-                        &self.zone,
-                        std::slice::from_ref(&owner),
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if !converged.contains(resource.key().resource_ref()) {
-                    return Ok(SharedProviderEffectResult {
-                        phase: SharedProviderEffectPhase::Pending,
-                        child_mutated: true,
-                        resource_projection: None,
-                    });
-                }
-                let children = crate::binding_child_resource_runtime::list_binding_children(
-                    &runtime.store,
-                    &self.zone,
-                )
-                .await
-                .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let binding_status = &status.status;
-                let projection =
-                    audio_binding_status_projection_with_status(
-                        &target,
-                        &children,
-                        binding_status,
-                    )
-                        .map_err(|error| match error {
-                            AudioResourceRuntimeError::InvalidResource
-                            | AudioResourceRuntimeError::InvalidRelationship => {
-                                SharedProviderEffectError::InvalidResource
-                            }
-                            AudioResourceRuntimeError::Controller(_) => {
-                                SharedProviderEffectError::Unavailable
-                            }
-                        })?;
-                Ok(SharedProviderEffectResult {
-                    phase: (binding_status.phase
-                        == d2b_provider_audio_pipewire::AudioBindingPhase::Ready)
-                        .then_some(SharedProviderEffectPhase::Ready)
-                        .unwrap_or(SharedProviderEffectPhase::Pending),
-                    child_mutated: false,
-                    resource_projection: Some(projection),
-                })
-            }
-            _ => Err(SharedProviderEffectError::InvalidResource),
-        }
-    }
-
-    async fn reconcile_shell(
-        &self,
-        kind: SharedProviderResourceKind,
-        context: &SharedProviderEffectContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        let value = self.validate(kind, context, resource)?;
-        let runtime = self.runtime()?;
-        match kind {
-            SharedProviderResourceKind::ShellPool => {
-                let (execution_ref, user_ref) = shell_pool_spec(&value)?;
-                let target = runtime
-                    .committed_resource_value(&execution_ref, &context.operation_id)
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let user = runtime
-                    .committed_resource_value(&user_ref, &context.operation_id)
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                let phase = if resource_phase(&target) == Some("Ready")
-                    && resource_phase(&user) == Some("Ready")
-                {
-                    SharedProviderEffectPhase::Ready
-                } else {
-                    SharedProviderEffectPhase::Pending
-                };
-                Ok(SharedProviderEffectResult {
-                    phase,
-                    child_mutated: false,
-                    resource_projection: None,
-                })
-            }
-            SharedProviderResourceKind::ShellSession => {
-                let pool_ref = resource_ref_at(&value, "/spec/poolRef")?;
-                if pool_ref.resource_type().as_str() != "shell-terminal.d2bus.org.ShellPool" {
-                    return Err(SharedProviderEffectError::InvalidResource);
-                }
-                let pool = runtime
-                    .committed_resource_value(&pool_ref, &context.operation_id)
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if resource_phase(&pool) != Some("Ready") {
-                    return Ok(SharedProviderEffectResult {
-                        phase: SharedProviderEffectPhase::Pending,
-                        child_mutated: false,
-                        resource_projection: None,
-                    });
-                }
-                let (execution_ref, user_ref) = shell_execution(&value)?;
-                let user_ref = user_ref.ok_or(SharedProviderEffectError::InvalidResource)?;
-                if resource_ref_at(&pool, "/spec/executionRef")? != execution_ref
-                    || resource_ref_at(&pool, "/spec/userRef")? != user_ref
-                {
-                    return Err(SharedProviderEffectError::InvalidResource);
-                }
-                let process_name = format!(
-                    "Process/shell-session-{}",
-                    resource.key().resource_ref().name().as_str()
-                );
-                let process_ref = ResourceRef::parse(&process_name)
-                    .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-                let client = runtime
-                    .process_resource_client()
-                    .ok_or(SharedProviderEffectError::Unavailable)?;
-                let process_spec = json!({
-                    "providerRef": "Provider/system-systemd",
-                    "executionRef": execution_ref.to_canonical_string(),
-                    "domain": "user",
-                    "userRef": user_ref.to_canonical_string(),
-                    "processClass": "service",
-                    "template": "shell-supervisor-main",
-                    "desiredLifecycle": "running",
-                    "deviceUsage": [],
-                    "networkUsage": null
-                });
-                let desired = vec![
-                    owned_child_intent(
-                        &self.zone,
-                        process_ref,
-                        resource.key().resource_ref(),
-                        process_spec,
-                        [pool_ref],
-                    )?,
-                ];
-                let owner = crate::binding_child_resource_runtime::OwnedChildOwner {
-                    resource: stored_resource_from_snapshot(resource),
-                    desired: Some(desired),
-                    fenced: false,
-                };
-                let converged =
-                    crate::binding_child_resource_runtime::reconcile_owned_children(
-                        &runtime.store,
-                        &client,
-                        &self.zone,
-                        std::slice::from_ref(&owner),
-                    )
-                    .await
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                if !converged.contains(resource.key().resource_ref()) {
-                    return Ok(SharedProviderEffectResult {
-                        phase: SharedProviderEffectPhase::Pending,
-                        child_mutated: true,
-                        resource_projection: None,
-                    });
-                }
-                let children = crate::binding_child_resource_runtime::list_binding_children(
-                    &runtime.store,
-                    &self.zone,
-                )
-                .await
-                .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                Ok(SharedProviderEffectResult {
-                    phase: if crate::binding_child_resource_runtime::owned_children_ready(
-                        &owner, &children,
-                    ) {
-                        SharedProviderEffectPhase::Ready
-                    } else {
-                        SharedProviderEffectPhase::Pending
-                    },
-                    child_mutated: false,
-                    resource_projection: None,
-                })
-            }
-            _ => Err(SharedProviderEffectError::InvalidResource),
-        }
-    }
-
     async fn reconcile_guest(
         &self,
         kind: SharedProviderResourceKind,
@@ -3024,30 +2113,8 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
         context: &SharedProviderEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::CloudHypervisorGuest
-                | SharedProviderResourceKind::QemuMediaGuest
-                | SharedProviderResourceKind::AzureContainerAppsGuest
-                | SharedProviderResourceKind::AzureVirtualMachineGuest
-        ) {
-            self.reconcile_guest_runtime(kind, context, resource, &[])
-                .await
-        } else if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-                | SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-                | SharedProviderResourceKind::ShellPool
-                | SharedProviderResourceKind::ShellSession
-        ) {
-            self.reconcile_result(kind, context, resource, &[]).await
-        } else {
-            self.observe(kind, context, resource)
-                .await
-                .map(SharedProviderEffectResult::phase)
-        }
+        self.reconcile_guest_runtime(kind, context, resource, &[])
+            .await
     }
 
     async fn finalize_guest(
@@ -3065,27 +2132,7 @@ impl SharedProviderEffectExecutor for DaemonSharedProviderEffects {
         context: &SharedProviderEffectContext,
         resource: &ResourceSnapshot,
     ) -> Result<(), SharedProviderEffectError> {
-        if matches!(
-            kind,
-            SharedProviderResourceKind::CloudHypervisorGuest
-                | SharedProviderResourceKind::QemuMediaGuest
-                | SharedProviderResourceKind::AzureContainerAppsGuest
-                | SharedProviderResourceKind::AzureVirtualMachineGuest
-        ) {
-            return self.finalize_guest_runtime(kind, context, resource).await;
-        }
-        if matches!(
-            kind,
-            SharedProviderResourceKind::DisplayWaylandPolicy
-                | SharedProviderResourceKind::DisplayWaylandSession
-                | SharedProviderResourceKind::AudioService
-                | SharedProviderResourceKind::AudioBinding
-                | SharedProviderResourceKind::ShellPool
-                | SharedProviderResourceKind::ShellSession
-        ) {
-            return self.finalize_u9(kind, context, resource).await;
-        }
-        Err(SharedProviderEffectError::Unavailable)
+        self.finalize_guest_runtime(kind, context, resource).await
     }
 }
 
@@ -3212,12 +2259,6 @@ impl SharedProviderResourceReconciler {
                 SharedProviderResourceKind::QemuMediaGuest
                     | SharedProviderResourceKind::AzureContainerAppsGuest
                     | SharedProviderResourceKind::AzureVirtualMachineGuest
-                    | SharedProviderResourceKind::DisplayWaylandPolicy
-                    | SharedProviderResourceKind::DisplayWaylandSession
-                    | SharedProviderResourceKind::AudioService
-                    | SharedProviderResourceKind::AudioBinding
-                    | SharedProviderResourceKind::ShellPool
-                    | SharedProviderResourceKind::ShellSession
             ) {
                 status.insert(
                     "observedGeneration".to_owned(),
@@ -3304,263 +2345,6 @@ pub(super) fn finalizer_candidate(
     Ok(value.to_canonical_bytes())
 }
 
-fn stored_resource_from_snapshot(resource: &ResourceSnapshot) -> StoredResource {
-    StoredResource {
-        resource_ref: resource.key().resource_ref().clone(),
-        zone: resource.key().zone().clone(),
-        uid: resource.key().uid().clone(),
-        owner_uid: resource.owner_uid().cloned(),
-        owner_generation: resource.owner_generation(),
-        generation: resource.generation(),
-        revision: resource.revision(),
-        canonical_json: resource.canonical_json().to_vec(),
-        payload_digest: canonical_digest(
-            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
-            resource.canonical_json(),
-        ),
-    }
-}
-
-fn display_resource_projection(
-    owner: &crate::binding_child_resource_runtime::OwnedChildOwner,
-    children: &[StoredResource],
-) -> Value {
-    let child = |resource_type: &str| {
-        owner
-            .desired
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .find(|intent| intent.target().resource_type().as_str() == resource_type)
-            .and_then(|intent| {
-                children.iter().find(|candidate| {
-                    candidate.resource_ref == *intent.target()
-                        && ResourceEnvelope::from_json(&candidate.canonical_json)
-                            .ok()
-                            .and_then(|envelope| envelope.metadata().owner_ref().cloned())
-                            == Some(owner.resource.resource_ref.clone())
-                        && !value_deletion_requested(
-                            &serde_json::from_slice::<Value>(&candidate.canonical_json)
-                                .unwrap_or_default(),
-                        )
-                })
-            })
-    };
-    let process_refs = owner
-        .desired
-        .as_ref()
-        .into_iter()
-        .flatten()
-        .filter(|intent| intent.target().resource_type().as_str() == "Process")
-        .map(|intent| intent.target().to_canonical_string())
-        .collect::<Vec<_>>();
-    let endpoint_ref = child("Endpoint").map(|resource| resource.resource_ref.clone());
-    let endpoint_generation = child("Endpoint").map(|resource| resource.generation.get());
-    let resource = d2b_provider_display_wayland::WaylandSessionResourceStatus {
-        proxy_process_ref: process_refs.first().and_then(|reference| ResourceRef::parse(reference).ok()),
-        guest_frontend_process_ref: process_refs.get(1).and_then(|reference| ResourceRef::parse(reference).ok()),
-        wayland_endpoint_ref: endpoint_ref,
-        wayland_endpoint_generation: endpoint_generation,
-        policy_digest: String::new(),
-    };
-    crate::interaction_composition::wayland_session_resource_projection(&resource)
-}
-
-fn resource_phase(value: &Value) -> Option<&str> {
-    value.pointer("/status/phase").and_then(Value::as_str)
-}
-
-fn value_deletion_requested(value: &Value) -> bool {
-    value
-        .pointer("/metadata/deletionRequestedAt")
-        .is_some_and(|value| !value.is_null())
-}
-
-fn resource_ref_at(value: &Value, path: &str) -> Result<ResourceRef, SharedProviderEffectError> {
-    value
-        .pointer(path)
-        .and_then(Value::as_str)
-        .and_then(|reference| ResourceRef::parse(reference).ok())
-        .ok_or(SharedProviderEffectError::InvalidResource)
-}
-
-fn audio_dependency<'a>(
-    dependencies: &'a [DependencySnapshot],
-    target: &ResourceRef,
-) -> Option<&'a DependencySnapshot> {
-    dependencies
-        .iter()
-        .find(|dependency| dependency.resource().key().resource_ref() == target)
-}
-
-fn validate_audio_dependency_identity(
-    resource: &StoredResource,
-    target: &ResourceRef,
-    zone: &ZoneId,
-) -> Result<(), SharedProviderEffectError> {
-    if resource.zone != *zone
-        || resource.resource_ref != *target
-        || resource.uid.as_str().is_empty()
-        || resource.generation.get() == 0
-        || resource.revision.get() == 0
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-    let metadata = envelope.metadata();
-    if metadata.zone() != zone
-        || metadata.uid() != &resource.uid
-        || metadata.generation() != resource.generation
-        || metadata.revision() != resource.revision
-        || envelope
-            .digest()
-            .map_err(|_| SharedProviderEffectError::InvalidResource)?
-            != resource.payload_digest
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    Ok(())
-}
-
-fn map_audio_effect_error(
-    error: AudioResourceRuntimeError,
-) -> SharedProviderEffectError {
-    match error {
-        AudioResourceRuntimeError::InvalidResource
-        | AudioResourceRuntimeError::InvalidRelationship => {
-            SharedProviderEffectError::InvalidResource
-        }
-        AudioResourceRuntimeError::Controller(_) => SharedProviderEffectError::Unavailable,
-    }
-}
-
-fn shell_pool_spec(
-    value: &Value,
-) -> Result<(ResourceRef, ResourceRef), SharedProviderEffectError> {
-    if value.pointer("/spec/providerRef").and_then(Value::as_str)
-        != Some("Provider/shell-terminal")
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    let execution_ref = resource_ref_at(value, "/spec/executionRef")?;
-    if !matches!(
-        execution_ref.resource_type().as_str(),
-        "Host" | "Guest"
-    ) {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    let user_ref = resource_ref_at(value, "/spec/userRef")?;
-    let login_shell = value
-        .pointer("/spec/loginShellRef")
-        .and_then(Value::as_str)
-        .ok_or(SharedProviderEffectError::InvalidResource)?;
-    if user_ref.resource_type().as_str() != "User"
-        || !login_shell.starts_with("artifact://")
-        || login_shell.len() > 255
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    Ok((execution_ref, user_ref))
-}
-
-fn shell_execution(
-    value: &Value,
-) -> Result<(ResourceRef, Option<ResourceRef>), SharedProviderEffectError> {
-    if value.pointer("/spec/providerRef").and_then(Value::as_str)
-        != Some("Provider/shell-terminal")
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    let execution_ref = resource_ref_at(value, "/spec/executionRef")?;
-    if !matches!(
-        execution_ref.resource_type().as_str(),
-        "Host" | "Guest"
-    ) {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    let user_ref = value
-        .pointer("/spec/userRef")
-        .and_then(Value::as_str)
-        .map(ResourceRef::parse)
-        .transpose()
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-    if user_ref
-        .as_ref()
-        .is_some_and(|reference| reference.resource_type().as_str() != "User")
-        || value
-            .pointer("/spec/loginShellRef")
-            .and_then(Value::as_str)
-            .is_none_or(|shell| {
-                !shell.starts_with("artifact://") || shell.len() > 255
-            })
-    {
-        return Err(SharedProviderEffectError::InvalidResource);
-    }
-    Ok((execution_ref, user_ref))
-}
-
-fn owned_child_intent(
-    zone: &ZoneId,
-    target: ResourceRef,
-    owner: &ResourceRef,
-    spec: Value,
-    dependencies: impl IntoIterator<Item = ResourceRef>,
-) -> Result<d2b_core_controller::OwnedChildIntent, SharedProviderEffectError> {
-    let value = json!({
-        "apiVersion": "resources.d2bus.org/v3",
-        "type": target.resource_type().as_str(),
-        "metadata": {
-            "name": target.name().as_str(),
-            "zone": zone.as_str(),
-            "ownerRef": owner.to_canonical_string(),
-            "annotations": {},
-            "finalizers": [],
-            "deletionRequestedAt": null,
-            "createdAt": "1970-01-01T00:00:00.000Z",
-            "updatedAt": "1970-01-01T00:00:00.000Z",
-            "generation": 1,
-            "revision": 1,
-            "managedBy": "controller"
-        },
-        "spec": spec,
-        "status": {
-            "completedAt": null,
-            "conditions": [],
-            "lastReconciledAt": null,
-            "observedGeneration": 0,
-            "outcome": null,
-            "phase": "Pending",
-            "resource": {},
-            "startedAt": null,
-            "update": {
-                "dependencies": {"count": 0, "refs": []},
-                "disruption": "None",
-                "lastAssessedAt": null,
-                "observedGeneration": 0,
-                "operationId": null,
-                "owned": {"count": 0, "refs": []},
-                "preserveState": true,
-                "reasons": [],
-                "state": "Unknown",
-                "targetGeneration": 1
-            }
-        }
-    });
-    let bytes = CanonicalJsonValue::parse(
-        &serde_json::to_vec(&value).map_err(|_| SharedProviderEffectError::InvalidResource)?,
-    )
-    .map_err(|_| SharedProviderEffectError::InvalidResource)?
-    .to_canonical_bytes();
-    let digest = canonical_digest(
-        d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
-        &bytes,
-    );
-    d2b_core_controller::OwnedChildIntent::new(target, bytes, digest)
-        .and_then(|intent| intent.with_dependencies(dependencies))
-        .map_err(|_| SharedProviderEffectError::InvalidResource)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedProviderReconcileError {
     InvalidResource,
@@ -3597,18 +2381,10 @@ impl ResourceReconciler for SharedProviderResourceReconciler {
             && serde_json::from_slice::<Value>(resource.canonical_json())
                 .ok()
                 .is_some_and(|value| {
-                    if matches!(
-                        self.kind,
-                        SharedProviderResourceKind::DisplayWaylandPolicy
-                            | SharedProviderResourceKind::DisplayWaylandSession
-                    ) {
-                        ResourceEnvelope::from_json(resource.canonical_json()).is_ok()
-                    } else {
-                        value
-                            .pointer("/spec/providerRef")
-                            .and_then(Value::as_str)
-                            == Some(self.kind.provider_ref())
-                    }
+                    value
+                        .pointer("/spec/providerRef")
+                        .and_then(Value::as_str)
+                        == Some(self.kind.provider_ref())
                 });
         std::future::ready(Ok(if valid {
             ValidationResult::Valid
@@ -4109,12 +2885,7 @@ pub fn compose_shared_provider_runner_descriptors(
                 3,
             )
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-            let provider_selector = if registration.resource_type.starts_with("display-wayland.")
-            {
-                None
-            } else {
-                Some(registration.provider_ref.to_owned())
-            };
+            let provider_selector = Some(registration.provider_ref.to_owned());
             let mut selectors = vec![
                 ControllerSelector::new(
                     resource_type.clone(),
@@ -4145,18 +2916,6 @@ pub fn compose_shared_provider_runner_descriptors(
                     "Device",
                     "Credential",
                 ],
-                "display-wayland.d2bus.org.WaylandSession" => &[
-                    "Guest",
-                    "Host",
-                    "User",
-                    "display-wayland.d2bus.org.WaylandPolicy",
-                ],
-                "audio.d2bus.org.AudioBinding" => {
-                    &["audio.d2bus.org.AudioService", "Guest"]
-                }
-                "shell-terminal.d2bus.org.ShellSession" => {
-                    &["shell-terminal.d2bus.org.ShellPool"]
-                }
                 _ => &[],
             };
             let dependency_selectors = dependency_types

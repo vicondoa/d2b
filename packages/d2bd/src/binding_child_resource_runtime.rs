@@ -5,9 +5,7 @@
 //! those intents, then submits exact resource mutations. It never starts or
 //! stops a feature process itself.
 
-use std::collections::BTreeSet;
 
-use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildSet;
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId, canonical_digest,
@@ -24,12 +22,6 @@ use d2b_resource_store::{
 };
 use d2b_resource_store_redb::RedbResourceStore;
 
-const CHILD_TYPES: [&str; 4] = [
-    "Process",
-    "EphemeralProcess",
-    "Endpoint",
-    "VolumeBinding",
-];
 const GUEST_CHILD_TYPES: [&str; 5] = [
     "Process",
     "EphemeralProcess",
@@ -39,18 +31,6 @@ const GUEST_CHILD_TYPES: [&str; 5] = [
 ];
 const OWNER_INDEX_MAX_DEPTH: usize = 8;
 const OWNER_INDEX_MAX_WORK_ITEMS: usize = 64;
-
-/// One Binding owner and its complete Provider-declared child set.
-#[derive(Clone)]
-pub(crate) struct BindingChildOwner {
-    /// The authoritative parent resource row.
-    pub resource: StoredResource,
-    /// `None` means the parent is deleting and must have no children.
-    pub desired: Option<BindingChildSet>,
-    /// The parent is malformed or has a dangling relationship. Fenced owners
-    /// retain existing children and finalizers but receive no child mutation.
-    pub fenced: bool,
-}
 
 /// One non-semantic Provider owner and its Core-owned child set.
 #[derive(Clone)]
@@ -156,107 +136,6 @@ fn first_guest_child_mutation(mutations: &[OwnerMutation]) -> Option<&OwnerMutat
         .find(|mutation| !matches!(mutation, OwnerMutation::Delete { .. }))
 }
 
-/// Reconcile a generic Provider-owned child set through the same bounded
-/// Core owner index used by semantic Bindings.
-pub(crate) async fn reconcile_owned_children(
-    store: &RedbResourceStore,
-    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
-    zone: &ZoneId,
-    owners: &[OwnedChildOwner],
-) -> Result<BTreeSet<ResourceRef>, BindingChildRuntimeError> {
-    if owners.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let children = list_children(store, zone).await?;
-    validate_child_relist(&children)?;
-    let limits = OwnerLimits::new(OWNER_INDEX_MAX_DEPTH, OWNER_INDEX_MAX_WORK_ITEMS)
-        .expect("closed owner limits are valid");
-    let mut reconciler = BindingChildReconciler::new(limits);
-    let mut converged = BTreeSet::new();
-
-    for owner in owners {
-        if owner.fenced {
-            continue;
-        }
-        let owner_target = HintTarget::new(
-            owner.resource.zone.clone(),
-            owner.resource.resource_ref.clone(),
-            owner.resource.uid.clone(),
-        );
-        let observed = children
-            .iter()
-            .filter(|child| child_owner_ref(child) == Some(owner.resource.resource_ref.clone()))
-            .map(|child| {
-                observed_child_from_resource(
-                    HintTarget::new(
-                        child.zone.clone(),
-                        child.resource_ref.clone(),
-                        child.uid.clone(),
-                    ),
-                    &owner_target,
-                    owner.resource.generation,
-                    child.revision,
-                    &child.canonical_json,
-                    deletion_requested(child),
-                    deletion_ready(child),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(BindingChildRuntimeError::Core)?;
-        reconciler
-            .relist_with_owner_generation(owner_target.clone(), owner.resource.generation, observed)
-            .map_err(|error| {
-                BindingChildRuntimeError::Core(BindingChildMaterializationError::OwnerReconcile(
-                    error,
-                ))
-            })?;
-        let plan = match &owner.desired {
-            Some(desired) => reconciler
-                .plan_owned(&owner_target, desired.iter().cloned())
-                .map_err(BindingChildRuntimeError::Core)?,
-            None => reconciler
-                .plan_owned(&owner_target, std::iter::empty())
-                .map_err(BindingChildRuntimeError::Core)?,
-        };
-        let mut mutations = plan.mutations().to_vec();
-        mutations.sort_by_key(mutation_order);
-        apply_mutation_batch(client, &owner.resource, &children, &mutations).await?;
-        if plan.is_converged() {
-            converged.insert(owner.resource.resource_ref.clone());
-        }
-    }
-    Ok(converged)
-}
-
-/// Check whether every desired generic child is current and Ready.
-///
-/// VolumeBinding children are Ready only behind the typed fenced status
-/// projection (KTD3): readiness whose UID / generation / revision fence
-/// does not match the stored binding is never current.
-pub(crate) fn owned_children_ready(owner: &OwnedChildOwner, children: &[StoredResource]) -> bool {
-    let Some(desired) = owner.desired.as_ref() else {
-        return false;
-    };
-    !owner.fenced
-        && desired.iter().all(|intent| {
-            children
-                .iter()
-                .find(|child| owned_child_matches(owner, intent, child))
-                .is_some_and(|child| {
-                    if child.resource_ref.resource_type().as_str()
-                        == d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE
-                    {
-                        binding_readiness_current(child)
-                    } else {
-                        matches!(
-                            child_status_phase(child).as_deref(),
-                            Some("Ready" | "Succeeded")
-                        )
-                    }
-                })
-        })
-}
-
 /// Whether one stored VolumeBinding carries a current fenced readiness
 /// projection.  Unparseable or unfenced projections fail closed.
 pub(crate) fn binding_readiness_current(child: &StoredResource) -> bool {
@@ -290,28 +169,6 @@ pub(crate) fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBind
     }
     serde_json::from_value::<VolumeBindingSpec>(serde_json::Value::Object(object.clone())).ok()
 }
-fn owned_child_matches(
-    owner: &OwnedChildOwner,
-    intent: &OwnedChildIntent,
-    child: &StoredResource,
-) -> bool {
-    if child.resource_ref != *intent.target()
-        || child.zone != owner.resource.zone
-        || child_owner_ref(child) != Some(owner.resource.resource_ref.clone())
-        || deletion_requested(child)
-    {
-        return false;
-    }
-    let Ok(actual) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
-        return false;
-    };
-    let Ok(expected) = serde_json::from_slice::<serde_json::Value>(intent.canonical_resource())
-    else {
-        return false;
-    };
-    actual.get("spec") == expected.get("spec")
-}
-
 /// Stable failures from the Core-to-Resource-API child adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindingChildRuntimeError {
@@ -338,87 +195,6 @@ impl core::fmt::Display for BindingChildRuntimeError {
 
 impl std::error::Error for BindingChildRuntimeError {}
 
-/// Reconcile all supplied Binding owners against one authoritative child
-/// relist. Deletions are submitted Endpoint-first and Process-last.
-pub(crate) async fn reconcile_binding_children(
-    store: &RedbResourceStore,
-    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
-    zone: &ZoneId,
-    owners: &[BindingChildOwner],
-) -> Result<BTreeSet<ResourceRef>, BindingChildRuntimeError> {
-    if owners.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let children = list_children(store, zone).await?;
-    validate_child_relist(&children)?;
-    let limits = OwnerLimits::new(OWNER_INDEX_MAX_DEPTH, OWNER_INDEX_MAX_WORK_ITEMS)
-        .expect("closed owner limits are valid");
-    let mut reconciler = BindingChildReconciler::new(limits);
-    let mut converged = BTreeSet::new();
-
-    for owner in owners {
-        if owner.fenced {
-            continue;
-        }
-        let owner_target = HintTarget::new(
-            owner.resource.zone.clone(),
-            owner.resource.resource_ref.clone(),
-            owner.resource.uid.clone(),
-        );
-        let observed = children
-            .iter()
-            .filter(|child| {
-                ResourceEnvelope::from_json(&child.canonical_json)
-                    .expect("validated child relist")
-                    .metadata()
-                    .owner_ref()
-                    == Some(&owner.resource.resource_ref)
-            })
-            .map(|child| {
-                observed_child_from_resource(
-                    HintTarget::new(
-                        child.zone.clone(),
-                        child.resource_ref.clone(),
-                        child.uid.clone(),
-                    ),
-                    &owner_target,
-                    owner.resource.generation,
-                    child.revision,
-                    &child.canonical_json,
-                    deletion_requested(child),
-                    deletion_ready(child),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| BindingChildRuntimeError::Core(error))?;
-        reconciler
-            .relist_with_owner_generation(owner_target.clone(), owner.resource.generation, observed)
-            .map_err(|error| {
-                BindingChildRuntimeError::Core(BindingChildMaterializationError::OwnerReconcile(
-                    error,
-                ))
-            })?;
-
-        let plan = match &owner.desired {
-            Some(desired) => reconciler
-                .plan_intents(&owner_target, desired)
-                .map_err(BindingChildRuntimeError::Core)?,
-            None => reconciler
-                .plan_empty(&owner_target)
-                .map_err(BindingChildRuntimeError::Core)?,
-        };
-        let mut mutations = plan.mutations().to_vec();
-        mutations.sort_by_key(mutation_order);
-        for mutation in &mutations {
-            apply_mutation(client, &owner.resource, &children, mutation).await?;
-        }
-        if plan.is_converged() {
-            converged.insert(owner.resource.resource_ref.clone());
-        }
-    }
-    Ok(converged)
-}
-
 fn validate_child_relist(children: &[StoredResource]) -> Result<(), BindingChildRuntimeError> {
     for child in children {
         let envelope = ResourceEnvelope::from_json(&child.canonical_json)
@@ -439,13 +215,7 @@ fn validate_child_relist(children: &[StoredResource]) -> Result<(), BindingChild
     Ok(())
 }
 
-/// List all Core-owned child resources in a Zone.
-pub(crate) async fn list_binding_children(
-    store: &RedbResourceStore,
-    zone: &ZoneId,
-) -> Result<Vec<StoredResource>, BindingChildRuntimeError> {
-    list_children(store, zone).await
-}
+
 
 async fn apply_mutation(
     client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
@@ -494,170 +264,6 @@ async fn apply_mutation(
             expected_revision,
         } => delete_child(client, owner, target, expected_uid, *expected_revision).await,
     }
-}
-
-async fn apply_mutation_batch(
-    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
-    owner: &StoredResource,
-    children: &[StoredResource],
-    mutations: &[OwnerMutation],
-) -> Result<(), BindingChildRuntimeError> {
-    if mutations.is_empty() {
-        return Ok(());
-    }
-    // Child commits are rare; log every batch with its targets so a
-    // silently missing serving child is diagnosable from the journal.
-    tracing::warn!(
-        owner = %owner.resource_ref.to_canonical_string(),
-        targets = ?mutations
-            .iter()
-            .map(|mutation| match mutation {
-                OwnerMutation::Create { target, .. }
-                | OwnerMutation::Repair { target, .. }
-                | OwnerMutation::RequestDeletion { target, .. }
-                | OwnerMutation::Delete { target, .. } => {
-                    target.to_canonical_string()
-                }
-            })
-            .collect::<Vec<_>>(),
-        "binding child commit batch",
-    );
-    let mut request = wire::CommitBatchRequest::new();
-    let operation = crate::resource_runtime::bounded_operation_id(&format!(
-        "binding-child-batch-{}-{}",
-        owner.resource_ref.to_canonical_string(),
-        owner.revision.get()
-    ));
-    request.meta = protobuf::MessageField::some(request_meta(&operation));
-    for mutation in mutations {
-        let mutation = match mutation {
-            OwnerMutation::Create {
-                target,
-                canonical_resource,
-            } => {
-                let mut mutation = wire::Mutation::new();
-                mutation.kind =
-                    protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
-                mutation.target =
-                    protobuf::MessageField::some(identity(&owner.zone, target, None, None, None));
-                mutation.precondition = protobuf::MessageField::some(create_precondition());
-                mutation.resource = protobuf::MessageField::some(resource_body(
-                    &owner.zone,
-                    target,
-                    None,
-                    canonical_resource,
-                )?);
-                mutation.owner = protobuf::MessageField::some(identity(
-                    &owner.zone,
-                    &owner.resource_ref,
-                    None,
-                    None,
-                    None,
-                ));
-                mutation
-            }
-            OwnerMutation::Repair {
-                target,
-                expected_uid,
-                expected_revision,
-                canonical_resource,
-            } => {
-                let current = children
-                    .iter()
-                    .find(|child| {
-                        &child.resource_ref == target
-                            && &child.uid == expected_uid
-                            && child.revision == *expected_revision
-                    })
-                    .ok_or(BindingChildRuntimeError::Api)?;
-                let mut mutation = wire::Mutation::new();
-                mutation.kind =
-                    protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_SPEC);
-                mutation.target = protobuf::MessageField::some(identity(
-                    &current.zone,
-                    target,
-                    Some(expected_uid),
-                    Some(current.generation.get()),
-                    Some(expected_revision.get()),
-                ));
-                mutation.precondition = protobuf::MessageField::some(exact_precondition(
-                    expected_uid,
-                    *expected_revision,
-                ));
-                let canonical = merge_desired_spec(&current.canonical_json, canonical_resource)?;
-                mutation.resource = protobuf::MessageField::some(resource_body(
-                    &current.zone,
-                    target,
-                    Some(expected_uid),
-                    &canonical,
-                )?);
-                mutation
-            }
-            OwnerMutation::RequestDeletion {
-                target,
-                expected_uid,
-                expected_revision,
-            }
-            | OwnerMutation::Delete {
-                target,
-                expected_uid,
-                expected_revision,
-            } => {
-                let mut mutation = wire::Mutation::new();
-                mutation.kind =
-                    protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
-                mutation.target = protobuf::MessageField::some(identity(
-                    &owner.zone,
-                    target,
-                    Some(expected_uid),
-                    None,
-                    Some(expected_revision.get()),
-                ));
-                mutation.precondition = protobuf::MessageField::some(exact_precondition(
-                    expected_uid,
-                    *expected_revision,
-                ));
-                mutation
-            }
-        };
-        request.mutations.push(mutation);
-    }
-    let response = client.commit_batch(request).await;
-    if let Some(error) = response.error.as_ref() {
-        tracing::warn!(
-            owner = %owner.resource_ref.to_canonical_string(),
-            error_kind = ?error.kind,
-            current_revision = error.current_revision,
-            retry_class = ?error.retry_class,
-            reason = %error.reason,
-            "Binding child commit batch rejected by Resource API",
-        );
-        return Err(BindingChildRuntimeError::Api);
-    }
-    Ok(())
-}
-
-fn mutation_order(mutation: &OwnerMutation) -> (u8, ResourceRef) {
-    let target = match mutation {
-        OwnerMutation::Create { target, .. }
-        | OwnerMutation::Repair { target, .. }
-        | OwnerMutation::RequestDeletion { target, .. }
-        | OwnerMutation::Delete { target, .. } => target,
-    };
-    let deleting = matches!(
-        mutation,
-        OwnerMutation::RequestDeletion { .. } | OwnerMutation::Delete { .. }
-    );
-    let rank = match (deleting, target.resource_type().as_str()) {
-        (true, "Endpoint") => 0,
-        (true, "EphemeralProcess") => 1,
-        (true, "Process") => 2,
-        (false, "Process") => 0,
-        (false, "EphemeralProcess") => 1,
-        (false, "Endpoint") => 2,
-        _ => 3,
-    };
-    (rank, target.clone())
 }
 
 async fn create_child(
@@ -883,25 +489,10 @@ fn deletion_ready(resource: &StoredResource) -> bool {
         .is_some_and(|finalizers| finalizers.is_empty())
 }
 
-fn child_status_phase(resource: &StoredResource) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
-        .ok()
-        .and_then(|value| value.get("status").cloned())
-        .and_then(|status| status.get("phase").cloned())
-        .and_then(|value| value.as_str().map(str::to_owned))
-}
-
 fn child_owner_ref(resource: &StoredResource) -> Option<ResourceRef> {
     ResourceEnvelope::from_json(&resource.canonical_json)
         .ok()
         .and_then(|envelope| envelope.metadata().owner_ref().cloned())
-}
-
-async fn list_children(
-    store: &RedbResourceStore,
-    zone: &ZoneId,
-) -> Result<Vec<StoredResource>, BindingChildRuntimeError> {
-    list_children_of_types(store, zone, &CHILD_TYPES).await
 }
 
 async fn list_children_of_types(
@@ -1100,39 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn creates_processes_before_endpoints_and_deletes_endpoints_first() {
-        let process = target("Process", "process");
-        let endpoint = target("Endpoint", "endpoint");
-        let create_endpoint = OwnerMutation::Create {
-            target: endpoint.clone(),
-            canonical_resource: Vec::new(),
-        };
-        let create_process = OwnerMutation::Create {
-            target: process.clone(),
-            canonical_resource: Vec::new(),
-        };
-        assert!(mutation_order(&create_process) < mutation_order(&create_endpoint));
-
-        let delete_endpoint = OwnerMutation::RequestDeletion {
-            target: endpoint,
-            expected_uid: d2b_contracts_resource::v3::ResourceUid::parse(
-                "123e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap(),
-            expected_revision: d2b_contracts_resource::v3::ZoneRevision::new(1),
-        };
-        let delete_process = OwnerMutation::RequestDeletion {
-            target: process,
-            expected_uid: d2b_contracts_resource::v3::ResourceUid::parse(
-                "223e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap(),
-            expected_revision: d2b_contracts_resource::v3::ZoneRevision::new(1),
-        };
-        assert!(mutation_order(&delete_endpoint) < mutation_order(&delete_process));
-    }
-
-    #[test]
     fn guest_child_progress_never_issues_a_second_delete() {
         let child_uid = d2b_contracts_resource::v3::ResourceUid::parse(
             "123e4567-e89b-42d3-a456-426614174000",
@@ -1168,39 +726,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generic_child_readiness_requires_owner_spec_and_ready_status() {
-        let owner_ref = target("VolumeBinding", "binding");
-        let child_ref = target("Process", "worker");
-        let spec = serde_json::json!({
-            "providerRef": "Provider/system-minijail",
-            "executionRef": "Host/host-system",
-            "template": "virtiofsd-worker",
-            "processClass": "worker"
-        });
-        let child = stored_resource_with_spec(&child_ref, Some(&owner_ref), "Ready", spec.clone());
-        let intent = OwnedChildIntent::new(
-            child_ref.clone(),
-            child.canonical_json.clone(),
-            "sha256:child",
-        )
-        .expect("child intent");
-        let owner = OwnedChildOwner {
-            resource: stored_resource(&owner_ref, None, "Pending"),
-            desired: Some(vec![intent]),
-            fenced: false,
-        };
-        assert!(owned_children_ready(&owner, &[child]));
-
-        let foreign = stored_resource_with_spec(
-            &child_ref,
-            Some(&target("VolumeBinding", "other")),
-            "Ready",
-            spec,
-        );
-        assert!(!owned_children_ready(&owner, &[foreign]));
-    }
-
     fn binding_child_with_fence(
         binding_ref: &ResourceRef,
         owner_ref: &ResourceRef,
@@ -1231,19 +756,6 @@ mod tests {
         let owner_ref = target("Volume", "volume");
         let binding_ref = target("VolumeBinding", "binding");
         let current_uid = "123e4567-e89b-42d3-a456-426614174000";
-        let make_owner = |child: &StoredResource| {
-            let intent = OwnedChildIntent::new(
-                child.resource_ref.clone(),
-                child.canonical_json.clone(),
-                "sha256:binding",
-            )
-            .expect("binding intent");
-            OwnedChildOwner {
-                resource: stored_resource(&owner_ref, None, "Pending"),
-                desired: Some(vec![intent]),
-                fenced: false,
-            }
-        };
 
         // Phase Ready alone never satisfies a binding child: the typed
         // fenced projection is required (KTD3).
@@ -1253,7 +765,7 @@ mod tests {
             "Ready",
             serde_json::json!({"volumeRef": "Volume/volume"}),
         );
-        assert!(!owned_children_ready(&make_owner(&unfenced), &[unfenced]));
+        assert!(!binding_readiness_current(&unfenced));
 
         // A fence under another binding UID is stale.
         let foreign_uid = binding_child_with_fence(
@@ -1265,7 +777,7 @@ mod tests {
                 "revision": 1
             }),
         );
-        assert!(!owned_children_ready(&make_owner(&foreign_uid), &[foreign_uid]));
+        assert!(!binding_readiness_current(&foreign_uid));
 
         // A fence under an older generation is stale: the stored binding
         // is at generation 1, the projection reports generation 2.
@@ -1278,10 +790,7 @@ mod tests {
                 "revision": 1
             }),
         );
-        assert!(!owned_children_ready(
-            &make_owner(&stale_generation),
-            &[stale_generation]
-        ));
+        assert!(!binding_readiness_current(&stale_generation));
 
         // A fence matching the binding's UID, generation, and revision is
         // current.
@@ -1294,7 +803,7 @@ mod tests {
                 "revision": 1
             }),
         );
-        assert!(owned_children_ready(&make_owner(&current), &[current]));
+        assert!(binding_readiness_current(&current));
     }
 
     #[test]
