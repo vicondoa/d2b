@@ -77,13 +77,13 @@ use d2b_core_controller::controller_assignment::{
 };
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::{
-    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ControllerIdentity, CoreControllerSource,
-    CoreResourceReconciler, Runner, RunnerConfig, SelectorField, SourceError,
-    core_controller_descriptors,
+    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ControllerDescriptor, ControllerIdentity,
+    CoreControllerSource, CoreResourceReconciler, Runner, RunnerConfig, SelectorField,
+    SourceError, core_controller_descriptors,
 };
 #[cfg(test)]
 use d2b_core_controller::{
-    ControllerDescriptor, DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult,
+    DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult,
     ObservationResult, ReconcileContext, ReconcileDisposition, ReconcilePlan, ReconcileResult,
     ResourceKey, ResourceMutationBatch, ResourceReconciler, ResourceSnapshot, StatusPersistence,
     UpdateAssessment, UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
@@ -191,8 +191,14 @@ use serde_json::{Value, json};
 
 mod volume_effect_adapter;
 mod guest_provider_runtime;
+mod plane_controller_bridge;
 mod shared_provider_runtime;
 pub(crate) mod interaction_effects;
+use plane_controller_bridge::{
+    ControllerPlaneView, LiveControllerSessionEvidence, ManagerControllerPlaneView,
+    ManagerPlaneDependencyRows, PlaneAwareControllerApi, PlaneProviderDependencies,
+};
+use d2b_resource_runtime::manager::ResourceView;
 pub use guest_provider_runtime::{
     compose_shared_guest_runner_descriptors, SharedGuestRunnerRegistration,
     U6_SHARED_PROVIDER_RUNNERS,
@@ -283,8 +289,9 @@ pub struct SharedProviderRunnerRegistration {
     pub watched_configuration_is_dependency: bool,
 }
 
-type SharedCoreControllerSource =
-    CoreControllerSource<d2b_resource_api::registered::RedbRegisteredControllerApi>;
+type SharedCoreControllerSource = CoreControllerSource<
+    PlaneAwareControllerApi<d2b_resource_api::registered::RedbRegisteredControllerApi>,
+>;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CoreRunnerIdentity {
@@ -1146,6 +1153,11 @@ struct ControllerSessionCoordinator {
     zone: ZoneId,
     bundle_resource_types: Vec<ResourceTypeName>,
     store: Arc<RedbResourceStore>,
+    /// G5 bridge: the zone plane's manager view for converted rows. Set by
+    /// [`ZoneResourceRuntime::attach_v3_planes`] once the composition
+    /// publishes the plane; absent keeps every controller-session read on
+    /// the durable store path.
+    plane_view: Arc<Mutex<Option<Arc<dyn ControllerPlaneView>>>>,
     assigned_process_api: Arc<Mutex<Option<Arc<RedbRegisteredControllerApi>>>>,
     api: Arc<ResourceService<ZoneStoreBackend>>,
     authorizer: Arc<NativeAuthorizer>,
@@ -4918,7 +4930,18 @@ impl ZoneResourceRuntime {
         >,
     ) {
         if let Ok(mut slot) = self.v3_planes.lock() {
-            *slot = Some(planes);
+            *slot = Some(Arc::clone(&planes));
+        }
+        // G5: the controller-session path (and the Provider's dependency
+        // observation) read manager-served controller rows through the same
+        // published table, so the session coordinator gets the zone plane's
+        // manager view seam here, before activation.
+        if let Some(plane) = planes.lock().get(self.zone.as_str()).cloned() {
+            self.controller_session_coordinator()
+                .attach_plane_view(Arc::new(ManagerControllerPlaneView::new(
+                    plane.client().clone(),
+                    self.zone.clone(),
+                )));
         }
     }
 
@@ -5431,6 +5454,35 @@ impl ZoneResourceRuntime {
             }))
     }
 
+    /// Bind one core runner's registered API: the durable adapter decorated
+    /// with the manager dependency bridge (G5). The bridge is present exactly
+    /// when the zone's plane is published, and it only affects the
+    /// owner-scoped `Provider` dependency read.
+    fn core_controller_source(
+        &self,
+        descriptor: ControllerDescriptor,
+        api: d2b_resource_api::registered::RedbRegisteredControllerApi,
+    ) -> Result<Arc<SharedCoreControllerSource>, ResourceRuntimeError> {
+        let merge = match self.v3_plane() {
+            Ok(plane) => {
+                let sessions: Arc<dyn LiveControllerSessionEvidence> =
+                    self.controller_session_coordinator();
+                Some(Arc::new(PlaneProviderDependencies::new(
+                    Arc::new(ManagerPlaneDependencyRows::new(
+                        plane.client().clone(),
+                        &self.zone,
+                    )),
+                    sessions,
+                )))
+            }
+            Err(_) => None,
+        };
+        Ok(CoreControllerSource::new(
+            descriptor,
+            Arc::new(PlaneAwareControllerApi::new(Arc::new(api), merge)),
+        ))
+    }
+
     async fn start_core_controller_runners(&self) -> Result<(), ResourceRuntimeError> {
         let _runner_guard = self.core_runner_lock.lock().await;
         #[cfg(test)]
@@ -5569,7 +5621,7 @@ impl ZoneResourceRuntime {
                 .registered_controller_api(subject, authorization_state.clone(), resource_assignments)
                 .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
             let api = api.with_assignment_fence_resolver(resolver);
-            let source = CoreControllerSource::new(descriptor.clone(), Arc::new(api));
+            let source = self.core_controller_source(descriptor.clone(), api)?;
             let runner_identity = CoreRunnerIdentity::new(
                 descriptor.identity().controller_ref().clone(),
                 registration.resource_type(),
@@ -7598,6 +7650,7 @@ impl ZoneResourceRuntime {
             zone: self.zone.clone(),
             bundle_resource_types: self.bundle_resource_types.clone(),
             store: Arc::clone(&self.store),
+            plane_view: Arc::new(Mutex::new(None)),
             assigned_process_api: Arc::new(Mutex::new(None)),
             api: Arc::clone(&self.api),
             authorizer: Arc::clone(&self.authorizer),
@@ -7768,6 +7821,34 @@ impl ControllerSessionCoordinator {
         }
     }
 
+    /// Adopt the zone plane's manager view seam (G5).
+    fn attach_plane_view(&self, plane: Arc<dyn ControllerPlaneView>) {
+        if let Ok(mut slot) = self.plane_view.lock() {
+            *slot = Some(plane);
+        }
+    }
+
+    /// The manager's row for one controller Process key, when the new plane
+    /// serves it. `Ok(None)` keeps the caller on the durable store path (an
+    /// unconverted or legacy row); a manager failure is reported, never
+    /// folded into absence.
+    async fn controller_plane_row(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<Option<ResourceView>, ResourceRuntimeError> {
+        let Some(plane) = self.plane_view.lock().ok().and_then(|slot| slot.clone()) else {
+            return Ok(None);
+        };
+        plane.process_view(process_ref).await.map_err(|error| {
+            tracing::debug!(
+                process = %process_ref.to_canonical_string(),
+                error = %error,
+                "controller plane view unavailable",
+            );
+            ResourceRuntimeError::StoreReadFailed
+        })
+    }
+
     async fn persist_controller_session_evidence_with_retry(
         &self,
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
@@ -7807,6 +7888,23 @@ impl ControllerSessionCoordinator {
                 .and_then(|mut errors| errors.pop())
         {
             return Err(error);
+        }
+        if let Some(view) = self.controller_plane_row(context.process_ref()).await? {
+            // Manager-served row (KTD4): its status is never durable
+            // (R11/AE6), so there is nothing to write or clear here - the
+            // evidence is the live admitted session, which the Provider's
+            // dependency observation reads on every pass. The identity check
+            // keeps the old semantics: evidence for a row this context does
+            // not describe still refuses.
+            controller_session_evidence_identity_check(
+                controller_plane_resource_matches(context, &view),
+                session_generation.is_none(),
+            )?;
+            tracing::debug!(
+                process = %context.process_ref(),
+                "controller-session evidence for a manager-served row is the live session",
+            );
+            return Ok(());
         }
         let process = match self
             .store
@@ -8141,6 +8239,15 @@ impl ControllerSessionCoordinator {
         };
         let stale_sessions = controller_session_resource_fences(sessions, resources);
         for (process_ref, context) in stale_sessions {
+            // G5: a fence candidate the durable list cannot see may be a
+            // manager-served controller row; the zone manager is its
+            // authority, and only a row it also does not hold (or does not
+            // match) is genuinely stale.
+            if let Some(view) = self.controller_plane_row(&process_ref).await?
+                && controller_plane_resource_matches(&context, &view)
+            {
+                continue;
+            }
             providers.fail_controller_bootstrap(&context);
             self.clear_controller_session_for_reconcile(&process_ref, Some(&context))
                 .await?;
@@ -8826,6 +8933,11 @@ impl ControllerSessionCoordinator {
             || *provider_generation != context.provider_generation()
         {
             return Ok(false);
+        }
+        // G5: a controller Process row minted in the new plane (KTD4) is not
+        // in the durable store; the zone manager is its authority.
+        if let Some(view) = self.controller_plane_row(context.process_ref()).await? {
+            return Ok(controller_plane_resource_matches(context, &view));
         }
         let resources =
             crate::process_resource_runtime::list_process_resources(&self.store, &self.zone)
@@ -11880,6 +11992,83 @@ fn controller_session_evidence_identity_check(
         return Err(ResourceRuntimeError::IdentityUnbound);
     }
     Ok(())
+}
+
+/// Whether one manager-served Process row is the row the bootstrap context
+/// describes (G5). The manager row persists the authored metadata (`ownerRef`)
+/// and the canonical spec envelope; the owner's committed uid/generation are
+/// bound onto the ticket by the KTD7 identity seam, so the row-side owner
+/// check is the authored reference - the same fact the row was ingested with.
+fn controller_plane_resource_matches(
+    context: &crate::process_provider_runtime::ControllerBootstrapContext,
+    view: &ResourceView,
+) -> bool {
+    if view.key.zone != context.zone().as_str()
+        || view.key.type_name != "Process"
+        || view.key.name != context.process_ref().name().as_str()
+        || view.generation != context.generation().get()
+        || plane_controller_bridge::row_uid(&view.uid).as_ref() != Some(context.process_uid())
+    {
+        return false;
+    }
+    let Ok(metadata) = serde_json::from_slice::<Value>(&view.metadata) else {
+        return false;
+    };
+    if metadata.get("ownerRef").and_then(Value::as_str)
+        != Some(context.provider_owner_ref().to_canonical_string().as_str())
+    {
+        return false;
+    }
+    let Ok(spec) = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(&view.spec)
+    else {
+        return false;
+    };
+    if spec.provider_ref() != Some(context.process_provider_ref()) {
+        return false;
+    }
+    let Ok(process) = serde_json::from_slice::<ProcessSpec>(&spec.base().to_canonical_bytes())
+    else {
+        return false;
+    };
+    process.execution().process_class()
+        == d2b_contracts_resource::v3::process::ProcessClass::Controller
+        && process.execution().execution_ref() == context.execution_ref()
+}
+
+impl LiveControllerSessionEvidence for ControllerSessionCoordinator {
+    fn controller_session_evidence(
+        &self,
+        process_ref: &ResourceRef,
+        process_uid: &ResourceUid,
+        generation: ResourceGeneration,
+    ) -> Option<Value> {
+        let sessions = self.controller_sessions.lock().ok()?;
+        let session = sessions.get(process_ref)?;
+        // Liveness and identity are re-read per evaluation; a finished task
+        // or a session bound to another row identity/generation is not
+        // evidence for this row.
+        if session.service_task.is_finished() {
+            return None;
+        }
+        let context = &session.context;
+        if context.process_uid() != process_uid || context.generation() != generation {
+            return None;
+        }
+        Some(json!({
+            "ready": true,
+            "providerRef": context.provider_owner_ref().to_canonical_string(),
+            "providerUid": context.provider_uid().as_str(),
+            "providerGeneration": context.provider_generation().get(),
+            "processRef": context.process_ref().to_canonical_string(),
+            "processUid": context.process_uid().as_str(),
+            "processGeneration": context.generation().get(),
+            "controllerGeneration": context.controller_generation().get(),
+            "sessionGeneration": session.binding.session_generation().get(),
+            "artifactReady": true,
+            "descriptorReady": true,
+            "registrationReady": true,
+        }))
+    }
 }
 
 fn committed_provider_spec(
@@ -17118,6 +17307,374 @@ mod tests {
         ));
 
         drop(sibling_peer);
+        drop(coordinator);
+        runtime.shutdown().await.unwrap();
+    }
+
+    /// One manager-served `Process` row for the G5 bridge tests.
+    struct ControllerPlaneRowFixture {
+        view: Option<ResourceView>,
+    }
+
+    #[async_trait]
+    impl ControllerPlaneView for ControllerPlaneRowFixture {
+        async fn process_view(
+            &self,
+            _process_ref: &ResourceRef,
+        ) -> Result<Option<ResourceView>, d2b_resource_runtime::error::ResourceError> {
+            Ok(self.view.clone())
+        }
+    }
+
+    fn plane_uid_bytes(uid: &ResourceUid) -> [u8; 16] {
+        let hex = uid.as_str().replace('-', "");
+        let mut bytes = [0u8; 16];
+        for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+            bytes[index] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
+        }
+        bytes
+    }
+
+    /// The manager view of the controller row one bootstrap context describes.
+    fn manager_process_view(
+        context: &crate::process_provider_runtime::ControllerBootstrapContext,
+    ) -> ResourceView {
+        ResourceView {
+            key: d2b_resource_runtime::identity::ResourceKey::new(
+                context.zone().as_str(),
+                "Process",
+                context.process_ref().name().as_str(),
+            ),
+            uid: plane_uid_bytes(context.process_uid()),
+            generation: context.generation().get(),
+            deleting: false,
+            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+            spec: serde_json::to_vec(&json!({
+                "providerRef": context.process_provider_ref().to_canonical_string(),
+                "processClass": "controller",
+                "template": "test-controller",
+                "executionRef": context.execution_ref().to_canonical_string(),
+            }))
+            .unwrap(),
+            metadata: serde_json::to_vec(&json!({
+                "ownerRef": context.provider_owner_ref().to_canonical_string(),
+                "labels": {},
+                "annotations": {},
+            }))
+            .unwrap(),
+            owner_key: None,
+            status: Some(d2b_resource_runtime::resource::ResourceStatus::Ready),
+            status_generation: Some(context.generation().get()),
+        }
+    }
+
+    /// A `Provider/system-core`-owned controller context whose Process row is
+    /// only ever minted in the manager (never materialized in the store).
+    async fn manager_served_controller_fixture(
+        runtime: &ZoneResourceRuntime,
+    ) -> (
+        Arc<crate::process_provider_runtime::ProductionProcessProviders>,
+        ResourceRef,
+        crate::process_provider_runtime::ControllerBootstrapContext,
+    ) {
+        let zone = runtime.zone.clone();
+        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
+        let process_ref = ResourceRef::parse("Process/manager-controller").unwrap();
+        materialize_test_bundle(runtime, Vec::new()).await;
+        let provider = read_test_resource(runtime, provider_ref.clone(), "g5-provider").await;
+        let controller_generation = runtime
+            .store
+            .runtime_metadata()
+            .await
+            .unwrap()
+            .policy_snapshot
+            .controller_generation
+            .expect("test policy has a controller generation");
+        let providers = test_controller_session_providers();
+        providers
+            .attach_controller_provider_context_for_test(
+                zone.clone(),
+                process_ref.clone(),
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+                ResourceGeneration::new(3).unwrap(),
+                ResourceRef::parse("Provider/system-minijail").unwrap(),
+                provider_ref.clone(),
+                provider.uid.clone(),
+                provider.generation,
+                ResourceRef::parse("Host/host-system").unwrap(),
+                controller_generation,
+            )
+            .unwrap();
+        let context = providers
+            .controller_bootstrap_contexts(&zone)
+            .into_iter()
+            .find(|context| context.process_ref() == &process_ref)
+            .expect("manager-served controller context");
+        (providers, process_ref, context)
+    }
+
+    /// G5: a controller Process row minted in the new plane is visible to the
+    /// session-evidence path through the manager's view.
+    #[tokio::test(flavor = "current_thread")]
+    async fn manager_served_controller_row_is_current_and_evidence_is_live() {
+        let (_directory, runtime, _broker_evidence) =
+            open_production_guest_runtime_for_test().await;
+        let (providers, process_ref, context) =
+            manager_served_controller_fixture(&runtime).await;
+        let coordinator = runtime.controller_session_coordinator();
+
+        assert!(
+            !coordinator
+                .controller_context_is_current(&providers, &context)
+                .await
+                .unwrap(),
+            "the durable store does not serve the manager row"
+        );
+
+        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
+            view: Some(manager_process_view(&context)),
+        }));
+        assert!(
+            coordinator
+                .controller_context_is_current(&providers, &context)
+                .await
+                .unwrap(),
+            "the manager's row is the authority for a converted Process row"
+        );
+        coordinator
+            .persist_controller_session_evidence(
+                &context,
+                Some(ReconnectGeneration::new(1).unwrap()),
+            )
+            .await
+            .expect("manager-served evidence is the live session, not a durable write");
+
+        // A manager row for another identity is not this context's row.
+        let mut mismatched = manager_process_view(&context);
+        mismatched.generation = context.generation().get() + 1;
+        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
+            view: Some(mismatched),
+        }));
+        assert!(
+            !coordinator
+                .controller_context_is_current(&providers, &context)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            coordinator
+                .persist_controller_session_evidence(
+                    &context,
+                    Some(ReconnectGeneration::new(1).unwrap()),
+                )
+                .await,
+            Err(ResourceRuntimeError::IdentityUnbound),
+            "evidence for a row this context does not describe still refuses"
+        );
+
+        assert_eq!(context.process_ref(), &process_ref);
+
+        drop(coordinator);
+        runtime.shutdown().await.unwrap();
+    }
+
+    /// G5: a row still served by the durable plane keeps the old path, with
+    /// or without a manager that holds no such row.
+    #[tokio::test(flavor = "current_thread")]
+    async fn durable_controller_row_still_resolves_without_a_manager_row() {
+        let (_directory, runtime, _broker_evidence) =
+            open_production_guest_runtime_for_test().await;
+        let zone = runtime.zone.clone();
+        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
+        let process_ref = ResourceRef::parse("Process/durable-controller").unwrap();
+        materialize_test_bundle(&runtime, Vec::new()).await;
+        let process = BundleResource::new(
+            ResourceTypeName::parse("Process").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse("durable-controller").unwrap(),
+                zone.clone(),
+                Some(provider_ref.clone()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"test-controller"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        materialize_test_bundle(&runtime, vec![process]).await;
+        let provider = read_test_resource(&runtime, provider_ref.clone(), "g5-durable-provider").await;
+        let process = read_test_resource(&runtime, process_ref.clone(), "g5-durable-process").await;
+        let controller_generation = runtime
+            .store
+            .runtime_metadata()
+            .await
+            .unwrap()
+            .policy_snapshot
+            .controller_generation
+            .expect("test policy has a controller generation");
+        let providers = test_controller_session_providers();
+        providers
+            .attach_controller_provider_context_for_test(
+                zone.clone(),
+                process_ref.clone(),
+                process.uid.clone(),
+                process.generation,
+                ResourceRef::parse("Provider/system-minijail").unwrap(),
+                provider_ref.clone(),
+                provider.uid.clone(),
+                provider.generation,
+                ResourceRef::parse("Host/host-system").unwrap(),
+                controller_generation,
+            )
+            .unwrap();
+        let context = providers
+            .controller_bootstrap_contexts(&zone)
+            .into_iter()
+            .find(|context| context.process_ref() == &process_ref)
+            .expect("durable controller context");
+        let coordinator = runtime.controller_session_coordinator();
+
+        assert!(
+            coordinator
+                .controller_context_is_current(&providers, &context)
+                .await
+                .unwrap(),
+            "the durable row still resolves through the old path"
+        );
+        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture { view: None }));
+        assert!(
+            coordinator
+                .controller_context_is_current(&providers, &context)
+                .await
+                .unwrap(),
+            "a manager that does not serve the row keeps the durable path authoritative"
+        );
+
+        drop(coordinator);
+        runtime.shutdown().await.unwrap();
+    }
+
+    /// G5: the session fence does not retire a live session whose row the
+    /// durable list cannot see but the manager does.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_fence_consults_the_manager_for_manager_served_rows() {
+        let (_directory, runtime, _broker_evidence) =
+            open_production_guest_runtime_for_test().await;
+        let (providers, process_ref, context) =
+            manager_served_controller_fixture(&runtime).await;
+        providers
+            .set_controller_session_waker(runtime.zone.clone(), Arc::new(|| Ok(())))
+            .unwrap();
+        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
+
+        insert_test_controller_session(&mut coordinator, &context).await;
+        coordinator
+            .fence_process_resources(&providers, &[])
+            .await
+            .unwrap();
+        assert!(
+            !coordinator
+                .controller_sessions
+                .lock()
+                .unwrap()
+                .contains_key(&process_ref),
+            "without a manager row the durable fence still retires the session"
+        );
+
+        insert_test_controller_session(&mut coordinator, &context).await;
+        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
+            view: Some(manager_process_view(&context)),
+        }));
+        coordinator
+            .fence_process_resources(&providers, &[])
+            .await
+            .unwrap();
+        assert!(
+            coordinator
+                .controller_sessions
+                .lock()
+                .unwrap()
+                .contains_key(&process_ref),
+            "the manager's row keeps the session out of the durable fence"
+        );
+
+        drop(coordinator);
+        runtime.shutdown().await.unwrap();
+    }
+
+    /// G5: the synthesized session evidence is the live session, re-read per
+    /// evaluation, and every uncertainty answers `None`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn live_session_evidence_is_generation_and_liveness_bound() {
+        let (_directory, runtime, _broker_evidence) =
+            open_production_guest_runtime_for_test().await;
+        let (_providers, _process_ref, context) =
+            manager_served_controller_fixture(&runtime).await;
+        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
+        insert_test_controller_session(&mut coordinator, &context).await;
+        {
+            let mut sessions = coordinator.controller_sessions.lock().unwrap();
+            let session = sessions.get_mut(context.process_ref()).unwrap();
+            session.service_task = tokio::spawn(async {
+                std::future::pending::<()>().await;
+                Ok::<(), SessionServerError>(())
+            });
+        }
+
+        let evidence = LiveControllerSessionEvidence::controller_session_evidence(
+            &coordinator,
+            context.process_ref(),
+            context.process_uid(),
+            context.generation(),
+        )
+        .expect("a live admitted session is evidence");
+        assert_eq!(evidence["ready"], json!(true));
+        assert_eq!(evidence["sessionGeneration"], json!(1));
+        assert_eq!(
+            evidence["processUid"].as_str(),
+            Some(context.process_uid().as_str())
+        );
+
+        assert!(
+            LiveControllerSessionEvidence::controller_session_evidence(
+                &coordinator,
+                context.process_ref(),
+                context.process_uid(),
+                ResourceGeneration::new(context.generation().get() + 1).unwrap(),
+            )
+            .is_none(),
+            "another generation is not this row's evidence"
+        );
+        assert!(
+            LiveControllerSessionEvidence::controller_session_evidence(
+                &coordinator,
+                context.process_ref(),
+                &ResourceUid::parse("99999999-9999-4999-8999-999999999999").unwrap(),
+                context.generation(),
+            )
+            .is_none(),
+            "another row identity is not this row's evidence"
+        );
+
+        {
+            let mut sessions = coordinator.controller_sessions.lock().unwrap();
+            let session = sessions.get_mut(context.process_ref()).unwrap();
+            session.service_task = tokio::spawn(async { Ok::<(), SessionServerError>(()) });
+        }
+        tokio::task::yield_now().await;
+        assert!(
+            LiveControllerSessionEvidence::controller_session_evidence(
+                &coordinator,
+                context.process_ref(),
+                context.process_uid(),
+                context.generation(),
+            )
+            .is_none(),
+            "a finished service task is not live evidence"
+        );
+
         drop(coordinator);
         runtime.shutdown().await.unwrap();
     }
