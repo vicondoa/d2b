@@ -101,6 +101,6 @@ pub use owner_reconcile::{
 pub use runtime::{
     CoreAdmissionCounts, CoreControllerDescriptorError, CoreControllerSource, CoreDispatchOutcome,
     CoreReconcileError, CoreResourceReconciler, CoreSourceError, RegisteredControllerApi,
-    core_controller_descriptors,
+    core_controller_descriptors, provider_observation,
 };
 pub use zone_status::{SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput};

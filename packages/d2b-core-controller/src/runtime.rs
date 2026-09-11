@@ -1040,7 +1040,10 @@ fn expected_provider_volume_refs(provider: &serde_json::Value) -> BTreeSet<Strin
         .collect()
 }
 
-fn provider_observation(
+/// The pure observation the Core `Provider` handler applies to its
+/// dependency list. Public so the bridge that merges manager-served
+/// dependency rows (G5) is pinned against the exact consumer of that list.
+pub fn provider_observation(
     resource: &ResourceSnapshot,
     dependencies: &[DependencySnapshot],
 ) -> Result<ProviderObservation, CoreReconcileError> {
