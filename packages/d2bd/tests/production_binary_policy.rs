@@ -69,6 +69,7 @@ fn production_binary_contains_no_peer_override_surface() {
         "src/activation_driver.rs",
         "src/shared_provider_driver.rs",
         "src/shared_provider_effects.rs",
+        "src/system_core_driver.rs",
         "src/audio_resource_runtime.rs",
         "src/semantic_binding_resource_runtime.rs",
         "src/provider_registry.rs",

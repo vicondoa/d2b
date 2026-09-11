@@ -108,6 +108,7 @@ use crate::shared_provider_driver::{
     shared_provider_spec_decoder,
 };
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
+use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
 
 /// Frozen purpose of the binding-owned virtiofsd socket (old `VIRTIOFSD_PURPOSE`
 /// in `endpoint_driver.rs`).
@@ -124,7 +125,7 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 14] =
+pub const CONVERTED_TYPES: [&str; 16] =
     d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
@@ -1367,6 +1368,7 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.shared_provider_effects),
             },
         )))?;
+        providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
         Ok(providers)
     }
 
@@ -1398,6 +1400,14 @@ impl ResourcePlaneV3 {
                 shared_provider_spec_decoder(),
             );
         }
+        decoders.insert(
+            ResourceTypeName::new("Host"),
+            system_core_spec_decoder(),
+        );
+        decoders.insert(
+            ResourceTypeName::new("User"),
+            system_core_spec_decoder(),
+        );
         decoders
     }
 
@@ -2060,14 +2070,14 @@ mod tests {
         for converted in CONVERTED_TYPES {
             assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
         }
-        for unconverted in ["Guest", "Provider", "User", "Quota", "EphemeralProcess"] {
+        for unconverted in ["Guest", "Provider", "Quota", "EphemeralProcess"] {
             assert_eq!(
                 route_resource_type(unconverted),
                 PlaneRoute::OldPlane,
                 "{unconverted} must stay on the old plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 14);
+        assert_eq!(CONVERTED_TYPES.len(), 16);
     }
 
     /// KTD7: the committed Provider identities the composition resolves are

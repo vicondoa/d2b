@@ -10,8 +10,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    path::Path,
+    fs::File,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -65,11 +64,7 @@ use d2b_contracts_resource::v3::{
     process::ProcessSpec,
     volume::VolumeSpec,
 };
-use d2b_contracts_resource::v3::{
-    guest::GuestSpec,
-    host::{HOST_PROVIDER_REF, HostSpec},
-    user::UserSpec,
-};
+use d2b_contracts_resource::v3::guest::GuestSpec;
 use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
@@ -84,18 +79,17 @@ use d2b_core_controller::controller_assignment::{
 };
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::{
-    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ChangeField, ChangeRecord, ControllerDescriptor,
-    ControllerExecutionPolicy, ControllerIdentity, ControllerSelector, ControllerVerb,
-    CoreControllerSource, CoreResourceReconciler, DependencySnapshot, DrainResult,
-    FinalizeResult, ObservationResult, ReconcileContext, ReconcileDisposition, ReconcilePlan,
-    ReconcileReason, ReconcileResult, ResourceReconciler,
-    ResourceRegistration, ResourceSnapshot, ResyncPolicy, Runner, RunnerConfig, RunnerError,
-    SelectorField, SourceError, StatusPersistence, TriggerReason, UpdateAssessment,
-    UpdateAssessmentState,
-    UpgradePlan, UpgradeStage, ValidationResult, core_controller_descriptors,
+    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ChangeRecord, ControllerIdentity, CoreControllerSource,
+    CoreResourceReconciler, Runner, RunnerConfig, RunnerError, SelectorField, SourceError,
+    core_controller_descriptors,
 };
 #[cfg(test)]
-use d2b_core_controller::{DisruptionClass, ResourceKey, ResourceMutationBatch};
+use d2b_core_controller::{
+    ControllerDescriptor, DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult,
+    ObservationResult, ReconcileContext, ReconcileDisposition, ReconcilePlan, ReconcileResult,
+    ResourceKey, ResourceMutationBatch, ResourceReconciler, ResourceSnapshot, StatusPersistence,
+    UpdateAssessment, UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
+};
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
@@ -135,11 +129,6 @@ use d2b_provider_runtime_azure_container_apps as aca_runtime;
 use d2b_provider_runtime_azure_virtual_machine as azure_vm_runtime;
 #[cfg(test)]
 use d2b_provider_runtime_qemu_media as qemu_media_runtime;
-use d2b_provider_system_core::{
-    HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
-    HostReconciler, MinijailPlatformGate, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
-    UserObservation, UserReconciler,
-};
 use d2b_resource_api::{
     RedbBackend, ResourceApiClient, ResourceBusAdapter, ResourceService, ResourceStoreBackend,
     authz::{AuthorizationState, BoundSubject, NativeAuthorizer, PolicySet},
@@ -196,11 +185,11 @@ use d2bd_runtime::zone_authority::{
     ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX, ZoneAuthorityIdentity,
     complete_generation_set_digest,
 };
-use nix::unistd::{Group, Uid, User};
+#[cfg(test)]
+use nix::unistd::{Uid, User};
 use protobuf::{EnumOrUnknown, MessageField};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 mod volume_effect_adapter;
 mod guest_provider_runtime;
@@ -5583,7 +5572,7 @@ impl ZoneResourceRuntime {
             assignments,
             provider_generation,
             controller_generation,
-            session_generation,
+            _session_generation,
             assignment_authority,
         ) = match self.core_assignment_fences().await {
             Ok(value) => value,
@@ -5697,65 +5686,14 @@ impl ZoneResourceRuntime {
                 resource_type: registration.resource_type(),
             });
         }
-        let system_core_controller_ref =
-            ResourceRef::parse("Process/system-core-resource-controller")
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let system_core_provider_ref = ResourceRef::parse(CORE_CONTROLLER_PROVIDER_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let system_core_host_ref = ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let system_core_identity = ControllerIdentity::new(
-            self.zone.clone(),
-            system_core_controller_ref.clone(),
-            controller_generation,
-            system_core_provider_ref,
-            provider_generation,
-            system_core_controller_ref,
-            system_core_host_ref,
-            None,
-        )
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let system_core_descriptor = system_core_resource_descriptor(system_core_identity)?;
-        let system_core_subject = self
-            .authorizer
-            .issue_authenticated_subject(subject_context.clone(), authorization_state.clone())
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        let system_core_api = self
-            .api
-            .registered_controller_api(system_core_subject, authorization_state.clone(), Vec::new())
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
-            .with_assignment_fence_resolver(system_core_assignment_fence_resolver(
-                Arc::clone(&self.store),
-                ResourceRef::parse("Process/system-core-resource-controller")
-                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                session_generation,
-            ));
-        let system_core_source =
-            CoreControllerSource::new(system_core_descriptor.clone(), Arc::new(system_core_api));
-        let system_core_runner = Runner::new(
-            SystemCoreResourceReconciler::new(system_core_descriptor.clone()),
-            system_core_source,
-            RunnerConfig {
-                policy_revision: authorization_state.snapshot.policy_revision,
-                api_revision: authorization_state.snapshot.api_catalog_revision,
-                configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                deadline_tick: 30_000,
-                max_attempts: 10,
-            },
-        );
         if prepared.is_empty() {
             tracing::debug!("no core runner preparations available; retrying");
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
-        let system_core_runner_identity = CoreRunnerIdentity::new(
-            system_core_descriptor.identity().controller_ref().clone(),
-            "Host/User",
-        );
-        let mut required_identities = prepared
+        let required_identities = prepared
             .iter()
             .map(|runner| runner.identity().clone())
             .collect::<BTreeSet<_>>();
-        required_identities.insert(system_core_runner_identity.clone());
 
         reap_finished_core_runner_tasks(&self.core_runner_tasks).await?;
         let mut present_identities = self
@@ -5778,71 +5716,13 @@ impl ZoneResourceRuntime {
             present_identities.push(identity);
             new_tasks.push(spawn_prepared_core_runner(runner));
         }
-        if !present_identities
-            .iter()
-            .any(|present| present == &system_core_runner_identity)
-        {
-            let handle = tokio::spawn(async move {
-                // A transient store timeout must not wedge Host/User
-                // reconciliation; retry before surfacing the failure.
-                let mut attempt = 0usize;
-                loop {
-                    match system_core_runner.run().await {
-                        Ok(report) => {
-                            tracing::debug!(
-                                dispatched = report.dispatched,
-                                relists = report.relists,
-                                "system-core Host/User shared runner stopped",
-                            );
-                            break;
-                        }
-                        Err(error) => {
-                            let transient = matches!(
-                                error.error(),
-                                RunnerError::Source(
-                                    SourceError::Timeout
-                                        | SourceError::Unavailable
-                                        | SourceError::Backpressure
-                                )
-                            );
-                            let backoff_ms =
-                                std::cmp::min(1_000u64 << attempt, 5_000);
-                            if !transient {
-                                tracing::warn!(
-                                    error = %error,
-                                    "system-core Host/User shared runner failed",
-                                );
-                                break;
-                            }
-                            attempt += 1;
-                            tracing::warn!(
-                                attempt,
-                                backoff_ms,
-                                "system-core Host/User shared runner retrying after transient failure",
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                backoff_ms,
-                            ))
-                            .await;
-                        }
-                    }
-                }
-            });
-            new_tasks.push(CoreRunnerTask {
-                identity: system_core_runner_identity,
-                handle,
-            });
-        }
         install_core_runner_tasks(&self.core_runner_tasks, new_tasks).await?;
         let tasks = self
             .core_runner_tasks
             .lock()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
         if !core_runner_tasks_are_ready(&tasks, &required_identities) {
-            tracing::debug!(
-                controller = "Host/User",
-                "core runner task set not ready after install",
-            );
+            tracing::debug!("core runner task set not ready after install");
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
         drop(tasks);
@@ -11389,229 +11269,6 @@ impl ZoneResourceRuntime {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct SystemCoreUserDiscovery;
-
-#[derive(Debug, Clone, Copy)]
-struct SystemCoreHostProbe {
-    user_uid: u32,
-}
-
-impl SystemCoreHostProbe {
-    fn current() -> Self {
-        Self {
-            user_uid: Uid::current().as_raw(),
-        }
-    }
-
-    fn kernel_release() -> Result<String, d2b_provider_system_core::SystemCoreError> {
-        d2bd_runtime::resource_runtime_support::read_bounded("/proc/sys/kernel/osrelease", 64)
-            .map(|release| release.trim().to_owned())
-            .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)
-    }
-
-    fn os_name() -> Result<String, d2b_provider_system_core::SystemCoreError> {
-        let release =
-            d2bd_runtime::resource_runtime_support::read_bounded("/etc/os-release", 16 * 1024)
-                .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?;
-        Ok(release
-            .lines()
-            .find_map(|line| line.strip_prefix("NAME="))
-            .map(|name| name.trim_matches('"').to_owned())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "unknown".to_owned()))
-    }
-
-    fn runtime_path(&self, name: &str) -> std::path::PathBuf {
-        Path::new("/run/user")
-            .join(self.user_uid.to_string())
-            .join(name)
-    }
-
-    fn has_render_node() -> bool {
-        fs::read_dir("/dev/dri")
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("renderD"))
-                })
-            })
-            .unwrap_or(false)
-    }
-
-    fn has_primary_drm_node() -> bool {
-        fs::read_dir("/dev/dri")
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("card"))
-                })
-            })
-            .unwrap_or(false)
-    }
-
-    fn active_process_count() -> Result<u32, d2b_provider_system_core::SystemCoreError> {
-        let mut count = 0_u32;
-        for entry in fs::read_dir("/proc")
-            .map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?
-        {
-            let entry =
-                entry.map_err(|_| d2b_provider_system_core::SystemCoreError::HostProbeFailed)?;
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
-            {
-                count = count.saturating_add(1);
-            }
-        }
-        Ok(count)
-    }
-}
-
-impl HostProbeEffectPort for SystemCoreHostProbe {
-    async fn probe(
-        &self,
-        capability: HostCapabilityClass,
-    ) -> Result<bool, d2b_provider_system_core::SystemCoreError> {
-        let available = match capability {
-            HostCapabilityClass::Kvm => Path::new("/dev/kvm").is_file(),
-            HostCapabilityClass::Pidfd => {
-                let gate = crate::process_provider_runtime::detect_minijail_platform_gate();
-                gate.kernel_major > 5 || (gate.kernel_major == 5 && gate.kernel_minor >= 3)
-            }
-            HostCapabilityClass::CgroupV2 => {
-                Path::new("/sys/fs/cgroup/cgroup.controllers").is_file()
-            }
-            HostCapabilityClass::UserNamespace => Path::new("/proc/self/ns/user").exists(),
-            HostCapabilityClass::Virtiofs => Path::new("/dev/fuse").is_file(),
-            HostCapabilityClass::AudioPipewire => {
-                d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("pipewire-0"))
-            }
-            HostCapabilityClass::Wayland => {
-                d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("wayland-0"))
-            }
-            HostCapabilityClass::GpuRender => Self::has_render_node(),
-            HostCapabilityClass::GpuDrm => Self::has_primary_drm_node(),
-            HostCapabilityClass::Tpm2 => {
-                Path::new("/dev/tpmrm0").is_file() || Path::new("/dev/tpm0").is_file()
-            }
-            HostCapabilityClass::Usbip => {
-                Path::new("/sys/module/usbip_core").exists()
-                    || Path::new("/sys/module/usbip_host").exists()
-            }
-        };
-        Ok(available)
-    }
-
-    async fn platform(
-        &self,
-    ) -> Result<MinijailPlatformGate, d2b_provider_system_core::SystemCoreError> {
-        let gate = crate::process_provider_runtime::detect_minijail_platform_gate();
-        Ok(MinijailPlatformGate::new(
-            gate.kernel_major,
-            gate.kernel_minor,
-            gate.cgroup_kill_available,
-        ))
-    }
-
-    async fn metadata(
-        &self,
-    ) -> Result<HostProbeMetadata, d2b_provider_system_core::SystemCoreError> {
-        Ok(HostProbeMetadata {
-            kernel_release: Self::kernel_release()?,
-            os_name: Self::os_name()?,
-            user_manager_available: self.runtime_path("systemd").is_dir(),
-            active_process_count: Self::active_process_count()?,
-        })
-    }
-}
-
-impl UserDiscoveryEffectPort for SystemCoreUserDiscovery {
-    async fn discover(
-        &self,
-        user_ref: &ResourceRef,
-        spec: &UserSpec,
-    ) -> Result<
-        Option<d2b_provider_system_core::DiscoveredUser>,
-        d2b_provider_system_core::SystemCoreError,
-    > {
-        discover_local_user(user_ref, spec).await
-    }
-}
-
-fn resource_status_observed_generation(resource: &ResourceSnapshot) -> Option<ResourceGeneration> {
-    let value = serde_json::from_slice::<Value>(resource.canonical_json()).ok()?;
-    let generation = value
-        .pointer("/status/observedGeneration")
-        .and_then(Value::as_u64)?;
-    ResourceGeneration::new(generation).ok()
-}
-
-async fn discover_local_user(
-    user_ref: &ResourceRef,
-    spec: &UserSpec,
-) -> Result<
-    Option<d2b_provider_system_core::DiscoveredUser>,
-    d2b_provider_system_core::SystemCoreError,
-> {
-    let username = spec.os_username().as_str();
-    let user = User::from_name(username)
-        .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?;
-    let Some(user) = user else {
-        return Ok(None);
-    };
-
-    let mut digest = Sha256::new();
-    digest.update(b"d2b-system-core-user-v1");
-    digest.update(user_ref.name().as_str().as_bytes());
-    digest.update([0]);
-    digest.update(username.as_bytes());
-    digest.update([0]);
-    digest.update(user.uid.as_raw().to_le_bytes());
-    digest.update(user.gid.as_raw().to_le_bytes());
-
-    let mut verified = std::collections::BTreeSet::from([UserBinding::NssRecord]);
-    if Group::from_gid(user.gid)
-        .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?
-        .is_some()
-    {
-        verified.insert(UserBinding::PrimaryGroup);
-    }
-
-    let mut groups_verified = true;
-    for group in spec.groups() {
-        let Some(group_record) = Group::from_name(group.as_str())
-            .map_err(|_| d2b_provider_system_core::SystemCoreError::DiscoveryUnavailable)?
-        else {
-            groups_verified = false;
-            tracing::debug!(
-                user = %username,
-                group = %group.as_str(),
-                "system-core user group record missing; membership unverified",
-            );
-            continue;
-        };
-        digest.update([0]);
-        digest.update(group.as_str().as_bytes());
-        if !group_record.mem.iter().any(|member| member == username) {
-            groups_verified = false;
-        }
-    }
-    if groups_verified && !spec.groups().is_empty() {
-        verified.insert(UserBinding::GroupMemberships);
-    }
-
-    Ok(Some(d2b_provider_system_core::DiscoveredUser {
-        identity: UserIdentityDigest::from_bytes(digest.finalize().into()),
-        observed: UserObservation::from_verified(verified),
-    }))
-}
-
 fn is_u9_provider_ref(value: &str) -> bool {
     U9_PROVIDER_REFS.contains(&value)
 }
@@ -12952,386 +12609,6 @@ fn parse_committed_notification_configuration(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SystemCoreResourceReconcileError;
-
-impl core::fmt::Display for SystemCoreResourceReconcileError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("system-core-resource-reconcile-failed")
-    }
-}
-
-impl std::error::Error for SystemCoreResourceReconcileError {}
-
-/// Typed Host/User handler executed by the shared Core Runner.
-struct SystemCoreResourceReconciler {
-    descriptor: ControllerDescriptor,
-}
-
-impl std::fmt::Debug for SystemCoreResourceReconciler {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("SystemCoreResourceReconciler")
-            .field("descriptor", &self.descriptor)
-            .finish()
-    }
-}
-
-impl SystemCoreResourceReconciler {
-    fn new(descriptor: ControllerDescriptor) -> Arc<Self> {
-        Arc::new(Self { descriptor })
-    }
-
-    fn valid_spec(resource: &ResourceSnapshot) -> bool {
-        let resource_type = (|| {
-            let envelope = ResourceEnvelope::from_json(resource.canonical_json())
-                .map_err(|_| SystemCoreResourceReconcileError)?;
-            let resource_type = envelope.resource_type().as_str();
-            match resource_type {
-                "Host" => {
-                    if envelope.spec().provider_ref().map(|provider| {
-                        provider.to_canonical_string() == HOST_PROVIDER_REF
-                    }) != Some(true)
-                    {
-                        return Err(SystemCoreResourceReconcileError);
-                    }
-                    serde_json::from_slice::<HostSpec>(
-                        &envelope.spec().base().to_canonical_bytes(),
-                    )
-                    .map_err(|_| SystemCoreResourceReconcileError)?;
-                }
-                "User" => {
-                    serde_json::from_slice::<UserSpec>(
-                        &envelope.spec().base().to_canonical_bytes(),
-                    )
-                    .map_err(|_| SystemCoreResourceReconcileError)?;
-                }
-                _ => return Err(SystemCoreResourceReconcileError),
-            }
-            Ok::<_, SystemCoreResourceReconcileError>(())
-        })();
-        resource_type.is_ok()
-    }
-
-    fn resource_type(
-        resource: &ResourceSnapshot,
-    ) -> Result<&str, SystemCoreResourceReconcileError> {
-        match resource.key().resource_ref().resource_type().as_str() {
-            "Host" | "User" => Ok(resource.key().resource_ref().resource_type().as_str()),
-            _ => Err(SystemCoreResourceReconcileError),
-        }
-    }
-
-    async fn status_candidate(
-        resource: &ResourceSnapshot,
-    ) -> Result<Vec<u8>, SystemCoreResourceReconcileError> {
-        let envelope = ResourceEnvelope::from_json(resource.canonical_json())
-            .map_err(|_| SystemCoreResourceReconcileError)?;
-        let resource_ref = ResourceRef::new(
-            envelope.resource_type().clone(),
-            envelope.metadata().name().clone(),
-        );
-        let status = match resource_ref.resource_type().as_str() {
-            "Host" => {
-                let spec: HostSpec =
-                    serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
-                        .map_err(|_| SystemCoreResourceReconcileError)?;
-                let provider_ref = envelope
-                    .spec()
-                    .provider_ref()
-                    .cloned()
-                    .ok_or(SystemCoreResourceReconcileError)?;
-                let report = match HostReconciler::new()
-                    .reconcile_with_probe(
-                        &resource_ref,
-                        &provider_ref,
-                        &spec,
-                        &SystemCoreHostProbe::current(),
-                        &BTreeSet::new(),
-                        false,
-                    )
-                    .await
-                {
-                    Ok(report) => report,
-                    Err(_) => {
-                        let mut status = HostReconciler::new()
-                            .reconcile(&resource_ref, &provider_ref, &spec)
-                            .map_err(|_| SystemCoreResourceReconcileError)?;
-                        status.phase = ResourcePhase::Degraded;
-                        HostObservationReport {
-                            status,
-                            capabilities: Vec::new(),
-                            kernel_release: "unknown".to_owned(),
-                            os_name: "unknown".to_owned(),
-                            user_manager_available: false,
-                            active_process_count: 0,
-                            minijail_ready: false,
-                        }
-                    }
-                };
-                host_status_value(&report).map_err(|_| SystemCoreResourceReconcileError)?
-            }
-            "User" => {
-                let spec: UserSpec =
-                    serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
-                        .map_err(|_| SystemCoreResourceReconcileError)?;
-                let status = UserReconciler::new(SystemCoreUserDiscovery)
-                    .reconcile(&resource_ref, &spec)
-                    .await
-                    .map_err(|_| SystemCoreResourceReconcileError)?;
-                serde_json::to_value(status).map_err(|_| SystemCoreResourceReconcileError)?
-            }
-            _ => return Err(SystemCoreResourceReconcileError),
-        };
-        let mut current = serde_json::from_slice::<Value>(resource.canonical_json())
-            .map_err(|_| SystemCoreResourceReconcileError)?;
-        let current_status = current
-            .get_mut("status")
-            .and_then(Value::as_object_mut)
-            .ok_or(SystemCoreResourceReconcileError)?;
-        let domain_status = status.as_object().ok_or(SystemCoreResourceReconcileError)?;
-        let mut resource_projection = current_status
-            .get("resource")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for (key, value) in domain_status {
-            if key != "phase" {
-                resource_projection.insert(key.clone(), value.clone());
-            }
-        }
-        let object = current_status;
-        if let Some(phase) = domain_status.get("phase") {
-            object.insert("phase".to_owned(), phase.clone());
-        }
-        object.insert("resource".to_owned(), Value::Object(resource_projection));
-        object.insert(
-            "observedGeneration".to_owned(),
-            Value::Number(resource.generation().get().into()),
-        );
-        object.insert(
-            "lastReconciledAt".to_owned(),
-            Value::String(current_status_timestamp().as_str().to_owned()),
-        );
-        serde_json::to_vec(&Value::Object(object.clone()))
-            .map_err(|_| SystemCoreResourceReconcileError)
-    }
-}
-
-impl ResourceReconciler for SystemCoreResourceReconciler {
-    type Error = SystemCoreResourceReconcileError;
-
-    fn classify_error(&self, _error: &Self::Error) -> d2b_core_controller::HandlerFailure {
-        d2b_core_controller::HandlerFailure::retryable()
-    }
-
-    fn describe(&self) -> impl Future<Output = Result<ControllerDescriptor, Self::Error>> + Send {
-        std::future::ready(Ok(self.descriptor.clone()))
-    }
-
-    fn validate_spec(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-    ) -> impl Future<Output = Result<ValidationResult, Self::Error>> + Send {
-        let valid = Self::resource_type(resource).is_ok() && Self::valid_spec(resource);
-        std::future::ready(Ok(if valid {
-            ValidationResult::Valid
-        } else {
-            ValidationResult::Invalid {
-                reason: ReconcileReason::InvalidSpec,
-            }
-        }))
-    }
-
-    fn plan(
-        &self,
-        context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> impl Future<Output = Result<ReconcilePlan, Self::Error>> + Send {
-        let plan = if resource_status_observed_generation(resource) == Some(resource.generation())
-            && !context.reasons().contains(TriggerReason::StartupRelist)
-        {
-            ReconcilePlan::new(Vec::new(), true)
-        } else {
-            ReconcilePlan::new(vec!["system-core-observe".to_owned()], false)
-        };
-        std::future::ready(plan.map_err(|_| SystemCoreResourceReconcileError))
-    }
-
-    fn reconcile(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-        _plan: &ReconcilePlan,
-    ) -> impl Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-        std::future::ready(Ok(ReconcileResult::converged(
-            resource.revision(),
-            resource.generation(),
-        )))
-    }
-
-    fn execute_effect(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-        _plan: &ReconcilePlan,
-    ) -> impl Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-        let result = async move {
-            let status = Self::status_candidate(resource).await?;
-            ReconcileResult::new(
-                resource.revision(),
-                resource.generation(),
-                None,
-                Some(status),
-                ReconcileDisposition::Pending,
-                None,
-                None,
-                StatusPersistence::Pending,
-            )
-            .map_err(|_| SystemCoreResourceReconcileError)
-        };
-        result
-    }
-
-    fn observe(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-    ) -> impl Future<Output = Result<ObservationResult, Self::Error>> + Send {
-        std::future::ready(Ok(ObservationResult::new(ReconcileResult::converged(
-            resource.revision(),
-            resource.generation(),
-        ))))
-    }
-
-    fn finalize(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-    ) -> impl Future<Output = Result<FinalizeResult, Self::Error>> + Send {
-        std::future::ready(Ok(FinalizeResult::new(ReconcileResult::converged(
-            resource.revision(),
-            resource.generation(),
-        ))))
-    }
-
-    fn health(
-        &self,
-    ) -> impl Future<Output = Result<d2b_core_controller::ControllerHealth, Self::Error>> + Send
-    {
-        std::future::ready(Ok(d2b_core_controller::ControllerHealth::Healthy))
-    }
-
-    fn drain(
-        &self,
-        _deadline_tick: u64,
-    ) -> impl Future<Output = Result<DrainResult, Self::Error>> + Send {
-        std::future::ready(Ok(DrainResult::Drained))
-    }
-
-    fn assess_update(
-        &self,
-        _context: &ReconcileContext,
-        _resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> impl Future<Output = Result<UpdateAssessment, Self::Error>> + Send {
-        std::future::ready(
-            UpdateAssessment::new(UpdateAssessmentState::Current, Vec::new(), true)
-                .map_err(|_| SystemCoreResourceReconcileError),
-        )
-    }
-
-    fn plan_upgrade(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-    ) -> impl Future<Output = Result<UpgradePlan, Self::Error>> + Send {
-        std::future::ready(
-            UpgradePlan::new(
-                d2b_core_controller::DisruptionClass::None,
-                true,
-                vec![UpgradeStage::Recycle(resource.key().resource_ref().clone())],
-            )
-            .map_err(|_| SystemCoreResourceReconcileError),
-        )
-    }
-
-    fn execute_upgrade(
-        &self,
-        _context: &ReconcileContext,
-        resource: &ResourceSnapshot,
-        _dependencies: &[DependencySnapshot],
-        _plan: &UpgradePlan,
-    ) -> impl Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-        std::future::ready(Ok(ReconcileResult::converged(
-            resource.revision(),
-            resource.generation(),
-        )))
-    }
-}
-
-fn system_core_resource_descriptor(
-    identity: ControllerIdentity,
-) -> Result<ControllerDescriptor, ResourceRuntimeError> {
-    let host =
-        ResourceTypeName::parse("Host").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let user =
-        ResourceTypeName::parse("User").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let resources = vec![
-        ResourceRegistration::new(host.clone(), vec![1], 5_000, 3)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-        ResourceRegistration::new(user.clone(), vec![1], 5_000, 3)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-    ];
-    let selectors = [host, user]
-        .into_iter()
-        .flat_map(|resource_type| {
-            [
-                ChangeField::Spec,
-                ChangeField::Status,
-                ChangeField::Metadata,
-                ChangeField::Finalizers,
-                ChangeField::Deletion,
-            ]
-            .into_iter()
-            .map(move |field| ControllerSelector::new(resource_type.clone(), field, None))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    ControllerDescriptor::new(
-        identity,
-        resources,
-        vec!["host".to_owned(), "user".to_owned()],
-        vec!["system".to_owned()],
-        vec![
-            ControllerVerb::ReadSpec,
-            ControllerVerb::ReadStatus,
-            ControllerVerb::WriteStatus,
-        ],
-        selectors,
-        Vec::new(),
-        false,
-        Vec::new(),
-        vec!["d2b.system-core.v3".to_owned()],
-        vec!["resources.d2bus.org/v3".to_owned()],
-        ControllerExecutionPolicy::new(
-            8,
-            8,
-            256,
-            8,
-            256,
-            ResyncPolicy::new(None, 5_000).map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-        )
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-    )
-    .map_err(|_| ResourceRuntimeError::HandlerNotReady)
-}
-
 async fn system_core_startup_result(
     zone: &ZoneId,
     store: &RedbResourceStore,
@@ -13393,42 +12670,6 @@ async fn system_core_startup_result(
         generation_cleanup_pending: cleanup_pending_count > 0,
         cleanup_pending_count,
     })
-}
-
-fn host_status_value(
-    report: &HostObservationReport,
-) -> Result<serde_json::Value, ResourceRuntimeError> {
-    let mut status =
-        serde_json::to_value(&report.status).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let object = status
-        .as_object_mut()
-        .ok_or(ResourceRuntimeError::HandlerNotReady)?;
-    object.insert(
-        "capabilities".to_owned(),
-        serde_json::to_value(&report.capabilities)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-    );
-    object.insert(
-        "kernelRelease".to_owned(),
-        serde_json::Value::String(report.kernel_release.clone()),
-    );
-    object.insert(
-        "osName".to_owned(),
-        serde_json::Value::String(report.os_name.clone()),
-    );
-    object.insert(
-        "userManagerAvailable".to_owned(),
-        serde_json::Value::Bool(report.user_manager_available),
-    );
-    object.insert(
-        "activeProcessCount".to_owned(),
-        serde_json::Value::Number(report.active_process_count.into()),
-    );
-    object.insert(
-        "minijailReady".to_owned(),
-        serde_json::Value::Bool(report.minijail_ready),
-    );
-    Ok(status)
 }
 
 fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRuntimeError {
@@ -13628,97 +12869,6 @@ fn process_assignment_fence_resolver(
                 controller_role: authority.controller_role.clone(),
                 target: execution_ref,
                 session_generation: authority.session_generation,
-                epoch: ASSIGNMENT_EPOCH,
-                scope: ResourceAssignmentScope::Primary,
-            })
-        })
-    })
-}
-
-fn system_core_assignment_fence_resolver(
-    store: Arc<RedbResourceStore>,
-    controller_role: ResourceRef,
-    session_generation: ReconnectGeneration,
-) -> AssignmentFenceResolver {
-    Arc::new(move |target, uid, revision| {
-        let store = Arc::clone(&store);
-        let controller_role = controller_role.clone();
-        Box::pin(async move {
-            let resource = store
-                .get(StoreGetRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "system-core-assignment-fence".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "system-core-assignment-fence".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: store.identity().zone().clone(),
-                    target: target.clone(),
-                    expected_uid: Some(uid.clone()),
-                    projection: StoreProjection::Full,
-                })
-                .await
-                .map_err(|error| assignment_fence_store_error(&error, revision))?;
-            if resource.revision != revision
-                || !matches!(
-                    resource.resource_ref.resource_type().as_str(),
-                    "Host" | "User"
-                )
-            {
-                return Err(SourceError::Conflict(resource.revision));
-            }
-            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-                .map_err(|_| SourceError::Integrity)?;
-            if let Some(provider_ref) = envelope.spec().provider_ref()
-                && provider_ref.to_canonical_string() != "Provider/system-core"
-            {
-                return Err(SourceError::Integrity);
-            }
-            let provider_ref =
-                ResourceRef::parse("Provider/system-core").map_err(|_| SourceError::Integrity)?;
-            let provider = store
-                .get(StoreGetRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "system-core-assignment-provider".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "system-core-assignment-provider".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: store.identity().zone().clone(),
-                    target: provider_ref,
-                    expected_uid: None,
-                    projection: StoreProjection::MetadataOnly,
-                })
-                .await
-                .map_err(|error| match error.kind() {
-                    StoreErrorKind::Backpressure | StoreErrorKind::StoreBackpressure => {
-                        SourceError::Backpressure
-                    }
-                    StoreErrorKind::Timeout => SourceError::Timeout,
-                    StoreErrorKind::ResourceConflict => {
-                        SourceError::Conflict(error.current_revision().unwrap_or(revision))
-                    }
-                    StoreErrorKind::ResourceNotFound => SourceError::Unavailable,
-                    _ => SourceError::Integrity,
-                })?;
-            let controller_generation = store
-                .runtime_metadata()
-                .await
-                .map_err(|error| assignment_fence_store_error(&error, revision))?
-                .policy_snapshot
-                .controller_generation
-                .ok_or(SourceError::Integrity)?;
-            Ok(ResourceAssignmentFence {
-                resource_uid: uid,
-                resource_revision: revision,
-                provider_generation: provider.generation,
-                controller_generation,
-                controller_role,
-                target: ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
-                    .map_err(|_| SourceError::Integrity)?,
-                session_generation,
                 epoch: ASSIGNMENT_EPOCH,
                 scope: ResourceAssignmentScope::Primary,
             })
@@ -15670,11 +14820,7 @@ mod tests {
         let expected = EXPECTED_PROVIDER_IDS.into_iter().collect::<BTreeSet<_>>();
         assert_eq!(expected.len(), 27);
 
-        let mut resource_owners = BTreeSet::from([
-            "system-core",
-            "system-systemd",
-            "system-minijail",
-        ]);
+        let mut resource_owners = BTreeSet::from(["system-systemd", "system-minijail"]);
         let mut registration_keys = BTreeSet::<(String, String, String)>::new();
         let mut check_shared_registration = |registration: SharedProviderRunnerRegistration| {
             assert!(
@@ -15801,10 +14947,20 @@ mod tests {
         );
         resource_owners.insert("activation-nixos");
 
+        // U12: the system-core Host/User family is composed by the v3 plane's
+        // registered SystemCoreDriverFactory rather than the shared Core
+        // Runner; both converted types must route to the new plane.
+        for resource_type in ["Host", "User"] {
+            assert_eq!(
+                crate::resource_plane_v3::route_resource_type(resource_type),
+                crate::resource_plane_v3::PlaneRoute::NewPlane,
+                "the converted system-core type {resource_type} must route to the new plane",
+            );
+        }
+
         assert_eq!(
             resource_owners,
             BTreeSet::from([
-                "system-core",
                 "system-systemd",
                 "system-minijail",
                 "runtime-cloud-hypervisor",
@@ -15830,7 +14986,8 @@ mod tests {
         ];
         // U12: the telemetry Provider's types are served by the v3 resource
         // plane, so it no longer carries an old-plane controller runner; the
-        // U8 shared host-provider family joined it on the same plane.
+        // U8 shared host-provider family and the system-core Host/User family
+        // joined it on the same plane.
         let new_plane_only = [
             "observability-otel",
             "network-local",
@@ -15838,6 +14995,7 @@ mod tests {
             "device-usbip",
             "device-security-key",
             "device-gpu",
+            "system-core",
         ];
         let session_only = ["clipboard-wayland", "notification-desktop"];
         let transport_only = ["transport-unix", "transport-vsock", "transport-azure-relay"];
@@ -17107,7 +16265,7 @@ mod tests {
         let role_ref = ResourceRef::parse("Role/public-read").unwrap();
         let role = d2b_contracts_zone_session::v3::role::RoleSpec::new(vec![
             d2b_contracts_zone_session::v3::role::RoleRule::new(
-                vec![ResourceTypeName::parse("Host").unwrap()],
+                vec![ResourceTypeName::parse("Provider").unwrap()],
                 vec![
                     d2b_contracts_zone_session::v3::role::RoleResourceVerb::Get,
                     d2b_contracts_zone_session::v3::role::RoleResourceVerb::List,
@@ -17356,12 +16514,12 @@ mod tests {
             json!({
                 "method": "Get",
                 "zoneRef": "Zone/work",
-                "resourceRef": "Host/host-system",
+                "resourceRef": "Provider/system-minijail",
             }),
             json!({
                 "method": "List",
                 "zoneRef": "Zone/work",
-                "resourceType": "Host",
+                "resourceType": "Provider",
             }),
         ] {
             tokio::time::timeout(
@@ -19411,31 +18569,6 @@ mod tests {
         assert!(legacy.requires_migration());
         assert!(legacy.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
         assert!(!legacy.validates_binding("vm-b", "legacy-swtpm:vm:vm-a"));
-    }
-
-    #[tokio::test]
-    async fn production_system_core_probe_returns_bounded_host_observations() {
-        let probe = SystemCoreHostProbe::current();
-        let metadata = probe
-            .metadata()
-            .await
-            .expect("the local host metadata probe succeeds");
-        assert!(!metadata.kernel_release.is_empty());
-        assert!(metadata.kernel_release.len() <= 64);
-        assert!(metadata.os_name.len() <= 128);
-        let platform = probe
-            .platform()
-            .await
-            .expect("the local platform probe succeeds");
-        assert!(platform.kernel_major > 0);
-        let pidfd = probe
-            .probe(HostCapabilityClass::Pidfd)
-            .await
-            .expect("the pidfd capability probe succeeds");
-        assert_eq!(
-            pidfd,
-            platform.kernel_major > 5 || (platform.kernel_major == 5 && platform.kernel_minor >= 3)
-        );
     }
 
     #[test]
@@ -21589,66 +20722,6 @@ mod tests {
             Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
         );
         runtime.shutdown().await.unwrap();
-    }
-
-    #[test]
-    fn exact_host_fixture_user_shape_is_valid_without_provider_ref() {
-        let zone = ZoneId::parse("work").unwrap();
-        let resource_ref = ResourceRef::parse("User/alice").unwrap();
-        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let resource = ResourceSnapshot::new(
-            ResourceKey::new(zone, resource_ref, uid),
-            ZoneRevision::new(1),
-            ResourceGeneration::new(1).unwrap(),
-            serde_json::to_vec(&json!({
-                "apiVersion": "resources.d2bus.org/v3",
-                "type": "User",
-                "metadata": {
-                    "name": "alice",
-                    "zone": "work",
-                    "uid": "123e4567-e89b-42d3-a456-426614174000",
-                    "generation": 1,
-                    "revision": 1,
-                    "configurationGeneration": 1,
-                    "ownerRef": null,
-                    "finalizers": [],
-                    "deletionRequestedAt": null,
-                    "createdAt": "1970-01-01T00:00:00.000Z",
-                    "updatedAt": "1970-01-01T00:00:00.000Z",
-                    "managedBy": "configuration",
-                },
-                "spec": {
-                    "displayName": "Alice",
-                    "groups": [],
-                    "osUsername": "alice",
-                },
-                "status": {
-                    "completedAt": null,
-                    "conditions": [],
-                    "lastReconciledAt": null,
-                    "observedGeneration": 0,
-                    "outcome": null,
-                    "phase": "Pending",
-                    "resource": {},
-                    "startedAt": null,
-                    "update": {
-                        "dependencies": {"count": 0, "refs": []},
-                        "disruption": "None",
-                        "lastAssessedAt": null,
-                        "observedGeneration": 0,
-                        "operationId": null,
-                        "owned": {"count": 0, "refs": []},
-                        "preserveState": true,
-                        "reasons": [],
-                        "state": "Unknown",
-                        "targetGeneration": 1,
-                    },
-                },
-            }))
-            .unwrap(),
-            false,
-        );
-        assert!(SystemCoreResourceReconciler::valid_spec(&resource));
     }
 
     #[tokio::test]

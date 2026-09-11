@@ -53,11 +53,13 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane,
 /// never by the pre-v3 durable store.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 14] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 16] = [
     "Process",
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "Host",
+    "User",
     "activation-nixos.d2bus.org.NixosGeneration",
     "telemetry.d2bus.org.TelemetryService",
     "telemetry.d2bus.org.TelemetryBinding",
