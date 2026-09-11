@@ -34,6 +34,7 @@
 //! Nothing here writes: converted rows keep the manager's single-writer
 //! discipline, and rows the manager does not serve keep the durable store.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -98,6 +99,40 @@ impl ControllerPlaneView for ManagerControllerPlaneView {
                 process_ref.resource_type().as_str(),
                 process_ref.name().as_str(),
             ))
+            .await
+    }
+}
+
+/// Production seam over the composition's published per-zone plane table.
+///
+/// The composition hands this table to a runtime at the top of its per-zone
+/// loop and fills it only after the loop, so a view resolved at attach time
+/// is permanently empty. This seam resolves the zone's plane per read - the
+/// same lazy lookup [`ManagerPlaneDependencyRows`] uses - so the
+/// controller-session path sees manager-served rows no matter when the
+/// composition publishes them.
+pub(crate) struct PublishedPlaneControllerView {
+    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
+    zone: ZoneId,
+}
+
+impl PublishedPlaneControllerView {
+    pub(crate) fn new(
+        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
+        zone: ZoneId,
+    ) -> Self {
+        Self { planes, zone }
+    }
+}
+
+#[async_trait]
+impl ControllerPlaneView for PublishedPlaneControllerView {
+    async fn process_view(&self, process_ref: &ResourceRef) -> Result<Option<ResourceView>, ResourceError> {
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return Ok(None);
+        };
+        ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
+            .process_view(process_ref)
             .await
     }
 }

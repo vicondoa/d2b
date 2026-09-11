@@ -726,7 +726,7 @@ pub fn compile_committed_policy_with_subjects(
                     resource.resource_ref.clone(),
                     (
                         resource.uid.clone(),
-                        resource_is_current(resource, &envelope),
+                        subject_is_bindable(&envelope),
                     ),
                 )
                 .is_some()
@@ -851,6 +851,50 @@ pub fn compile_committed_policy_with_subjects(
                     })
                     .collect::<Vec<_>>();
                 if resolved_subjects.is_empty() {
+                    // A binding whose subjects all fail the subject-evidence
+                    // gate is dropped wholesale, which silently removes the
+                    // grant those subjects would receive. Name each subject and
+                    // what the evidence said so a compile that dropped them is
+                    // diagnosable from the journal.
+                    let subjects = binding_spec
+                        .subjects()
+                        .iter()
+                        .map(|subject_ref| {
+                            let row = resources
+                                .iter()
+                                .find(|candidate| candidate.resource_ref == *subject_ref);
+                            let observed = row
+                                .and_then(|candidate| {
+                                    ResourceEnvelope::from_json(&candidate.canonical_json).ok()
+                                })
+                                .map(|envelope| {
+                                    format!(
+                                        "phase={:?} observedGeneration={} rowGeneration={}",
+                                        envelope.status().phase(),
+                                        envelope.status().observed_generation().get(),
+                                        row.map(|row| row.generation.get()).unwrap_or_default(),
+                                    )
+                                })
+                                .unwrap_or_else(|| "undecodable".to_owned());
+                            format!(
+                                "{}={} [{}]",
+                                subject_ref.to_canonical_string(),
+                                match subject_evidence.get(subject_ref) {
+                                    Some((_, true)) => "bindable",
+                                    Some((_, false)) => "tombstoned",
+                                    None => "no-row",
+                                },
+                                observed,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    tracing::warn!(
+                        zone = zone.as_str(),
+                        resource = resource.resource_ref.to_canonical_string(),
+                        subjects = %subjects,
+                        "committed RoleBinding dropped: no subject satisfied the readiness gate",
+                    );
                     continue;
                 }
                 bindings.push(
@@ -967,9 +1011,22 @@ fn validated_stored_resource_envelope(
     Ok(envelope)
 }
 
-fn resource_is_current(resource: &StoredResource, envelope: &ResourceEnvelope) -> bool {
-    envelope.status().phase() == ResourcePhase::Ready
-        && envelope.status().observed_generation().get() == resource.generation.get()
+/// Whether a committed row may be bound as a policy subject.
+///
+/// Authorization binds an identity (`subject_ref` plus its uid), so it must not
+/// depend on the producing plane having republished status for the row's
+/// current spec revision. Converted rows are status-owned by the manager
+/// (KTD3) and the durable bundle path materializes them `Pending` without ever
+/// updating them, so requiring `Ready`/`observedGeneration` here made every
+/// compiled grant depend on a status stream the compiler does not own and
+/// dropped the binding of subjects whose processes were already serving.
+/// Liveness is judged where it belongs - identity resolution for a caller,
+/// session establishment for a controller. Only tombstones are refused.
+fn subject_is_bindable(envelope: &ResourceEnvelope) -> bool {
+    !matches!(
+        envelope.status().phase(),
+        ResourcePhase::Deleted | ResourcePhase::Failed
+    )
 }
 
 pub fn system_core_endpoint_policy() -> EndpointPolicy {
@@ -1457,13 +1514,16 @@ pub(crate) fn resolve_zone_user_from_resources(
     Err(ResourceRuntimeError::IdentityUnbound)
 }
 
-/// Resolve a public peer uid from the complete User index of one Zone store.
-pub async fn resolve_zone_user(
+/// List the Zone's `User` rows from the durable store.
+///
+/// This is the reader's fallback source: a converted `User` row carries its
+/// status only in the manager (R11), so a caller that can reach the Zone's
+/// plane must overlay the manager status before resolving.
+pub async fn load_zone_user_rows(
     store: &RedbResourceStore,
     zone: &ZoneId,
-    peer_uid: u32,
     operation_id: &str,
-) -> Result<ResolvedZoneUser, ResourceRuntimeError> {
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
     let user_type =
         ResourceTypeName::parse("User").map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
     let mut resources = Vec::new();
@@ -1496,11 +1556,36 @@ pub async fn resolve_zone_user(
             break;
         }
     }
+    Ok(resources)
+}
+
+/// Resolve a public peer uid from the complete User index of one Zone store.
+pub async fn resolve_zone_user(
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+    peer_uid: u32,
+    operation_id: &str,
+) -> Result<ResolvedZoneUser, ResourceRuntimeError> {
+    let resources = load_zone_user_rows(store, zone, operation_id).await?;
+    resolve_zone_user_from_rows(zone, peer_uid, &resources)
+}
+
+/// Resolve a public peer uid against caller-supplied `User` rows.
+///
+/// The caller owns the row source. `User` is a converted type whose status
+/// lives only in the manager (R11), so a caller that would otherwise read the
+/// durable store passes the manager-rendered rows here and sees the live
+/// status the store cannot carry.
+pub fn resolve_zone_user_from_rows(
+    zone: &ZoneId,
+    peer_uid: u32,
+    resources: &[StoredResource],
+) -> Result<ResolvedZoneUser, ResourceRuntimeError> {
     let canonical_name = User::from_uid(Uid::from_raw(peer_uid))
         .ok()
         .flatten()
         .map(|user| user.name);
-    resolve_zone_user_from_resources(zone, peer_uid, &resources, |username| {
+    resolve_zone_user_from_resources(zone, peer_uid, resources, |username| {
         let user = User::from_name(username).ok().flatten()?;
         (user.uid.as_raw() == peer_uid
             && canonical_name
@@ -1680,7 +1765,7 @@ pub fn committed_policy_subject_fingerprints_with_retained(
             };
             let subject_envelope =
                 validated_stored_resource_envelope(subject, envelope.metadata().zone())?;
-            if !resource_is_current(subject, &subject_envelope) {
+            if !subject_is_bindable(&subject_envelope) {
                 continue;
             }
             current_fingerprints.insert(
@@ -4348,8 +4433,10 @@ mod tests {
     }
 
     #[test]
-    fn deleted_unready_or_stale_subjects_receive_no_grant() {
-        for (phase, observed_generation) in [("Deleted", 1), ("Pending", 1), ("Ready", 0)] {
+    fn only_tombstoned_subject_rows_lose_their_grant() {
+        for (phase, observed_generation, expect_grant) in
+            [("Deleted", 1, false), ("Pending", 1, true), ("Ready", 0, true)]
+        {
             let zone = ZoneId::parse("work").unwrap();
             let role = policy_resource(
                 "Role",
@@ -4404,15 +4491,16 @@ mod tests {
                     &state,
                 )
                 .unwrap();
-            assert!(
-                capabilities.resources.is_empty(),
-                "{phase} subject must not receive a grant"
+            assert_eq!(
+                !capabilities.resources.is_empty(),
+                expect_grant,
+                "{phase}/{observed_generation} subject grant expectation"
             );
         }
     }
 
     #[test]
-    fn missing_or_unready_subjects_do_not_create_policy_fingerprints() {
+    fn missing_subjects_do_not_fingerprint_but_unready_ones_do() {
         let role = policy_resource(
             "Role",
             "fingerprint-reader",
@@ -4447,10 +4535,12 @@ mod tests {
             json!({}),
         );
         set_status(&mut unready, "Pending", 1);
-        assert!(
+        assert_eq!(
             committed_policy_subject_fingerprints(&[role, binding, unready])
                 .unwrap()
-                .is_empty()
+                .len(),
+            1,
+            "a committed subject row fingerprints before its status settles; a missing one never does"
         );
     }
 
@@ -4741,7 +4831,7 @@ mod tests {
         let retained = refreshed_policy_subject_fingerprints(&missing_resources, &first).unwrap();
         assert_eq!(retained[&key].subject_uid(), first[&key].subject_uid());
 
-        for phase in ["Pending", "Deleted"] {
+        for (phase, expect_grant) in [("Pending", true), ("Deleted", false)] {
             let mut absent_subject = subject_v1.clone();
             set_status(&mut absent_subject, phase, 1);
             let resources = vec![role.clone(), binding.clone(), absent_subject];
@@ -4756,8 +4846,8 @@ mod tests {
             )
             .unwrap();
             let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
-            assert!(
-                authorizer
+            assert_eq!(
+                !authorizer
                     .positive_capabilities(
                         &subject_context(
                             "Provider/fenced-subject",
@@ -4769,7 +4859,8 @@ mod tests {
                     .unwrap()
                     .resources
                     .is_empty(),
-                "{phase} subject must lose its grant"
+                expect_grant,
+                "{phase} subject grant expectation"
             );
         }
 
@@ -4851,7 +4942,7 @@ mod tests {
                 .is_empty()
         );
         assert!(
-            authorizer
+            !authorizer
                 .positive_capabilities(
                     &subject_context(
                         "Provider/fenced-subject",
@@ -4862,7 +4953,8 @@ mod tests {
                 )
                 .unwrap()
                 .resources
-                .is_empty()
+                .is_empty(),
+            "a committed subject row keeps its grant until it is tombstoned",
         );
 
         let subject_v2 = policy_resource(

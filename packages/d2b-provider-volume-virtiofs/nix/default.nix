@@ -1,8 +1,12 @@
 # Zone resource projection for Provider/volume-virtiofs.
 #
-# The Provider owns the virtiofsd worker contract. This module emits only a
-# Guest-owned Process intent; executable paths and socket locators stay in the
-# signed Provider package and private launch ticket.
+# The Provider owns the virtiofsd worker contract. This module projects only
+# the Guest-owned store preflight intent; the live virtiofsd worker is minted
+# by the binding driver (template `virtiofsd-worker`) with its executable path
+# and socket locators held in the signed Provider package and private launch
+# ticket. No Guest-owned `Process` is projected: the Process driver refuses a
+# Guest-owned row that is not the Guest's `<guest>-vmm` process, so a
+# projected worker row could only retry a ticket that can never be issued.
 { config, lib, ... }:
 
 let
@@ -32,27 +36,6 @@ let
         (_: resource: resource.type == "Volume")
         (resourcesFor zoneName)));
 
-  processFor = zoneName: guestName:
-    let executionRef = providerExecutionRef zoneName;
-    in lib.optionalAttrs (executionRef != null && virtiofsGuest zoneName guestName) {
-      type = "Process";
-      metadata = {
-        name = "virtiofsd-${guestName}";
-        zone = zoneName;
-        ownerRef = "Guest/${guestName}";
-      };
-      spec = {
-        providerRef = processProviderRef;
-        inherit executionRef;
-        domain = "system";
-        processClass = "worker";
-        template = "virtiofsd";
-        desiredLifecycle = "running";
-        deviceUsage = [ ];
-        networkUsage = null;
-      };
-    };
-
   preflightFor = zoneName: guestName:
     let executionRef = providerExecutionRef zoneName;
     in lib.optionalAttrs (executionRef != null && virtiofsGuest zoneName guestName) {
@@ -79,7 +62,6 @@ let
         (guestName:
           lib.filter (resource: resource != { }) [
             (preflightFor zoneName guestName)
-            (processFor zoneName guestName)
           ])
         (lib.attrNames (lib.filterAttrs
           (_: resource: resource.type == "Guest")

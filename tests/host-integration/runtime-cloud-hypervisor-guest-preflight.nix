@@ -458,29 +458,44 @@ pkgs.testers.runNixOSTest {
         # hardware; this waits an eventual state, not a timing SLO.
         timeout=180,
     )
-    machine.wait_until_succeeds(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json list Process "
-        ">/run/d2b-volume-controller-processes.json && "
-        "jq -e '"
-        "([.resources[] | select(.type == \"Process\" and "
-        ".metadata.ownerRef == \"Provider/volume-local\" and "
-        ".spec.providerRef == \"Provider/system-minijail\" and "
-        ".spec.processClass == \"controller\" and "
-        ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
-        ".status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation)] | length == 1) and "
-        "([.resources[] | select(.type == \"Process\" and "
-        ".metadata.ownerRef == \"Provider/volume-virtiofs\" and "
-        ".spec.providerRef == \"Provider/system-minijail\" and "
-        ".spec.processClass == \"controller\" and "
-        ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
-        ".status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation)] | length == 1)' "
-        "/run/d2b-volume-controller-processes.json",
-        # Same cold-start variance as the session wait above.
-        timeout=180,
-    )
+    try:
+        machine.wait_until_succeeds(
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json list Process "
+            ">/run/d2b-volume-controller-processes.json && "
+            "jq -e '"
+            "([.resources[] | select(.type == \"Process\" and "
+            ".metadata.ownerRef == \"Provider/volume-local\" and "
+            ".spec.providerRef == \"Provider/system-minijail\" and "
+            ".spec.processClass == \"controller\" and "
+            ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
+            ".status.phase == \"Ready\" and "
+            ".status.observedGeneration == .metadata.generation)] | length == 1) and "
+            "([.resources[] | select(.type == \"Process\" and "
+            ".metadata.ownerRef == \"Provider/volume-virtiofs\" and "
+            ".spec.providerRef == \"Provider/system-minijail\" and "
+            ".spec.processClass == \"controller\" and "
+            ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
+            ".status.phase == \"Ready\" and "
+            ".status.observedGeneration == .metadata.generation)] | length == 1)' "
+            "/run/d2b-volume-controller-processes.json",
+            # Same cold-start variance as the session wait above.
+            timeout=180,
+        )
+    except Exception:
+        # A timed-out wait must say what the rows actually held: the phase and
+        # the generation the status was published for, per controller row.
+        machine.execute(
+            "jq -c '[.resources[] | select(.spec.processClass == \"controller\") "
+            "| {owner: .metadata.ownerRef, name: .metadata.name, "
+            "uid: .metadata.uid, generation: .metadata.generation, "
+            "phase: .status.phase, "
+            "observedGeneration: .status.observedGeneration, "
+            "conditions: [.status.conditions[]? | .type]}]' "
+            "/run/d2b-volume-controller-processes.json >&2 || "
+            "cat /run/d2b-volume-controller-processes.json >&2 || true"
+        )
+        raise
     machine.succeed(
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
         "| wc -l)\" -ge 2 && "
@@ -708,6 +723,8 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-process-ready.json && "
         "jq -e '"
         "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\")] | length == 1) and "
+        "([.resources[] | select(.type == \"Process\" and "
         ".metadata.name == \"acceptance-guest-vmm\" and "
         ".metadata.ownerRef == \"Guest/acceptance-guest\" and "
         ".spec.providerRef == \"Provider/system-minijail\" and "
@@ -887,6 +904,16 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-guest-session-generation-before"
     )
 
+    # The Guest target agent boots from its enrolled bundle and key pair, and
+    # the Guest console is forwarded into the host journal: a read it cannot
+    # make fails closed inside the Guest, so the host journal must never
+    # carry that failure. This is the gate the shell-pool fixture cannot
+    # provide (no vsock device there).
+    machine.fail(
+        "journalctl --no-pager -o cat -b "
+        "| grep -F 'Guest process bundle validation failed'"
+    )
+
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service", timeout=180)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
@@ -923,6 +950,8 @@ pkgs.testers.runNixOSTest {
         "d2b --zone work --json list Process "
         ">/run/d2b-process-adopted.json && "
         "jq -e '"
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Guest/acceptance-guest\")] | length == 1) and "
         "([.resources[] | select(.type == \"Process\" and "
         ".metadata.name == \"acceptance-guest-vmm\" and "
         ".metadata.ownerRef == \"Guest/acceptance-guest\" and "

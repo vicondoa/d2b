@@ -268,7 +268,7 @@ test-host-integration:
 	rc=0; \
 	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_CH_CONTROLLER_BUNDLE="$$controller_stage" \
 	D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
-	sudo -A -E nix build --option build-users-group "" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" || rc=$$?; \
+	sudo -A -E nix build --option build-users-group "" --option extra-sandbox-paths "/dev/vhost-vsock" --impure --out-link "$$run_dir/result-$$name" --print-build-logs --print-out-paths "git+file://$$root#vmChecks.$$system.$$name" >"$$run_dir/$$name.outputs" || rc=$$?; \
 	check_duration="$$(( $$(date +%s) - check_start ))"; \
 	if [ "$$rc" -eq 0 ]; then \
 	status=PASS; \

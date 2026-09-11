@@ -195,8 +195,8 @@ mod plane_controller_bridge;
 mod shared_provider_runtime;
 pub(crate) mod interaction_effects;
 use plane_controller_bridge::{
-    ControllerPlaneView, LiveControllerSessionEvidence, ManagerControllerPlaneView,
-    ManagerPlaneDependencyRows, PlaneAwareControllerApi, PlaneProviderDependencies,
+    ControllerPlaneView, LiveControllerSessionEvidence, ManagerPlaneDependencyRows,
+    PlaneAwareControllerApi, PlaneProviderDependencies, PublishedPlaneControllerView,
 };
 use d2b_resource_runtime::manager::ResourceView;
 pub use guest_provider_runtime::{
@@ -224,6 +224,10 @@ use shared_provider_runtime::{
 #[allow(unused_imports)]
 use shared_provider_runtime::finalizer_candidate;
 
+/// Bounded attempts to recompile the manager-plane authorization projection
+/// after the Zone's plane is published. Each attempt costs a policy recompile
+/// and a system-core session rebind, so the budget stays small; a public
+/// request that arrives before the manager's subject rows settle retries on a
 const CORE_CONTROLLER_PROCESS_REF: &str = "Process/d2b-core-controller";
 const CORE_CONTROLLER_PROVIDER_REF: &str = "Provider/system-core";
 const CORE_CONTROLLER_HOST_REF: &str = "Host/host-system";
@@ -1290,8 +1294,12 @@ impl PolicyProjection {
         // primary projection is already installed; a mirror failure only
         // disables the v3 surface.
         if let Some(manager) = &self.manager_authorizer
-            && manager.replace_policy(manager_policy, &state).is_err()
+            && let Err(error) = manager.replace_policy(manager_policy, &state)
         {
+            tracing::warn!(
+                error = ?error,
+                "manager plane policy mirror failed; the manager-backed API surface stays unavailable",
+            );
             manager.mark_policy_unavailable();
         }
         if let Ok(mut installed) = self.authorization_state.lock() {
@@ -4533,7 +4541,6 @@ impl ZoneResourceRuntime {
         }
         Ok(())
     }
-
     async fn current_controller_policy_subjects(
         &self,
     ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
@@ -4709,6 +4716,46 @@ impl ZoneResourceRuntime {
         Ok(())
     }
 
+    /// Resolve one public peer uid to its Zone `User`.
+    ///
+    /// `User` is a converted type: the manager is its status authority and a
+    /// converted row's status is in-memory only (R11), so a durable-store read
+    /// can never observe it `Ready`. Read the manager-rendered rows when this
+    /// Zone's plane serves them and fall back to the store otherwise (an
+    /// unconverted or legacy Zone).
+    async fn resolve_public_user(
+        &self,
+        peer_uid: u32,
+        operation_id: &str,
+    ) -> Result<d2bd_runtime::resource_runtime_support::ResolvedZoneUser, ResourceRuntimeError>
+    {
+        let mut rows = d2bd_runtime::resource_runtime_support::load_zone_user_rows(
+            &self.store,
+            &self.zone,
+            &format!("{operation_id}:user"),
+        )
+        .await?;
+        if let Ok(plane) = self.v3_plane() {
+            let client = plane.client().clone();
+            for row in rows.iter_mut() {
+                let key = d2b_resource_runtime::identity::ResourceKey::new(
+                    self.zone.as_str(),
+                    "User",
+                    row.resource_ref.name().as_str(),
+                );
+                let Ok(Some(view)) = client.get(key).await else {
+                    continue;
+                };
+                overlay_manager_row_status(row, &view);
+            }
+        }
+        d2bd_runtime::resource_runtime_support::resolve_zone_user_from_rows(
+            &self.zone,
+            peer_uid,
+            &rows,
+        )
+    }
+
     /// Issue one sealed Guest lifecycle lease from the authenticated local
     /// peer and the current store identities.
     pub(crate) async fn admit_guest_lifecycle(
@@ -4718,13 +4765,7 @@ impl ZoneResourceRuntime {
         operation_id: &str,
     ) -> Result<d2b_resource_api::service::GuestLifecycleAdmission, ResourceRuntimeError> {
         self.refresh_authorization_policy().await?;
-        let resolved_user = d2bd_runtime::resource_runtime_support::resolve_zone_user(
-            &self.store,
-            &self.zone,
-            peer_uid,
-            &format!("{operation_id}:user"),
-        )
-        .await?;
+        let resolved_user = self.resolve_public_user(peer_uid, operation_id).await?;
         let context = d2bd_runtime::resource_runtime_support::local_user_subject_context(
             &self.zone,
             &resolved_user,
@@ -4935,14 +4976,14 @@ impl ZoneResourceRuntime {
         // G5: the controller-session path (and the Provider's dependency
         // observation) read manager-served controller rows through the same
         // published table, so the session coordinator gets the zone plane's
-        // manager view seam here, before activation.
-        if let Some(plane) = planes.lock().get(self.zone.as_str()).cloned() {
-            self.controller_session_coordinator()
-                .attach_plane_view(Arc::new(ManagerControllerPlaneView::new(
-                    plane.client().clone(),
-                    self.zone.clone(),
-                )));
-        }
+        // manager view seam here, before activation. This runs before the
+        // composition fills the table (it is published after the per-zone
+        // loop), so the seam resolves the zone's plane per read.
+        self.controller_session_coordinator()
+            .attach_plane_view(Arc::new(PublishedPlaneControllerView::new(
+                Arc::clone(&planes),
+                self.zone.clone(),
+            )));
     }
 
     /// The manager-backed Resource API service for this Zone's converted
@@ -7827,7 +7868,6 @@ impl ControllerSessionCoordinator {
             *slot = Some(plane);
         }
     }
-
     /// The manager's row for one controller Process key, when the new plane
     /// serves it. `Ok(None)` keeps the caller on the durable store path (an
     /// unconverted or legacy row); a manager failure is reported, never
@@ -8711,10 +8751,19 @@ impl ControllerSessionCoordinator {
                         let _ = service_task.await;
                         providers.fail_controller_bootstrap(&context);
                         self.revoke_controller_ingress(ingress).await?;
-                        tracing::debug!(
-                            provider = %context.provider_owner_ref().to_canonical_string(),
-                            "controller session establish rejected; context not current or bootstrap activation refused",
-                        );
+                        if current {
+                            tracing::warn!(
+                                provider = %context.provider_owner_ref().to_canonical_string(),
+                                process = %context.process_ref().to_canonical_string(),
+                                "controller session establish rejected: bootstrap activation refused",
+                            );
+                        } else {
+                            tracing::warn!(
+                                provider = %context.provider_owner_ref().to_canonical_string(),
+                                process = %context.process_ref().to_canonical_string(),
+                                "controller session establish rejected: context not current",
+                            );
+                        }
                         continue;
                     }
                     let context_for_cleanup = context.clone();
@@ -10224,13 +10273,7 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
         let operation_id = public_operation_id(request, peer_uid, method);
-        let resolved_user = d2bd_runtime::resource_runtime_support::resolve_zone_user(
-            &self.store,
-            &self.zone,
-            peer_uid,
-            &format!("{}:user", operation_id),
-        )
-        .await?;
+        let resolved_user = self.resolve_public_user(peer_uid, &operation_id).await?;
         let read_only = matches!(method, "Get" | "List");
         if !read_only {
             self.refresh_authorization_policy().await?;
@@ -10243,11 +10286,37 @@ impl ZoneResourceRuntime {
         let state = self.policy_projection.installed_state()?;
         match public_request_route(request, method)? {
             crate::resource_plane_v3::PlaneRoute::NewPlane => {
-                let service = self.manager_api_service()?;
-                let subject = self
-                    .manager_plane_authorizer()?
-                    .issue_authenticated_subject(context, state)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let service = self.manager_api_service().inspect_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "public request refused: manager-backed API service is unavailable",
+                    );
+                })?;
+                if self.policy_projection.installed_state().is_err() {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        "public request refused: no authorization policy is installed",
+                    );
+                }
+                let authorizer = self.manager_plane_authorizer().inspect_err(|error| {
+                    tracing::warn!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "public request refused: manager plane authorizer is unavailable",
+                    );
+                })?;
+                let subject = match authorizer.issue_authenticated_subject(context.clone(), state.clone()) {
+                    Ok(subject) => subject,
+                    Err(error) => {
+                        tracing::warn!(
+                            zone = %self.zone.as_str(),
+                            error = ?error,
+                            "public request refused: manager plane subject issuance failed",
+                        );
+                        return Err(ResourceRuntimeError::AuthorizationUnavailable);
+                    }
+                };
                 let adapter = ResourceBusAdapter::bind_component_session(service, subject)
                     .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
                 let client = adapter.client();
@@ -11942,6 +12011,60 @@ pub(crate) fn controller_session_resource_fences(
                 .is_some_and(|resource| controller_resource_matches(context, resource))
         })
         .collect()
+}
+
+/// Overlay the manager's live status onto one durable `User` row.
+///
+/// A converted `User` row carries its status only in the manager (R11). The
+/// bundle-publication path still materializes every bundle row into the
+/// durable store with the create payload's `Pending` status, and nothing ever
+/// updates it, so identity resolution - which reads the durable envelope -
+/// must be handed the manager's live status for the row it is about to judge.
+///
+/// Identity is deliberately left alone: the durable row owns uid, generation
+/// and revision (KTD2/KTD8), and the compiled authorization policy's subjects
+/// are compiled from them. Only the phase and `observedGeneration` are
+/// replaced, and the stamped `observedGeneration` is the durable row's own
+/// generation: the resolved-user check compares the status against that field,
+/// while the manager's generation numbers a different view of the same row and
+/// is never substituted for it.
+fn overlay_manager_row_status(row: &mut StoredResource, view: &ResourceView) {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&row.canonical_json) else {
+        return;
+    };
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    let phase = match view.observed_status() {
+        Some(d2b_resource_runtime::resource::ResourceStatus::Ready) => "Ready",
+        Some(d2b_resource_runtime::resource::ResourceStatus::Failed(_)) => "Failed",
+        Some(d2b_resource_runtime::resource::ResourceStatus::Deleting) => "Deleting",
+        _ => "Pending",
+    };
+    let status = root
+        .entry("status".to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(status) = status.as_object_mut() {
+        status.insert(
+            "observedGeneration".to_owned(),
+            serde_json::json!(row.generation.get()),
+        );
+        status.insert("phase".to_owned(), serde_json::json!(phase));
+    }
+    let Ok(bytes) = serde_json::to_vec(&value) else {
+        return;
+    };
+    let Ok(canonical) = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&bytes) else {
+        return;
+    };
+    row.canonical_json = canonical.to_canonical_bytes();
+    // The row's identity and payload are validated against its digest by
+    // every reader that fences on the stored row (the policy loader refuses a
+    // row whose digest does not match), so the digest follows the edit.
+    row.payload_digest = d2b_contracts_resource::v3::resource_schema::canonical_digest(
+        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
+        &row.canonical_json,
+    );
 }
 
 fn controller_resource_matches(
