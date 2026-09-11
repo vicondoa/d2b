@@ -69,7 +69,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "b2934c5dff80ff578fa4d7f3a9c12add94e6a3db66fc8956c9c375f6abd43cb2",
+  "lock_sha256": "0b6654bdc777a96e07fa220488e50c73c1c72ea91bda52e5f74b71b76c613f9e",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -6862,6 +6862,12 @@
     {
       "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "to": "rusqlite_migration@2.6.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
+      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
