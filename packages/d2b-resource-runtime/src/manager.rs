@@ -58,6 +58,7 @@ use crate::error::ResourceError;
 use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource};
 use crate::provider::ProviderDirectory;
 use crate::resource::{ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus};
+use crate::target::{TargetBinding, TargetDirectory, TargetRef, TargetResolver};
 use crate::revision::RuntimeRevision;
 use crate::spec_store::{SpecStore, SpecStoreError};
 use crate::watch::{
@@ -318,6 +319,21 @@ pub enum ResourceManagerMsg {
     /// The actor finished driver cleanup; the manager removes the spec row
     /// and the actor stops (F3).
     DeletionComplete { key: ResourceKey },
+    /// One guest target lost its session (R21): every affected actor learns
+    /// that its target-dependent observed state is unavailable. Nothing is
+    /// deleted, moved, or re-assigned.
+    TargetUnavailable {
+        guest: TargetRef,
+        session_generation: u64,
+        affected: Vec<ResourceKey>,
+    },
+    /// One guest target reconnected (F5): every affected actor re-runs
+    /// target-local discovery, adoption, and reconcile.
+    TargetReconnected {
+        guest: TargetRef,
+        session_generation: u64,
+        pending_adoption: Vec<ResourceKey>,
+    },
 }
 
 /// The manager's durable + runtime state (spec section 4).
@@ -329,6 +345,13 @@ pub struct ResourceManagerState {
     admission: Arc<dyn MutationAdmission>,
     decoders: HashMap<ResourceTypeName, Arc<dyn SpecDecoder>>,
     default_decoder: Arc<dyn SpecDecoder>,
+    /// The per-Zone target directory (U13): one per manager (KTD5).
+    targets: Arc<TargetDirectory>,
+    /// The Zone's own Host target; rows without an execution reference
+    /// realize there.
+    host_target: TargetRef,
+    /// Resolves the execution reference a stored desired spec declares.
+    target_resolver: Arc<dyn TargetResolver>,
     backoff: Duration,
     my_cell: ActorCell,
 
@@ -489,6 +512,10 @@ impl ResourceManagerState {
             .and_then(|row| row.owner_uid)
             .and_then(|owner_uid| self.by_uid.get(&owner_uid).cloned());
         let _ = self.store.remove_after_cleanup(key.clone()).await;
+        // The realization is gone; its directory record goes with it (U13).
+        // Releasing one assignment never touches the guest session, another
+        // assignment, or another realization (R20).
+        self.targets.release(key);
         self.unindex_row(key);
         self.pending_retirement.remove(key);
         self.hub.publish(ChangeNotice {
@@ -515,9 +542,27 @@ impl ResourceManagerState {
         let type_name = ResourceTypeName::new(row.key.type_name.clone());
         let decoder =
             self.decoders.get(&type_name).cloned().unwrap_or_else(|| self.default_decoder.clone());
+        // The execution target comes from the row's own declared reference
+        // (U13): the manager resolves it, records the assignment, and hands
+        // the actor a directory-backed binding. A row whose reference cannot
+        // be resolved fails the spawn AFTER its row committed (F1): the row
+        // stays durable and a later Ensure or restart retries it.
+        let execution_ref = self
+            .target_resolver
+            .execution_ref(&row.key, &row.spec)
+            .unwrap_or_else(|| self.host_target.to_canonical_string());
+        let assignment = self
+            .targets
+            .assign(&row.key, &row.uid, row.generation, &execution_ref)
+            .map_err(|error| ResourceError::Provider {
+                type_name: type_name.to_string(),
+                message: error.to_string(),
+            })?;
+        let target_binding = TargetBinding::new(Arc::clone(&self.targets), assignment);
         let args = ResourceActorArgs {
             row: row.clone(),
-            target: crate::target::TargetHandle::Host,
+            target: target_binding.handle(),
+            target_binding: Some(target_binding),
             providers: self.providers.clone(),
             manager,
             decoder,
@@ -702,6 +747,17 @@ pub struct ResourceManagerArgs {
     /// Per-type spec decode hooks; unmatched types use the default.
     pub decoders: HashMap<ResourceTypeName, Arc<dyn SpecDecoder>>,
     pub default_decoder: Arc<dyn SpecDecoder>,
+    /// The per-Zone target directory (U13). The composition owns it: it
+    /// registers guest sessions and notifies the manager of session loss and
+    /// reconnect.
+    pub targets: Arc<TargetDirectory>,
+    /// The Zone's own Host target, used for rows without an execution
+    /// reference.
+    pub host_target: TargetRef,
+    /// Resolves the execution reference a stored desired spec declares
+    /// (`spec.executionRef`), supplied by the composition from the resource
+    /// contracts.
+    pub target_resolver: Arc<dyn TargetResolver>,
     /// Fixed reconcile backoff for retryable driver failures (R13).
     pub backoff: Duration,
 }
@@ -740,6 +796,9 @@ impl Actor for ResourceManager {
             admission: args.admission,
             decoders: args.decoders,
             default_decoder: args.default_decoder,
+            targets: args.targets,
+            host_target: args.host_target,
+            target_resolver: args.target_resolver,
             backoff: args.backoff,
             my_cell: myself.get_cell(),
             rows: HashMap::new(),
@@ -951,6 +1010,26 @@ impl Actor for ResourceManager {
             ResourceManagerMsg::ReconcileChildren { owner, desired, reply } => {
                 let result = reconcile_children(state, myself, &owner, desired).await;
                 reply.send(result).ok();
+            }
+            ResourceManagerMsg::TargetUnavailable { session_generation, affected, .. } => {
+                // R21: the actors learn; the desired rows and their
+                // assignments are untouched.
+                for key in affected {
+                    if let Some(actor) = state.actors.get(&key) {
+                        let _ = actor
+                            .send_message(ResourceMsg::TargetUnavailable { session_generation });
+                    }
+                }
+            }
+            ResourceManagerMsg::TargetReconnected { session_generation, pending_adoption, .. } => {
+                // F5: adoption and reconcile run again under the new session
+                // generation.
+                for key in pending_adoption {
+                    if let Some(actor) = state.actors.get(&key) {
+                        let _ = actor
+                            .send_message(ResourceMsg::TargetReconnected { session_generation });
+                    }
+                }
             }
             ResourceManagerMsg::DeletionComplete { key } => {
                 // Cleanup finished (F3). The actor stopped itself either
@@ -1414,8 +1493,8 @@ mod tests {
     use crate::error::ResourceError;
     use crate::identity::ResourceTypeName;
     use crate::resource::test_support::{
-        FakeFactory, desired, harness, harness_over, harness_over_with_factory, harness_with, key,
-        subject, until, wait_row_gone, wait_status,
+        FakeFactory, desired, harness, harness_over, harness_over_with_factory, harness_targeted,
+        harness_with, key, subject, until, wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -1457,6 +1536,87 @@ mod tests {
         let row = h.client.get_row(k.clone()).await.expect("get_row").expect("row");
         assert_eq!(row.generation, 2);
         assert_eq!(row.spec, b"two");
+    }
+
+    /// R18/R19/R21/F5: the manager resolves a row's declared execution
+    /// reference into a generation-bound guest assignment, and guest session
+    /// loss and reconnect reach the affected actor without moving desired
+    /// state or the target-local realization.
+    #[tokio::test]
+    async fn guest_target_assignment_binds_the_session_generation() {
+        use crate::guest_target::GuestTargetRuntime;
+        use crate::manager::ResourceManagerMsg;
+        use crate::resource::test_support::ScriptedResolver;
+        use crate::target::{
+            TargetBinding, TargetDirectory, TargetHandle, TargetRef, TargetResolver,
+        };
+
+        let targets = Arc::new(TargetDirectory::new());
+        let guest = TargetRef::guest("test-vm").expect("guest");
+        let runtime = Arc::new(GuestTargetRuntime::new(guest.clone()));
+        runtime.bind_session(1).expect("bind session");
+        targets
+            .connect_guest(&guest, 1, runtime.control(1).expect("control"))
+            .expect("connect guest");
+        let h = harness_targeted(
+            &["Test"],
+            Arc::new(ScriptedResolver) as Arc<dyn TargetResolver>,
+            Arc::clone(&targets),
+        )
+        .await;
+        let k = key("test", "Test", "guest-worker");
+        h.client
+            .ensure(subject(), None, desired("Test", "guest-worker", b"spec"))
+            .await
+            .expect("ensure");
+
+        let assignment = targets.assignment(&k).expect("assignment");
+        assert_eq!(assignment.handle(), TargetHandle::Guest);
+        assert_eq!(assignment.session_generation(), Some(1));
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+
+        // Target loss: the actor learns through the manager, and the desired
+        // row and its assignment stay exactly as they are (R21).
+        targets.disconnect_guest(&guest, 1).expect("disconnect");
+        h.client
+            .actor()
+            .send_message(ResourceManagerMsg::TargetUnavailable {
+                guest: guest.clone(),
+                session_generation: 1,
+                affected: vec![k.clone()],
+            })
+            .expect("notify target loss");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Recover)),
+        )
+        .await;
+        let assignment = targets.assignment(&k).expect("assignment survives the target loss");
+        assert_eq!(assignment.session_generation(), Some(1), "the lost session is still recorded");
+        assert!(h.client.get_row(k.clone()).await.expect("row").is_some());
+
+        // Reconnect: the new generation is registered and the affected actor
+        // is told to re-run adoption and reconcile (F5).
+        runtime.bind_session(2).expect("reconnect");
+        targets
+            .connect_guest(&guest, 2, runtime.control(2).expect("control"))
+            .expect("connect guest");
+        h.client
+            .actor()
+            .send_message(ResourceManagerMsg::TargetReconnected {
+                guest,
+                session_generation: 2,
+                pending_adoption: vec![k.clone()],
+            })
+            .expect("notify reconnect");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let binding = TargetBinding::new(Arc::clone(&targets), assignment);
+        assert_eq!(
+            binding.guest().expect("guest handle").session_generation(),
+            Some(1),
+            "the actor holds a value handle; only adoption re-binds it"
+        );
     }
 
     /// F1/AE1: ensure commits before spawn - a poisoned spawn still leaves

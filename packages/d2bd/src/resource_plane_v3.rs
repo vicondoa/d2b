@@ -70,10 +70,13 @@ use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::manager::{
     AdmissionDecision, DesiredResource, MutationAdmission, MutationRequest,
-    MutationSubject, ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceSelector,
+    MutationSubject, ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceManagerMsg,
+    ResourceSelector,
 };
 use d2b_resource_runtime::provider::ProviderDirectory;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
+use d2b_resource_runtime::GuestTargetControl;
+use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
 use d2b_resource_runtime::watch::{DEFAULT_RING_CAPACITY, WatchHub};
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
@@ -1299,8 +1302,30 @@ pub enum PlaneError {
     ManagerRpc(#[from] ResourceError),
     #[error("zone authority inputs invalid: {0}")]
     Authority(String),
+    #[error("target layer refused: {0}")]
+    Target(String),
     #[error("bundle invalid: {0}")]
     Bundle(String),
+}
+
+/// The canonical core Host target every non-guest resource realizes on
+/// (`CORE_CONTROLLER_HOST_REF` in the old plane).
+const CORE_HOST_TARGET_NAME: &str = "host-system";
+
+/// The canonical `spec.executionRef` resolver (U13).
+///
+/// A stored row's `spec` is the ResourceSpec object, so this reads exactly
+/// the `executionRef` base field the resource contracts' `PlacementAnchor::
+/// ExecutionRef` resolves. A row whose type has no execution anchor, or a
+/// legacy row that carries none, returns `None` and realizes on the Zone's
+/// Host target.
+struct DeclaredExecutionRef;
+
+impl TargetResolver for DeclaredExecutionRef {
+    fn execution_ref(&self, _key: &ResourceKey, spec: &[u8]) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_slice(spec).ok()?;
+        value.get("executionRef")?.as_str().map(str::to_owned)
+    }
 }
 
 /// The per-zone v3 resource plane: spec store, provider directory, watch
@@ -1311,6 +1336,9 @@ pub struct ResourcePlaneV3 {
     store_path: PathBuf,
     store: Arc<SpecStore>,
     hub: Arc<WatchHub>,
+    /// The per-Zone target directory (U13): every resource's assignment and
+    /// every guest session generation lives here.
+    targets: Arc<TargetDirectory>,
     registry: Arc<PlaneResourceRegistry>,
     client: ResourceManagerClient,
     readiness: Arc<NewPlaneReadinessState>,
@@ -1463,8 +1491,14 @@ impl ResourcePlaneV3 {
         // Stage 2: provider directory with production effects wired.
         let providers = Self::build_providers(&inputs)?;
         readiness.set_providers_registered(true);
-        // Stage 3: per-zone manager spawn (KTD5).
+        // Stage 3: per-zone manager spawn (KTD5), with the target layer
+        // wired (U13): the directory is owned here, the composition registers
+        // guest sessions on it, and the manager resolves each row's declared
+        // execution reference through it.
         let hub = Arc::new(WatchHub::new(&d2b_resource_runtime::revision::SystemClock, DEFAULT_RING_CAPACITY));
+        let targets = Arc::new(TargetDirectory::new());
+        let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
+            .map_err(|error| PlaneError::Target(error.to_string()))?;
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
@@ -1473,6 +1507,9 @@ impl ResourcePlaneV3 {
             admission: Arc::new(PlaneMutationAdmission),
             decoders: Self::decoders(),
             default_decoder: Arc::new(PassthroughDecoder),
+            targets: Arc::clone(&targets),
+            host_target,
+            target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
         };
         let runtime = tokio::runtime::Handle::try_current()
@@ -1491,6 +1528,7 @@ impl ResourcePlaneV3 {
             store_path,
             store,
             hub,
+            targets,
             registry: inputs.registry,
             client: ResourceManagerClient::new(actor),
             readiness,
@@ -1530,6 +1568,59 @@ impl ResourcePlaneV3 {
 
     pub fn zone(&self) -> &ZoneId {
         &self.zone
+    }
+
+    /// The per-Zone target directory (U13).
+    pub fn targets(&self) -> &Arc<TargetDirectory> {
+        &self.targets
+    }
+
+    /// Register one authenticated guest session generation and tell the
+    /// manager to notify the affected actors so they re-run target-local
+    /// discovery, adoption and reconcile (F5). Assignments are never
+    /// inherited from an older generation (R28).
+    pub fn bind_guest_target(
+        &self,
+        guest: &TargetRef,
+        session_generation: u64,
+        control: Arc<dyn GuestTargetControl>,
+    ) -> Result<(), PlaneError> {
+        let outcome = self
+            .targets
+            .connect_guest(guest, session_generation, control)
+            .map_err(|error| PlaneError::Target(error.to_string()))?;
+        self.client
+            .actor()
+            .send_message(ResourceManagerMsg::TargetReconnected {
+                guest: guest.clone(),
+                session_generation: outcome.session_generation(),
+                pending_adoption: outcome.pending_adoption().to_vec(),
+            })
+            .map_err(|error| PlaneError::Target(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Mark one guest session generation lost and tell the manager to notify
+    /// the affected actors that their target-dependent observed state is
+    /// unavailable (R21). Nothing is deleted, moved, or forgotten.
+    pub fn unbind_guest_target(
+        &self,
+        guest: &TargetRef,
+        session_generation: u64,
+    ) -> Result<(), PlaneError> {
+        let outcome = self
+            .targets
+            .disconnect_guest(guest, session_generation)
+            .map_err(|error| PlaneError::Target(error.to_string()))?;
+        self.client
+            .actor()
+            .send_message(ResourceManagerMsg::TargetUnavailable {
+                guest: guest.clone(),
+                session_generation: outcome.session_generation(),
+                affected: outcome.affected().to_vec(),
+            })
+            .map_err(|error| PlaneError::Target(error.to_string()))?;
+        Ok(())
     }
 
     pub fn readiness(&self) -> d2bd_runtime::resource_runtime_support::NewPlaneReadiness {

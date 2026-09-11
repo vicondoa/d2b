@@ -373,6 +373,11 @@ where
 pub struct ResourceContext {
     row: StoredDesiredResource,
     target: TargetHandle,
+    /// Directory-backed target binding (U13): the guest handle, the session
+    /// generation it is bound to, and the directory every guest operation
+    /// re-validates through. `None` when the manager runs without a target
+    /// directory (scaffold and unit fixtures).
+    target_binding: Option<crate::target::TargetBinding>,
     decoder: Arc<dyn SpecDecoder>,
     manager: Arc<dyn ManagerEndpoint>,
     requeue: Arc<dyn RequeueScheduler>,
@@ -402,6 +407,7 @@ impl ResourceContext {
         Self {
             row,
             target,
+            target_binding: None,
             decoder,
             manager,
             requeue,
@@ -497,6 +503,19 @@ impl ResourceContext {
     /// Execution target of this resource (R19).
     pub fn target(&self) -> &TargetHandle {
         &self.target
+    }
+
+    /// Attach the resolved target binding (U13, manager-wired). Drivers that
+    /// realize on a guest target work through it: every operation re-reads
+    /// the live session instead of trusting a channel the driver kept.
+    pub fn with_target_binding(mut self, binding: crate::target::TargetBinding) -> Self {
+        self.target_binding = Some(binding);
+        self
+    }
+
+    /// The resolved target binding, when the manager wired one.
+    pub fn target_binding(&self) -> Option<&crate::target::TargetBinding> {
+        self.target_binding.as_ref()
     }
 
     /// Fetch a resource row by key through the manager.

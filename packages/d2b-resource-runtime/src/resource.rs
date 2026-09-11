@@ -122,6 +122,14 @@ pub enum ResourceMsg {
         operation: OperationId,
         result: EffectResult,
     },
+    /// The resource's target went away (R21). Observed state is unavailable;
+    /// the desired row, its assignment, its children, and its target-local
+    /// realization are untouched, and no requeue is scheduled: the target's
+    /// own reconnect drives the retry.
+    TargetUnavailable { session_generation: u64 },
+    /// The guest target reconnected (F5): target-local discovery, adoption,
+    /// and reconcile run again under the new session generation.
+    TargetReconnected { session_generation: u64 },
 }
 
 /// Evaluate a watch condition against the actor's in-memory status (R12).
@@ -197,9 +205,13 @@ impl RequeueScheduler for ActorTimers {
 pub struct ResourceActorArgs {
     /// Committed durable row: the manager persisted it before spawning.
     pub row: StoredDesiredResource,
-    /// Execution target for effects (R19). U3 composes Host targets; U13
-    /// fills target resolution from the spec.
+    /// Execution target for effects (R19); the coarse handle derived from
+    /// `target_binding` when the manager resolved one.
     pub target: crate::target::TargetHandle,
+    /// Directory-backed target binding (U13), resolved by the manager from
+    /// the row's declared execution reference. `None` when the manager runs
+    /// without a target directory (scaffold and unit fixtures).
+    pub target_binding: Option<crate::target::TargetBinding>,
     /// Provider directory resolved in `pre_start`. A lookup failure fails
     /// the spawn AFTER the row committed (F1): the row stays durable and a
     /// restart or Ensure recovers it.
@@ -225,6 +237,8 @@ pub struct ResourceActorState {
     manager_endpoint: Arc<dyn ManagerEndpoint>,
     decoder: Arc<dyn SpecDecoder>,
     target: crate::target::TargetHandle,
+    /// Directory-backed target binding (U13); rebuilt with the context.
+    target_binding: Option<crate::target::TargetBinding>,
     /// Runtime-only retryable-failure backoff (R13).
     backoff: Duration,
     /// The owning resource's key (see [`ResourceActorArgs::owner_key`]).
@@ -393,7 +407,7 @@ impl ResourceActorState {
 
     /// Rebuild the driver context after a spec change (generation moves).
     fn rebuild_context(&mut self) {
-        self.ctx = ResourceContext::new(
+        let ctx = ResourceContext::new(
             self.row.clone(),
             self.target,
             self.decoder.clone(),
@@ -403,6 +417,10 @@ impl ResourceActorState {
             self.watch_tx.clone(),
         )
         .with_owner_key(self.owner_key.clone());
+        self.ctx = match self.target_binding.clone() {
+            Some(binding) => ctx.with_target_binding(binding),
+            None => ctx,
+        };
     }
 
     /// One reconcile pass. Callers guarantee `!effect_running` (R14: the
@@ -530,11 +548,16 @@ impl Actor for ResourceActor {
             watch_tx.clone(),
         )
         .with_owner_key(args.owner_key.clone());
+        let ctx = match args.target_binding.clone() {
+            Some(binding) => ctx.with_target_binding(binding),
+            None => ctx,
+        };
         Ok(ResourceActorState {
             manager: args.manager,
             manager_endpoint,
             decoder: args.decoder,
             target: args.target,
+            target_binding: args.target_binding,
             backoff: args.backoff,
             owner_key: args.owner_key,
             timers,
@@ -614,6 +637,23 @@ impl Actor for ResourceActor {
             ResourceMsg::Delete => state.delete_msg(myself).await,
             ResourceMsg::EffectCompleted { operation, result } => {
                 state.effect_completed(operation, result, myself).await
+            }
+            ResourceMsg::TargetUnavailable { .. } => {
+                // Target failure is not Zone failure (R21): only the
+                // target-dependent observed state changes.
+                if !state.deleting {
+                    state.transition(ResourceStatus::Failed(crate::error::DriverFailure::retryable(
+                        crate::error::DriverOp::Recover,
+                    )));
+                }
+                Ok(())
+            }
+            ResourceMsg::TargetReconnected { .. } => {
+                if state.deleting {
+                    Ok(())
+                } else {
+                    state.dependency_triggered().await
+                }
             }
         }
     }
@@ -939,6 +979,30 @@ pub(crate) mod test_support {
         spawn_manager(store, "test", types, backoff, Some(tmp)).await
     }
 
+    /// Spawn a manager with a scripted target resolver and directory (U13
+    /// wiring tests): the caller owns the directory and can drive guest
+    /// session loss and reconnect on it.
+    pub(crate) async fn harness_targeted(
+        types: &[&str],
+        resolver: Arc<dyn crate::target::TargetResolver>,
+        targets: Arc<crate::target::TargetDirectory>,
+    ) -> TestHarness {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            crate::spec_store::SpecStore::open(tmp.path().join("specs.sqlite")).expect("store"),
+        );
+        spawn_manager_targeted(
+            store,
+            "test",
+            types,
+            crate::resource::DEFAULT_REQUEUE_BACKOFF,
+            Some(tmp),
+            resolver,
+            targets,
+        )
+        .await
+    }
+
     /// Spawn a manager over an existing store (restart semantics: the new
     /// manager loads the durable rows and spawns actors for them).
     pub(crate) async fn harness_over(
@@ -973,12 +1037,48 @@ pub(crate) mod test_support {
         spawn_manager_with_factory(store, zone, factory, backoff, tmp).await
     }
 
+    /// Manager spawn with the target layer under test control (U13).
+    async fn spawn_manager_targeted(
+        store: Arc<crate::spec_store::SpecStore>,
+        zone: &str,
+        types: &[&str],
+        backoff: Duration,
+        tmp: Option<tempfile::TempDir>,
+        target_resolver: Arc<dyn crate::target::TargetResolver>,
+        targets: Arc<crate::target::TargetDirectory>,
+    ) -> TestHarness {
+        let factory = Arc::new(FakeFactory::new(types));
+        spawn_manager_with(store, zone, factory, backoff, tmp, target_resolver, targets).await
+    }
+
     async fn spawn_manager_with_factory(
         store: Arc<crate::spec_store::SpecStore>,
         zone: &str,
         factory: Arc<FakeFactory>,
         backoff: Duration,
         tmp: Option<tempfile::TempDir>,
+    ) -> TestHarness {
+        spawn_manager_with(
+            store,
+            zone,
+            factory,
+            backoff,
+            tmp,
+            Arc::new(HostOnlyResolver),
+            Arc::new(crate::target::TargetDirectory::new()),
+        )
+        .await
+    }
+
+    /// One manager spawn over one target directory and resolver.
+    async fn spawn_manager_with(
+        store: Arc<crate::spec_store::SpecStore>,
+        zone: &str,
+        factory: Arc<FakeFactory>,
+        backoff: Duration,
+        tmp: Option<tempfile::TempDir>,
+        target_resolver: Arc<dyn crate::target::TargetResolver>,
+        targets: Arc<crate::target::TargetDirectory>,
     ) -> TestHarness {
         let mut providers = crate::provider::ProviderDirectory::new();
         providers
@@ -996,6 +1096,9 @@ pub(crate) mod test_support {
             admission: Arc::new(crate::manager::AllowAll),
             decoders: HashMap::new(),
             default_decoder: Arc::new(PassthroughDecoder),
+            targets,
+            host_target: crate::target::TargetRef::host("test-host").expect("host target"),
+            target_resolver,
             backoff,
         };
         let (actor, _join) =
@@ -1008,6 +1111,25 @@ pub(crate) mod test_support {
             store,
             hub,
             _tmp: tmp,
+        }
+    }
+
+    /// Test resolver: no fixture row declares an execution reference, so
+    /// every test resource realizes on the Host target.
+    pub(crate) struct HostOnlyResolver;
+
+    impl crate::target::TargetResolver for HostOnlyResolver {
+        fn execution_ref(&self, _key: &ResourceKey, _spec: &[u8]) -> Option<String> {
+            None
+        }
+    }
+
+    /// Test resolver marking the `guest-worker` fixture row as guest-targeted.
+    pub(crate) struct ScriptedResolver;
+
+    impl crate::target::TargetResolver for ScriptedResolver {
+        fn execution_ref(&self, key: &ResourceKey, _spec: &[u8]) -> Option<String> {
+            (key.name == "guest-worker").then(|| "Guest/test-vm".to_owned())
         }
     }
 
