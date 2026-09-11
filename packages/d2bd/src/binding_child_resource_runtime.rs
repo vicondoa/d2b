@@ -7,9 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts_provider::v3::semantic_services::child_resources::{
-    BindingChildKind, BindingChildSet,
-};
+use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildSet;
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId, canonical_digest,
@@ -19,7 +17,8 @@ use d2b_core_controller::{
     BindingChildMaterializationError, BindingChildReconciler, HintTarget, OwnedChildIntent,
     OwnerLimits, OwnerMutation, observed_child_from_resource,
 };
-use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_api::{ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2bd_runtime::resource_runtime_support::ZoneStoreBackend;
 use d2b_resource_store::{
     StoreListRequest, StoreOperationContext, StoreProjection, StoredResource,
 };
@@ -40,8 +39,6 @@ const GUEST_CHILD_TYPES: [&str; 5] = [
 ];
 const OWNER_INDEX_MAX_DEPTH: usize = 8;
 const OWNER_INDEX_MAX_WORK_ITEMS: usize = 64;
-/// Finalizer held by semantic Bindings while Core drains their children.
-pub(crate) const BINDING_CHILD_FINALIZER: &str = "d2b.d2bus.org/binding-children";
 
 /// One Binding owner and its complete Provider-declared child set.
 #[derive(Clone)]
@@ -81,7 +78,7 @@ pub(crate) enum OneOwnedChildProgress {
 /// Volumes.
 pub(crate) async fn reconcile_one_guest_child(
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     zone: &ZoneId,
     owner: &OwnedChildOwner,
 ) -> Result<OneOwnedChildProgress, BindingChildRuntimeError> {
@@ -90,7 +87,7 @@ pub(crate) async fn reconcile_one_guest_child(
 
 async fn reconcile_one_owned_child_for_types(
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     zone: &ZoneId,
     owner: &OwnedChildOwner,
     resource_types: &[&str],
@@ -163,7 +160,7 @@ fn first_guest_child_mutation(mutations: &[OwnerMutation]) -> Option<&OwnerMutat
 /// Core owner index used by semantic Bindings.
 pub(crate) async fn reconcile_owned_children(
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     zone: &ZoneId,
     owners: &[OwnedChildOwner],
 ) -> Result<BTreeSet<ResourceRef>, BindingChildRuntimeError> {
@@ -315,58 +312,6 @@ fn owned_child_matches(
     actual.get("spec") == expected.get("spec")
 }
 
-/// Whether a resource carries the semantic Binding child finalizer.
-pub(crate) fn has_binding_child_finalizer(resource: &StoredResource) -> bool {
-    finalizers(resource)
-        .is_some_and(|values| values.iter().any(|value| value == BINDING_CHILD_FINALIZER))
-}
-
-/// Add or remove the semantic Binding child finalizer with exact fencing.
-pub(crate) async fn update_binding_child_finalizer(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
-    resource: &StoredResource,
-    add: bool,
-) -> Result<(), BindingChildRuntimeError> {
-    if add == has_binding_child_finalizer(resource) {
-        return Ok(());
-    }
-    let mut mutation = wire::Mutation::new();
-    mutation.kind =
-        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
-    mutation.target = protobuf::MessageField::some(identity(
-        &resource.zone,
-        &resource.resource_ref,
-        Some(&resource.uid),
-        Some(resource.generation.get()),
-        Some(resource.revision.get()),
-    ));
-    mutation.precondition =
-        protobuf::MessageField::some(exact_precondition(&resource.uid, resource.revision));
-    if add {
-        mutation
-            .add_finalizers
-            .push(BINDING_CHILD_FINALIZER.to_owned());
-    } else {
-        mutation
-            .remove_finalizers
-            .push(BINDING_CHILD_FINALIZER.to_owned());
-    }
-    let operation = crate::resource_runtime::bounded_operation_id(&format!(
-        "binding-child-finalizer-{}-{}-{}",
-        resource.resource_ref.to_canonical_string(),
-        resource.revision.get(),
-        if add { "add" } else { "remove" }
-    ));
-    let mut request = wire::UpdateFinalizersRequest::new();
-    request.meta = protobuf::MessageField::some(request_meta(&operation));
-    request.mutation = protobuf::MessageField::some(mutation);
-    let response = client.update_finalizers(request).await;
-    if response.error.is_some() || response.resource.is_none() {
-        return Err(BindingChildRuntimeError::Api);
-    }
-    Ok(())
-}
-
 /// Stable failures from the Core-to-Resource-API child adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindingChildRuntimeError {
@@ -397,7 +342,7 @@ impl std::error::Error for BindingChildRuntimeError {}
 /// relist. Deletions are submitted Endpoint-first and Process-last.
 pub(crate) async fn reconcile_binding_children(
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     zone: &ZoneId,
     owners: &[BindingChildOwner],
 ) -> Result<BTreeSet<ResourceRef>, BindingChildRuntimeError> {
@@ -502,112 +447,8 @@ pub(crate) async fn list_binding_children(
     list_children(store, zone).await
 }
 
-/// Check runtime readiness for every desired child of one Binding.
-pub(crate) fn binding_children_ready(
-    owner: &BindingChildOwner,
-    children: &[StoredResource],
-) -> bool {
-    let Some(desired) = owner.desired.as_ref() else {
-        return false;
-    };
-    if owner.fenced {
-        return false;
-    }
-    desired.iter().all(|intent| {
-        let Some(child) = children
-            .iter()
-            .find(|child| child_matches_intent(owner, intent, child))
-        else {
-            return false;
-        };
-        child_ready(intent, child)
-    })
-}
-
-fn child_matches_intent(
-    owner: &BindingChildOwner,
-    intent: &d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent,
-    child: &StoredResource,
-) -> bool {
-    if child.resource_ref != *intent.resource_ref()
-        || child.zone != owner.resource.zone
-        || child_owner_ref(child) != Some(owner.resource.resource_ref.clone())
-        || deletion_requested(child)
-    {
-        return false;
-    }
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
-        return false;
-    };
-    let Some(spec) = value.get("spec").and_then(serde_json::Value::as_object) else {
-        return false;
-    };
-    match intent.kind() {
-        BindingChildKind::Process | BindingChildKind::EphemeralProcess => {
-            let expected_provider = intent
-                .process_provider()
-                .unwrap_or("Provider/system-systemd");
-            if spec.get("providerRef").and_then(serde_json::Value::as_str)
-                != Some(expected_provider)
-                || spec.get("executionRef").and_then(serde_json::Value::as_str)
-                    != Some(intent.execution_ref().to_canonical_string().as_str())
-                || spec.get("template").and_then(serde_json::Value::as_str)
-                    != intent.process_template()
-                || spec.get("processClass").and_then(serde_json::Value::as_str)
-                    != intent.process_class()
-            {
-                return false;
-            }
-            if let Some(domain) = intent.process_domain() {
-                let expected = match domain {
-                    d2b_contracts_resource::v3::ExecutionDomain::System => "system",
-                    d2b_contracts_resource::v3::ExecutionDomain::User => "user",
-                };
-                if spec.get("domain").and_then(serde_json::Value::as_str) != Some(expected) {
-                    return false;
-                }
-            }
-            match intent.process_user() {
-                Some(user_ref)
-                    if spec.get("userRef").and_then(serde_json::Value::as_str)
-                        != Some(user_ref.to_canonical_string().as_str()) =>
-                {
-                    false
-                }
-                None if spec.get("userRef").is_some_and(|value| !value.is_null()) => false,
-                _ => true,
-            }
-        }
-        BindingChildKind::Endpoint => {
-            spec.get("providerRef").and_then(serde_json::Value::as_str)
-                == Some(intent.provider_ref().to_canonical_string().as_str())
-                && spec.get("producerRef").and_then(serde_json::Value::as_str)
-                    == intent
-                        .producer_ref()
-                        .map(|producer| producer.to_canonical_string())
-                        .as_deref()
-        }
-    }
-}
-
-fn child_ready(
-    intent: &d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent,
-    child: &StoredResource,
-) -> bool {
-    match intent.kind() {
-        BindingChildKind::Process => child_status_phase(child).as_deref() == Some("Ready"),
-        BindingChildKind::EphemeralProcess => matches!(
-            child_status_phase(child).as_deref(),
-            Some("Ready" | "Succeeded")
-        ),
-        // Endpoint status is Provider observation. A ready producer is not
-        // evidence that the endpoint itself was published.
-        BindingChildKind::Endpoint => child_status_phase(child).as_deref() == Some("Ready"),
-    }
-}
-
 async fn apply_mutation(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     owner: &StoredResource,
     children: &[StoredResource],
     mutation: &OwnerMutation,
@@ -656,7 +497,7 @@ async fn apply_mutation(
 }
 
 async fn apply_mutation_batch(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     owner: &StoredResource,
     children: &[StoredResource],
     mutations: &[OwnerMutation],
@@ -820,7 +661,7 @@ fn mutation_order(mutation: &OwnerMutation) -> (u8, ResourceRef) {
 }
 
 async fn create_child(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     owner: &StoredResource,
     target: &ResourceRef,
     canonical_resource: &[u8],
@@ -854,7 +695,7 @@ async fn create_child(
 }
 
 async fn update_child_spec(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     current: &StoredResource,
     target: &ResourceRef,
     expected_uid: &d2b_contracts_resource::v3::ResourceUid,
@@ -897,7 +738,7 @@ async fn update_child_spec(
 }
 
 async fn delete_child(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     owner: &StoredResource,
     target: &ResourceRef,
     expected_uid: &d2b_contracts_resource::v3::ResourceUid,
@@ -1042,20 +883,6 @@ fn deletion_ready(resource: &StoredResource) -> bool {
         .is_some_and(|finalizers| finalizers.is_empty())
 }
 
-fn finalizers(resource: &StoredResource) -> Option<Vec<String>> {
-    serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
-        .ok()
-        .and_then(|value| value.get("metadata").cloned())
-        .and_then(|metadata| metadata.get("finalizers").cloned())
-        .and_then(|value| value.as_array().cloned())
-        .map(|values| {
-            values
-                .into_iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect()
-        })
-}
-
 fn child_status_phase(resource: &StoredResource) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
         .ok()
@@ -1121,12 +948,6 @@ async fn list_children_of_types(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_provider::v3::semantic_services::{
-        SemanticFamily,
-        child_resources::{
-            BindingChildKind, BindingChildPlacement, BindingChildRequest, explicit_binding_children,
-        },
-    };
 
     fn target(resource_type: &str, name: &str) -> ResourceRef {
         ResourceRef::parse(&format!("{resource_type}/{name}")).expect("resource reference")
@@ -1334,188 +1155,6 @@ mod tests {
             first_guest_child_mutation(&[request]),
             Some(OwnerMutation::RequestDeletion { .. })
         ));
-    }
-
-    #[test]
-    fn readiness_requires_the_matching_child_owner() {
-        let binding_ref = target("usb.d2bus.org.UsbBinding", "work");
-        let service_ref = target("usb.d2bus.org.UsbService", "work");
-        let target_ref = target("Guest", "work");
-        let provider_ref = target("Provider", "device-usbip");
-        let desired = explicit_binding_children(
-            SemanticFamily::Usb,
-            binding_ref.clone(),
-            service_ref,
-            target_ref,
-            provider_ref,
-            &[BindingChildRequest::process(
-                BindingChildKind::Process,
-                BindingChildPlacement::Host,
-                "relay",
-                "Provider/system-minijail",
-                "usbip-relay",
-                d2b_contracts_resource::v3::ExecutionDomain::System,
-                "service",
-            )],
-        )
-        .expect("child intent");
-        let child_ref = desired
-            .iter()
-            .next()
-            .expect("one child")
-            .resource_ref()
-            .clone();
-        let owner = BindingChildOwner {
-            resource: stored_resource(&binding_ref, None, "Pending"),
-            desired: Some(desired),
-            fenced: false,
-        };
-        let foreign_owner = target("usb.d2bus.org.UsbBinding", "other");
-        assert!(!binding_children_ready(
-            &owner,
-            &[stored_resource(&child_ref, Some(&foreign_owner), "Ready")]
-        ));
-        assert!(binding_children_ready(
-            &owner,
-            &[stored_resource_with_spec(
-                &child_ref,
-                Some(&binding_ref),
-                "Ready",
-                serde_json::json!({
-                    "executionRef": "Host/host-system",
-                    "providerRef": "Provider/system-minijail",
-                    "template": "usbip-relay",
-                    "processClass": "service",
-                    "domain": "system"
-                }),
-            )]
-        ));
-    }
-
-    #[test]
-    fn readiness_requires_the_exact_guest_execution_target() {
-        let binding_ref = target("usb.d2bus.org.UsbBinding", "work");
-        let service_ref = target("usb.d2bus.org.UsbService", "work");
-        let guest_ref = target("Guest", "work");
-        let provider_ref = target("Provider", "device-usbip");
-        let desired = explicit_binding_children(
-            SemanticFamily::Usb,
-            binding_ref.clone(),
-            service_ref,
-            guest_ref.clone(),
-            provider_ref,
-            &[BindingChildRequest::process(
-                BindingChildKind::Process,
-                BindingChildPlacement::Guest,
-                "proxy",
-                "Provider/system-minijail",
-                "usbip-guest-proxy",
-                d2b_contracts_resource::v3::ExecutionDomain::System,
-                "service",
-            )],
-        )
-        .expect("child intent");
-        let child_ref = desired
-            .child("proxy")
-            .expect("proxy child")
-            .resource_ref()
-            .clone();
-        let owner = BindingChildOwner {
-            resource: stored_resource(&binding_ref, None, "Pending"),
-            desired: Some(desired),
-            fenced: false,
-        };
-        let wrong_guest = stored_resource_with_spec(
-            &child_ref,
-            Some(&binding_ref),
-            "Ready",
-            serde_json::json!({
-                "executionRef": "Guest/other",
-                "providerRef": "Provider/system-minijail",
-                "template": "usbip-guest-proxy",
-                "processClass": "service",
-                "domain": "system"
-            }),
-        );
-        assert!(!binding_children_ready(&owner, &[wrong_guest]));
-
-        let matching_guest = stored_resource_with_spec(
-            &child_ref,
-            Some(&binding_ref),
-            "Ready",
-            serde_json::json!({
-                "executionRef": guest_ref.to_canonical_string(),
-                "providerRef": "Provider/system-minijail",
-                "template": "usbip-guest-proxy",
-                "processClass": "service",
-                "domain": "system"
-            }),
-        );
-        assert!(binding_children_ready(&owner, &[matching_guest]));
-    }
-
-    #[test]
-    fn pending_endpoint_requires_its_own_provider_observation() {
-        let binding_ref = target("usb.d2bus.org.UsbBinding", "work");
-        let service_ref = target("usb.d2bus.org.UsbService", "work");
-        let target_ref = target("Guest", "work");
-        let provider_ref = target("Provider", "device-usbip");
-        let desired = explicit_binding_children(
-            SemanticFamily::Usb,
-            binding_ref.clone(),
-            service_ref,
-            target_ref,
-            provider_ref,
-            &[
-                BindingChildRequest::process(
-                    BindingChildKind::Process,
-                    BindingChildPlacement::Guest,
-                    "proxy",
-                    "Provider/system-minijail",
-                    "usbip-proxy",
-                    d2b_contracts_resource::v3::ExecutionDomain::System,
-                    "service",
-                ),
-                BindingChildRequest::endpoint(BindingChildPlacement::Guest, "endpoint", "proxy"),
-            ],
-        )
-        .expect("child intents");
-        let process_ref = desired
-            .child("proxy")
-            .expect("process")
-            .resource_ref()
-            .clone();
-        let endpoint_ref = desired
-            .child("endpoint")
-            .expect("endpoint")
-            .resource_ref()
-            .clone();
-        let owner = BindingChildOwner {
-            resource: stored_resource(&binding_ref, None, "Pending"),
-            desired: Some(desired),
-            fenced: false,
-        };
-        let process = stored_resource(&process_ref, Some(&binding_ref), "Ready");
-        let endpoint = stored_resource_with_spec(
-            &endpoint_ref,
-            Some(&binding_ref),
-            "Pending",
-            serde_json::json!({
-                "producerRef": process_ref.to_canonical_string()
-            }),
-        );
-        assert!(!binding_children_ready(&owner, &[process, endpoint]));
-
-        let endpoint = stored_resource_with_spec(
-            &endpoint_ref,
-            Some(&binding_ref),
-            "Degraded",
-            serde_json::json!({
-                "producerRef": process_ref.to_canonical_string()
-            }),
-        );
-        let process = stored_resource(&process_ref, Some(&binding_ref), "Ready");
-        assert!(!binding_children_ready(&owner, &[process, endpoint]));
     }
 
     #[test]

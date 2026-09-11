@@ -1024,14 +1024,14 @@ pub fn unix_transport(
 
 pub async fn register_system_core_session(
     registrar: &mut ZoneRegistrar,
-    api: Arc<ResourceService<RedbBackend>>,
+    api: Arc<ResourceService<ZoneStoreBackend>>,
     authorizer: Arc<NativeAuthorizer>,
     authz_state: AuthorizationState,
 ) -> Result<
     (
         BusIngress,
         tokio::task::JoinHandle<Result<(), SessionServerError>>,
-        Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
         AuthenticatedSubjectContext,
     ),
     ResourceRuntimeError,
@@ -1743,7 +1743,7 @@ pub fn initial_policy_snapshot() -> Result<PolicySnapshot, ResourceRuntimeError>
 pub async fn ensure_bootstrap_host_resource(
     zone: &ZoneId,
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
 ) -> Result<(), ResourceRuntimeError> {
     let host_type =
         ResourceTypeName::parse("Host").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -1915,7 +1915,7 @@ pub async fn ensure_bootstrap_zone_resource(
     zone: &ZoneId,
     zone_uid: &ResourceUid,
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
 ) -> Result<(), ResourceRuntimeError> {
     let zone_type =
         ResourceTypeName::parse("Zone").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -1996,7 +1996,7 @@ pub async fn materialize_zone_resource_bundle(
     zone: &ZoneId,
     bundle: &ResourceBundle,
     store: &RedbResourceStore,
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
 ) -> Result<(), ResourceRuntimeError> {
     let mutations = plan_zone_resource_bundle(zone, bundle, store).await?;
     if mutations.is_empty() {
@@ -2738,6 +2738,12 @@ pub fn stable_uid(domain: &str, value: &str) -> ResourceUid {
     ResourceUid::parse(rendered).expect("stable UUID is valid")
 }
 
+/// The Zone's API-path store backend: the durable Redb store. Converted
+/// types never reach it from outside - the public surface routes them to the
+/// manager-backed service (KTD4) - and the legacy in-daemon writers that
+/// still do are deleted with their providers in Phase B.
+pub type ZoneStoreBackend = RedbBackend;
+
 pub fn resource_result_error(reason: &'static str) -> ResourceError {
     ResourceError::terminal(ResourceErrorKind::InternalIntegrityFailure, reason)
 }
@@ -3208,7 +3214,7 @@ pub fn configuration_cleanup_pending(
 }
 
 pub async fn persist_resource_status(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     resource: &StoredResource,
     status: &serde_json::Value,
 ) -> Result<(), ResourceRuntimeError> {
@@ -3216,7 +3222,7 @@ pub async fn persist_resource_status(
 }
 
 pub async fn persist_resource_status_with_projection(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     resource: &StoredResource,
     status: &serde_json::Value,
     resource_projection: Option<&serde_json::Value>,
@@ -3357,7 +3363,7 @@ fn resource_controller_session_candidate(
 }
 
 async fn persist_resource_status_candidate(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     resource: &StoredResource,
     value: CanonicalJsonValue,
     operation_scope: &str,
@@ -5407,4 +5413,5 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("public-1000-Start-Guest-"));
     }
+
 }

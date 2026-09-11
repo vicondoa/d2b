@@ -543,6 +543,67 @@ async fn create_get_update_delete_round_trip_through_the_manager() {
     fixture.manager_actor.get_cell().stop(None);
 }
 
+/// Nix-ingested rows persist spec-shaped bytes, so their envelope is
+/// rendered on the read (the fallback path). The manager view must serve the
+/// row's stable uid there: the public delete precondition resolves the exact
+/// uid from `metadata.uid`, and `ResourceUid`'s redacted `Display` is never
+/// data. A round trip through an API-created row cannot catch this - those
+/// rows persist envelope-shaped bytes and already carry their uid.
+#[tokio::test]
+async fn spec_shaped_row_serves_its_stable_uid() {
+    let fixture = manager_fixture().await;
+    let service = wired_service(&fixture, authorizer(&[ResourceVerb::Get]));
+    let handle = fixture
+        .client
+        .ensure(
+            d2b_resource_runtime::manager::MutationSubject {
+                principal: "nix:test-bundle".to_owned(),
+                origin: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+            },
+            None,
+            d2b_resource_runtime::manager::DesiredResource {
+                key: d2b_resource_runtime::spec_store::ResourceKey::new(
+                    TEST_ZONE,
+                    "Host",
+                    "host-system",
+                ),
+                spec: serde_json::to_vec(&serde_json::json!({
+                    "providerRef": "Provider/system-core",
+                    "updatePolicy": {
+                        "disruptive": "manual",
+                        "nonDisruptive": "automatic",
+                    },
+                }))
+                .unwrap(),
+                metadata: serde_json::to_vec(&serde_json::json!({"ownerRef": null})).unwrap(),
+                provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+            },
+        )
+        .await
+        .expect("ensure");
+    let stable_uid = super::row_uid(&handle.uid);
+
+    let fetched = service.get(trusted(get_request())).await;
+    assert!(
+        fetched.error.is_none(),
+        "get failed: kind={:?} reason={}",
+        error_kind(&fetched),
+        error_reason(&fetched)
+    );
+    let resource = fetched.resource.unwrap();
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&resource.canonical_json).expect("served envelope");
+    assert_eq!(
+        envelope
+            .pointer("/metadata/uid")
+            .and_then(serde_json::Value::as_str),
+        Some(stable_uid.as_str()),
+        "the manager view serves the row's stable uid, not a redacted placeholder",
+    );
+
+    fixture.manager_actor.get_cell().stop(None);
+}
+
 #[tokio::test]
 async fn exact_revision_precondition_rejects_a_stale_generation() {
     let fixture = manager_fixture().await;

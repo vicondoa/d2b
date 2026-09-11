@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
-use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_api::{ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use crate::resource_runtime_support::ZoneStoreBackend;
 use protobuf::{EnumOrUnknown, MessageField};
 use serde_json::Value;
 
@@ -293,7 +294,7 @@ pub struct Wave6AcceptanceReport {
 
 /// Select exactly one resource of every Wave 6 kind through the public API.
 pub async fn select_wave6_resources(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
 ) -> Result<Wave6ResourceSet, Wave6BoundaryError> {
     let mut resources = BTreeMap::new();
     for kind in [
@@ -315,7 +316,7 @@ pub async fn select_wave6_resources(
 /// client. The caller supplies only the closed acceptance kind; identity and
 /// provider routing come from the committed response.
 pub async fn select_authenticated_resource(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
     kind: Wave6ResourceKind,
 ) -> Result<Wave6Resource, Wave6BoundaryError> {
     let mut request = wire::ListRequest::new();

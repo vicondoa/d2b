@@ -1,18 +1,18 @@
 //! Volume resource driver (U7): the v3 `ResourceDriver` conversion of the
 //! daemon-owned shared-Volume path (R4, R8, R9; KTD7, F1, F4).
 //!
-//! The driver keeps the old `SharedVolumeResourceReconciler` Volume leg
-//! (`packages/d2bd/src/resource_runtime/volume_provider_runtime.rs`,
-//! `reconcile_volume`) and nothing else: recover discovers existing
-//! volume-local layout state on the host target, reconcile runs the
-//! preserved volume-local layout effect and then derives one deterministic
-//! `VolumeBinding` child per virtiofs attachment through the manager-routed
-//! ensure (the child spec is committed BEFORE the child actor exists, F1),
-//! and delete removes the Volume's own layout state. Child teardown on
-//! parent delete is the manager's reconcile_children diff (R9/F3): the
-//! manager marks children deleting and drives bindings -> endpoint ->
-//! process-last ordering; this driver's delete covers only the Volume's own
-//! effect, with the drain finalizer preserved behind the provider port.
+//! The driver keeps the old shared-volume Volume leg (the deleted
+//! `SharedVolumeResourceReconciler`'s `reconcile_volume`) and nothing else:
+//! recover discovers existing volume-local layout state on the host target,
+//! reconcile runs the preserved volume-local layout effect and then derives
+//! one deterministic `VolumeBinding` child per virtiofs attachment through
+//! the manager-routed ensure (the child spec is committed BEFORE the child
+//! actor exists, F1), and delete removes the Volume's own layout state.
+//! Child teardown on parent delete is the manager's reconcile_children diff
+//! (R9/F3): the manager marks children deleting and drives bindings ->
+//! endpoint -> process-last ordering; this driver's delete covers only the
+//! Volume's own effect, with the drain finalizer preserved behind the
+//! provider port.
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`VolumeDriverFactory`] registration under `Volume`.
@@ -731,6 +731,15 @@ mod tests {
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
             Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
+        }
+
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            // Desired rows only: this fixture publishes no runtime status, so
+            // it serves no observed state.
+            Ok(None)
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {

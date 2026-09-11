@@ -50,6 +50,26 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
     "ResourceImport",
 ];
 
+/// The resource types the v3 resource runtime owns end to end (R35/F1
+/// exclusive per-type partition): served only by the per-zone manager plane,
+/// never by the pre-v3 durable store.
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 14] = [
+    "Process",
+    "Volume",
+    "VolumeBinding",
+    "Endpoint",
+    "activation-nixos.d2bus.org.NixosGeneration",
+    "telemetry.d2bus.org.TelemetryService",
+    "telemetry.d2bus.org.TelemetryBinding",
+    "Credential",
+    "Network",
+    "Device",
+    "usb.d2bus.org.UsbService",
+    "usb.d2bus.org.UsbBinding",
+    "security-key.d2bus.org.SecurityKeyService",
+    "security-key.d2bus.org.SecurityKeyBinding",
+];
+
 /// Identity class used by typed validation errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityClass {

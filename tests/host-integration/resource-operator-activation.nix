@@ -189,9 +189,9 @@ pkgs.testers.runNixOSTest {
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation and "
-        ".status.resource.adopted == false))' "
+        "(.metadata.uid != null and .metadata.generation > 0 and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation))' "
         "/run/d2b-process-before.json",
         timeout=60,
     )
@@ -218,12 +218,17 @@ pkgs.testers.runNixOSTest {
         ">/run/d2b-process-after.json && "
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
         "| wc -l)\" -eq 1 && "
-        "jq -e '([.resources[] | select(.type == \"Process\" and "
+        "jq -e --slurpfile before /run/d2b-process-before.json "
+        "'([.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
-        ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and .status.observedGeneration == "
-        ".metadata.generation and .status.resource.adopted == false))' "
+        ".metadata.ownerRef == \"Provider/network-local\") as $after | "
+        "($before[0].resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/network-local\")) as $old | "
+        "($after.metadata.uid == $old.metadata.uid and "
+        "$after.metadata.generation == $old.metadata.generation and "
+        "$after.status.phase == \"Ready\" and "
+        "$after.status.observedGeneration == $after.metadata.generation))' "
         "/run/d2b-process-after.json",
         timeout=60,
     )
@@ -234,23 +239,21 @@ pkgs.testers.runNixOSTest {
         f"controller PID changed across d2bd restart: "
         f"{controller_pid_before} -> {controller_pid_after}"
     )
-    machine.succeed(
-        "date +%s >/run/d2b-resource-restart-observed-at && "
-        "! journalctl -u d2bd.service --no-pager -o cat "
-        "| grep -F 'Process Provider shared runner stopped'"
-    )
+    machine.succeed("date +%s >/run/d2b-resource-restart-observed-at")
     machine.wait_until_succeeds(
         "test $(( $(date +%s) - $(cat /run/d2b-resource-restart-observed-at) )) -ge 20 && "
-        "! journalctl -u d2bd.service --no-pager -o cat "
-        "| grep -F 'Process Provider shared runner stopped' && "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-process-after-resync.json && "
+        "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
+        "| wc -l)\" -eq 1 && "
         "jq -e '([.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\")] | length == 1) and "
         "(.resources[] | select(.type == \"Process\" and "
         ".metadata.ownerRef == \"Provider/network-local\") | "
-        "(.status.phase == \"Ready\" and .status.resource.adopted == false))' "
+        "(.metadata.uid != null and .metadata.generation > 0 and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation))' "
         "/run/d2b-process-after-resync.json",
         timeout=60,
     )

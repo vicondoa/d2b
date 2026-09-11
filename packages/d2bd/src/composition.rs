@@ -18,7 +18,7 @@ use std::sync::{
 type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
 type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
 type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
-    d2b_resource_api::RedbBackend,
+    d2bd_runtime::resource_runtime_support::ZoneStoreBackend,
     d2b_resource_api::service::UnavailableUpgradeDispatcher,
 >;
 use std::thread;
@@ -76,7 +76,6 @@ use d2b_contracts_resource::v3::{
     process::ProcessSpec,
 };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
-use d2b_contracts_resource::v3::network::NetworkSpec;
 #[cfg(test)]
 use d2b_contracts_resource::v3::ResourceErrorKind;
 #[cfg(test)]
@@ -109,9 +108,9 @@ use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 #[cfg(test)]
-use d2b_core_controller::{ResourceKey, ResourceSnapshot};
+use d2b_contracts_resource::v3::network::NetworkSpec;
+use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use d2b_core_controller::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkError, ZoneLinkEvent,
     ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkRecord, ZoneLinkRouteBinding,
@@ -195,7 +194,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use socket2::Socket;
 
-mod activation_resource_runtime;
 pub use d2bd_runtime::console_session;
 pub use d2bd_runtime::daemon_client::{
     apply_overrides, maybe_write_state_restore_report, run_test_client,
@@ -642,12 +640,16 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
-    #[allow(dead_code)]
     security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
+    /// Per-Zone v3 resource planes (U9/U10): the new runtime the Resource
+    /// API routes converted types to. Parked here so `open_resource_plane`
+    /// publishes them and the resource runtime reaches each plane's
+    /// client + hub for the manager-backed API backend.
+    v3_planes:
+        std::sync::Arc<parking_lot::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
 }
-
 #[cfg(test)]
 pub(crate) fn install_test_resource_plane(
     state: &Arc<ServerState>,
@@ -3628,6 +3630,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             crate::security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
+        v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
     };
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
@@ -5479,7 +5482,8 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             tracing_span_id: self.tracing_span_id.clone(),
             inherited_fd_count: 0,
             network_tap_context: None,
-        });
+                        launch_args: None,
+            });
         match dispatch_broker_request_with_fds_timeout(
             &self.state,
             request,
@@ -7374,6 +7378,23 @@ fn resolve_volume_storage_ref(
     Ok(BundleOpId::new(storage_id))
 }
 
+#[cfg(test)]
+fn parse_committed_network_spec(
+    resource: &Value,
+) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
+    let mut spec = resource
+        .get("spec")
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let object = spec
+        .as_object_mut()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
 pub(crate) fn resolve_network_effect_context(
     resource: &Value,
     resolver: &BundleResolver,
@@ -8051,22 +8072,6 @@ struct Wave6NetworkEffectRequest<'a> {
     resource: &'a Value,
     operation_id: &'a str,
     ensure_host_base: bool,
-}
-
-fn parse_committed_network_spec(
-    resource: &Value,
-) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
-    let mut spec = resource
-        .get("spec")
-        .cloned()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let object = spec
-        .as_object_mut()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    for field in ["providerRef", "updatePolicy", "provider"] {
-        object.remove(field);
-    }
-    serde_json::from_value(spec).map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
 }
 
 fn committed_resource_uid(
@@ -9796,6 +9801,7 @@ mod workload_observability_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -15573,6 +15579,41 @@ fn committed_zone_topology(
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)
 }
 
+/// Production probe for the Credential driver's managed-identity agent
+/// readiness (U12). The agent is a v3 manager row, so the live evidence is
+/// the manager view: `Ready` status published for the row's current
+/// generation (R11). The plane publishes its client into the slot right
+/// after it opens - before any bundle row is ingested - so the probe is
+/// live for the first credential reconcile.
+fn credential_agent_ready_probe(
+    client: Arc<std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>>,
+    zone: ZoneId,
+) -> Arc<
+    dyn for<'a> Fn(&'a ResourceRef) -> crate::credential_driver::AgentReadyFuture<'a> + Send + Sync,
+> {
+    Arc::new(move |agent_ref: &ResourceRef| {
+        let client = Arc::clone(&client);
+        let zone = zone.clone();
+        let agent_ref = agent_ref.clone();
+        Box::pin(async move {
+            let Some(client) = client.get() else {
+                return false;
+            };
+            let key = d2b_resource_runtime::identity::ResourceKey::new(
+                zone.as_str(),
+                agent_ref.resource_type().as_str(),
+                agent_ref.name().as_str(),
+            );
+            matches!(
+                client.get(key).await,
+                Ok(Some(view))
+                    if view.status == Some(d2b_resource_runtime::ResourceStatus::Ready)
+                        && view.status_generation == Some(view.generation)
+            )
+        })
+    })
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -15880,9 +15921,14 @@ async fn open_resource_plane(
     // Volume, VolumeBinding, Endpoint) through the per-zone ResourceManager;
     // unconverted types keep flowing through the old materialization path
     // above (exclusive per-type partition, no dual-write).
-    let mut v3_planes: BTreeMap<String, crate::resource_plane_v3::ResourcePlaneV3> =
+    // (published into ServerState below; the local map threads them through
+    // the publication loop).
+    let mut v3_planes: BTreeMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>> =
         BTreeMap::new();
     while let Some((_zone, mut runtime, materialization_bundle)) = remaining.next() {
+        // F1 wiring: the runtime's manager-backed API service resolves the
+        // Zone's v3 plane client and watch hub from the published table.
+        runtime.attach_v3_planes(std::sync::Arc::clone(&state.v3_planes));
         let installed_provider_count = state
             .provider_runtime
             .registered_provider_count()
@@ -15942,66 +15988,6 @@ async fn open_resource_plane(
         // small VM creates a store-read thundering herd that trips their
         // own startup deadlines.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if let Err(error) = runtime.start_u10_controller_runners().await {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "Credential controller runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u12_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "observability and activation controller runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
-        if let Err(error) = runtime
-            .start_u7_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone().as_str(),
-                error = ?error,
-                "storage Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
         if let Err(error) = runtime
             .start_u6_controller_runners(Arc::new(state.clone()))
             .await
@@ -16061,6 +16047,37 @@ async fn open_resource_plane(
         // old materialization path above. Exclusive per-type partition.
         {
             let bundle = &materialization_bundle;
+            let credential_agent_client: Arc<
+                std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>,
+            > = Arc::new(std::sync::OnceLock::new());
+            // KTD7: the v3 plane cannot read unconverted `Provider` rows from
+            // its own store (they pass through to the old plane), so resolve
+            // the bundle's committed Provider identities here - the same
+            // durable rows the controller policy and session fences compare
+            // against - and let the plane publish them before its manager
+            // spawns any resource actor.
+            let provider_refs = bundle
+                .resources
+                .iter()
+                .filter(|row| row.resource_type().as_str() == "Provider")
+                .filter_map(|row| {
+                    ResourceRef::parse(&format!("Provider/{}", row.metadata().name().as_str())).ok()
+                })
+                .collect::<BTreeSet<_>>();
+            let committed_provider_identities = match runtime
+                .committed_provider_identities(provider_refs)
+                .await
+            {
+                Ok(identities) => identities,
+                Err(error) => {
+                    tracing::warn!(
+                        zone = %_zone.as_str(),
+                        error = ?error,
+                        "committed Provider identities unavailable; controller rows stay unbound",
+                    );
+                    BTreeMap::new()
+                }
+            };
             let mut inputs = crate::resource_plane_v3::ConstructionInputs::production(
                 &std::sync::Arc::new(state.clone()),
                 _zone.clone(),
@@ -16076,6 +16093,11 @@ async fn open_resource_plane(
                     resource_runtime::ResourceRuntimeError::HandlerNotReady
                 })?,
                 resolver.clone(),
+                runtime.credential_driver_effects(credential_agent_ready_probe(
+                    Arc::clone(&credential_agent_client),
+                    _zone.clone(),
+                )),
+                committed_provider_identities,
             )
             .map_err(|error| {
                 tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 plane inputs construction failed");
@@ -16086,6 +16108,9 @@ async fn open_resource_plane(
                 tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
+            // Fill the Credential agent probe's manager handle before the
+            // bundle lands, so the first credential reconcile sees it.
+            let _ = credential_agent_client.set(Arc::new(plane_v3.client().clone()));
             plane_v3
                 .complete_initial_load()
                 .await
@@ -16105,7 +16130,7 @@ async fn open_resource_plane(
                 pass_through = report.pass_through_count,
                 "v3 resource plane nix ingestion complete"
             );
-            v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
+            v3_planes.insert(_zone.as_str().to_owned(), std::sync::Arc::new(plane_v3));
         }
         match plane.insert(runtime) {
             Ok(_) => {}
@@ -16117,6 +16142,13 @@ async fn open_resource_plane(
                 return Err(error);
             }
         }
+    }
+    // Publish the per-zone v3 planes (F1 wiring): the resource runtime's
+    // manager-backed API backend resolves its manager client + watch hub
+    // from here.
+    {
+        let mut parked = state.v3_planes.lock();
+        *parked = v3_planes.into_iter().collect();
     }
     compose_gateway_zone_links(state, &mut plane, &topology).await;
     if plane.ready_zone_count() == 0 {
@@ -16918,6 +16950,7 @@ impl VmStartRunner<'_> {
                 tracing_span_id: None,
                 inherited_fd_count: 0,
                 network_tap_context: self.network_tap_context.clone(),
+                            launch_args: None,
             }),
             self.caller_role.clone(),
             timeout,
@@ -23582,6 +23615,7 @@ mod public_status_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -25589,6 +25623,7 @@ pub(crate) mod detached_exec_routing_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -25596,43 +25631,6 @@ pub(crate) mod detached_exec_routing_tests {
         PeerIdentity {
             role: PeerRole::Admin,
             uid: 4242,
-        }
-    }
-
-    #[tokio::test]
-    async fn production_u8_effects_fail_closed_without_authoritative_runtime() {
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let effects = resource_runtime::DaemonSharedProviderEffects::new(
-            Arc::new(state),
-            ZoneId::parse("work").unwrap(),
-        );
-        for registration in resource_runtime::U8_SHARED_PROVIDER_RUNNERS {
-            let resource_ref =
-                ResourceRef::parse(&format!("{}/u8-test", registration.resource_type)).unwrap();
-            let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-            let resource = ResourceSnapshot::new(
-                ResourceKey::new(
-                    ZoneId::parse("work").unwrap(),
-                    resource_ref,
-                    uid,
-                ),
-                ZoneRevision::new(1),
-                ResourceGeneration::new(1).unwrap(),
-                serde_json::to_vec(&serde_json::json!({
-                    "type": registration.resource_type,
-                    "metadata": {"uid": "123e4567-e89b-42d3-a456-426614174000"},
-                    "spec": {"providerRef": registration.provider_ref},
-                    "status": {"phase": "Pending"}
-                }))
-                .unwrap(),
-                false,
-            );
-            assert!(!matches!(
-                effects
-                    .test_reconcile_registration(registration, &resource)
-                    .await,
-                Ok(resource_runtime::SharedProviderEffectPhase::Ready)
-            ));
         }
     }
 
@@ -25724,6 +25722,7 @@ mod accept_loop_concurrency_tests {
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -26462,6 +26461,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -26513,6 +26513,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         }
     }
 
@@ -28030,6 +28031,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -28284,6 +28286,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         let listener = socket(
@@ -28582,6 +28585,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -30600,6 +30604,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         // Emit the same event that the timeout handler in
@@ -31751,6 +31756,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         // Set a 0ms readiness timeout via the test-only config override so the
@@ -31891,6 +31897,7 @@ mod broker_dispatch_tests {
                 0,
                 [],
             )),
+            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
         };
 
         let response = dispatch_broker_vm_start(

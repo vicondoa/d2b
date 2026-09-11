@@ -13,7 +13,8 @@ use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
     BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
     GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest, OpenPidfdRequest,
-    RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
+    RunnerLaunchArgs, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
+    SpawnRunnerRequest,
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, execution_policy::ExecutionDomain};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
@@ -83,6 +84,9 @@ pub struct BrokerLaunchIntent {
     pub activation_input: Option<ActivationRunnerInput>,
     /// Exact authenticated binding for a Guest-local Process.
     pub guest_execution: Option<BrokerGuestExecutionBinding>,
+    /// Whether the resolved template admits controller-supplied launch
+    /// arguments (the broker re-checks the same fence before exec).
+    pub accepts_launch_args: bool,
 }
 
 impl std::fmt::Debug for BrokerLaunchIntent {
@@ -426,6 +430,20 @@ impl BundleBackedLaunchResolver {
             }
             _ => return Err(ProcessEffectError::IdentityChanged),
         };
+        let binding_worker_launch = ticket
+            .owner_ref()
+            .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
+        // KTD7 host-exec/guest-target split: a binding-owned serving worker
+        // executes on the Host the signed serving template binds; the
+        // attachment's Guest is only the ticket's target ref. The launch's
+        // VM identity is therefore the execution host, exactly as the
+        // serving intent was minted under it (the broker daemon fences the
+        // requested vm_id against the intent's own vm name).
+        let launch_vm_name = if binding_worker_launch {
+            ticket.execution_ref().name().as_str()
+        } else {
+            vm_name
+        };
         let process_role_id = ticket.process_ref().name().as_str();
         let intent_id = intent_id_legacy_runner(vm_name, process_role_id);
         let expected_execution_ref = ticket.execution_ref().to_canonical_string();
@@ -458,6 +476,16 @@ impl BundleBackedLaunchResolver {
                     Some("Provider/credential-managed-identity"),
                 )
             });
+        let binding_worker_intent = if binding_worker_launch {
+            self.bundle.find_volume_binding_worker_intent(
+                &expected_execution_ref,
+                expected_execution_domain,
+                expected_user_ref.as_deref(),
+                ticket.template().as_str(),
+            )
+        } else {
+            None
+        };
         let generic_intent = if let Some(owner) = ticket
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
@@ -503,6 +531,7 @@ impl BundleBackedLaunchResolver {
             "process-controller" => (
                 static_controller_intent
                     .or(provider_component_intent)
+                    .or(binding_worker_intent)
                     .or(generic_intent)
                     .ok_or_else(|| {
                         warn!(
@@ -536,7 +565,9 @@ impl BundleBackedLaunchResolver {
             ProcessRole::CloudHypervisorRunner => "ch-runner",
             _ => intent.role_id.as_str(),
         };
-        if intent.vm_name != vm_name || (legacy_identity && intent.role_id != process_role_id) {
+        if intent.vm_name != launch_vm_name
+            || (legacy_identity && intent.role_id != process_role_id)
+        {
             warn!(
                 provider = "supervisor",
                 resource = %ticket.process_ref().to_canonical_string(),
@@ -583,8 +614,13 @@ impl BundleBackedLaunchResolver {
             }
         }
         let inherited_fd_count = ticket.inherited_fd_table().count();
-        if (role == RunnerRole::ProviderController && !(1..=2).contains(&inherited_fd_count))
-            || (role != RunnerRole::ProviderController && inherited_fd_count != 0)
+        // A binding-owned serving worker is a controller-role launch that
+        // carries no broker escrow descriptors: it receives none and must
+        // request none.
+        let expects_bootstrap_fds =
+            role == RunnerRole::ProviderController && !binding_worker_launch;
+        if (expects_bootstrap_fds && !(1..=2).contains(&inherited_fd_count))
+            || (!expects_bootstrap_fds && inherited_fd_count != 0)
         {
             warn!(
                 provider = "supervisor",
@@ -666,7 +702,7 @@ impl BundleBackedLaunchResolver {
                     controller_generation: binding.controller_generation().get(),
                 });
         Ok(BrokerLaunchIntent {
-            vm_id: VmId::new(vm_name),
+            vm_id: VmId::new(launch_vm_name),
             zone_uid: ticket.zone_uid().cloned(),
             owner_ref: ticket.owner_ref().cloned(),
             owner_uid: ticket.owner_uid().cloned(),
@@ -699,12 +735,13 @@ impl BundleBackedLaunchResolver {
                     warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
-                "identity-rejection: trusted bundle content identity missing"
-                    );
+                    "identity-rejection: trusted bundle content identity missing"
+                );
                     ProcessEffectError::IdentityChanged
                 })?,
             activation_input: ticket.activation_input().cloned(),
             guest_execution,
+            accepts_launch_args: intent.accepts_launch_args,
             sandbox_plan: ticket.sandbox_plan().map(|plan| {
                 let spec = plan.spec();
                 SandboxLaunchPlan {
@@ -943,6 +980,23 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         let (request, inherited_fds) = request.into_parts();
         let intent = self.resolver.resolve(&request)?;
         let inherited_fd_count = request.ticket().inherited_fd_table().count();
+        // Controller-supplied arguments are admitted only by the resolved
+        // template's own declaration; every other template refuses them here
+        // (and the broker re-checks the same fence).
+        let launch_args = if request.ticket().launch_args().is_empty() {
+            None
+        } else if intent.accepts_launch_args {
+            Some(
+                RunnerLaunchArgs::new(request.ticket().launch_args().to_vec())
+                    .map_err(|_| ProcessEffectError::LaunchFailed)?,
+            )
+        } else {
+            warn!(
+                provider = "supervisor",
+                "launch rejected: resolved template does not admit controller-supplied arguments"
+            );
+            return Err(ProcessEffectError::UnsupportedProvider);
+        };
         let frame = self.request_with_fds(
             BrokerRequest::SpawnRunner(SpawnRunnerRequest {
                 execution_ref: Some(intent.execution_ref.clone()),
@@ -961,9 +1015,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 template_identity: intent.wire_template_identity(),
                 generation: intent.wire_generation(),
                 runtime_scope: intent.wire_runtime_scope(),
-                guest_execution: intent.guest_execution.clone(),
                 sandbox_plan: intent.sandbox_plan.clone(),
                 activation_input: intent.activation_input.clone(),
+                guest_execution: intent.guest_execution.clone(),
+                launch_args,
                 role: intent.role,
                 bundle_runner_intent_ref: intent.bundle_runner_intent_ref.clone(),
                 runtime_allocations: Vec::new(),
@@ -1466,6 +1521,7 @@ mod tests {
                 sandbox_plan: None,
                 activation_input: None,
                 guest_execution: None,
+                accepts_launch_args: false,
             },
             pid: i32::from(seed) + 1,
             start_time_ticks: u64::from(seed) + 1,

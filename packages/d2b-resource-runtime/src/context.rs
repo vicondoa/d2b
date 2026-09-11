@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::ResourceError;
 use crate::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
+use crate::manager::ResourceView;
 use crate::spec_store::EnsureOutcome;
 use crate::target::TargetHandle;
 
@@ -57,9 +58,19 @@ pub struct EffectCompleted {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchCondition {
     /// Satisfied when the watched resource's status reports ready.
+    ///
+    /// Satisfaction wakes the *subscriber's actor*
+    /// (`ResourceMsg::DependencySatisfied`), which reconciles; the driver
+    /// then proves readiness by reading the observed state back through
+    /// [`ResourceContext::get_view`] (the watch is the wake-up, the read is
+    /// the proof). This is the seam readiness checks use.
     Ready,
     /// Named custom predicate; the target actor's driver supplies the
     /// predicate implementation by id.
+    ///
+    /// Not implemented: the target actor evaluates every custom predicate as
+    /// unsatisfied, so readiness is expressed with [`Self::Ready`] until the
+    /// driver-supplied predicate hook lands (U6+).
     Custom(String),
 }
 
@@ -139,6 +150,12 @@ pub enum ManagerCall {
         key: ResourceKey,
         reply: oneshot::Sender<Result<Option<StoredDesiredResource>, ResourceError>>,
     },
+    /// Live runtime view (row plus published status) for one resource
+    /// (`ResourceContext::get_view`).
+    GetView {
+        key: ResourceKey,
+        reply: oneshot::Sender<Result<Option<ResourceView>, ResourceError>>,
+    },
     Delete {
         key: ResourceKey,
         reply: oneshot::Sender<Result<(), ResourceError>>,
@@ -173,6 +190,10 @@ pub trait ManagerEndpoint: Send + Sync + 'static {
         child: ChildEnsure,
     ) -> Result<EnsureOutcome, ResourceError>;
     async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError>;
+    /// Live runtime view of one resource, its published status included
+    /// (the manager's in-memory projection; see
+    /// [`ResourceContext::get_view`] for the absent/unknown semantics).
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError>;
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError>;
     async fn list_owned(&self, owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError>;
     async fn register_watch(
@@ -210,6 +231,15 @@ impl ManagerEndpoint for ChannelManagerEndpoint {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(ManagerCall::Get { key: key.clone(), reply })
+            .await
+            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
+        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+    }
+
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(ManagerCall::GetView { key: key.clone(), reply })
             .await
             .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
         rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
@@ -351,6 +381,10 @@ pub struct ResourceContext {
     next_operation: u64,
     decoded_spec: OnceCell<Box<dyn Any + Send>>,
     status: Option<Box<dyn Any + Send>>,
+    /// The owning resource's key, resolved by the manager from the row's
+    /// owner uid. Drivers select their launch shape from it; `None` for
+    /// roots and for rows whose owner row is not in this manager.
+    owner_key: Option<crate::identity::ResourceKey>,
 }
 
 impl ResourceContext {
@@ -376,7 +410,22 @@ impl ResourceContext {
             next_operation: 1,
             decoded_spec: OnceCell::new(),
             status: None,
+            owner_key: None,
         }
+    }
+
+    /// Attach the owning resource's key (manager-resolved).
+    pub fn with_owner_key(mut self, owner_key: Option<crate::identity::ResourceKey>) -> Self {
+        self.owner_key = owner_key;
+        self
+    }
+
+    /// The owning resource's key, when this resource is an owned child and
+    /// its owner row is known to this manager. Drivers that key their launch
+    /// intent on the owner (provider controllers, binding-owned workers)
+    /// read it from here.
+    pub fn owner_key(&self) -> Option<&crate::identity::ResourceKey> {
+        self.owner_key.as_ref()
     }
 
     /// Durable identity of the resource being driven.
@@ -401,6 +450,16 @@ impl ResourceContext {
     /// key where a key is needed.
     pub fn owner(&self) -> Option<&[u8; 16]> {
         self.row.owner_uid.as_ref()
+    }
+
+    /// Opaque authored metadata envelope of the current desired row.
+    ///
+    /// The manager resolves an owner key only for owners that are rows it
+    /// manages; a driver that must name an owner which is not a managed row
+    /// (an owned child of an unconverted resource) reads the authored owner
+    /// reference here. The spec itself is reached through [`Self::spec`].
+    pub fn metadata(&self) -> &[u8] {
+        &self.row.metadata
     }
 
     /// Typed decode of the stored spec envelope through the wired hook.
@@ -443,6 +502,42 @@ impl ResourceContext {
     /// Fetch a resource row by key through the manager.
     pub async fn get(&mut self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
         self.manager.get(key).await
+    }
+
+    /// Live state of another resource (KTD3): the manager's in-memory
+    /// runtime view for `key` - the committed row plus the status its actor
+    /// last published (R11: memory only, zero store reads) and the row
+    /// generation that status was published for.
+    ///
+    /// This is *observed* state, and the answer is explicit about what is
+    /// not known:
+    ///
+    /// - `Ok(None)`: **absent** - no row for `key` exists in this manager's
+    ///   Zone (never created, already retired, or owned by another Zone).
+    /// - `Ok(Some(view))` with `view.status == None`: the row exists but no
+    ///   actor has ever published a status for it (spawn still in flight,
+    ///   poisoned spawn, actor restart). **Unknown**, never "not ready".
+    /// - `Ok(Some(view))` with
+    ///   `view.status_generation != Some(view.generation)`: the last
+    ///   published status describes an older generation, so it is not
+    ///   observed state of the current row.
+    ///   [`ResourceView::observed_status`] folds both of the last two cases
+    ///   into `None`.
+    /// - `Err(ResourceError::ManagerRpc(_))`: the manager could not answer.
+    ///   Never reported as absence.
+    ///
+    /// Readiness of a child or dependency is therefore
+    /// `view.observed_status() == Some(ResourceStatus::Ready)`; when the
+    /// answer is not-ready, a [`Self::watch`] on [`WatchCondition::Ready`]
+    /// wakes this resource's actor on the transition and the next reconcile
+    /// re-reads here.
+    ///
+    /// The read is one manager mailbox round-trip answered from the
+    /// manager's in-memory projection (no store access, KTD12), and it
+    /// blocks nothing but the calling driver's own await - the same shape as
+    /// [`Self::get`].
+    pub async fn get_view(&mut self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        self.manager.view(key).await
     }
 
     /// Ensure an owned child resource through the manager (R8, R9): the
@@ -525,6 +620,7 @@ pub(crate) mod test_support {
     };
     use crate::error::ResourceError;
     use crate::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+    use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
     use crate::target::TargetHandle;
 
@@ -566,6 +662,10 @@ pub(crate) mod test_support {
         }
 
         async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("dead manager".into()))
+        }
+
+        async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
             Err(ResourceError::ManagerRpc("dead manager".into()))
         }
 
@@ -787,6 +887,8 @@ mod tests {
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.get(&key).await.unwrap_err();
         assert!(matches!(error, ResourceError::ManagerRpc(_)));
+        let error = endpoint.view(&key).await.unwrap_err();
+        assert!(matches!(error, ResourceError::ManagerRpc(_)), "the live read fails loudly too");
 
         // Manager receives the request and drops it without replying.
         let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
@@ -795,6 +897,21 @@ mod tests {
             let _ = rx.recv().await; // take the request, never reply
         });
         let error = endpoint.get(&key).await.unwrap_err();
+        assert!(matches!(error, ResourceError::ManagerRpc(_)));
+    }
+
+    /// The live read (`ResourceContext::get_view`, `ManagerEndpoint::view`)
+    /// never fabricates absence: a request the manager drops without
+    /// replying surfaces as `ResourceError::ManagerRpc`.
+    #[tokio::test]
+    async fn dropped_view_request_surfaces_as_manager_rpc_error() {
+        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
+        let endpoint = super::ChannelManagerEndpoint::new(tx);
+        tokio::spawn(async move {
+            let _ = rx.recv().await; // take the request, never reply
+        });
+        let key = ResourceKey::new("z", "Volume", "data");
+        let error = endpoint.view(&key).await.unwrap_err();
         assert!(matches!(error, ResourceError::ManagerRpc(_)));
     }
 

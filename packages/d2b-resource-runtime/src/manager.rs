@@ -43,7 +43,7 @@
 
 pub const MODULE_NAME: &str = "manager";
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -161,7 +161,30 @@ pub struct ResourceView {
     pub provenance: ResourceProvenance,
     pub spec: Vec<u8>,
     pub metadata: Vec<u8>,
+    /// The owning resource's key, resolved from the row's owner uid (KTD2
+    /// persists ownership by uid). Drivers and API reads that key on the
+    /// owner - launch intents, owned-child filters - read it here.
+    pub owner_key: Option<ResourceKey>,
     pub status: Option<ResourceStatus>,
+    /// The row generation the in-memory status was published for. An actor is
+    /// notified once per committed generation, so a status published before a
+    /// spec change must not be read as observed state of the newer row.
+    pub status_generation: Option<u64>,
+}
+
+impl ResourceView {
+    /// The status the owning actor published **for this exact row
+    /// generation**: `None` while nothing has been published for the row,
+    /// and `None` for a status carried over from an older generation - a
+    /// status published before a spec change is not observed state of the
+    /// newer row (see [`Self::status_generation`]).
+    ///
+    /// This is the accessor drivers read to prove a child or dependency
+    /// Ready: comparing [`Self::status`] alone would let a stale `Ready` from
+    /// generation N pass as readiness of generation N+1.
+    pub fn observed_status(&self) -> Option<ResourceStatus> {
+        self.status.filter(|_| self.status_generation == Some(self.generation))
+    }
 }
 
 /// Filter for [`ResourceManagerMsg::List`]. Absent fields are wildcards.
@@ -229,8 +252,12 @@ pub enum ResourceManagerMsg {
     },
     /// A resource actor transitioned its in-memory status (R11): update the
     /// runtime view and publish to the hub; zero persistent writes (AE6).
+    /// `generation` is the row generation the actor held when it published
+    /// the status, so a status delivered after a newer spec committed is
+    /// never recorded as observed state of that newer row.
     RuntimeChanged {
         key: ResourceKey,
+        generation: u64,
         status: ResourceStatus,
     },
     /// Bookkeeping from spawn flows (spec section 4).
@@ -308,6 +335,14 @@ pub struct ResourceManagerState {
     /// Runtime resource index (spec section 4).
     rows: HashMap<ResourceKey, StoredDesiredResource>,
     statuses: HashMap<ResourceKey, ResourceStatus>,
+    /// The generation each published status belongs to (see
+    /// [`ResourceView::status_generation`]).
+    status_generations: HashMap<ResourceKey, u64>,
+    /// Rows whose cleanup completed at their actor while owned children were
+    /// still retiring: the row holds (with its durable deleting mark) until
+    /// the last child row retires, so no parent row disappears ahead of an
+    /// owned child (F3; the volume fixture reads the mark in this window).
+    pending_retirement: HashSet<ResourceKey>,
     actors: HashMap<ResourceKey, ActorRef<ResourceMsg>>,
     actors_by_id: HashMap<ractor::ActorId, ResourceKey>,
     by_uid: HashMap<[u8; 16], ResourceKey>,
@@ -349,6 +384,15 @@ pub(crate) fn deterministic_uid(key: &ResourceKey) -> [u8; 16] {
 }
 
 impl ResourceManagerState {
+    /// The owning resource's key for one row. The durable row carries the
+    /// owner uid only (KTD2), so the manager resolves the key through its uid
+    /// index; `None` when the row is a root or its owner row is not in this
+    /// manager.
+    fn row_owner_key(&self, key: &ResourceKey) -> Option<ResourceKey> {
+        let owner_uid = self.rows.get(key)?.owner_uid?;
+        self.by_uid.get(&owner_uid).cloned()
+    }
+
     fn view(&self, key: &ResourceKey) -> Option<ResourceView> {
         let row = self.rows.get(key)?;
         Some(ResourceView {
@@ -359,7 +403,9 @@ impl ResourceManagerState {
             provenance: row.provenance,
             spec: row.spec.clone(),
             metadata: row.metadata.clone(),
+            owner_key: self.row_owner_key(key),
             status: self.statuses.get(key).copied(),
+            status_generation: self.status_generations.get(key).copied(),
         })
     }
 
@@ -371,17 +417,27 @@ impl ResourceManagerState {
             .entry(ResourceTypeName::new(key.type_name.clone()))
             .or_default()
             .insert(key.clone());
-        if let Some(owner_uid) = row.owner_uid {
-            if let Some(owner_key) = self.by_uid.get(&owner_uid).cloned() {
-                self.by_owner.entry(owner_key).or_default().insert(key.clone());
-            }
-        }
-        self.rows.insert(key, row);
+        self.rows.insert(key.clone(), row);
+        self.link_row_owner(&key);
+    }
+
+    /// Link a row into its owner's owned-child set. The link needs the
+    /// owner's uid indexed, so on load the caller indexes every row before
+    /// linking ([`ResourceManager::pre_start`]).
+    fn link_row_owner(&mut self, key: &ResourceKey) {
+        let Some(owner_uid) = self.rows.get(key).and_then(|row| row.owner_uid) else {
+            return;
+        };
+        let Some(owner_key) = self.by_uid.get(&owner_uid).cloned() else {
+            return;
+        };
+        self.by_owner.entry(owner_key).or_default().insert(key.clone());
     }
 
     /// Drop all index entries for a key (deletion completed).
     fn unindex_row(&mut self, key: &ResourceKey) {
         self.statuses.remove(key);
+        self.status_generations.remove(key);
         if let Some(row) = self.rows.remove(key) {
             self.by_uid.remove(&row.uid);
             self.by_type
@@ -416,6 +472,38 @@ impl ResourceManagerState {
         self.dependents.remove(key);
     }
 
+    /// Whether a cleanup-completed row still has owned children retiring.
+    fn has_live_children(&self, key: &ResourceKey) -> bool {
+        self.by_owner.get(key).is_some_and(|children| !children.is_empty())
+    }
+
+    /// Retire one cleanup-completed row whose owned children are gone: drop
+    /// the durable row, retire the index entries, and publish the deletion.
+    /// An owner whose own cleanup completed while this row was still alive
+    /// retires in the same step - children first, parents last (F3), so the
+    /// durable deleting mark stays observable for the whole teardown.
+    async fn retire_row(&mut self, key: &ResourceKey) {
+        let owner_key = self
+            .rows
+            .get(key)
+            .and_then(|row| row.owner_uid)
+            .and_then(|owner_uid| self.by_uid.get(&owner_uid).cloned());
+        let _ = self.store.remove_after_cleanup(key.clone()).await;
+        self.unindex_row(key);
+        self.pending_retirement.remove(key);
+        self.hub.publish(ChangeNotice {
+            key: key.clone(),
+            kind: ChangeKind::Delete,
+            source: ChangeSource::Desired,
+        });
+        if let Some(owner_key) = owner_key
+            && self.pending_retirement.contains(&owner_key)
+            && !self.has_live_children(&owner_key)
+        {
+            Box::pin(self.retire_row(&owner_key)).await;
+        }
+    }
+
     /// Resolves the per-type decoder (falling back to the configured
     /// default) and spawns the resource actor linked to this manager (R17).
     /// The spawn happens only after the caller committed the row (F1).
@@ -434,6 +522,7 @@ impl ResourceManagerState {
             manager,
             decoder,
             backoff: self.backoff,
+            owner_key: self.row_owner_key(&row.key),
         };
         match ResourceActor::spawn_linked(None, ResourceActor::new(), args, self.my_cell.clone())
             .await
@@ -502,6 +591,13 @@ impl ResourceManagerState {
         let committed = outcome.row().clone();
         let changed = matches!(outcome, EnsureOutcome::Created(_) | EnsureOutcome::Updated(_));
         self.index_row(committed.clone());
+        if matches!(outcome, EnsureOutcome::Updated(_)) {
+            // The committed generation moved past the published status: the
+            // actor republishes after `SpecChanged`, and until it does the
+            // runtime view claims no observed state for the new row.
+            self.statuses.remove(&committed.key);
+            self.status_generations.remove(&committed.key);
+        }
         if changed {
             // Desired-state change publishes into the hub (F4); status stays
             // in memory (AE6).
@@ -532,7 +628,8 @@ impl ResourceManagerState {
 
     /// Durable deletion (R10, F3): mark deleting (commit), cascade to owned
     /// children, then run cleanup through the actor. Absent resources are a
-    /// no-op; resources that never realized effects are cleaned up inline.
+    /// no-op; a resource that never realized effects is retired as soon as
+    /// its owned children retire (no actor to run cleanup through).
     async fn remove_internal(
         &mut self,
         subject: &MutationSubject,
@@ -560,8 +657,10 @@ impl ResourceManagerState {
         }
         match self.store.mark_deleting(key.clone()).await {
             Ok(row) => {
+                let generation = row.generation;
                 self.rows.insert(key.clone(), row);
                 self.statuses.insert(key.clone(), ResourceStatus::Deleting);
+                self.status_generations.insert(key.clone(), generation);
                 self.hub.publish(ChangeNotice {
                     key: key.clone(),
                     kind: ChangeKind::Upsert,
@@ -577,14 +676,14 @@ impl ResourceManagerState {
             }
             None => {
                 // Nothing was ever realized on a target: cleanup is
-                // trivially complete; retire the row now.
-                let _ = self.store.remove_after_cleanup(key.clone()).await;
-                self.unindex_row(key);
-                self.hub.publish(ChangeNotice {
-                    key: key.clone(),
-                    kind: ChangeKind::Delete,
-                    source: ChangeSource::Desired,
-                });
+                // trivially complete. Retire the row now - or hold it until
+                // its owned children retire, exactly as a completed
+                // cleanup does.
+                if self.has_live_children(key) {
+                    self.pending_retirement.insert(key.clone());
+                } else {
+                    self.retire_row(key).await;
+                }
             }
         }
         Ok(())
@@ -645,6 +744,8 @@ impl Actor for ResourceManager {
             my_cell: myself.get_cell(),
             rows: HashMap::new(),
             statuses: HashMap::new(),
+            status_generations: HashMap::new(),
+            pending_retirement: HashSet::new(),
             actors: HashMap::new(),
             actors_by_id: HashMap::new(),
             by_uid: HashMap::new(),
@@ -666,8 +767,19 @@ impl Actor for ResourceManager {
             .list(crate::spec_store::SpecSelector::default())
             .await
             .map_err(|error| ActorProcessingErr::from(error.to_string()))?;
+        // Ownership links are rebuilt only after every row is indexed: the
+        // durable listing order is (zone, type, name), which can place
+        // children ("Endpoint", "Process") ahead of their owner
+        // ("VolumeBinding"), and an insert-time link would silently drop
+        // those edges. Without them a resumed delete retires the parent
+        // while its children are still tearing down (F3).
+        for row in rows.iter().cloned() {
+            state.index_row(row);
+        }
+        for row in &rows {
+            state.link_row_owner(&row.key);
+        }
         for row in rows {
-            state.index_row(row.clone());
             let _ = state.spawn_resource_actor(myself.clone(), row).await;
         }
         Ok(state)
@@ -730,11 +842,17 @@ impl Actor for ResourceManager {
                 // within the epoch (F4, R23).
                 reply.send(Ok(state.hub.register(selector, after))).ok();
             }
-            ResourceManagerMsg::RuntimeChanged { key, status } => {
+            ResourceManagerMsg::RuntimeChanged { key, generation, status } => {
                 // Status is in-memory only (R11): update the view model and
-                // publish; no store write (AE6).
+                // publish; no store write (AE6). The recorded generation is
+                // the one the actor published the status FOR, not whatever
+                // the row holds by the time the message is processed: a
+                // status in flight across an Ensure(N+1) commit must not be
+                // read as observed state of the newer row (see
+                // `ResourceView::status_generation`).
                 if state.rows.contains_key(&key) {
                     state.statuses.insert(key.clone(), status);
+                    state.status_generations.insert(key.clone(), generation);
                     state.hub.publish(ChangeNotice {
                         key,
                         kind: ChangeKind::Upsert,
@@ -835,16 +953,12 @@ impl Actor for ResourceManager {
                 reply.send(result).ok();
             }
             ResourceManagerMsg::DeletionComplete { key } => {
-                // Cleanup finished (F3): remove the spec row, retire the
-                // index entries, publish the deletion. The actor stops
-                // itself; supervision sees no entry and does not respawn.
-                let _ = state.store.remove_after_cleanup(key.clone()).await;
-                state.unindex_row(&key);
+                // Cleanup finished (F3). The actor stopped itself either
+                // way, so drop its bookkeeping before the row: supervision
+                // events are delivered ahead of regular mailbox traffic, and
+                // an ActorTerminated racing ahead of this message must not
+                // respawn the finished resource.
                 state.actors.remove(&key);
-                // Drop the id mapping too: supervision events are delivered
-                // ahead of regular mailbox traffic, so an ActorTerminated
-                // racing ahead of this message must not respawn the
-                // finished resource.
                 let dead: Vec<ractor::ActorId> = state
                     .actors_by_id
                     .iter()
@@ -854,11 +968,16 @@ impl Actor for ResourceManager {
                 for id in dead {
                     state.actors_by_id.remove(&id);
                 }
-                state.hub.publish(ChangeNotice {
-                    key,
-                    kind: ChangeKind::Delete,
-                    source: ChangeSource::Desired,
-                });
+                if state.has_live_children(&key) {
+                    // Owned children are still retiring: hold the row (and
+                    // its durable deleting mark) until the last one retires.
+                    // A parent row must not disappear ahead of an owned
+                    // child, and the mark is what makes the in-progress
+                    // deletion observable to reads (F3).
+                    state.pending_retirement.insert(key);
+                } else {
+                    state.retire_row(&key).await;
+                }
             }
         }
         Ok(())
@@ -1094,6 +1213,10 @@ impl ManagerEndpoint for ManagerActorEndpoint {
         self.rpc(|reply| ResourceManagerMsg::GetRow { key: key.clone(), reply }).await
     }
 
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::Get { key: key.clone(), reply }).await
+    }
+
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
         let subject = MutationSubject {
             principal: key.to_string(),
@@ -1280,6 +1403,7 @@ fn selector_matches(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::Ordering as AtomicOrdering;
     use std::time::Duration;
 
@@ -1290,8 +1414,8 @@ mod tests {
     use crate::error::ResourceError;
     use crate::identity::ResourceTypeName;
     use crate::resource::test_support::{
-        desired, harness, harness_over, harness_with, key, subject, until, wait_row_gone,
-        wait_status,
+        FakeFactory, desired, harness, harness_over, harness_over_with_factory, harness_with, key,
+        subject, until, wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -1433,6 +1557,53 @@ mod tests {
         assert!(h.client.get_row(parent.clone()).await.expect("get_row").is_some());
     }
 
+    /// F3 ordering: a cleanup-completed parent row holds - durable deleting
+    /// mark included - until its owned children retire, so a child row never
+    /// outlives its parent and reads observe the in-progress deletion (the
+    /// volume fixture reads the parent's `deletionRequestedAt` in exactly
+    /// this window).
+    #[tokio::test]
+    async fn parent_row_retires_after_its_owned_children() {
+        let h = harness(&["Volume", "Worker"]).await;
+        let parent = key("test", "Volume", "data");
+        let child = key("test", "Worker", "helper");
+        h.client.ensure(subject(), None, desired("Volume", "data", b"vol")).await.expect("parent");
+        h.client
+            .reconcile_children(
+                parent.clone(),
+                vec![ChildEnsure {
+                    type_name: ResourceTypeName::new("Worker"),
+                    name: "helper".to_owned(),
+                    spec: b"w".to_vec(),
+                    metadata: Vec::new(),
+                }],
+            )
+            .await
+            .expect("child");
+
+        // The child's cleanup blocks, so the parent's own cleanup completes
+        // while the child row is provably still alive.
+        let cshare = h.factory.shared(&child);
+        cshare.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        let pshare = h.factory.shared(&parent);
+        h.client.remove(subject(), parent.clone()).await.expect("remove");
+        until(|| pshare.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        until(|| cshare.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let parent_row =
+            h.client.get_row(parent.clone()).await.expect("get_row").expect("held parent row");
+        assert!(parent_row.deleting, "the held parent row keeps its durable deleting mark");
+        assert!(
+            h.client.get_row(child.clone()).await.expect("get_row").is_some(),
+            "the child row is still tearing down"
+        );
+
+        // Releasing the child retires it first, then the held parent.
+        cshare.open_gate();
+        wait_row_gone(&h.client, &child).await;
+        wait_row_gone(&h.client, &parent).await;
+    }
+
     /// R10 + the Ensure-during-deleting rejection: a resource with the
     /// durable deleting mark committed rejects a late Ensure with the typed
     /// deleting conflict, surfaced through the manager.
@@ -1467,6 +1638,220 @@ mod tests {
         wait_row_gone(&h.client, &k).await;
     }
 
+    /// R35 blocker (F3, crash resume): the durable listing order is
+    /// `(zone, type, name)`, so a restart loads a Volume chain's children
+    /// (`Endpoint`, `Process`) before the `VolumeBinding` that owns them.
+    /// Ownership must be linked after every row is indexed; with insert-time
+    /// linking the binding's owned-child set is empty on resume, so a crash
+    /// mid-delete retires the binding (and its Volume) while the children
+    /// are still tearing down. Fails on the insert-time link: the binding
+    /// (and Volume) rows disappear inside the observed window.
+    #[tokio::test]
+    async fn resumed_delete_holds_reloaded_parent_until_children_retire() {
+        use crate::identity::ResourceProvenance;
+        use crate::spec_store::StoredDesiredResource;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            crate::spec_store::SpecStore::open(tmp.path().join("specs.sqlite")).expect("store"),
+        );
+        let volume = key("test", "Volume", "data");
+        let binding = key("test", "VolumeBinding", "binding");
+        let worker = key("test", "Process", "worker");
+        let endpoint = key("test", "Endpoint", "ep");
+        let uid = |key: &crate::identity::ResourceKey| crate::manager::deterministic_uid(key);
+        let row = |key: &crate::identity::ResourceKey, owner_uid: Option<[u8; 16]>, spec: &[u8]| {
+            StoredDesiredResource {
+                key: key.clone(),
+                uid: uid(key),
+                generation: 1,
+                owner_uid,
+                provenance: ResourceProvenance::Resource,
+                deleting: false,
+                spec: spec.to_vec(),
+                metadata: Vec::new(),
+                created_at: 0,
+            }
+        };
+        store.ensure(row(&volume, None, b"vol")).await.expect("volume row");
+        store
+            .ensure(row(&binding, Some(uid(&volume)), b"binding"))
+            .await
+            .expect("binding row");
+        store
+            .ensure(row(&worker, Some(uid(&binding)), b"worker"))
+            .await
+            .expect("worker row");
+        store
+            .ensure(row(&endpoint, Some(uid(&binding)), b"endpoint"))
+            .await
+            .expect("endpoint row");
+        // Crash mid-delete: every row carries the durable deleting mark.
+        for key in [&volume, &binding, &worker, &endpoint] {
+            store.mark_deleting(key.clone()).await.expect("deleting mark");
+        }
+
+        // The durable load order that puts the children ahead of the owner.
+        let listed: Vec<String> = store
+            .list(crate::spec_store::SpecSelector::default())
+            .await
+            .expect("list rows")
+            .into_iter()
+            .map(|row| row.key.type_name)
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                "Endpoint".to_owned(),
+                "Process".to_owned(),
+                "Volume".to_owned(),
+                "VolumeBinding".to_owned(),
+            ],
+            "fixture must exercise the adversarial (zone, type, name) load order"
+        );
+
+        // The resumed children's cleanup stays gated until the test releases
+        // it, so the parent rows must be held in between. The gate is set on
+        // the shared factory BEFORE the manager loads rows and spawns actors.
+        let factory = Arc::new(FakeFactory::new(&[
+            "Volume",
+            "VolumeBinding",
+            "Process",
+            "Endpoint",
+        ]));
+        factory.shared(&worker).delete_blocked.store(true, AtomicOrdering::SeqCst);
+        factory.shared(&endpoint).delete_blocked.store(true, AtomicOrdering::SeqCst);
+        let restarted = harness_over_with_factory(
+            store.clone(),
+            "test",
+            factory.clone(),
+            Duration::from_millis(200),
+        )
+        .await;
+
+        until(|| {
+            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst) >= 1
+        })
+        .await;
+        until(|| {
+            factory.shared(&worker).delete_calls.load(AtomicOrdering::SeqCst) >= 1
+        })
+        .await;
+        until(|| {
+            factory.shared(&endpoint).delete_calls.load(AtomicOrdering::SeqCst) >= 1
+        })
+        .await;
+
+        // Children-first on the resume path: while the blocked child rows
+        // exist, the binding and its Volume stay present with the deleting
+        // mark. Insert-time linkage retires them within this window.
+        for _ in 0..25 {
+            let binding_row = restarted
+                .client
+                .get_row(binding.clone())
+                .await
+                .expect("get_row");
+            assert!(
+                binding_row.is_some_and(|row| row.deleting),
+                "a cleanup-completed binding must hold until its owned children retire"
+            );
+            let volume_row = restarted
+                .client
+                .get_row(volume.clone())
+                .await
+                .expect("get_row");
+            assert!(
+                volume_row.is_some_and(|row| row.deleting),
+                "a cleanup-completed Volume must not retire ahead of its binding"
+            );
+            assert!(
+                restarted
+                    .client
+                    .get_row(worker.clone())
+                    .await
+                    .expect("get_row")
+                    .is_some(),
+                "the blocked child row stays durable until its cleanup completes"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Releasing the children completes the resumed cascade: children
+        // first, then the binding, then the Volume.
+        factory.shared(&worker).open_gate();
+        factory.shared(&endpoint).open_gate();
+        wait_row_gone(&restarted.client, &worker).await;
+        wait_row_gone(&restarted.client, &endpoint).await;
+        wait_row_gone(&restarted.client, &binding).await;
+        wait_row_gone(&restarted.client, &volume).await;
+    }
+
+    /// R35 finding: a status published for generation N and delivered after
+    /// an `Ensure(N+1)` commit must be recorded against the generation it
+    /// was published for, never against the row the manager happens to hold
+    /// when the message is processed. Recording it against N+1 would make
+    /// the read projection serve `phase: Ready, observedGeneration: N+1` for
+    /// a generation the actor never reconciled.
+    #[tokio::test]
+    async fn in_flight_status_keeps_its_published_generation() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"one"))
+            .await
+            .expect("ensure");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let published = h.client.get_row(k.clone()).await.expect("get_row").expect("row");
+        let published_generation = published.generation;
+
+        // Commit generation N+1 and wait for the actor's status for it, so
+        // the stale delivery below is the only in-flight status.
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"two"))
+            .await
+            .expect("changed ensure");
+        let advanced = h.client.get_row(k.clone()).await.expect("get_row").expect("row");
+        assert_eq!(advanced.generation, published_generation + 1);
+        for _ in 0..500 {
+            let view = h.client.get(k.clone()).await.expect("get").expect("view");
+            if view.status == Some(ResourceStatus::Ready)
+                && view.status_generation == Some(advanced.generation)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Deliver the status published for N after the N+1 commit (exactly
+        // the queued-message shape the review found).
+        h.client
+            .actor()
+            .send_message(crate::manager::ResourceManagerMsg::RuntimeChanged {
+                key: k.clone(),
+                generation: published_generation,
+                status: ResourceStatus::Ready,
+            })
+            .expect("queued status delivery");
+        for _ in 0..50 {
+            let view = h.client.get(k.clone()).await.expect("get").expect("view");
+            if view.status_generation == Some(published_generation) {
+                assert_eq!(
+                    view.generation,
+                    advanced.generation,
+                    "the status must not advance the row generation it describes"
+                );
+                assert_eq!(
+                    view.observed_status(),
+                    None,
+                    "a status published for an older generation is not observed state of the row"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("stale status delivery was not recorded against its published generation");
+    }
+
     /// R14: two `Reconcile` messages on one resource while an effect is in
     /// flight never overlap - the guard coalesces them, and the driver is
     /// entered exactly once more after the effect completes.
@@ -1478,9 +1863,7 @@ mod tests {
         *shared.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
         let handle =
             h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
-        eprintln!("DBG after ensure: reconcile_calls={}", shared.reconcile_calls.load(AtomicOrdering::SeqCst));
         until(|| {
-            eprintln!("DBG poll reconcile_calls={}", shared.reconcile_calls.load(AtomicOrdering::SeqCst));
             shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1
         })
         .await;
@@ -1598,6 +1981,134 @@ mod tests {
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(rx.try_recv().is_err(), "exactly one notification per registration");
+    }
+
+    /// KTD3 gap fix: a driver proves a child's live phase through its own
+    /// context (`ResourceContext::get_view`) once the child's actor has
+    /// published status - the read the volume leg (KTD6) and the child-set
+    /// readiness lanes could not reach through `get`/`children`.
+    #[tokio::test]
+    async fn driver_reads_child_live_phase_through_its_context() {
+        let h = harness(&["Parent", "Worker"]).await;
+        let parent = key("test", "Parent", "p");
+        let child = key("test", "Worker", "w");
+        let pshare = h.factory.shared(&parent);
+        // The parent's driver reads the child's live view on every reconcile.
+        *pshare.view_targets.lock() = vec![child.clone()];
+
+        let handle = h
+            .client
+            .ensure(subject(), None, desired("Parent", "p", b"p"))
+            .await
+            .expect("parent");
+        h.client
+            .ensure(subject(), Some(parent.clone()), desired("Worker", "w", b"w"))
+            .await
+            .expect("child");
+        wait_status(&h.client, &child, ResourceStatus::Ready).await;
+
+        // Force one more parent reconcile so the read observes published
+        // state rather than whatever the start pass raced.
+        handle.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        until(|| {
+            pshare.view_reads.lock().iter().any(|read| {
+                read.key == child
+                    && read
+                        .view
+                        .as_ref()
+                        .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+            })
+        })
+        .await;
+
+        let reads = pshare.view_reads.lock();
+        let read = reads.iter().rev().find(|read| read.key == child).expect("child read");
+        let view = read.view.as_ref().expect("the child row exists");
+        assert_eq!(view.key, child);
+        assert_eq!(view.owner_key.as_ref(), Some(&parent), "the view names the owning resource");
+        assert_eq!(view.status, Some(ResourceStatus::Ready));
+        assert_eq!(view.status_generation, Some(view.generation));
+        assert_eq!(view.generation, 1);
+    }
+
+    /// KTD3 gap fix: a driver-declared readiness watch on a dependency wakes
+    /// its actor when the dependency becomes Ready, and the woken driver
+    /// proves the dependency ready through its context read.
+    #[tokio::test]
+    async fn driver_readiness_watch_wakes_the_subscriber_and_the_read_proves_ready() {
+        let h = harness(&["Dep", "Target"]).await;
+        let dep = key("test", "Dep", "d");
+        let target = key("test", "Target", "t");
+        let dshare = h.factory.shared(&dep);
+        let tshare = h.factory.shared(&target);
+        // The target holds its first reconcile open until the gate opens, so
+        // it is not Ready while the dependent registers its watch.
+        *tshare.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        *dshare.watch_target.lock() = Some(target.clone());
+        *dshare.view_targets.lock() = vec![target.clone()];
+
+        h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dep");
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        let reconciles_before = dshare.reconcile_calls.load(AtomicOrdering::SeqCst);
+        assert!(
+            dshare.view_reads.lock().iter().all(|read| read
+                .view
+                .as_ref()
+                .is_none_or(|view| view.observed_status() != Some(ResourceStatus::Ready))),
+            "the dependency is not ready while the watch is registered"
+        );
+
+        // The dependency becomes ready: its gated effect completes.
+        tshare.open_gate();
+
+        // The satisfaction wakes the dependent's actor, which reconciles and
+        // re-reads the dependency; the read now proves it Ready.
+        until(|| dshare.reconcile_calls.load(AtomicOrdering::SeqCst) > reconciles_before).await;
+        until(|| {
+            dshare.view_reads.lock().iter().any(|read| {
+                read.key == target
+                    && read
+                        .view
+                        .as_ref()
+                        .is_some_and(|view| view.observed_status() == Some(ResourceStatus::Ready))
+            })
+        })
+        .await;
+        wait_status(&h.client, &target, ResourceStatus::Ready).await;
+    }
+
+    /// The documented absent/unknown semantics of the live read: a key with
+    /// no row answers `Ok(None)` (absent), and a key whose row exists with
+    /// nothing published answers a view with no status at all (unknown,
+    /// never a fabricated `Pending`).
+    #[tokio::test]
+    async fn live_read_documents_absent_and_unpublished_rows() {
+        let h = harness(&["Other"]).await; // factory does NOT cover "Ghost"
+        let home = key("test", "Other", "home");
+        let ghost = key("test", "Ghost", "g");
+        let absent = key("test", "Other", "never-created");
+        let shared = h.factory.shared(&home);
+        *shared.view_targets.lock() = vec![ghost.clone(), absent.clone()];
+
+        // A poisoned spawn leaves the committed row with no actor, so nothing
+        // has ever published a status for it.
+        h.client
+            .ensure(subject(), None, desired("Ghost", "g", b"spec"))
+            .await
+            .expect_err("spawn fails after the commit");
+        h.client.ensure(subject(), None, desired("Other", "home", b"home")).await.expect("home");
+        until(|| shared.view_reads.lock().len() >= 2).await;
+
+        let reads = shared.view_reads.lock();
+        let ghost_read = reads.iter().find(|read| read.key == ghost).expect("ghost read");
+        let view = ghost_read.view.as_ref().expect("the committed row is visible");
+        assert_eq!(view.generation, 1);
+        assert!(view.status.is_none(), "no status has ever been published for the row");
+        assert!(view.status_generation.is_none());
+        assert!(view.observed_status().is_none(), "unpublished status is unknown, not Pending");
+        let absent_read = reads.iter().find(|read| read.key == absent).expect("absent read");
+        assert!(absent_read.view.is_none(), "a key with no row answers absent");
     }
 
     /// Spec section 32: the delete path cancels the pending requeue timer -

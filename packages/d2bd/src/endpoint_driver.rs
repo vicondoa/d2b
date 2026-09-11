@@ -21,6 +21,8 @@
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
 #![allow(dead_code)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
@@ -144,11 +146,16 @@ pub(crate) trait EndpointDriverEffects: Send + Sync + 'static {
         -> Result<(), String>;
 }
 
+/// Boxed future returned by the production presence probe: resolving the
+/// socket target is store-backed (the registry loads derived-child rows from
+/// the authority on a miss), so the port cannot be a sync closure.
+pub(crate) type SocketPresenceFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+
 /// Production effects over the preserved endpoint realization. U9 wires the
 /// adapter construction (the same inputs the old serving effect adapter
 /// assembled).
 pub(crate) struct ProductionEndpointDriverEffects {
-    present: Arc<dyn Fn(&ResourceRef, &str) -> bool + Send + Sync>,
+    present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
     ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
     remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
 }
@@ -161,7 +168,7 @@ pub(crate) trait AsyncSocketEffect: Send + Sync {
 
 impl ProductionEndpointDriverEffects {
     pub(crate) fn new(
-        present: Arc<dyn Fn(&ResourceRef, &str) -> bool + Send + Sync>,
+        present: Arc<dyn for<'a> Fn(&'a ResourceRef, &'a str) -> SocketPresenceFuture<'a> + Send + Sync>,
         ensure: Arc<dyn AsyncSocketEffect + Send + Sync>,
         remove: Arc<dyn AsyncSocketEffect + Send + Sync>,
     ) -> Self {
@@ -172,7 +179,7 @@ impl ProductionEndpointDriverEffects {
 #[async_trait::async_trait]
 impl EndpointDriverEffects for ProductionEndpointDriverEffects {
     async fn socket_present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        (self.present)(producer_ref, purpose)
+        (self.present)(producer_ref, purpose).await
     }
 
     async fn ensure_socket(
@@ -484,6 +491,13 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("dead".into()))
+        }
+
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
             Err(ResourceError::ManagerRpc("dead".into()))
         }
 

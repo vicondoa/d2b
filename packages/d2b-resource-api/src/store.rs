@@ -102,6 +102,41 @@ impl RedbBackend {
     }
 }
 
+/// A backend backed by the durable Redb resource store. Controller-source
+/// adapters bind through it (R35/F1: the Zone API backend may be wrapped by
+/// the per-type partition and still expose its Redb store).
+pub trait RedbStoreSource {
+    fn redb_store_arc(&self) -> Result<Arc<d2b_resource_store_redb::RedbResourceStore>, StoreBindingError>;
+}
+
+impl RedbStoreSource for RedbBackend {
+    fn redb_store_arc(&self) -> Result<Arc<d2b_resource_store_redb::RedbResourceStore>, StoreBindingError> {
+        Ok(self.store_arc())
+    }
+}
+
+/// One sealed-commit call boxed over the concrete backend (R35/F1: the Zone
+/// API backend may be partition-wrapped; the controller-source commit path
+/// captures the backend generically).
+pub type BoxedCommitFn = std::sync::Arc<
+    dyn Fn(AdmittedMutation) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<StoreCommitResult, StoreError>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// Capture one checked store's sealed-commit path as a backend-agnostic
+/// boxed call.
+pub fn box_commit<S>(checked: Arc<CheckedResourceStore<S>>) -> BoxedCommitFn
+where
+    S: ResourceStoreBackend + 'static,
+{
+    std::sync::Arc::new(move |admitted| {
+        let checked = Arc::clone(&checked);
+        Box::pin(async move { checked.commit(admitted).await })
+    })
+}
+
 impl ResourceStoreBackend for RedbBackend {
     async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
         self.store.get(request).await

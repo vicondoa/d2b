@@ -456,6 +456,13 @@ pub struct ResolvedRunnerIntent {
     /// Umask the broker installs in the spawned child before execve.
     /// None = inherit broker umask.
     pub umask: Option<u32>,
+    /// Whether the template admits controller-supplied launch arguments.
+    ///
+    /// The broker always composes `argv[0]` from `binary_path`; when this is
+    /// true the owning Process controller may append bounded arguments. A
+    /// launch that supplies arguments for a template that does not declare
+    /// them is refused fail-closed.
+    pub accepts_launch_args: bool,
 }
 
 /// Single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
@@ -551,6 +558,7 @@ impl ResolvedRunnerIntent {
             profile_id: profile_id.clone(),
             user_namespace: user_namespace.map(UserNamespaceSpec::from),
             umask: *umask,
+            accepts_launch_args: false,
         })
     }
 }
@@ -2360,6 +2368,32 @@ impl BundleResolver {
         matches.next().is_none().then_some(first)
     }
 
+    /// Find the unique binding-owned serving-worker intent for one execution
+    /// target. VolumeBinding-owned virtiofsd workers resolve through the
+    /// owning Provider's signed serving template, never through the guest
+    /// VMM chain (old `resource_ticket`'s VolumeBinding branch). The launch
+    /// ticket pins the template to the resolved intent's role id, so the
+    /// lookup accepts either that exact role id or the serving template
+    /// name, and refuses ambiguity.
+    pub fn find_volume_binding_worker_intent(
+        &self,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        user_ref: Option<&str>,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let mut matches = self.runner_intents.values().filter(|intent| {
+            intent.role == ProcessRole::ProviderController
+                && intent.owner_ref.as_deref() == Some("Provider/volume-virtiofs")
+                && intent.execution_ref == execution_ref
+                && intent.execution_domain == execution_domain
+                && intent.user_ref.as_deref() == user_ref
+                && (intent.role_id == template || intent.profile_id == template)
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
     pub fn find_socket_intent(&self, id: &str) -> Option<&ResolvedSocketIntent> {
         self.socket_intents.get(id)
     }
@@ -2445,6 +2479,42 @@ impl BundleResolver {
             .paths
             .iter()
             .find(|spec| spec.id.as_str() == id)
+    }
+
+    /// Resolve the served view root of one local-path Volume: the trusted
+    /// storage path row for the Volume's source policy, the per-Volume
+    /// subdirectory the daemon provisions, and the named view's relative path.
+    ///
+    /// Returns `None` for source kinds whose root this resolver does not
+    /// derive (NixClosure farm views are broker-managed), and refuses any
+    /// non-anchored result, so a serving worker never receives a path the
+    /// trusted bundle did not name.
+    pub fn resolve_volume_view_root(
+        &self,
+        storage_path_id: &str,
+        volume_name: &str,
+        view_path: &str,
+    ) -> Option<PathBuf> {
+        if volume_name.is_empty() || volume_name == "." || volume_name == ".." {
+            return None;
+        }
+        let root = self.find_storage_path_spec(storage_path_id)?;
+        let mut path = PathBuf::from(root.path_template.as_str());
+        path.push(volume_name);
+        if !view_path.is_empty() {
+            if view_path.starts_with('/') {
+                return None;
+            }
+            path.push(view_path);
+        }
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return None;
+        }
+        Some(path)
     }
 
     pub fn find_sync_lock_spec(&self, id: &str) -> Option<&crate::sync::LockSpec> {
@@ -4383,6 +4453,13 @@ fn build_provider_controller_intents(
                     .expect("SHA-256 always has four-byte prefixes"),
             ) & 0x00ff_ffff,
         );
+        // The binding-owned virtiofsd serving worker declares the frozen
+        // ADR 0021 sandbox posture in its Process spec: a user namespace
+        // with the process-principal-root mapping and no host capabilities.
+        // The broker daemon binds the launch's sandbox plan to this trusted
+        // profile, so the serving template must mint it here.
+        let serving_worker = binding.owner_ref().to_canonical_string() == "Provider/volume-virtiofs"
+            && profile_id == "virtiofsd-worker";
         let intent = ResolvedRunnerIntent {
             intent_id: intent_id_legacy_runner(&vm_name, &role_id),
             vm_name,
@@ -4405,7 +4482,7 @@ fn build_provider_controller_intents(
                 net: false,
                 ipc: false,
                 uts: false,
-                user: false,
+                user: serving_worker,
             },
             seccomp_policy_ref: Some("w1-provider-controller".to_owned()),
             mount_policy: MountPolicy {
@@ -4423,8 +4500,12 @@ fn build_provider_controller_intents(
             },
             root_carve_out: false,
             profile_id,
-            user_namespace: None,
+            user_namespace: serving_worker.then_some(UserNamespaceSpec {
+                host_uid_for_zero: principal_id,
+                host_gid_for_zero: principal_id,
+            }),
             umask: Some(0o022),
+            accepts_launch_args: binding.admits_launch_args(),
         };
         out.insert(intent.intent_id.clone(), intent);
     }
@@ -5532,6 +5613,7 @@ fn load_guest_vmm_intents(
             profile_id: profile_id.as_str().to_owned(),
             user_namespace: None,
             umask: Some(0o022),
+            accepts_launch_args: false,
         };
         if intents.insert(key.clone(), intent).is_some()
             || zone_uids.insert(key, zone_uid).is_some()

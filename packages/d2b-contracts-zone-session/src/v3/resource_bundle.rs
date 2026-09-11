@@ -227,6 +227,15 @@ pub struct ProcessTemplateBinding {
     binary_path: String,
     #[serde(default, skip_serializing_if = "is_false")]
     dynamic: bool,
+    /// Whether the owning controller may supply bounded launch arguments for
+    /// Processes resolved through this template.
+    ///
+    /// The broker composes `argv[0]` from `binary_path` always; this flag is
+    /// the template's declaration that the controller (Process controller
+    /// acting for its owner) may append arguments after it. Templates that do
+    /// not declare it refuse any supplied arguments fail-closed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    launch_args: bool,
 }
 
 impl ProcessTemplateBinding {
@@ -251,6 +260,7 @@ impl ProcessTemplateBinding {
             binary_ref,
             artifact_digest,
             binary_path,
+            false,
             false,
         )
     }
@@ -279,6 +289,34 @@ impl ProcessTemplateBinding {
             artifact_digest,
             binary_path,
             true,
+            false,
+        )
+    }
+
+    /// Construct one controller-created template whose Processes the owning
+    /// controller may launch with bounded arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_dynamic_with_launch_args(
+        process_ref: ResourceRef,
+        owner_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        template: BoundedToken,
+        artifact_id: ArtifactId,
+        binary_ref: BinaryRef,
+        artifact_digest: ArtifactDigest,
+        binary_path: impl Into<String>,
+    ) -> Result<Self, ResourceBundleError> {
+        Self::new_inner(
+            process_ref,
+            owner_ref,
+            execution_ref,
+            template,
+            artifact_id,
+            binary_ref,
+            artifact_digest,
+            binary_path,
+            true,
+            true,
         )
     }
 
@@ -293,6 +331,7 @@ impl ProcessTemplateBinding {
         artifact_digest: ArtifactDigest,
         binary_path: impl Into<String>,
         dynamic: bool,
+        launch_args: bool,
     ) -> Result<Self, ResourceBundleError> {
         let binary_path = binary_path.into();
         if process_ref.resource_type().as_str() != "Process"
@@ -319,6 +358,7 @@ impl ProcessTemplateBinding {
             artifact_digest,
             binary_path,
             dynamic,
+            launch_args,
         })
     }
 
@@ -366,6 +406,11 @@ impl ProcessTemplateBinding {
     pub const fn is_dynamic(&self) -> bool {
         self.dynamic
     }
+
+    /// Whether the owning controller may append bounded launch arguments.
+    pub const fn admits_launch_args(&self) -> bool {
+        self.launch_args
+    }
 }
 
 impl core::fmt::Debug for ProcessTemplateBinding {
@@ -389,6 +434,8 @@ impl<'de> Deserialize<'de> for ProcessTemplateBinding {
             binary_path: String,
             #[serde(default)]
             dynamic: bool,
+            #[serde(default)]
+            launch_args: bool,
         }
         let wire = Wire::deserialize(deserializer)?;
         Self::new_inner(
@@ -401,6 +448,7 @@ impl<'de> Deserialize<'de> for ProcessTemplateBinding {
             wire.artifact_digest,
             wire.binary_path,
             wire.dynamic,
+            wire.launch_args,
         )
         .map_err(serde::de::Error::custom)
     }

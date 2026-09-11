@@ -894,7 +894,10 @@ fn append_virtiofsd_worker_templates<'a>(
         .join(EXECUTABLE_DIR)
         .join(binary_ref.as_str());
     templates.push(
-        ProcessTemplateBinding::new_dynamic(
+        // The virtiofsd worker is the one template whose controller-derived
+        // arguments (socket path, served view root, thread pool, flags) carry
+        // per-binding launch data. The executable stays pinned here.
+        ProcessTemplateBinding::new_dynamic_with_launch_args(
             process_ref,
             provider_ref,
             execution_ref,

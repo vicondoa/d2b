@@ -11,6 +11,13 @@ use d2b_contracts_resource::v3::{
 };
 use sha2::{Digest, Sha256};
 
+/// Maximum controller-supplied launch arguments per ticket.
+pub const MAX_LAUNCH_ARGS: usize = 64;
+/// Maximum byte length of one controller-supplied launch argument.
+pub const MAX_LAUNCH_ARG_BYTES: usize = 4096;
+/// Maximum combined byte length of controller-supplied launch arguments.
+pub const MAX_LAUNCH_ARGS_TOTAL_BYTES: usize = 16 * 1024;
+
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
 use crate::sandbox::SandboxPlan;
@@ -398,6 +405,7 @@ pub struct LaunchTicket {
     expected_identity_digest: Option<ProcessIdentityDigest>,
     readiness: ReadinessExpectation,
     activation_input: Option<ActivationRunnerInput>,
+    launch_args: Vec<String>,
     inherited_fd_table: InheritedFdTable,
     sandbox: Option<SandboxPlan>,
     guest_execution: Option<GuestExecutionBinding>,
@@ -483,6 +491,7 @@ impl LaunchTicket {
             expected_identity_digest: None,
             readiness: ReadinessExpectation::None,
             activation_input: None,
+            launch_args: Vec::new(),
             inherited_fd_table,
             sandbox: None,
             guest_execution: None,
@@ -824,6 +833,38 @@ impl LaunchTicket {
     /// Borrow the closed activation-runner stdin input, when present.
     pub const fn activation_input(&self) -> Option<&ActivationRunnerInput> {
         self.activation_input.as_ref()
+    }
+
+    /// Bind bounded controller-supplied arguments to this launch.
+    ///
+    /// The executable is never carried here: the effect owner composes
+    /// `argv[0]` from the trusted intent's pinned binary and appends these
+    /// arguments. Refuses anything the exec path cannot round-trip, and
+    /// leaves the admission decision to the resolved template.
+    pub fn with_launch_args(mut self, args: Vec<String>) -> Result<Self, ProcessConformanceError> {
+        if !self.launch_args.is_empty() || args.is_empty() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        if args.len() > MAX_LAUNCH_ARGS {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        let mut total = 0usize;
+        for arg in &args {
+            if arg.is_empty() || arg.contains('\0') || arg.len() > MAX_LAUNCH_ARG_BYTES {
+                return Err(ProcessConformanceError::InvalidTicket);
+            }
+            total = total.saturating_add(arg.len());
+        }
+        if total > MAX_LAUNCH_ARGS_TOTAL_BYTES {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.launch_args = args;
+        Ok(self)
+    }
+
+    /// Borrow the controller-supplied launch arguments.
+    pub fn launch_args(&self) -> &[String] {
+        &self.launch_args
     }
 
     /// Borrow the typed sandbox plan, when this launch is a generic Process.

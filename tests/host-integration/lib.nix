@@ -593,9 +593,17 @@ rec {
         # The writableStore hardlink-farm tests stay on the default
         # same-fs layout, so this is opt-out for them.
         (lib.mkIf (! writableStore) {
+          # The image is a `pkgs.runCommand` output, so QEMU must not need
+          # write access to it: the lane builds these checks inside the Nix
+          # sandbox, where /nix/store is mounted read-only, and a writable
+          # drive on a store path makes QEMU abort at machine start - the
+          # test driver surfaces that as a bare "Connection reset by peer".
+          # `snapshot=on` opens the backing file read-only and keeps every
+          # guest write in an ephemeral per-VM overlay under TMPDIR, which
+          # matches the fixture's ephemeral state disk either way.
           virtualisation.qemu.options = [
             "-drive"
-            "file=${stateDisk},format=raw,if=virtio,cache=unsafe,aio=threads"
+            "file=${stateDisk},format=raw,if=virtio,cache=unsafe,aio=threads,snapshot=on"
           ];
           fileSystems."/var/lib/d2b" = {
             device = "/dev/vdb";

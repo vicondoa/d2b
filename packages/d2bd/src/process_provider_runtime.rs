@@ -20,6 +20,7 @@ use d2b_contracts_resource::v3::{
     ZoneRevision,
     process::ReadinessClass,
     process::{EphemeralProcessSpec, ProcessClass, ProcessSpec},
+    volume::{AttachmentAccess, AttachmentCache},
 };
 use d2b_core::{
     bundle_resolver::BundleResolver,
@@ -341,6 +342,38 @@ fn identity_changed_error(mismatches: Vec<String>) -> String {
     format!("provider-process-identity-changed:{}", mismatches.join(","))
 }
 
+/// Binding-declared launch inputs for one binding-owned serving worker.
+///
+/// The Process controller composes the worker's arguments from the owning
+/// VolumeBinding and the Volume it serves (KD13: the binding controller
+/// declares what to serve through its resources; the Process controller owns
+/// the launch). Nothing here names an executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServingWorkerLaunch {
+    /// Volume whose view the worker serves.
+    pub(crate) volume_ref: ResourceRef,
+    /// Named view served to the target Guest.
+    pub(crate) view: BoundedToken,
+    /// Attachment execution target (the ticket's guest target ref).
+    pub(crate) guest_ref: ResourceRef,
+    /// Trusted storage path row id (`path:<policy>`) for a local-path source.
+    pub(crate) storage_path_id: Option<String>,
+    /// View-relative path within the Volume root.
+    pub(crate) view_path: String,
+    /// Attachment access declared by the binding.
+    pub(crate) access: AttachmentAccess,
+    /// Resolved worker thread pool (attachment tuning or the declared default).
+    pub(crate) thread_pool_size: u32,
+    /// Whether POSIX ACLs are served.
+    pub(crate) posix_acl: bool,
+    /// Whether extended attributes are served.
+    pub(crate) xattr: bool,
+    /// Page-cache mode.
+    pub(crate) cache: AttachmentCache,
+    /// Optional resolved socket group name.
+    pub(crate) socket_group: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) zone: ZoneId,
@@ -370,6 +403,9 @@ pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) user_ref: Option<ResourceRef>,
     /// Catalog-bound private Guest setup descriptor digest.
     pub(crate) guest_descriptor_digest: Option<SchemaFingerprint>,
+    /// Binding-declared serving-worker launch inputs, when this Process is a
+    /// VolumeBinding-owned serving worker.
+    pub(crate) worker_launch: Option<ServingWorkerLaunch>,
 }
 
 impl<'a> ProcessResourceContext<'a> {
@@ -404,7 +440,14 @@ impl<'a> ProcessResourceContext<'a> {
             execution_ref: None,
             user_ref: None,
             guest_descriptor_digest: None,
+            worker_launch: None,
         }
+    }
+
+    /// Attach the binding-declared serving-worker launch inputs.
+    pub(crate) fn with_worker_launch(mut self, launch: Option<ServingWorkerLaunch>) -> Self {
+        self.worker_launch = launch;
+        self
     }
 
     pub(crate) fn with_guest_execution(mut self, binding: Option<&GuestExecutionBinding>) -> Self {
@@ -768,6 +811,9 @@ pub struct ProductionProcessProviders {
     minijail: MinijailProcessProvider<BrokerProcessSupervisor>,
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
+    /// Runtime root the private serving sockets of binding-owned workers live
+    /// under (the broker socket's parent directory).
+    socket_runtime_dir: PathBuf,
     mode: DaemonMode,
     fixed_effect: FixedEffectAdapter,
     guest_backend_supervisor: Option<Arc<dyn GuestCredentialBackendSupervisor>>,
@@ -808,6 +854,10 @@ impl ProductionProcessProviders {
         mode: DaemonMode,
     ) -> Self {
         let broker_socket = broker_socket.into();
+        let socket_runtime_dir = broker_socket
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
         let fixed_socket = broker_socket.clone();
         let daemon_uid = caller_uid(&caller_role);
         let resolver = BundleBackedLaunchResolver::new(bundle.clone()).with_observation_socket(
@@ -840,6 +890,7 @@ impl ProductionProcessProviders {
                 SystemdProcessBackend::new(systemd_owner),
             )),
             bundle,
+            socket_runtime_dir,
             mode,
             fixed_effect,
             guest_backend_supervisor: None,
@@ -1084,6 +1135,20 @@ impl ProductionProcessProviders {
             timeout,
             Some(spec.readiness().class()),
         )?;
+        // A binding-owned serving worker launches with the binding-declared
+        // arguments; the template decides whether that is admitted at all
+        // (the broker refuses supplied arguments on every other template).
+        let ticket = match context.worker_launch.as_ref() {
+            Some(launch) => ticket
+                .with_launch_args(serving_worker_launch_args(
+                    &self.bundle,
+                    &self.socket_runtime_dir,
+                    &context.zone,
+                    launch,
+                )?)
+                .map_err(|_| "provider-ticket:serving-args-invalid".to_owned())?,
+            None => ticket,
+        };
         self.retire_resource_if_identity_changed(
             &context,
             provider,
@@ -3388,6 +3453,76 @@ fn validate_resource_execution_target(
     Ok(())
 }
 
+/// Compose one binding-owned serving worker's launch arguments.
+///
+/// The executable is never named here: the trusted `virtiofsd-worker`
+/// template pins it, and the broker composes `argv[0]` from it. These
+/// arguments carry the per-binding data the binding controller declared
+/// (private socket path, served view root, thread pool, cache, flags).
+fn serving_worker_launch_args(
+    bundle: &BundleResolver,
+    socket_runtime_dir: &std::path::Path,
+    zone: &ZoneId,
+    launch: &ServingWorkerLaunch,
+) -> Result<Vec<String>, String> {
+    let zone_token = BoundedToken::parse(zone.as_str().to_owned())
+        .map_err(|_| "provider-ticket:serving-zone-invalid".to_owned())?;
+    let socket_path = crate::resource_plane_v3::virtiofs_socket_path(
+        socket_runtime_dir,
+        &zone_token,
+        &launch.volume_ref,
+        &launch.guest_ref,
+    )
+    .ok_or_else(|| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
+    let storage_path_id = launch
+        .storage_path_id
+        .as_deref()
+        .ok_or_else(|| "provider-ticket:serving-view-root-unsupported".to_owned())?;
+    let shared_dir = bundle
+        .resolve_volume_view_root(
+            storage_path_id,
+            launch.volume_ref.name().as_str(),
+            &launch.view_path,
+        )
+        .ok_or_else(|| "provider-ticket:serving-view-root-unresolved".to_owned())?;
+    // The worker binds its private socket as the in-namespace principal; the
+    // directory is realized before the launch (old-plane runtime-dir prep).
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
+    let cache = match launch.cache {
+        AttachmentCache::Auto => "auto",
+        AttachmentCache::Always => "always",
+        AttachmentCache::Never => "never",
+    };
+    let mut args = Vec::with_capacity(11);
+    args.push(format!("--socket-path={}", socket_path.display()));
+    if let Some(group) = launch.socket_group.as_deref() {
+        args.push(format!("--socket-group={group}"));
+    }
+    args.push(format!("--shared-dir={}", shared_dir.display()));
+    args.push(format!(
+        "--thread-pool-size={}",
+        launch.thread_pool_size.max(1)
+    ));
+    if launch.posix_acl {
+        args.push("--posix-acl".to_owned());
+    }
+    if launch.xattr {
+        args.push("--xattr".to_owned());
+    }
+    args.push(format!("--cache={cache}"));
+    args.push("--sandbox=chroot".to_owned());
+    args.push("--inode-file-handles=never".to_owned());
+    if launch.access == AttachmentAccess::ReadOnly {
+        args.push("--readonly".to_owned());
+    }
+    Ok(args)
+}
+
 fn resource_ticket(
     bundle: &BundleResolver,
     context: &ProcessResourceContext<'_>,
@@ -3456,6 +3591,10 @@ fn resource_ticket(
             owner_ref.as_deref(),
         )
     });
+    let binding_worker = context
+        .owner_ref
+        .as_ref()
+        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
     let generic_intent = if exact_static_controller {
         None
     } else if managed_identity_agent {
@@ -3466,11 +3605,7 @@ fn resource_ticket(
             execution.template().as_str(),
             Some("Provider/credential-managed-identity"),
         )
-    } else if context
-        .owner_ref
-        .as_ref()
-        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
-    {
+    } else if binding_worker {
         // Binding-owned serving workers resolve through the owning
         // Provider's signed serving template, not the guest VMM chain.
         if execution.template().as_str()
@@ -3522,12 +3657,13 @@ fn resource_ticket(
         .flatten()
         .or(generic_intent)
         .ok_or_else(|| "provider-ticket:template-not-found".to_owned())?;
-    let ticket_template = if exact_static_controller || managed_identity_agent {
-        execution.template().clone()
-    } else {
-        BoundedToken::parse(trusted_intent.role_id.clone())
-            .map_err(|_| "provider-ticket:invalid-template".to_owned())?
-    };
+    let ticket_template =
+        if exact_static_controller || managed_identity_agent || binding_worker {
+            execution.template().clone()
+        } else {
+            BoundedToken::parse(trusted_intent.role_id.clone())
+                .map_err(|_| "provider-ticket:invalid-template".to_owned())?
+        };
     let provider_name = context.provider_ref.name().as_str();
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| "provider-ticket:invalid-provider")?;
@@ -4329,6 +4465,48 @@ mod tests {
         assert!(ticket.resource_client_binding().is_none());
         assert!(ticket.execution_commitment().is_some());
         assert!(ticket.runtime_scope().is_some());
+    }
+
+    /// The controller bootstrap context (what the signed controller ticket
+    /// carries) forms only with the owning Provider's committed identity
+    /// bound; an unbound context refuses with the exact provider reason the
+    /// launch path surfaces (KTD7: the effects bind it, and a missing row
+    /// stays refused).
+    #[test]
+    fn controller_bootstrap_context_requires_the_bound_provider_identity() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let process_ref = ResourceRef::parse("Process/controller").expect("process ref");
+        let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider");
+        let owner = ResourceRef::parse("Provider/network-local").expect("owner");
+        let execution_ref = ResourceRef::parse("Host/host-system").expect("execution");
+        let process_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("process uid");
+        let provider_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("provider uid");
+        let provider_generation = ResourceGeneration::new(4).expect("generation");
+        let identity = ProcessIdentityDigest::from_bytes([0x11; 32]);
+        let context = ProcessResourceContext::new(
+            zone,
+            &process_ref,
+            &process_uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_owner_ref(Some(owner));
+        assert_eq!(
+            ControllerBootstrapContext::from_resource_context(&context, &execution_ref, identity)
+                .expect_err("an unbound controller identity refuses closed"),
+            "provider-controller-provider-identity-missing"
+        );
+        let bound = context.with_provider_identity(Some(&provider_uid), Some(provider_generation));
+        let bootstrap =
+            ControllerBootstrapContext::from_resource_context(&bound, &execution_ref, identity)
+                .expect("a bound controller identity forms the bootstrap context");
+        assert_eq!(bootstrap.provider_uid(), &provider_uid);
+        assert_eq!(bootstrap.provider_generation(), provider_generation);
     }
 
     #[test]

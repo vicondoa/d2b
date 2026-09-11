@@ -82,7 +82,8 @@ use d2b_resource_api::authz::{
     ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
     NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
 };
-use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_api::{ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2bd_runtime::resource_runtime_support::ZoneStoreBackend;
 use d2b_resource_store::{PolicySnapshot, StoredResource};
 use d2b_session::{
     AuthenticatedSessionRouteBinding, ComponentSessionDriver, OwnedAttachment, OwnedTransport,
@@ -414,7 +415,7 @@ where
         BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
     notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
     display_resource_client:
-        Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+        Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     clipboard_configuration: Option<CommittedClipboardProviderConfiguration>,
@@ -1018,7 +1019,7 @@ where
     /// owned by the system-core Resource API client.
     pub(crate) fn bind_display_resource_client(
         &mut self,
-        client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        client: Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
     ) {
         self.display_resource_client = Some(client);
     }
@@ -2785,7 +2786,7 @@ impl ProcessLaunchEffectPort for UnavailableProcessEffectPort {
 /// adapter in the production composition.
 pub struct DisplaySupervisorEffects<S> {
     _supervisor: S,
-    resource_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    resource_client: Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
     resource_zone: Option<ZoneId>,
     wayland_session_ref: Option<ResourceRef>,
     wayland_session_uid: Option<ResourceUid>,
@@ -2871,7 +2872,7 @@ where
     /// generic durable Process runtime.
     pub fn new_with_resource_client(
         supervisor: S,
-        resource_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        resource_client: Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
         zone: ZoneId,
         wayland_session_ref: ResourceRef,
         wayland_session_uid: ResourceUid,
@@ -4938,7 +4939,7 @@ pub(crate) struct ProductionInteractionResourceState<'a> {
     resource_ready: bool,
     configuration: Option<&'a CommittedInteractionProviderConfiguration>,
     identity: Option<&'a CommittedInteractionIdentity>,
-    system_core_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    system_core_client: Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
 }
 
 impl<'a> ProductionInteractionResourceState<'a> {
@@ -4951,7 +4952,7 @@ impl<'a> ProductionInteractionResourceState<'a> {
         configuration: Option<&'a CommittedInteractionProviderConfiguration>,
         identity: Option<&'a CommittedInteractionIdentity>,
         system_core_client: Option<
-            Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+            Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
         >,
     ) -> Self {
         Self {

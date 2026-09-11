@@ -35,7 +35,7 @@ use std::{
 use d2b_contracts_resource::v3::{
     AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
     ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
-    process::{DesiredLifecycle, ProcessSpec, RestartClass},
+    process::{DesiredLifecycle, ProcessClass, ProcessSpec, RestartClass},
 };
 use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, ProcessIdentityDigest};
 use d2b_resource_runtime::context::{
@@ -208,6 +208,10 @@ pub(crate) struct ProcessResourceIdentity {
     pub(crate) resource_ref: ResourceRef,
     pub(crate) resource_uid: ResourceUid,
     pub(crate) resource_generation: ResourceGeneration,
+    /// Spec `processClass` (decoded from the same durable row). Only
+    /// controller rows take the committed controller-provider identity, and
+    /// the effects cannot re-read the spec at finalize time (KTD7).
+    pub(crate) process_class: ProcessClass,
     pub(crate) provider_ref: ResourceRef,
     /// Semantic owner (binding workers, static controllers, guest VMM
     /// processes); the Phase A host driver leaves owner/target wiring to the
@@ -222,6 +226,9 @@ pub(crate) struct ProcessResourceIdentity {
     pub(crate) controller_provider_uid: Option<ResourceUid>,
     pub(crate) controller_provider_generation: Option<ResourceGeneration>,
     pub(crate) guest_execution: Option<GuestExecutionBinding>,
+    /// Binding-declared serving-worker launch inputs (VolumeBinding-owned
+    /// virtiofsd workers only).
+    pub(crate) worker_launch: Option<crate::process_provider_runtime::ServingWorkerLaunch>,
 }
 
 impl ProcessResourceIdentity {
@@ -234,10 +241,12 @@ impl ProcessResourceIdentity {
             &self.resource_ref,
             &self.resource_uid,
             self.resource_generation,
-            // The new store carries no per-commit zone revision; the provider
-            // identity fence does not compare revisions and the old zone-watch
-            // waiter registration is not part of the driver contract.
-            ZoneRevision::new(0),
+            // The new store has no zone-wide commit revision: the durable
+            // revision of a row is its generation. The launch ticket requires
+            // a non-zero resource revision, and the provider identity fence
+            // compares generations, not revisions, so the row generation is
+            // the honest binding here.
+            ZoneRevision::new(self.resource_generation.get()),
             &self.provider_ref,
             self.controller_generation,
             self.target_ref.clone(),
@@ -254,6 +263,7 @@ impl ProcessResourceIdentity {
             self.controller_provider_uid.as_ref(),
             self.controller_provider_generation,
         )
+        .with_worker_launch(self.worker_launch.clone())
     }
 }
 
@@ -329,14 +339,87 @@ pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
     ) -> bool;
 }
 
+/// KTD7 committed Provider identity source: the committed `Provider` rows
+/// (uid + generation) the per-zone plane publishes, resolved from the old
+/// plane's durable authority (the new store carries no `Provider` rows). The
+/// Process layer never reads a store itself (KTD7); a reference this source
+/// does not retain stays unbound, so the provider ticket path refuses the
+/// controller launch closed (`provider-controller-provider-identity-missing`).
+pub(crate) trait CommittedProviderIdentitySource: Send + Sync + 'static {
+    /// The committed row's identity for one `Provider` reference.
+    fn committed_provider_identity(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Option<(ResourceUid, ResourceGeneration)>;
+}
+
 /// Production effects over the composed fixed Providers.
 pub(crate) struct ProductionProcessDriverEffects {
     providers: Arc<ProductionProcessProviders>,
+    /// Committed Provider identities (KTD7), wired by the plane's
+    /// construction path from the composition-resolved snapshot.
+    committed_provider_identities: Option<Arc<dyn CommittedProviderIdentitySource>>,
 }
 
 impl ProductionProcessDriverEffects {
     pub(crate) fn new(providers: Arc<ProductionProcessProviders>) -> Self {
-        Self { providers }
+        Self {
+            providers,
+            committed_provider_identities: None,
+        }
+    }
+
+    /// Attach the committed Provider identity source (KTD7). Unwired effects
+    /// keep the driver-derived (unbound) identity, which the provider ticket
+    /// path refuses closed.
+    pub(crate) fn with_committed_provider_identities(
+        mut self,
+        source: Arc<dyn CommittedProviderIdentitySource>,
+    ) -> Self {
+        self.committed_provider_identities = Some(source);
+        self
+    }
+
+    /// The provider-layer context for one row, with the committed
+    /// controller-provider identity bound (KTD7).
+    fn resource_context<'a>(
+        &self,
+        identity: &'a ProcessResourceIdentity,
+    ) -> ProcessResourceContext<'a> {
+        bind_committed_controller_provider_identity(
+            identity,
+            self.committed_provider_identities.as_deref(),
+        )
+    }
+}
+
+/// Bind the committed Provider row's identity (KTD7) onto one controller
+/// row's provider context: a controller Process owned by a `Provider` takes
+/// that Provider's committed uid/generation when the driver left the identity
+/// unbound. Every other row - another process class, another owner type, an
+/// already-bound identity, or a Provider with no committed row - keeps the
+/// driver-derived context, so a genuinely missing row still refuses closed.
+fn bind_committed_controller_provider_identity<'a>(
+    identity: &'a ProcessResourceIdentity,
+    source: Option<&dyn CommittedProviderIdentitySource>,
+) -> ProcessResourceContext<'a> {
+    let context = identity.resource_context();
+    if identity.process_class != ProcessClass::Controller
+        || identity.controller_provider_uid.is_some()
+        || identity.controller_provider_generation.is_some()
+    {
+        return context;
+    }
+    let Some(provider_owner) = identity
+        .owner_ref
+        .as_ref()
+        .filter(|owner| owner.resource_type().as_str() == "Provider")
+    else {
+        return context;
+    };
+    match source.and_then(|source| source.committed_provider_identity(provider_owner)) {
+        Some((uid, generation)) => context.with_provider_identity(Some(&uid), Some(generation)),
+        None => context,
     }
 }
 
@@ -348,7 +431,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProcessIdentityDigest, String> {
-        let context = identity.resource_context();
+        let context = self.resource_context(identity);
         self.providers
             .launch_resource(context, spec, timeout)
             .await
@@ -361,7 +444,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         self.providers
-            .adopt_resource(identity.resource_context(), spec)
+            .adopt_resource(self.resource_context(identity), spec)
             .await
     }
 
@@ -373,7 +456,12 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         kill_timeout: Duration,
     ) -> Result<bool, String> {
         self.providers
-            .stop_resource(identity.resource_context(), spec, term_timeout, kill_timeout)
+            .stop_resource(
+                self.resource_context(identity),
+                spec,
+                term_timeout,
+                kill_timeout,
+            )
             .await
     }
 
@@ -389,7 +477,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
 
     async fn finalize(&self, identity: &ProcessResourceIdentity) -> Result<(), String> {
         self.providers
-            .finalize_resource(identity.resource_context())
+            .finalize_resource(self.resource_context(identity))
             .await
     }
 
@@ -637,9 +725,17 @@ impl ProcessDriver {
     /// Re-derive the adoption/launch identity (KTD7) from the durable row plus
     /// the zone-authority inputs. Target-local evidence (pidfd, /proc
     /// starttime, socket path) stays behind the provider effect port.
-    fn identity(
+    ///
+    /// A binding-owned virtiofsd worker executes on the host (the signed
+    /// `virtiofsd-worker` template binds the Host execution reference) and is
+    /// targeted at the attachment's Guest through the ticket's target ref
+    /// (KTD7) - the host-exec/guest-target split the old binding runner
+    /// preserved. The authoritative target input is the owning VolumeBinding
+    /// row's declared execution ref; every other owner keeps an unbound
+    /// target.
+    async fn identity(
         &self,
-        ctx: &ResourceContext,
+        ctx: &mut ResourceContext,
         provider_ref: &ResourceRef,
         op: DriverOp,
     ) -> Result<ProcessResourceIdentity, ProcessDriverError> {
@@ -654,15 +750,50 @@ impl ProcessDriver {
             .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
         let resource_generation = ResourceGeneration::new(ctx.generation())
             .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+        // The row's process class rides the identity: the production effects
+        // bind the committed controller-provider identity for controller rows
+        // and have no spec to consult when they finalize (KTD7).
+        let (_, spec) = self.decoded_spec(ctx, op)?;
+        let process_class = spec.execution().process_class();
+        let mut worker_launch = None;
+        let target_ref = match ctx.owner_key().cloned() {
+            Some(owner) if owner.type_name == "VolumeBinding" => match ctx.get(&owner).await {
+                Ok(Some(row)) => {
+                    let binding = serde_json::from_slice::<ResourceSpec>(&row.spec)
+                        .ok()
+                        .and_then(|envelope| {
+                            serde_json::from_slice::<
+                                d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+                            >(&envelope.base().to_canonical_bytes())
+                            .ok()
+                        });
+                    if let Some(binding) = binding.as_ref() {
+                        worker_launch = self
+                            .serving_worker_launch(ctx, binding, op)
+                            .await;
+                    }
+                    binding.map(|binding| binding.execution_ref().clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        };
         Ok(ProcessResourceIdentity {
             zone,
             resource_ref: ResourceRef::new(resource_type, name),
             resource_uid,
             resource_generation,
+            process_class,
             provider_ref: provider_ref.clone(),
-            owner_ref: None,
+            owner_ref: ctx
+                .owner_key()
+                .and_then(|owner| ResourceRef::parse(&format!("{}/{}", owner.type_name, owner.name)).ok())
+                // The manager resolves an owner key only for owners that are
+                // its own rows; an owned child of an unconverted owner falls
+                // back to the authored reference the row was ingested with.
+                .or_else(|| crate::resource_plane_v3::decode_metadata_owner_ref(ctx.metadata())),
             owner_uid: ctx.owner().and_then(resource_uid_from_bytes_bytes),
-            target_ref: None,
+            target_ref,
             zone_uid: self.authority.zone_uid.clone(),
             policy_revision: self.authority.policy_revision,
             provider_assignment_generation: self.authority.provider_assignment_generation,
@@ -670,6 +801,73 @@ impl ProcessDriver {
             controller_provider_uid: None,
             controller_provider_generation: None,
             guest_execution: self.authority.guest_execution.clone(),
+            worker_launch,
+        })
+    }
+
+    /// Derive the binding-declared serving-worker launch inputs.
+    ///
+    /// Only the signed `virtiofsd-worker` template on a VolumeBinding-owned
+    /// Process reaches this path; anything else keeps an unbound launch. The
+    /// declaration itself stays in the binding and Volume rows: the worker
+    /// serves the view the binding names, with the attachment tuning the
+    /// Volume declared.
+    async fn serving_worker_launch(
+        &self,
+        ctx: &mut ResourceContext,
+        binding: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+        op: DriverOp,
+    ) -> Option<crate::process_provider_runtime::ServingWorkerLaunch> {
+        let (_, spec) = self.decoded_spec(ctx, op).ok()?;
+        if spec.execution().template().as_str() != d2b_provider_volume_virtiofs::WORKER_TEMPLATE {
+            return None;
+        }
+        let volume_key = ResourceKey::new(
+            self.zone.as_str(),
+            "Volume",
+            binding.volume_ref().name().as_str(),
+        );
+        let row = ctx.get(&volume_key).await.ok().flatten()?;
+        let volume = serde_json::from_slice::<ResourceSpec>(&row.spec)
+            .ok()
+            .and_then(|envelope| {
+                serde_json::from_slice::<d2b_contracts_resource::v3::volume::VolumeSpec>(
+                    &envelope.base().to_canonical_bytes(),
+                )
+                .ok()
+            })?;
+        let view = volume.views().get(binding.view().as_str())?;
+        let attachment = volume
+            .attachments()
+            .iter()
+            .find(|attachment| attachment.execution_ref() == binding.execution_ref())?;
+        let settings = attachment.settings();
+        let source = volume.source();
+        let storage_path_id = match source.settings().kind() {
+            d2b_contracts_resource::v3::volume::SourceKind::LocalPath => {
+                let policy = source.settings().source_policy_id()?.as_str().to_owned();
+                Some(if policy == "state-root" || policy == "default-state" {
+                    "path:state-root".to_owned()
+                } else {
+                    format!("path:{policy}")
+                })
+            }
+            _ => None,
+        };
+        Some(crate::process_provider_runtime::ServingWorkerLaunch {
+            volume_ref: binding.volume_ref().clone(),
+            view: binding.view().clone(),
+            guest_ref: binding.execution_ref().clone(),
+            storage_path_id,
+            view_path: view.path().to_owned(),
+            access: binding.access(),
+            thread_pool_size: settings.thread_pool_size().unwrap_or(1),
+            posix_acl: settings.posix_acl(),
+            xattr: settings.xattr(),
+            cache: settings.cache(),
+            socket_group: settings
+                .socket_group()
+                .map(|group| group.as_str().to_owned()),
         })
     }
 
@@ -719,7 +917,19 @@ impl ProcessDriver {
             let effect_result = match effects.launch(&identity, &task_spec, LAUNCH_TIMEOUT).await {
                 Ok(_) => EffectResult::Completed,
                 Err(error) => {
-                    let _ = error;
+                    // The closed classification is what reaches status, and
+                    // status is memory-only (R11), so the journal is the only
+                    // place the provider's reason for refusing the launch is
+                    // observable.
+                    // `ResourceRef`'s `Display` is the redaction stub, so both
+                    // refs render canonically: the redacting form would make
+                    // the only diagnostic for a refused launch unreadable.
+                    tracing::warn!(
+                        resource = %identity.resource_ref.to_canonical_string(),
+                        provider = %identity.provider_ref.to_canonical_string(),
+                        error = %error,
+                        "process launch failed"
+                    );
                     if budget.allows(&task_spec) {
                         budget.record_restart();
                         EffectResult::Failed(DriverFailure::retryable(DriverOp::Reconcile))
@@ -742,6 +952,7 @@ fn resource_uid_from_bytes_bytes(bytes: &[u8; 16]) -> Option<d2b_contracts_resou
 /// Map preserved provider error spellings onto the closed driver kinds (the
 /// same classification as the old `map_provider_error`).
 fn map_provider_error(error: String, op: DriverOp) -> ProcessDriverError {
+    tracing::warn!(operation = ?op, error = %error, "process provider effect failed");
     let kind = if error.contains("template-not-found") {
         ProcessDriverErrorKind::TemplateUnavailable
     } else if error.contains("quarantined")
@@ -784,7 +995,7 @@ impl ResourceDriver for ProcessDriver {
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Recover)?;
         self.check_provider(&envelope, DriverOp::Recover)?;
-        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Recover)?;
+        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Recover).await?;
 
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
             ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
@@ -824,8 +1035,7 @@ impl ResourceDriver for ProcessDriver {
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         self.check_provider(&envelope, DriverOp::Reconcile)?;
-        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Reconcile)?;
-
+        let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Reconcile).await?;
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
             ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
             return Ok(ReconcileOutcome::Satisfied);
@@ -900,7 +1110,7 @@ impl ResourceDriver for ProcessDriver {
             // converged).
             return Ok(());
         };
-        let identity = match self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Delete) {
+        let identity = match self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Delete).await {
             Ok(identity) => identity,
             Err(_) => return Ok(()),
         };
@@ -954,7 +1164,8 @@ mod tests {
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, ProcessSpec, ResourceRef, ResourceUid, ZoneId,
+        ControllerGeneration, ProcessSpec, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+        process::ProcessClass,
     };
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
@@ -1226,6 +1437,13 @@ mod tests {
             Err(ResourceError::ManagerRpc("dead".into()))
         }
 
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            Err(ResourceError::ManagerRpc("dead".into()))
+        }
+
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
             Err(ResourceError::ManagerRpc("dead".into()))
         }
@@ -1412,6 +1630,150 @@ mod tests {
     }
 
     // -- factory -------------------------------------------------------------
+
+    /// A manager can resolve an owner key only for owners that are its own
+    /// rows. An owned child of an unconverted owner therefore carries no
+    /// owner key, and the launch ticket must still name its controller owner:
+    /// the authored reference the row was ingested with is the fallback.
+    #[tokio::test]
+    async fn identity_falls_back_to_the_authored_owner_reference() {
+        let mut row = test_row();
+        row.metadata =
+            br#"{"annotations":{},"labels":{},"ownerRef":"Provider/network-local"}"#.to_vec();
+        let mut f = fixture(row);
+        assert!(f.ctx.owner_key().is_none(), "fixture resolves no owner key");
+        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let identity = d
+            .typed
+            .identity(
+                &mut f.ctx,
+                &ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+                DriverOp::Reconcile,
+            )
+            .await
+            .expect("identity");
+        assert_eq!(
+            identity.owner_ref,
+            Some(ResourceRef::parse("Provider/network-local").expect("owner ref"))
+        );
+    }
+
+    // -- committed controller-provider identity (KTD7) -----------------------
+
+    /// The committed Provider uid the test source publishes.
+    const COMMITTED_PROVIDER_UID: &str = "123e4567-e89b-42d3-a456-426614174010";
+    /// The committed Provider generation the test source publishes.
+    const COMMITTED_PROVIDER_GENERATION: u64 = 4;
+
+    /// A controller-class Process row owned by a Provider: the row shape the
+    /// controller ticket needs its owner's committed identity for.
+    fn controller_row() -> StoredDesiredResource {
+        let mut row = test_row();
+        row.key = ResourceKey::new("work", "Process", "controller");
+        row.metadata =
+            br#"{"annotations":{},"labels":{},"ownerRef":"Provider/network-local"}"#.to_vec();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"controller","template":"reaction","drainTimeout":"250ms"}"#.to_vec();
+        row
+    }
+
+    async fn controller_identity(f: &mut Fixture) -> super::ProcessResourceIdentity {
+        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        d.typed
+            .identity(
+                &mut f.ctx,
+                &ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+                DriverOp::Reconcile,
+            )
+            .await
+            .expect("identity")
+    }
+
+    /// Fixed committed Provider rows: the view the plane registry publishes
+    /// after Nix bundle ingestion (KTD7).
+    #[derive(Default)]
+    struct FixedProviderIdentities(
+        std::collections::BTreeMap<String, (ResourceUid, ResourceGeneration)>,
+    );
+
+    impl FixedProviderIdentities {
+        fn with(mut self, provider_ref: &str, uid: &str, generation: u64) -> Self {
+            self.0.insert(
+                provider_ref.to_owned(),
+                (
+                    ResourceUid::parse(uid).expect("provider uid"),
+                    ResourceGeneration::new(generation).expect("provider generation"),
+                ),
+            );
+            self
+        }
+    }
+
+    impl super::CommittedProviderIdentitySource for FixedProviderIdentities {
+        fn committed_provider_identity(
+            &self,
+            provider_ref: &ResourceRef,
+        ) -> Option<(ResourceUid, ResourceGeneration)> {
+            self.0.get(&provider_ref.to_canonical_string()).cloned()
+        }
+    }
+
+    /// KTD7: a controller row owned by a Provider takes the owner's committed
+    /// uid/generation into the provider context, so the controller bootstrap
+    /// ticket forms instead of refusing with
+    /// `provider-controller-provider-identity-missing`.
+    #[tokio::test]
+    async fn controller_provider_identity_binds_the_committed_provider_row() {
+        let mut f = fixture(controller_row());
+        let identity = controller_identity(&mut f).await;
+        assert_eq!(
+            identity.process_class,
+            ProcessClass::Controller,
+            "the row decodes as a controller"
+        );
+        assert_eq!(
+            identity.owner_ref,
+            Some(ResourceRef::parse("Provider/network-local").expect("owner ref"))
+        );
+
+        let source = FixedProviderIdentities::default().with(
+            "Provider/network-local",
+            COMMITTED_PROVIDER_UID,
+            COMMITTED_PROVIDER_GENERATION,
+        );
+        let context = super::bind_committed_controller_provider_identity(
+            &identity,
+            Some(&source as &dyn super::CommittedProviderIdentitySource),
+        );
+        assert_eq!(
+            context.provider_uid.as_ref().map(ResourceUid::as_str),
+            Some(COMMITTED_PROVIDER_UID)
+        );
+        assert_eq!(
+            context.provider_generation,
+            Some(ResourceGeneration::new(COMMITTED_PROVIDER_GENERATION).expect("generation"))
+        );
+    }
+
+    /// KTD7: a Provider the daemon retains no committed row for - and an
+    /// unwired production effects value - leaves the identity unbound, so the
+    /// ticket path still refuses closed instead of inventing an identity.
+    #[tokio::test]
+    async fn controller_provider_identity_stays_unbound_without_a_committed_row() {
+        let mut f = fixture(controller_row());
+        let identity = controller_identity(&mut f).await;
+
+        let empty = FixedProviderIdentities::default();
+        let unretained = super::bind_committed_controller_provider_identity(
+            &identity,
+            Some(&empty as &dyn super::CommittedProviderIdentitySource),
+        );
+        assert_eq!(unretained.provider_uid, None);
+        assert_eq!(unretained.provider_generation, None);
+
+        let unwired = super::bind_committed_controller_provider_identity(&identity, None);
+        assert_eq!(unwired.provider_uid, None);
+        assert_eq!(unwired.provider_generation, None);
+    }
 
     #[tokio::test]
     async fn factory_registers_only_the_process_resource_type() {

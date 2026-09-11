@@ -18,7 +18,7 @@ pub use d2b_contracts::identity::{
     IdentityClass, IdentityError, MAX_QUALIFIED_RESOURCE_TYPE_BYTES, MAX_RESOURCE_NAME_BYTES,
     MAX_RESOURCE_TYPE_SEGMENT_BYTES, RESOURCE_BUNDLE_GENERATION_DOMAIN_TAG,
     ResourceBundleGenerationId, ResourceName, ResourceTypeName, ResourceUid,
-    STANDARD_RESOURCE_TYPES,
+    STANDARD_RESOURCE_TYPES, V3_CONVERTED_RESOURCE_TYPES,
 };
 
 fn string_schema(pattern: &str, min: u32, max: u32) -> Schema {

@@ -18,8 +18,9 @@ use d2b_contracts_resource::v3::{
 use d2b_core_controller::controller_assignment::{AssignmentVerb, ScopedResourceMutation};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
-    StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation,
-    StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
+    StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
+    StoreMutation, StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest,
+    StoredResource,
 };
 use protobuf::{Message, MessageField};
 
@@ -2745,6 +2746,7 @@ mod tests {
         owner.zone = "dev".to_owned();
         owner.resource_type = "Provider".to_owned();
         owner.name = "system-core".to_owned();
+
         value.owner = MessageField::some(owner);
         request.mutation = MessageField::some(value);
 
@@ -2802,6 +2804,7 @@ mod tests {
             .clone()
             .expect("store received canonical bytes");
         assert_eq!(stored, canonical_create);
+
         let value = CanonicalJsonValue::parse(&stored).unwrap();
         let CanonicalJsonValue::Object(root) = value else {
             panic!("store received a non-object resource body");

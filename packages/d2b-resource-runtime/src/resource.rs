@@ -210,6 +210,11 @@ pub struct ResourceActorArgs {
     pub decoder: Arc<dyn SpecDecoder>,
     /// Runtime-only retryable-failure backoff (R13, manager-configured).
     pub backoff: Duration,
+    /// The owning resource's key, resolved by the manager from the row's
+    /// owner uid (R8). Drivers select their launch shape from it (the
+    /// provider-controller and binding-worker ticket intents both key on the
+    /// owner reference), so a child row without it cannot bind a ticket.
+    pub owner_key: Option<crate::identity::ResourceKey>,
 }
 
 /// The resource actor's live state (spec section 8).
@@ -222,6 +227,8 @@ pub struct ResourceActorState {
     target: crate::target::TargetHandle,
     /// Runtime-only retryable-failure backoff (R13).
     backoff: Duration,
+    /// The owning resource's key (see [`ResourceActorArgs::owner_key`]).
+    owner_key: Option<crate::identity::ResourceKey>,
     /// Requeue timers (ractor timers, runtime-only, R13).
     timers: Arc<ActorTimers>,
 
@@ -260,13 +267,17 @@ pub struct ResourceActorState {
 impl ResourceActorState {
     /// Publish one status transition (R11, spec section 19): evaluate the
     /// internal watchers in the same handler and notify the manager, which
-    /// feeds the watch hub. Zero persistent writes on this path (AE6).
+    /// feeds the watch hub. Zero persistent writes on this path (AE6). The
+    /// message carries the row generation this actor holds, so a status that
+    /// crosses a spec commit is never recorded as state of the newer row.
     fn transition(&mut self, status: ResourceStatus) {
         self.status = status;
         self.evaluate_watchers();
-        let _ = self
-            .manager
-            .send_message(ResourceManagerMsg::RuntimeChanged { key: self.row.key.clone(), status });
+        let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
+            key: self.row.key.clone(),
+            generation: self.row.generation,
+            status,
+        });
     }
 
     /// AE2, spec section 15: satisfy matching watchers in the transition
@@ -390,7 +401,8 @@ impl ResourceActorState {
             self.timers.clone(),
             self.effect_tx.clone(),
             self.watch_tx.clone(),
-        );
+        )
+        .with_owner_key(self.owner_key.clone());
     }
 
     /// One reconcile pass. Callers guarantee `!effect_running` (R14: the
@@ -516,13 +528,15 @@ impl Actor for ResourceActor {
             timers.clone(),
             effect_tx.clone(),
             watch_tx.clone(),
-        );
+        )
+        .with_owner_key(args.owner_key.clone());
         Ok(ResourceActorState {
             manager: args.manager,
             manager_endpoint,
             decoder: args.decoder,
             target: args.target,
             backoff: args.backoff,
+            owner_key: args.owner_key,
             timers,
             row: args.row.clone(),
             status: ResourceStatus::Pending,
@@ -671,6 +685,15 @@ pub(crate) mod test_support {
         FailRetryable,
     }
 
+    /// One live read a fake driver performed through its context
+    /// (`ResourceContext::get_view`), carrying the manager's answer verbatim.
+    #[derive(Debug, Clone)]
+    pub(crate) struct FakeViewRead {
+        pub(crate) key: ResourceKey,
+        /// `None` = the manager reported no row for the key.
+        pub(crate) view: Option<crate::manager::ResourceView>,
+    }
+
     /// Shared, test-drivable state of one fake driver (per resource key).
     pub(crate) struct FakeDriverShared {
         pub(crate) validate_calls: AtomicU64,
@@ -687,6 +710,12 @@ pub(crate) mod test_support {
         /// When set, every reconcile registers an internal watch on this
         /// target first (models a dependent resource).
         pub(crate) watch_target: Mutex<Option<ResourceKey>>,
+        /// Keys every reconcile reads live through its context
+        /// (`ResourceContext::get_view`), in order (models a parent proving a
+        /// child, or a dependent proving a dependency).
+        pub(crate) view_targets: Mutex<Vec<ResourceKey>>,
+        /// Live reads performed through the context, in order.
+        pub(crate) view_reads: Mutex<Vec<FakeViewRead>>,
         /// Generations observed by `reconcile` (spec change delivery).
         pub(crate) generations_seen: Mutex<Vec<u64>>,
     }
@@ -706,6 +735,8 @@ pub(crate) mod test_support {
                 gate: tokio::sync::Notify::new(),
                 delete_blocked: AtomicBool::new(false),
                 watch_target: Mutex::new(None),
+                view_targets: Mutex::new(Vec::new()),
+                view_reads: Mutex::new(Vec::new()),
                 generations_seen: Mutex::new(Vec::new()),
             }
         }
@@ -777,6 +808,13 @@ pub(crate) mod test_support {
             if let Some(target) = watch_target {
                 self.shared.watch_calls.fetch_add(1, Ordering::SeqCst);
                 let _watch = ctx.watch(target, WatchCondition::Ready).await;
+            }
+            // Live state of other resources (KTD3): each reconcile reads the
+            // configured keys through the context and records the answer.
+            let view_targets = self.shared.view_targets.lock().clone();
+            for target in view_targets {
+                let view = ctx.get_view(&target).await.expect("live view read");
+                self.shared.view_reads.lock().push(FakeViewRead { key: target, view });
             }
             let mode = *self.shared.reconcile_mode.lock();
             match mode {
@@ -912,6 +950,18 @@ pub(crate) mod test_support {
         spawn_manager(store, zone, types, backoff, None).await
     }
 
+    /// Restart semantics with the caller's factory: restart tests can pin
+    /// driver behavior (e.g. blocked deletes) on keys before the manager
+    /// loads rows and spawns their actors.
+    pub(crate) async fn harness_over_with_factory(
+        store: Arc<crate::spec_store::SpecStore>,
+        zone: &str,
+        factory: Arc<FakeFactory>,
+        backoff: Duration,
+    ) -> TestHarness {
+        spawn_manager_with_factory(store, zone, factory, backoff, None).await
+    }
+
     async fn spawn_manager(
         store: Arc<crate::spec_store::SpecStore>,
         zone: &str,
@@ -920,6 +970,16 @@ pub(crate) mod test_support {
         tmp: Option<tempfile::TempDir>,
     ) -> TestHarness {
         let factory = Arc::new(FakeFactory::new(types));
+        spawn_manager_with_factory(store, zone, factory, backoff, tmp).await
+    }
+
+    async fn spawn_manager_with_factory(
+        store: Arc<crate::spec_store::SpecStore>,
+        zone: &str,
+        factory: Arc<FakeFactory>,
+        backoff: Duration,
+        tmp: Option<tempfile::TempDir>,
+    ) -> TestHarness {
         let mut providers = crate::provider::ProviderDirectory::new();
         providers
             .register(factory.clone() as Arc<dyn ResourceDriverFactory>)

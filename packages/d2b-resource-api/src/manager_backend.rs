@@ -44,6 +44,7 @@ use d2b_resource_runtime::manager::{
     DesiredResource, MutationSubject, ResourceManagerClient, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::{ResourceProvenance, StoredDesiredResource};
 use d2b_resource_runtime::watch::{
     WatchRegistration as RuntimeWatchRegistration, WatchSelector as RuntimeWatchSelector,
@@ -439,20 +440,192 @@ fn stored_of(
     }
 }
 
-/// Map one manager runtime view onto the stored-resource contract.
-fn stored_from_view(view: &ResourceView) -> StoredResource {
-    stored_of(
+/// Map one manager runtime view onto the stored-resource contract, carrying
+/// the actor's in-memory status onto the read (R11): the durable row has no
+/// status, the live actor does.
+fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
+    let canonical = render_envelope(
+        &view.key,
+        &view.uid,
+        view.generation,
+        &view.metadata,
+        &view.spec,
+        view.owner_key.as_ref(),
+    )?;
+    let mut stored = stored_of(
         &view.key.zone,
         &view.key.type_name,
         &view.key.name,
         &view.uid,
         None,
         view.generation,
-        &view.spec,
-    )
+        &canonical,
+    );
+    if let Some(status) = view.status
+        && view.status_generation == Some(view.generation)
+    {
+        // Only a status the actor published for this exact row generation is
+        // observed state of it; a status carried over from an older
+        // generation is not (see `ResourceView::status_generation`).
+        stamp_status(&mut stored, status, view.generation)?;
+    }
+    if view.deleting {
+        stamp_deletion_request(&mut stored)?;
+    }
+    Ok(stored)
+}
+
+/// The wire envelope of one manager row.
+///
+/// API-created rows persist the full canonical envelope minus status (KTD2);
+/// Nix-materialized rows persist the compiled spec with its authored metadata
+/// beside it. Reads always answer with the envelope shape - the public
+/// surface stays uniform across both provenances - so a spec-shaped row is
+/// rendered against its metadata and the row's authoritative identity.
+fn render_envelope(
+    key: &RuntimeResourceKey,
+    uid: &[u8; 16],
+    generation: u64,
+    metadata: &[u8],
+    spec: &[u8],
+    resolved_owner: Option<&RuntimeResourceKey>,
+) -> Result<Vec<u8>, StoreError> {
+    let spec_value = CanonicalJsonValue::parse(spec).map_err(|_| envelope_invalid())?;
+    if spec_value.as_object().is_some_and(|root| {
+        root.contains_key("apiVersion") && root.contains_key("spec")
+    }) {
+        return Ok(spec.to_vec());
+    }
+    let authored: serde_json::Value =
+        serde_json::from_slice(metadata).unwrap_or(serde_json::Value::Null);
+    let field = |name: &str, fallback: serde_json::Value| {
+        authored
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| fallback.clone())
+    };
+    let spec_json =
+        CanonicalJsonValue::parse(spec).map_err(|_| envelope_invalid())?;
+    // The stable identity is data, not log material: `ResourceUid`'s
+    // `Display` is a redaction stub, and rendering it here would publish
+    // `ResourceUid(<redacted>)` as the row's uid to every API client (the
+    // public delete precondition resolves the exact uid from this field).
+    let row_identity = row_uid(uid);
+    let envelope = serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "metadata": {
+            "annotations": field("annotations", serde_json::json!({})),
+            "createdAt": field("createdAt", serde_json::json!("1970-01-01T00:00:00.000Z")),
+            "deletionRequestedAt": field("deletionRequestedAt", serde_json::Value::Null),
+            "finalizers": field("finalizers", serde_json::json!([])),
+            "generation": generation,
+            "labels": field("labels", serde_json::json!({})),
+            "name": key.name,
+            "ownerRef": authored
+                .get("ownerRef")
+                .cloned()
+                .filter(|value| !value.is_null())
+                .unwrap_or_else(|| match resolved_owner {
+                    Some(owner) => serde_json::Value::String(format!(
+                        "{}/{}",
+                        owner.type_name, owner.name
+                    )),
+                    None => serde_json::Value::Null,
+                }),
+            "revision": generation,
+            "uid": row_identity.as_str(),
+            "updatedAt": field("updatedAt", serde_json::json!("1970-01-01T00:00:00.000Z")),
+            "zone": key.zone,
+        },
+        "spec": serde_json::to_value(&spec_json).map_err(|_| envelope_invalid())?,
+        "type": key.type_name,
+    });
+    let canonical =
+        CanonicalJsonValue::parse(&serde_json::to_vec(&envelope).map_err(|_| envelope_invalid())?)
+            .map_err(|_| envelope_invalid())?;
+    Ok(canonical.to_canonical_bytes())
+}
+
+/// Project the closed runtime classification onto the wire status.
+///
+/// The manager's view carries the runtime classification and nothing else,
+/// so the projection is the phase, the row generation the status is current
+/// for, and - for a failed actor - the closed failure classification, which
+/// is otherwise unobservable because status is never persisted (R11). A
+/// Ready row reports `observedGeneration == metadata.generation`, the
+/// manager-view form of the old plane's converged status.
+fn stamp_status(
+    stored: &mut StoredResource,
+    status: ResourceStatus,
+    generation: u64,
+) -> Result<(), StoreError> {
+    let (phase, failure) = match status {
+        ResourceStatus::Pending | ResourceStatus::Recovering | ResourceStatus::Reconciling => {
+            ("Pending", None)
+        }
+        ResourceStatus::Ready => ("Ready", None),
+        ResourceStatus::Failed(failure) => ("Failed", Some(failure)),
+        ResourceStatus::Deleting => ("Deleting", None),
+    };
+    let mut value =
+        CanonicalJsonValue::parse(&stored.canonical_json).map_err(|_| envelope_invalid())?;
+    let CanonicalJsonValue::Object(root) = &mut value else {
+        return Err(envelope_invalid());
+    };
+    let driver_failure = match failure {
+        Some(failure) => format!(
+            r#","driverFailure":{{"operation":"{:?}","retryable":{}}}"#,
+            failure.op(),
+            failure.class() == d2b_resource_runtime::error::FailureClass::Retryable,
+        ),
+        None => String::new(),
+    };
+    let projected = format!(
+        r#"{{"observedGeneration":{generation},"phase":"{phase}"{driver_failure}}}"#
+    );
+    let status = CanonicalJsonValue::parse(projected.as_bytes()).map_err(|_| envelope_invalid())?;
+    root.insert("status".to_owned(), status);
+    stored.canonical_json = value.to_canonical_bytes();
+    Ok(())
+}
+
+/// Project the durable deletion mark onto the wire envelope.
+///
+/// The manager row records the deletion *request* as its `deleting` mark; the
+/// instant itself stays in the store's audit stream in Phase A. The wire
+/// contract's `deletionRequestedAt` is what consumers read as "deletion
+/// requested" (the old plane stamped it at the delete transition), so a
+/// deleting row renders the same epoch fallback this renderer already uses
+/// for every timestamp a row does not carry. The value is constant per row,
+/// so repeated reads and diffs stay stable.
+fn stamp_deletion_request(stored: &mut StoredResource) -> Result<(), StoreError> {
+    const DELETION_FALLBACK: &str = "1970-01-01T00:00:00.000Z";
+    let mut value =
+        CanonicalJsonValue::parse(&stored.canonical_json).map_err(|_| envelope_invalid())?;
+    let CanonicalJsonValue::Object(root) = &mut value else {
+        return Err(envelope_invalid());
+    };
+    let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+        return Err(envelope_invalid());
+    };
+    metadata.insert(
+        "deletionRequestedAt".to_owned(),
+        CanonicalJsonValue::String(DELETION_FALLBACK.to_owned()),
+    );
+    stored.canonical_json = value.to_canonical_bytes();
+    Ok(())
 }
 
 fn stored_from_row(row: &StoredDesiredResource) -> StoredResource {
+    let canonical = render_envelope(
+        &row.key,
+        &row.uid,
+        row.generation,
+        &row.metadata,
+        &row.spec,
+        None,
+    )
+    .unwrap_or_else(|_| row.spec.clone());
     stored_of(
         &row.key.zone,
         &row.key.type_name,
@@ -460,7 +633,7 @@ fn stored_from_row(row: &StoredDesiredResource) -> StoredResource {
         &row.uid,
         row.owner_uid.map(|uid| row_uid(&uid)),
         row.generation,
-        &row.spec,
+        &canonical,
     )
 }
 
@@ -565,7 +738,7 @@ impl ManagerBackend {
     /// The authoritative committed view after a mutation returned.
     async fn committed(&self, key: &RuntimeResourceKey) -> Result<StoredResource, StoreError> {
         match self.manager.get(key.clone()).await.map_err(map_manager_error)? {
-            Some(view) => Ok(stored_from_view(&view)),
+            Some(view) => stored_from_view(&view),
             None => Err(not_found()),
         }
     }
@@ -716,7 +889,7 @@ impl ResourceStoreBackend for ManagerBackend {
         {
             return Err(conflict(view.generation, "resource-uid-mismatch"));
         }
-        let mut stored = stored_from_view(&view);
+        let mut stored = stored_from_view(&view)?;
         project_resource(&mut stored, request.projection)?;
         Ok(stored)
     }
@@ -744,7 +917,7 @@ impl ResourceStoreBackend for ManagerBackend {
             {
                 continue;
             }
-            let mut stored = stored_from_view(view);
+            let mut stored = stored_from_view(view)?;
             if !filters_match(&request.filters, &stored, &view.spec) {
                 continue;
             }

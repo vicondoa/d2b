@@ -223,6 +223,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 workload_identity: None,
                 inherited_fd_count: 0,
                 network_tap_context: None,
+                            launch_args: None,
             }),
             self.caller_role.clone(),
             timeout,

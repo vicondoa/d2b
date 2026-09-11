@@ -2,25 +2,43 @@
 //! of the binding leg of the shared-Volume path (R4, R8, R9; KTD7, KTD1,
 //! F1, F4).
 //!
-//! The driver keeps the old binding behavior and nothing else: reconcile
-//! derives the binding-owned worker Process and Endpoint children exactly
-//! as the preserved `binding_children` minting did (`worker_child_specs`),
-//! ensures each through the manager-routed ensure (the child spec is
-//! committed BEFORE the child actor exists, F1), and reports child-phase
-//! driven readiness. Recover re-derives the launch plan from the persisted
-//! binding plus the bundle-resolved view spec (KTD7) so the re-derived plan
-//! matches the pre-restart incarnation: the same template, the same
-//! path-free worker plan (tuning travels in the plan, never in the
-//! resource, KTD1). Delete participates in the preserved endpoint-first /
-//! process-last teardown ordering: the Endpoint child is deleted, the
-//! socket is removed, and only then the worker Process child.
+//! This driver now owns the whole binding family: the legacy shared-Runner
+//! binding leg (`SharedVolumeResourceReconciler` over
+//! `DaemonVolumeProviderEffects::reconcile_binding`/`finalize_binding`) is
+//! deleted, and the behavior that survived it is folded here:
+//!
+//! - the derived [`VirtiofsdWorkerPlan`] is the serving authority: a
+//!   binding the frozen plan contract rejects is refused with the stable
+//!   provider reason, the plan travels in the in-memory status (never in a
+//!   resource, KTD1), and the worker Process child is minted argv-free so
+//!   the Process controller composes its launch from the binding/Volume
+//!   rows (KTD13, U17);
+//! - reconcile derives the binding-owned worker Process and Endpoint
+//!   children exactly as the preserved `binding_children` minting did
+//!   (`worker_child_specs`), ensures each through the manager-routed ensure
+//!   (the child spec is committed BEFORE the child actor exists, F1),
+//!   retires owned children the derived set no longer names endpoint-first /
+//!   process-last, registers the dependency watches (R12/R17), and
+//!   publishes the in-memory status (R11);
+//! - delete preserves the drain/finalizer semantics: the guest mount is
+//!   observed BEFORE anything is deleted (KTD6), and a present mount blocks
+//!   the teardown - retryable, durable deleting mark and owned children
+//!   still in place - instead of force-clearing a served share. Otherwise
+//!   the worker drains, the Endpoint is removed first and the worker Process
+//!   child last, and the manager holds the parent row until the last child
+//!   retires (F3), which is exactly what the old finalizer gated.
+//!
+//! Recover re-derives the launch plan from the persisted binding plus the
+//! bundle-resolved view spec (KTD7) so the re-derived plan matches the
+//! pre-restart incarnation, and adopts the owned-child realization (both
+//! child rows current and the serving socket listening).
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`BindingDriverFactory`] registration under `VolumeBinding`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - `binding_children` minting + readiness -> [`ResourceDriver::reconcile`].
-//! - endpoint-first teardown -> [`ResourceDriver::delete`].
+//! - `finalize_binding` drain + endpoint-first teardown -> [`ResourceDriver::delete`].
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
 //!
 //! The KTD7 zone-authority inputs (target Guest vcpu count for the worker
@@ -28,22 +46,28 @@
 //! and ZoneAuthorityIdentity path, never from the spec store.
 #![allow(dead_code)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
     ResourceRef, ResourceSpec, ResourceUid,
+    volume::{VolumeSpec, ViewSpec},
     volume_binding::VolumeBindingSpec,
-    volume::VolumeSpec,
 };
-use d2b_provider_volume_virtiofs::{StoredBinding, VirtiofsdWorkerPlan, WORKER_TEMPLATE};
+use d2b_provider_volume_virtiofs::{
+    StoredBinding, VirtiofsBindingError, VirtiofsdWorkerPlan, WORKER_TEMPLATE,
+};
 use d2b_resource_runtime::context::{
-    ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder,
+    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::spec_store::EnsureOutcome;
 
 /// The one resource type this factory serves (KTD4 Phase A).
 pub(crate) const BINDING_TYPE_NAME: &str = "VolumeBinding";
@@ -58,6 +82,23 @@ const WORKER_PROVIDER_REF: &str = "Provider/system-minijail";
 /// Deterministic owned-child resource types.
 const WORKER_TYPE: &str = "Process";
 const ENDPOINT_TYPE: &str = "Endpoint";
+
+/// Preserved resync cadence while the derived child set is not yet current:
+/// the `volume-virtiofs` Runner contract's repair interval (the old runner's
+/// resync), not a per-pass timer.
+const BINDING_RESYNC: Duration = Duration::from_secs(
+    d2b_provider_volume_virtiofs::virtiofs_runner_contract().repair_interval_secs,
+);
+
+/// Teardown rank of the owned-child types (R9/F3): the Endpoint is removed
+/// before the worker Process that produces it; anything else ranks last.
+fn teardown_rank(type_name: &str) -> u8 {
+    match type_name {
+        ENDPOINT_TYPE => 0,
+        WORKER_TYPE => 1,
+        _ => 2,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -127,10 +168,26 @@ impl std::error::Error for BindingDriverError {}
 /// incarnation is reproduced (KTD7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindingDriverStatus {
-    /// Worker + Endpoint children derived and ensured.
-    ServingChildren { worker_ref: String, endpoint_ref: String },
-    /// The exact pre-restart plan was re-derived on recover.
-    RecoveredPlan { worker_ref: String, endpoint_ref: String },
+    /// Worker + Endpoint children derived and ensured; readiness as observed
+    /// this pass (worker socket + guest mount, both fail-closed).
+    ServingChildren {
+        plan: DerivedPlan,
+        /// The derived child set was already current (no ensure/create or
+        /// obsolete retirement mutated it); the manager requeues otherwise.
+        converged: bool,
+        socket_ready: bool,
+        mount_ready: bool,
+    },
+    /// The exact pre-restart plan was re-derived on recover and the owned
+    /// children plus the serving socket are current.
+    RecoveredPlan {
+        plan: DerivedPlan,
+        socket_ready: bool,
+    },
+    /// A terminal admission rejection (old `failed_binding_result`): the
+    /// stable provider reason stays visible in memory while the actor
+    /// publishes the Failed phase (KTD5).
+    Rejected { reason: &'static str },
 }
 
 /// The in-memory handle the driver reports through status (R11): the exact
@@ -185,15 +242,43 @@ pub(crate) trait BindingDriverEffects: Send + Sync + 'static {
         &self,
         socket: &d2b_provider_volume_virtiofs::SocketIdentity,
     ) -> Result<(), String>;
+
+    /// Guest mount observation (the KTD6 drain gate): whether the target
+    /// Guest currently observes the mount.
+    ///
+    /// A present mount keeps the durable deleting mark and the owned
+    /// children - the drain never force-clears a serve that is still mounted
+    /// (old `ChildReadinessPort::observe_guest_mount`, sourced from the
+    /// Endpoint child's published state). The new plane has no guest-mount
+    /// observation surface yet (it arrives with the guest target layer,
+    /// U13), so the default answers "no mount observed" - exactly the old
+    /// plane's answer while the Endpoint had no published state.
+    async fn guest_mount_ready(&self, _binding: &StoredBinding) -> Result<bool, String> {
+        Ok(false)
+    }
 }
+
+/// Boxed future returned by one production serving-socket probe: resolving
+/// the socket target is store-backed (the registry loads derived-child rows
+/// from the authority on a miss), so the port cannot be a sync closure.
+pub(crate) type ServingEffectFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Production effects over the preserved virtiofs serving adapter. U9 wires
 /// the adapter construction (the same inputs the old
-/// `ChildReadinessPort` consumed).
+/// `ChildReadinessPort` consumed). The guest-mount gate keeps the trait
+/// default: this plane has no guest-mount observation surface yet (U13), so
+/// production answers "no mount observed" exactly as the old plane did
+/// while the Endpoint child had no published state.
 pub(crate) struct ProductionBindingDriverEffects {
-    ready: Arc<dyn Fn(&d2b_provider_volume_virtiofs::SocketIdentity) -> bool + Send + Sync>,
+    ready: Arc<
+        dyn for<'a> Fn(&'a d2b_provider_volume_virtiofs::SocketIdentity) -> ServingEffectFuture<'a, bool>
+            + Send
+            + Sync,
+    >,
     remove: Arc<
-        dyn Fn(&d2b_provider_volume_virtiofs::SocketIdentity) -> Result<(), String>
+        dyn for<'a> Fn(
+                &'a d2b_provider_volume_virtiofs::SocketIdentity,
+            ) -> ServingEffectFuture<'a, Result<(), String>>
             + Send
             + Sync,
     >,
@@ -201,9 +286,17 @@ pub(crate) struct ProductionBindingDriverEffects {
 
 impl ProductionBindingDriverEffects {
     pub(crate) fn new(
-        ready: Arc<dyn Fn(&d2b_provider_volume_virtiofs::SocketIdentity) -> bool + Send + Sync>,
+        ready: Arc<
+            dyn for<'a> Fn(
+                    &'a d2b_provider_volume_virtiofs::SocketIdentity,
+                ) -> ServingEffectFuture<'a, bool>
+                + Send
+                + Sync,
+        >,
         remove: Arc<
-            dyn Fn(&d2b_provider_volume_virtiofs::SocketIdentity) -> Result<(), String>
+            dyn for<'a> Fn(
+                    &'a d2b_provider_volume_virtiofs::SocketIdentity,
+                ) -> ServingEffectFuture<'a, Result<(), String>>
                 + Send
                 + Sync,
         >,
@@ -218,14 +311,14 @@ impl BindingDriverEffects for ProductionBindingDriverEffects {
         &self,
         socket: &d2b_provider_volume_virtiofs::SocketIdentity,
     ) -> bool {
-        (self.ready)(socket)
+        (self.ready)(socket).await
     }
 
     async fn remove_socket(
         &self,
         socket: &d2b_provider_volume_virtiofs::SocketIdentity,
     ) -> Result<(), String> {
-        (self.remove)(socket)
+        (self.remove)(socket).await
     }
 }
 
@@ -285,6 +378,11 @@ pub(crate) struct BindingDriver {
     zone: String,
     effects: Arc<dyn BindingDriverEffects>,
     vcpu_count: u32,
+    /// Targets this driver already registered a dependency watch on
+    /// (R12/R17). Runtime-only (R6/R11): one registration per target keeps
+    /// the dependency edge that wakes the actor on dependency death or
+    /// readiness without accumulating manager watch entries.
+    watched: Vec<ResourceKey>,
 }
 
 impl BindingDriver {
@@ -293,6 +391,7 @@ impl BindingDriver {
             zone: args.zone,
             effects: args.effects,
             vcpu_count: args.vcpu_count,
+            watched: Vec::new(),
         }
     }
 
@@ -328,6 +427,11 @@ impl BindingDriver {
         Ok((envelope.clone(), binding))
     }
 
+    /// The key of the parent Volume this binding declares.
+    fn parent_volume_key(&self, binding: &VolumeBindingSpec) -> ResourceKey {
+        ResourceKey::new(&self.zone, "Volume", binding.volume_ref().name().as_str())
+    }
+
     /// The parent Volume row through the manager (R2: the driver never
     /// touches the spec store). The binding's declared Volume must be the
     /// row the manager reports as this resource's owner - a child cannot
@@ -338,7 +442,7 @@ impl BindingDriver {
         binding: &VolumeBindingSpec,
         op: DriverOp,
     ) -> Result<(ResourceUid, VolumeSpec), BindingDriverError> {
-        let key = ResourceKey::new(&self.zone, "Volume", binding.volume_ref().name().as_str());
+        let key = self.parent_volume_key(binding);
         let row = ctx
             .get(&key)
             .await
@@ -361,21 +465,117 @@ impl BindingDriver {
         Ok((uid, volume_spec))
     }
 
+    /// Record one terminal admission rejection in this pass's in-memory
+    /// status (old `failed_binding_result`) and return the typed failure: the
+    /// actor publishes the Failed phase, and the stable provider reason stays
+    /// visible instead of collapsing into a generic error (KTD5).
+    fn rejected(
+        &self,
+        ctx: &mut ResourceContext,
+        reason: &'static str,
+        op: DriverOp,
+    ) -> BindingDriverError {
+        ctx.set_status(BindingDriverStatus::Rejected { reason });
+        self.error(BindingDriverErrorKind::PlanDerivation, op)
+    }
+
     /// Re-derive the path-free launch plan from the persisted binding plus
     /// the bundle-resolved view spec (KTD7). Tuning travels in the plan,
     /// never in the resource (KTD1): the serving posture is the frozen
-    /// default declared by `VirtiofsdWorkerPlan::for_binding`.
+    /// default declared by `VirtiofsdWorkerPlan::for_binding`. A plan the
+    /// frozen contract rejects is terminal, and its reason is preserved.
     fn derive_plan(
         &self,
+        ctx: &mut ResourceContext,
         binding: &StoredBinding,
-        view: &d2b_contracts_resource::v3::volume::ViewSpec,
+        view: &ViewSpec,
         op: DriverOp,
     ) -> Result<VirtiofsdWorkerPlan, BindingDriverError> {
         let principal = binding
             .worker_principal()
-            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
+            .map_err(|reason| self.rejected(ctx, reason.code(), op))?;
         VirtiofsdWorkerPlan::for_binding(binding, view, self.vcpu_count, principal)
-            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))
+            .map_err(|reason| self.rejected(ctx, reason.code(), op))
+    }
+
+    /// The status handle carrying the exact re-derived plan (KTD7).
+    fn derived_plan(
+        &self,
+        stored: &StoredBinding,
+        plan: VirtiofsdWorkerPlan,
+        op: DriverOp,
+    ) -> Result<DerivedPlan, BindingDriverError> {
+        Ok(DerivedPlan {
+            worker_ref: stored
+                .worker_process_ref()
+                .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?
+                .to_canonical_string(),
+            endpoint_ref: stored
+                .endpoint_ref()
+                .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?
+                .to_canonical_string(),
+            plan,
+        })
+    }
+
+    /// The desired owned-child keys: worker Process first, then its Endpoint.
+    fn desired_child_keys(
+        &self,
+        stored: &StoredBinding,
+        op: DriverOp,
+    ) -> Result<[ResourceKey; 2], BindingDriverError> {
+        let worker = stored
+            .worker_process_ref()
+            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
+        let endpoint = stored
+            .endpoint_ref()
+            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
+        Ok([
+            ResourceKey::new(&self.zone, WORKER_TYPE, worker.name().as_str()),
+            ResourceKey::new(&self.zone, ENDPOINT_TYPE, endpoint.name().as_str()),
+        ])
+    }
+
+    /// Register one dependency watch (R12/R17) exactly once per target.
+    ///
+    /// Best-effort by design: a dependency that is still an unconverted row
+    /// has no actor to watch yet (`register_watch` refuses it), and the
+    /// resync requeue re-evaluates those rows until they are served.
+    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if self.watched.contains(&target) {
+            return;
+        }
+        if ctx.watch(target.clone(), WatchCondition::Ready).await.is_ok() {
+            self.watched.push(target);
+        }
+    }
+
+    /// Retire the owned children the desired set no longer names, in the
+    /// preserved teardown order (old `reconcile_owned_children` diff, R8/R9:
+    /// Endpoint before its producer Process). Rows already deleting are left
+    /// to the manager's retirement; reports whether anything was retired.
+    async fn retire_obsolete_children(
+        &self,
+        ctx: &mut ResourceContext,
+        desired: &[ResourceKey],
+        op: DriverOp,
+    ) -> Result<bool, BindingDriverError> {
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
+        let mut obsolete = owned
+            .iter()
+            .filter(|row| !row.deleting && !desired.contains(&row.key))
+            .collect::<Vec<_>>();
+        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        let retired = !obsolete.is_empty();
+        for row in obsolete {
+            ctx.delete(&row.key)
+                .await
+                .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
+        }
+        Ok(retired)
     }
 
     /// The stored binding for one row: strict neutral spec plus the
@@ -414,9 +614,17 @@ impl BindingDriver {
         let endpoint_ref = binding
             .endpoint_ref()
             .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, DriverOp::Reconcile))?;
+        // The worker executes on the host, exactly as the runtime this
+        // driver replaces minted it (old `worker_child_specs` hardcodes
+        // Host/host-system) and as the signed `virtiofsd-worker` template
+        // the launch ticket resolves through binds it: the template's
+        // execution_ref is the volume-virtiofs Provider's
+        // config.controllerExecutionRef. The attachment's Guest stays the
+        // ticket's target ref (KTD7), re-derived from the owning VolumeBinding
+        // row by the Process driver's identity path.
         let process_spec = serde_json::json!({
             "providerRef": WORKER_PROVIDER_REF,
-            "executionRef": binding.spec().execution_ref().to_canonical_string(),
+            "executionRef": "Host/host-system",
             "domain": "system",
             "processClass": "worker",
             "template": WORKER_TEMPLATE,
@@ -471,32 +679,27 @@ impl BindingDriver {
         Ok((worker, endpoint))
     }
 
+    /// Ensure the desired worker Process and Endpoint children (old
+    /// `binding_children` minting). The manager commits each child row BEFORE
+    /// creating or updating the child actor (F1, AE1); the Endpoint child
+    /// names the worker as its producer, so the worker row is committed
+    /// first. Reports whether either ensure mutated the durable child set.
     async fn ensure_children(
         &self,
         ctx: &mut ResourceContext,
         binding: &StoredBinding,
         op: DriverOp,
-    ) -> Result<(String, String), BindingDriverError> {
+    ) -> Result<bool, BindingDriverError> {
         let (worker, endpoint) = self.worker_child_specs(binding)?;
-        // The manager commits each child row BEFORE creating or updating
-        // the child actor (F1, AE1); the endpoint child depends on the
-        // worker process, so the worker row is committed first.
-        ctx.ensure_child(worker)
-            .await
-            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
-        ctx.ensure_child(endpoint)
-            .await
-            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
-        let worker_ref = binding
-            .worker_process_ref()
-            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
-        let endpoint_ref = binding
-            .endpoint_ref()
-            .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
-        Ok((
-            worker_ref.to_canonical_string(),
-            endpoint_ref.to_canonical_string(),
-        ))
+        let mut mutated = false;
+        for child in [worker, endpoint] {
+            match ctx.ensure_child(child).await {
+                Ok(EnsureOutcome::Created(_) | EnsureOutcome::Updated(_)) => mutated = true,
+                Ok(EnsureOutcome::Unchanged(_)) => {}
+                Err(_) => return Err(self.error(BindingDriverErrorKind::ChildMutation, op)),
+            }
+        }
+        Ok(mutated)
     }
 }
 
@@ -532,32 +735,34 @@ impl ResourceDriver for BindingDriver {
         Ok(())
     }
 
-    /// Re-derive the launch plan from the persisted binding plus the
-    /// bundle-resolved view spec (KTD7) and probe the serving socket: a
-    /// ready socket adopts the pre-restart incarnation, an absent socket
-    /// waits for reconcile.
+    /// Owned-child adoption (F2): the pre-restart incarnation is adopted
+    /// only when the derived plan re-derives exactly, every desired child
+    /// row is present and current, and the serving socket is listening.
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
-        let (_, binding) = self.decoded_binding(ctx, DriverOp::Recover)?;
-        let stored = self.stored_binding(ctx, binding, DriverOp::Recover)?;
-        let (_, volume_spec) = self
-            .parent_volume(ctx, stored.spec(), DriverOp::Recover)
-            .await?;
+        let op = DriverOp::Recover;
+        let (_, binding) = self.decoded_binding(ctx, op)?;
+        let stored = self.stored_binding(ctx, binding, op)?;
+        let (_, volume_spec) = self.parent_volume(ctx, stored.spec(), op).await?;
         let view = volume_spec
             .views()
             .get(stored.spec().view().as_str())
-            .ok_or_else(|| self.error(BindingDriverErrorKind::PlanDerivation, DriverOp::Recover))?;
-        let _plan = self.derive_plan(&stored, view, DriverOp::Recover)?;
+            .ok_or_else(|| self.rejected(ctx, VirtiofsBindingError::ViewNotFound.code(), op))?;
+        let plan = self.derive_plan(ctx, &stored, view, op)?;
+        let derived = self.derived_plan(&stored, plan, op)?;
+        let desired = self.desired_child_keys(&stored, op)?;
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
+        let children_current = desired
+            .iter()
+            .all(|key| owned.iter().any(|row| row.key == *key && !row.deleting));
         let socket = stored.socket_identity(&self.zone_bounded());
-        if self.effects.socket_ready(&socket).await {
+        let socket_ready = self.effects.socket_ready(&socket).await;
+        if children_current && socket_ready {
             ctx.set_status(BindingDriverStatus::RecoveredPlan {
-                worker_ref: stored
-                    .worker_process_ref()
-                    .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, DriverOp::Recover))?
-                    .to_canonical_string(),
-                endpoint_ref: stored
-                    .endpoint_ref()
-                    .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, DriverOp::Recover))?
-                    .to_canonical_string(),
+                plan: derived,
+                socket_ready,
             });
             Ok(RecoveryOutcome::Adopted)
         } else {
@@ -565,69 +770,105 @@ impl ResourceDriver for BindingDriver {
         }
     }
 
-    /// One reconcile pass: derive the launch plan, ensure the worker
-    /// Process child and then the Endpoint child (F1), and report
-    /// child-phase driven readiness on the serving socket.
+    /// One reconcile pass (old `plan` + `reconcile` + `execute_effect`):
+    /// derive the launch plan, ensure the worker Process child and then the
+    /// Endpoint child (F1), retire owned children the derived set no longer
+    /// names, register the dependency watches (R12/R17), and publish the
+    /// in-memory status with the observed serving readiness (R11).
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
-        let (_, binding) = self.decoded_binding(ctx, DriverOp::Reconcile)?;
-        let stored = self.stored_binding(ctx, binding, DriverOp::Reconcile)?;
-        let (_, volume_spec) = self
-            .parent_volume(ctx, stored.spec(), DriverOp::Reconcile)
-            .await?;
+        let op = DriverOp::Reconcile;
+        let (_, binding) = self.decoded_binding(ctx, op)?;
+        let stored = self.stored_binding(ctx, binding, op)?;
+        let (_, volume_spec) = self.parent_volume(ctx, stored.spec(), op).await?;
+        // Dependency edge (R12/R17): a Volume change wakes this actor.
+        self.watch_once(ctx, self.parent_volume_key(stored.spec())).await;
         let view = volume_spec
             .views()
             .get(stored.spec().view().as_str())
-            .ok_or_else(|| self.error(BindingDriverErrorKind::PlanDerivation, DriverOp::Reconcile))?;
-        let _plan = self.derive_plan(&stored, view, DriverOp::Reconcile)?;
-        let (worker_ref, endpoint_ref) = self.ensure_children(ctx, &stored, DriverOp::Reconcile).await?;
-        ctx.set_status(BindingDriverStatus::ServingChildren {
-            worker_ref: worker_ref.clone(),
-            endpoint_ref: endpoint_ref.clone(),
-        });
-        let socket = stored.socket_identity(&self.zone_bounded());
-        if self.effects.socket_ready(&socket).await {
-            Ok(ReconcileOutcome::Satisfied)
-        } else {
-            // Child-phase driven readiness: the socket is not up yet; the
-            // actor re-reconciles on the next signal (R5).
-            Ok(ReconcileOutcome::Satisfied)
+            .ok_or_else(|| self.rejected(ctx, VirtiofsBindingError::ViewNotFound.code(), op))?;
+        let plan = self.derive_plan(ctx, &stored, view, op)?;
+        let derived = self.derived_plan(&stored, plan, op)?;
+
+        let mut mutated = self.ensure_children(ctx, &stored, op).await?;
+        let desired = self.desired_child_keys(&stored, op)?;
+        // Old owner diff (R8/R9): an owned child the derived set no longer
+        // names is retired endpoint-first / process-last.
+        mutated |= self.retire_obsolete_children(ctx, &desired, op).await?;
+        for key in desired {
+            self.watch_once(ctx, key).await;
         }
+
+        // Readiness is child-phase driven: the worker socket is the serving
+        // evidence and the guest mount the consumer-side one; both
+        // fail closed when the port cannot observe them.
+        let socket = stored.socket_identity(&self.zone_bounded());
+        let socket_ready = self.effects.socket_ready(&socket).await;
+        let mount_ready = self
+            .effects
+            .guest_mount_ready(&stored)
+            .await
+            .unwrap_or(false);
+        ctx.set_status(BindingDriverStatus::ServingChildren {
+            plan: derived,
+            converged: !mutated,
+            socket_ready,
+            mount_ready,
+        });
+        if mutated {
+            // The child rows were (re)committed this pass: re-check them on
+            // the preserved resync cadence.
+            ctx.requeue_after(BINDING_RESYNC);
+        }
+        Ok(ReconcileOutcome::Satisfied)
     }
 
-    /// Teardown in the preserved endpoint-first / process-last ordering
-    /// (R9/F3, old `reconcile_binding_children` deletion order): remove the
-    /// endpoint realization first, then delete the worker Process child
-    /// through the manager. Idempotent under retry (R10): a missing child
-    /// row converges without effects.
+    /// Teardown with the preserved drain semantics (R9/F3, old
+    /// `finalize_binding`): the guest mount is observed BEFORE anything is
+    /// deleted (KTD6) - a present mount keeps the durable deleting mark and
+    /// the owned children, and the pass retries instead of force-clearing a
+    /// serve that is still mounted. Otherwise the Endpoint realization is
+    /// removed first and the worker Process child last, and the manager holds
+    /// the parent row until the last child retires. Idempotent under retry
+    /// (R10): missing child rows converge without effects.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        let Ok((_, binding)) = self.decoded_binding(ctx, DriverOp::Delete) else {
-            return Ok(());
-        };
-        let Ok(stored) = self.stored_binding(ctx, binding, DriverOp::Delete) else {
-            return Ok(());
-        };
-        let Ok(endpoint_ref) = stored.endpoint_ref() else {
-            return Ok(());
-        };
-        let Ok(worker_ref) = stored.worker_process_ref() else {
-            return Ok(());
-        };
-        // 1. Endpoint first: the endpoint child row is deleted and the
-        // socket realization removed.
-        let endpoint_key = ResourceKey::new(&self.zone, ENDPOINT_TYPE, endpoint_ref.name().as_str());
-        let _ = ctx.delete(&endpoint_key).await;
-        let socket = stored.socket_identity(&self.zone_bounded());
-        self.effects
-            .remove_socket(&socket)
-            .await
-            .map_err(|_| self.error(BindingDriverErrorKind::ServingEffect, DriverOp::Delete))?;
-        // 2. Process last: the worker child row is deleted only after the
-        // endpoint is gone (the worker's socket drain relies on it).
-        let worker_key = ResourceKey::new(&self.zone, WORKER_TYPE, worker_ref.name().as_str());
-        let _ = ctx
-            .delete(&worker_key)
-            .await
-            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, DriverOp::Delete));
+        let op = DriverOp::Delete;
+        // A row whose spec no longer decodes still drains by owner key below.
+        if let Ok((_, binding)) = self.decoded_binding(ctx, op)
+            && let Ok(stored) = self.stored_binding(ctx, binding, op)
+        {
+            if self
+                .effects
+                .guest_mount_ready(&stored)
+                .await
+                .unwrap_or(false)
+            {
+                // Old `VirtiofsBindingController::drain` returned
+                // `DrainIncomplete`: the finalizer (now the durable deleting
+                // mark) and the owned children stay, and the actor retries.
+                return Err(self.error(BindingDriverErrorKind::ServingEffect, op));
+            }
+            let [worker, endpoint] = self.desired_child_keys(&stored, op)?;
+            // Endpoint-first: the endpoint child row is retired and the
+            // socket realization removed before the worker goes away (the
+            // worker's socket drain relies on it).
+            ctx.delete(&endpoint)
+                .await
+                .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
+            let socket = stored.socket_identity(&self.zone_bounded());
+            self.effects
+                .remove_socket(&socket)
+                .await
+                .map_err(|_| self.error(BindingDriverErrorKind::ServingEffect, op))?;
+            // Process-last.
+            ctx.delete(&worker)
+                .await
+                .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
+        }
+        // Retire anything else this binding owns behind the same role order;
+        // already-deleting rows are left to the manager. The manager keeps
+        // the parent row until the last child retires (F3) - the guarantee
+        // the old finalizer existed for.
+        let _ = self.retire_obsolete_children(ctx, &[], op).await?;
         Ok(())
     }
 }
@@ -642,8 +883,7 @@ impl ResourceDriver for BindingDriver {
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::volume::AttachmentAccess;
-    use d2b_provider_volume_virtiofs::{SocketIdentity, WORKER_TEMPLATE};
+    use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding, WORKER_TEMPLATE};
     use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration};
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
@@ -661,39 +901,52 @@ mod tests {
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Scripted serving port: records every call in order.
+    /// Scripted serving port over the caller's ordered log, so the tests
+    /// assert one sequence across manager calls and serving effects.
     struct FakeServingEffects {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
+        log: Arc<parking_lot::Mutex<OrderLog>>,
         ready: std::sync::atomic::AtomicBool,
+        mounted: std::sync::atomic::AtomicBool,
     }
 
     impl FakeServingEffects {
         fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                ready: std::sync::atomic::AtomicBool::new(false),
-            })
+            Self::shared(Arc::new(parking_lot::Mutex::new(Vec::new())))
         }
 
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
+        fn shared(log: Arc<parking_lot::Mutex<OrderLog>>) -> Arc<Self> {
+            Arc::new(Self {
+                log,
+                ready: std::sync::atomic::AtomicBool::new(false),
+                mounted: std::sync::atomic::AtomicBool::new(false),
+            })
         }
 
         fn make_ready(&self) {
             self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        /// The guest observes the mount: the drain gate must block.
+        fn make_mounted(&self) {
+            self.mounted.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     #[async_trait::async_trait]
     impl super::BindingDriverEffects for FakeServingEffects {
         async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-            self.calls.lock().push("socket-ready");
+            self.log.lock().push("socket-ready".to_owned());
             self.ready.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-            self.calls.lock().push("remove-socket");
+            self.log.lock().push("remove-socket".to_owned());
             Ok(())
+        }
+
+        async fn guest_mount_ready(&self, _binding: &StoredBinding) -> Result<bool, String> {
+            self.log.lock().push("guest-mount".to_owned());
+            Ok(self.mounted.load(std::sync::atomic::Ordering::SeqCst))
         }
     }
 
@@ -705,6 +958,7 @@ mod tests {
         zone: String,
         log: Arc<parking_lot::Mutex<OrderLog>>,
         rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
+        watch_targets: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
         next_uid: Arc<std::sync::atomic::AtomicU64>,
     }
 
@@ -714,6 +968,7 @@ mod tests {
                 zone: "work".to_owned(),
                 log: Arc::new(parking_lot::Mutex::new(Vec::new())),
                 rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                watch_targets: Arc::new(parking_lot::Mutex::new(Vec::new())),
                 next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             }
         }
@@ -733,8 +988,35 @@ mod tests {
             self
         }
 
+        /// Seed one owned child row (drift the driver must retire).
+        fn seed_owned(&self, key: ResourceKey) {
+            self.rows.lock().push(StoredDesiredResource {
+                key,
+                uid: [0x77; 16],
+                generation: 1,
+                owner_uid: Some([0x42; 16]),
+                provenance: ResourceProvenance::Resource,
+                deleting: false,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                created_at: 0,
+            });
+        }
+
+        fn log(&self) -> Arc<parking_lot::Mutex<OrderLog>> {
+            Arc::clone(&self.log)
+        }
+
         fn order(&self) -> Vec<String> {
             self.log.lock().clone()
+        }
+
+        fn rows(&self) -> Vec<StoredDesiredResource> {
+            self.rows.lock().clone()
+        }
+
+        fn watch_targets(&self) -> Vec<ResourceKey> {
+            self.watch_targets.lock().clone()
         }
     }
 
@@ -790,6 +1072,15 @@ mod tests {
             Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
         }
 
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            // Desired rows only: this fixture publishes no runtime status, so
+            // it serves no observed state.
+            Ok(None)
+        }
+
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
                 .lock()
@@ -814,9 +1105,13 @@ mod tests {
         async fn register_watch(
             &self,
             _subscriber: &ResourceKey,
-            _registration: WatchRegistration,
+            registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("watches unused in this unit".into()))
+            // Manager rows always exist here; the actor-side handler is the
+            // runtime's, so the fake only records the registration.
+            let mut targets = self.watch_targets.lock();
+            targets.push(registration.target.clone());
+            Ok(WatchId(targets.len() as u64))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
@@ -824,12 +1119,33 @@ mod tests {
         }
     }
 
-    /// Dead requeue: these binding flows never schedule a requeue.
-    struct NullRequeue;
+    /// Recording requeue: the driver's resync schedules are observable.
+    #[derive(Clone)]
+    struct RecordingRequeue {
+        scheduled: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
+    }
 
-    impl d2b_resource_runtime::context::RequeueScheduler for NullRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: std::time::Duration) -> d2b_resource_runtime::context::RequeueId {
-            d2b_resource_runtime::context::RequeueId(0)
+    impl RecordingRequeue {
+        fn new() -> Self {
+            Self {
+                scheduled: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn scheduled(&self) -> Vec<ResourceKey> {
+            self.scheduled.lock().clone()
+        }
+    }
+
+    impl d2b_resource_runtime::context::RequeueScheduler for RecordingRequeue {
+        fn schedule(
+            &self,
+            key: ResourceKey,
+            _after: std::time::Duration,
+        ) -> d2b_resource_runtime::context::RequeueId {
+            let mut scheduled = self.scheduled.lock();
+            scheduled.push(key);
+            d2b_resource_runtime::context::RequeueId(scheduled.len() as u64)
         }
 
         fn cancel(&self, _id: d2b_resource_runtime::context::RequeueId) {}
@@ -888,21 +1204,27 @@ mod tests {
     struct Fixture {
         ctx: ResourceContext,
         manager: RecordingManager,
+        requeue: RecordingRequeue,
     }
 
     fn fixture(row: StoredDesiredResource, manager: RecordingManager) -> Fixture {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        let requeue = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row,
             TargetHandle::Host,
             binding_spec_decoder(),
             Arc::new(manager.clone()),
-            Arc::new(NullRequeue),
+            Arc::new(requeue.clone()),
             effects_tx,
             notify_tx,
         );
-        Fixture { ctx, manager }
+        Fixture {
+            ctx,
+            manager,
+            requeue,
+        }
     }
 
     fn row_key(id: &str, zone: &str) -> ResourceKey {
@@ -938,8 +1260,8 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_derives_worker_and_endpoint_children_persisted_before_spawn() {
-        let fake = FakeServingEffects::new();
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -970,119 +1292,295 @@ mod tests {
         assert!(worker_ensure < worker_spawn, "persist-before-spawn (F1): {order:?}");
         assert!(endpoint_ensure < endpoint_spawn, "persist-before-spawn (F1): {order:?}");
         assert!(worker_ensure < endpoint_ensure, "endpoint depends on worker");
-        // Child-phase driven readiness.
-        assert!(fake.call_order().contains(&"socket-ready"));
+        // Child-phase driven readiness is observed this pass.
+        assert!(order.contains(&"socket-ready".to_owned()));
+        assert!(order.contains(&"guest-mount".to_owned()));
+        // The derived plan is the status handle (never a resource field).
+        match f.ctx.status::<BindingDriverStatus>() {
+            Some(BindingDriverStatus::ServingChildren {
+                plan,
+                converged,
+                socket_ready,
+                mount_ready,
+            }) => {
+                assert!(!converged, "the first pass committed the child rows");
+                assert!(!socket_ready, "the scripted socket is not ready yet");
+                assert!(!mount_ready);
+                assert_eq!(plan.plan.template, WORKER_TEMPLATE);
+                assert_eq!(plan.plan.thread_pool_size, 4);
+                assert!(plan.plan.readonly);
+            }
+            other => panic!("expected ServingChildren, got {other:?}"),
+        }
+        // The not-yet-current child set re-checks on the preserved resync.
+        assert_eq!(f.requeue.scheduled().len(), 1);
+
+        // Second pass: the same children are current, no churn, no requeue.
+        d.reconcile(&mut f.ctx).await.expect("reconcile again");
+        let ensures = f
+            .manager
+            .order()
+            .iter()
+            .filter(|entry| entry.starts_with("ensure:"))
+            .count();
+        assert_eq!(ensures, 4, "two passes, two ensures each");
+        assert_eq!(f.requeue.scheduled().len(), 1);
+        assert!(matches!(
+            f.ctx.status::<BindingDriverStatus>(),
+            Some(BindingDriverStatus::ServingChildren {
+                converged: true,
+                ..
+            })
+        ));
+    }
+
+    // -- launch authority: plan + typed, argv-free worker child ---------------
+
+    #[tokio::test]
+    async fn worker_child_carries_the_signed_template_and_no_argv() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+
+        let rows = manager.rows();
+        let worker = rows
+            .iter()
+            .find(|row| row.key.type_name == "Process")
+            .expect("worker Process child row");
+        let endpoint = rows
+            .iter()
+            .find(|row| row.key.type_name == "Endpoint")
+            .expect("Endpoint child row");
+        let mut process_spec: serde_json::Value =
+            serde_json::from_slice(&worker.spec).expect("worker spec json");
+        // The serving posture is the frozen default; the template is the
+        // signed worker template the launch path resolves (KTD13/U17).
+        assert_eq!(process_spec["template"], WORKER_TEMPLATE);
+        assert_eq!(process_spec["executionRef"], "Host/host-system");
+        assert_eq!(process_spec["processClass"], "worker");
+        // No argv/launch parameter may travel in the resource (KTD1): the
+        // Process controller composes the launch from the binding/Volume rows.
+        let rendered = process_spec.to_string();
+        for forbidden in ["argv", "args", "command", "cmd", "exec"] {
+            assert!(
+                !rendered.contains(&format!("\"{forbidden}\"")),
+                "worker child must stay argv-free, found {forbidden:?}: {rendered}"
+            );
+        }
+        // The store validates the base layer; providerRef lives in the
+        // envelope layer (mirroring validate_standard_base_bytes).
+        process_spec
+            .as_object_mut()
+            .expect("process spec object")
+            .remove("providerRef");
+        let typed: d2b_contracts_resource::v3::process::ProcessSpec =
+            serde_json::from_value(process_spec).expect("ProcessSpec parses");
+        assert_eq!(typed.execution().template().as_str(), WORKER_TEMPLATE);
+        let endpoint_spec: serde_json::Value =
+            serde_json::from_slice(&endpoint.spec).expect("endpoint spec json");
+        let _typed: d2b_contracts_resource::v3::endpoint::EndpointSpec =
+            serde_json::from_value(endpoint_spec).expect("EndpointSpec parses");
     }
 
     // -- recover: plan re-derivation matches the pre-restart incarnation ------
 
     #[tokio::test]
     async fn recover_rederives_the_launch_plan_matching_the_pre_restart_incarnation() {
-        let fake = FakeServingEffects::new();
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let mut f = fixture(binding_row([0x42; 16]), manager);
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
-        // Pre-restart: reconcile derives and stores the plan.
+        // Pre-restart: reconcile derives the plan and commits the child rows.
         d.reconcile(&mut f.ctx).await.expect("reconcile");
         let pre = match f.ctx.status::<BindingDriverStatus>() {
-            Some(BindingDriverStatus::ServingChildren { worker_ref, endpoint_ref }) => {
-                (worker_ref.clone(), endpoint_ref.clone())
-            }
+            Some(BindingDriverStatus::ServingChildren { plan, .. }) => plan.clone(),
             other => panic!("expected ServingChildren, got {other:?}"),
         };
 
-        // Restart: a fresh context (no in-memory state) recovers; the
-        // re-derived plan must match the pre-restart incarnation (same
-        // template/socket-equivalent identity - the plan is path-free, so
-        // socket identity equivalence is the worker + endpoint refs and the
-        // frozen plan fields).
-        let mut f2 = fixture(binding_row([0x42; 16]), manager_clone_placeholder());
+        // Restart: a fresh context over the same durable rows (the manager
+        // holds them across the restart) recovers; the re-derived plan must
+        // equal the pre-restart incarnation (the plan is path-free, so
+        // equality covers the frozen template/sandbox posture).
+        let mut f2 = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d2 = driver(fake.clone()).await;
         fake.make_ready();
         assert_eq!(
             d2.recover(&mut f2.ctx).await.expect("recover"),
             RecoveryOutcome::Adopted,
-            "socket ready: pre-restart incarnation adopted"
+            "owned children current and socket ready: pre-restart incarnation adopted"
         );
-        let recovered = match f2.ctx.status::<BindingDriverStatus>() {
-            Some(BindingDriverStatus::RecoveredPlan { worker_ref, endpoint_ref }) => {
-                (worker_ref.clone(), endpoint_ref.clone())
+        match f2.ctx.status::<BindingDriverStatus>() {
+            Some(BindingDriverStatus::RecoveredPlan { plan, socket_ready }) => {
+                assert!(socket_ready);
+                assert_eq!(pre, plan.clone(), "re-derived plan matches pre-restart");
+                assert_eq!(plan.plan.template, WORKER_TEMPLATE);
+                assert_eq!(plan.plan.thread_pool_size, 4);
+                assert!(plan.plan.readonly);
+                assert!(!plan.plan.posix_acl);
+                assert!(!plan.plan.xattr);
             }
             other => panic!("expected RecoveredPlan, got {other:?}"),
-        };
-        assert_eq!(pre, recovered, "re-derived plan matches pre-restart incarnation");
-        // The frozen plan posture: same template, frozen sandbox defaults.
-        let binding = d2b_provider_volume_virtiofs::StoredBinding::new(
-            d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
-                d2b_contracts_resource::v3::ResourceRef::parse("Volume/data").expect("volume"),
-                d2b_contracts_resource::v3::ResourceRef::parse("Guest/guest-a").expect("guest"),
-                "root",
-                AttachmentAccess::ReadOnly,
-                "/mnt/data",
-            )
-            .expect("binding spec"),
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "42424242-4242-4242-8242-424242424242",
-            )
-            .expect("uid"),
-            d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
-            d2b_contracts_resource::v3::ZoneRevision::new(0),
+        }
+
+        // A restart whose children are gone adopts nothing.
+        let mut f3 = fixture(binding_row([0x42; 16]), manager_clone_placeholder());
+        let mut d3 = driver(fake).await;
+        assert_eq!(
+            d3.recover(&mut f3.ctx).await.expect("recover"),
+            RecoveryOutcome::Missing,
+            "no owned child rows: the realization is missing"
         );
-        let view = parent_volume_bytes_view();
-        let plan = binding
-            .worker_principal()
-            .ok()
-            .and_then(|principal| {
-                d2b_provider_volume_virtiofs::VirtiofsdWorkerPlan::for_binding(
-                    &binding, &view, 4, principal,
-                )
-                .ok()
-            })
-            .expect("plan derives");
-        assert_eq!(plan.template, WORKER_TEMPLATE);
-        assert_eq!(plan.thread_pool_size, 4);
-        assert!(plan.readonly);
-        assert!(!plan.posix_acl);
-        assert!(!plan.xattr);
     }
 
     // -- teardown ordering -----------------------------------------------------
 
     #[tokio::test]
-    async fn delete_removes_endpoint_before_worker() {
-        let fake = FakeServingEffects::new();
+    async fn delete_drains_the_endpoint_before_the_worker_and_behind_the_mount_gate() {
         let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
         d.reconcile(&mut f.ctx).await.expect("reconcile");
+        let before = manager.order().len();
         d.delete(&mut f.ctx).await.expect("delete");
 
-        let order = manager.order();
-        let endpoint_delete = order
-            .iter()
-            .position(|entry| entry.starts_with("delete:Endpoint/"))
-            .expect("endpoint child deleted");
-        let _worker_delete = order
-            .iter()
-            .position(|entry| entry.starts_with("delete:Process/"))
-            .expect("worker child deleted");
-        assert!(
-            endpoint_delete < worker_delete_index(&order, endpoint_delete),
-            "endpoint-first / process-last teardown: {order:?}"
-        );
-        // The socket removal (the endpoint effect) precedes the worker
-        // deletion on the serving port.
-        assert!(fake.call_order().contains(&"remove-socket"));
+        let order: Vec<String> = manager.order().into_iter().skip(before).collect();
+        let position = |needle: &str| {
+            order
+                .iter()
+                .position(|entry| entry.starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} recorded in {order:?}"))
+        };
+        // KTD6: the guest mount is observed before anything is deleted, and
+        // the preserved ordering holds: endpoint row, socket realization,
+        // worker Process row last.
+        assert!(position("guest-mount") < position("delete:Endpoint/"));
+        assert!(position("delete:Endpoint/") < position("remove-socket"));
+        assert!(position("remove-socket") < position("delete:Process/"));
     }
 
-    fn worker_delete_index(order: &[String], endpoint_delete: usize) -> usize {
-        order[endpoint_delete..]
+    #[tokio::test]
+    async fn mounted_share_blocks_the_drain_before_any_child_is_removed() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+        let children_before = manager.rows().len();
+        fake.make_mounted();
+
+        // KTD6: a present mount keeps the durable deleting mark and the
+        // owned children; the pass retries instead of force-clearing a
+        // served share (old `VirtiofsBindingError::DrainIncomplete`).
+        let failure = d.delete(&mut f.ctx).await.expect_err("drain must block");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        let teardown: Vec<String> = manager
+            .order()
+            .into_iter()
+            .filter(|entry| entry.starts_with("delete:") || entry == "remove-socket")
+            .collect();
+        assert!(teardown.is_empty(), "nothing may be torn down: {teardown:?}");
+        assert_eq!(manager.rows().len(), children_before, "children stay committed");
+    }
+
+    // -- owned-child drift -----------------------------------------------------
+
+    #[tokio::test]
+    async fn obsolete_owned_child_is_retired_endpoint_first() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        // A stale Endpoint child the derived set no longer names (a binding
+        // whose endpoint identity changed), plus a stale Process sibling.
+        manager.seed_owned(ResourceKey::new("work", "Endpoint", "stale-endpoint"));
+        manager.seed_owned(ResourceKey::new("work", "Process", "stale-worker"));
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+
+        let order = manager.order();
+        let stale_endpoint = order
             .iter()
-            .position(|entry| entry.starts_with("delete:Process/"))
-            .map(|offset| endpoint_delete + offset)
-            .expect("worker delete after endpoint")
+            .position(|entry| entry == "delete:Endpoint/stale-endpoint")
+            .expect("stale endpoint retired");
+        let stale_worker = order
+            .iter()
+            .position(|entry| entry == "delete:Process/stale-worker")
+            .expect("stale worker retired");
+        assert!(
+            stale_endpoint < stale_worker,
+            "endpoint-first / process-last retirement: {order:?}"
+        );
+    }
+
+    // -- dependency edges ------------------------------------------------------
+
+    #[tokio::test]
+    async fn dependency_watches_are_registered_once_per_target() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        d.reconcile(&mut f.ctx).await.expect("reconcile one");
+        d.reconcile(&mut f.ctx).await.expect("reconcile two");
+
+        let mut targets = manager
+            .watch_targets()
+            .into_iter()
+            .map(|key| format!("{}/{}", key.type_name, key.name))
+            .collect::<Vec<_>>();
+        let registered = targets.len();
+        targets.sort();
+        targets.dedup();
+        assert_eq!(
+            registered,
+            targets.len(),
+            "no dependency watch is registered twice"
+        );
+        // The parent Volume plus both derived children (R12/R17).
+        assert!(targets.contains(&"Volume/data".to_owned()));
+        let child_keys = manager
+            .rows()
+            .iter()
+            .filter(|row| matches!(row.key.type_name.as_str(), "Process" | "Endpoint"))
+            .map(|row| format!("{}/{}", row.key.type_name, row.key.name))
+            .collect::<Vec<_>>();
+        assert_eq!(child_keys.len(), 2, "worker + endpoint child rows");
+        for key in child_keys {
+            assert!(targets.contains(&key), "the dependency edge watches {key}");
+        }
+    }
+
+    // -- terminal rejection visibility -----------------------------------------
+
+    #[tokio::test]
+    async fn rejected_view_keeps_its_stable_reason_in_status() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut row = binding_row([0x42; 16]);
+        let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
+        spec["view"] = serde_json::json!("absent");
+        row.spec = serde_json::to_vec(&spec).expect("binding spec bytes");
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake).await;
+
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        // Old `failed_binding_result`: the stable provider code stays visible.
+        assert!(matches!(
+            f.ctx.status::<BindingDriverStatus>(),
+            Some(BindingDriverStatus::Rejected {
+                reason: "view-not-found"
+            })
+        ));
+        assert!(
+            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            "a rejected binding mints no children"
+        );
     }
 
     // -- owner guard -----------------------------------------------------------
@@ -1119,18 +1617,6 @@ mod tests {
         assert_eq!(ensures.len(), 4);
         assert_eq!(ensures[0], ensures[2], "worker child key is deterministic");
         assert_eq!(ensures[1], ensures[3], "endpoint child key is deterministic");
-    }
-
-    fn parent_volume_bytes_view() -> d2b_contracts_resource::v3::volume::ViewSpec {
-        d2b_contracts_resource::v3::volume::ViewSpec::new(
-            "data",
-            vec![
-                d2b_contracts_resource::v3::volume::ViewRight::Read,
-                d2b_contracts_resource::v3::volume::ViewRight::Write,
-                d2b_contracts_resource::v3::volume::ViewRight::Traverse,
-            ],
-        )
-        .expect("view")
     }
 
     fn manager_clone_placeholder() -> RecordingManager {

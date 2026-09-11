@@ -410,6 +410,7 @@ impl ResolvedRunnerIntentBuilder {
             profile_id: self.profile_id,
             user_namespace: self.user_namespace,
             umask: self.umask,
+            accepts_launch_args: false,
         }
     }
 }

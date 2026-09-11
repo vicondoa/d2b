@@ -3200,6 +3200,123 @@ impl RunnerRole {
 /// together with their signed bundle contract and identity fencing.
 pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[RunnerRole::ActivationNixos];
 
+/// Controller-supplied arguments for one typed Process launch.
+///
+/// The executor never accepts an `argv[0]`: the executable is always the
+/// trusted intent's `binary_path`. This type only carries the arguments the
+/// owning Process controller appends after it, and only for templates whose
+/// trusted bundle row declares that it admits controller arguments. Bounds
+/// mirror the spawn preflight so an argument the exec path cannot round-trip
+/// is refused at the wire boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerLaunchArgs {
+    args: Vec<String>,
+}
+
+impl RunnerLaunchArgs {
+    /// Maximum number of supplied arguments.
+    pub const MAX_ARGS: usize = 64;
+    /// Maximum byte length of one argument.
+    pub const MAX_ARG_BYTES: usize = 4096;
+    /// Maximum combined byte length of every supplied argument.
+    pub const MAX_TOTAL_BYTES: usize = 16 * 1024;
+
+    /// Validate and construct one bounded argument vector.
+    pub fn new(args: Vec<String>) -> Result<Self, RunnerLaunchArgsError> {
+        if args.is_empty() {
+            return Err(RunnerLaunchArgsError::Empty);
+        }
+        if args.len() > Self::MAX_ARGS {
+            return Err(RunnerLaunchArgsError::TooMany { count: args.len() });
+        }
+        let mut total = 0usize;
+        for (index, arg) in args.iter().enumerate() {
+            if arg.is_empty() {
+                return Err(RunnerLaunchArgsError::EmptyArgument { index });
+            }
+            if arg.contains('\0') {
+                return Err(RunnerLaunchArgsError::ArgumentWithNul { index });
+            }
+            if arg.len() > Self::MAX_ARG_BYTES {
+                return Err(RunnerLaunchArgsError::ArgumentTooLong { index });
+            }
+            total = total.saturating_add(arg.len());
+        }
+        if total > Self::MAX_TOTAL_BYTES {
+            return Err(RunnerLaunchArgsError::TotalTooLong { bytes: total });
+        }
+        Ok(Self { args })
+    }
+
+    /// Borrow the validated arguments.
+    pub fn as_slice(&self) -> &[String] {
+        &self.args
+    }
+}
+
+/// Closed refusal for one launch-argument vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerLaunchArgsError {
+    /// The vector carried no arguments.
+    Empty,
+    /// More arguments than [`RunnerLaunchArgs::MAX_ARGS`].
+    TooMany {
+        /// Observed argument count.
+        count: usize,
+    },
+    /// One argument was empty.
+    EmptyArgument {
+        /// Index of the offending argument.
+        index: usize,
+    },
+    /// One argument contained a NUL byte the exec path cannot round-trip.
+    ArgumentWithNul {
+        /// Index of the offending argument.
+        index: usize,
+    },
+    /// One argument exceeded [`RunnerLaunchArgs::MAX_ARG_BYTES`].
+    ArgumentTooLong {
+        /// Index of the offending argument.
+        index: usize,
+    },
+    /// The combined size exceeded [`RunnerLaunchArgs::MAX_TOTAL_BYTES`].
+    TotalTooLong {
+        /// Observed combined byte length.
+        bytes: usize,
+    },
+}
+
+impl core::fmt::Display for RunnerLaunchArgsError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("launch-args-empty"),
+            Self::TooMany { .. } => formatter.write_str("launch-args-too-many"),
+            Self::EmptyArgument { .. } => formatter.write_str("launch-args-empty-argument"),
+            Self::ArgumentWithNul { .. } => formatter.write_str("launch-args-nul"),
+            Self::ArgumentTooLong { .. } => formatter.write_str("launch-args-argument-too-long"),
+            Self::TotalTooLong { .. } => formatter.write_str("launch-args-total-too-long"),
+        }
+    }
+}
+
+impl std::error::Error for RunnerLaunchArgsError {}
+
+impl<'de> Deserialize<'de> for RunnerLaunchArgs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            args: Vec<String>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.args).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpawnRunnerRequest {
@@ -3244,6 +3361,14 @@ pub struct SpawnRunnerRequest {
     /// Typed stdin input admitted only for the activation-nixos runner role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_input: Option<ActivationRunnerInput>,
+    /// Bounded controller-supplied arguments for a typed Process launch.
+    ///
+    /// The executable is never supplied here: the broker composes `argv[0]`
+    /// from the trusted intent's `binary_path` and appends these arguments.
+    /// Refused unless the resolved intent's template declares that it admits
+    /// controller arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_args: Option<RunnerLaunchArgs>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_plan: Option<SandboxLaunchPlan>,
     /// Role selector - picks the argv generator the broker applies to
@@ -4622,6 +4747,7 @@ mod tests {
             generation: None,
             runtime_scope: None,
             activation_input: None,
+            launch_args: None,
             sandbox_plan: None,
             role,
             bundle_runner_intent_ref: BundleOpId::new("runner:test"),

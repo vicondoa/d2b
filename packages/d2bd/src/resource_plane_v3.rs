@@ -4,11 +4,15 @@
 //! ## What this module owns
 //!
 //! - [`route_resource_type`] classifies a resource type onto the new plane
-//!   (`Process`, `Volume`, `VolumeBinding`, `Endpoint`) or the old plane.
-//!   The partition rule is exclusive: converted types are served ONLY by
-//!   the new plane, unconverted types ONLY by the old plane; no type is
-//!   served by both (no dual-write). R29's "exactly one model" completes in
-//!   Phase B when the remaining types convert.
+//!   (`Process`, `Volume`, `VolumeBinding`, `Endpoint`) or the old plane,
+//!   and the public surface dispatches by that classification: converted
+//!   types are served to callers ONLY by the new plane, unconverted types
+//!   ONLY by the old one. Legacy in-daemon writers of converted types (the
+//!   framework runners and controller sessions that U12 carries over) still
+//!   write the redb plane until their providers convert, so the exclusive
+//!   rule holds on the API surface, not yet inside the daemon. R29's
+//!   "exactly one model" completes in Phase B when the remaining types
+//!   convert and those writers are deleted.
 //! - [`ResourcePlaneV3`] is the per-zone NEW assembly (KTD5): it opens the
 //!   per-zone SQLite spec store, registers the four converted-type driver
 //!   factories over the production effects the old reconcilers compose from
@@ -25,10 +29,14 @@
 //! ## Spec store path decision
 //!
 //! The old redb store is opened through a broker fd handover
-//! (`open_zone_store_from_broker`), so the daemon never derived its path.
-//! The new SQLite store is a plain daemon-owned file under the zone's state
-//! directory - the same directory composition already derives for audit and
-//! telemetry (`<state-root>/zones/<zone>`): `zones/<zone>/spec-store.sqlite3`.
+//! (`open_zone_store_from_broker`), so the daemon never derived its path and
+//! never needed write access to the directory holding it. That directory
+//! (`<state-root>/zones/<zone>`) is broker-provisioned and owned by the
+//! zone-store principal; the daemon may traverse it but not create entries in
+//! it, so a spec store placed there fails to open with `SQLITE_CANTOPEN`.
+//! The new SQLite store is a plain daemon-owned file and therefore lives
+//! under the daemon's own state root:
+//! `<daemon-state>/zones/<zone>/spec-store.sqlite3`.
 //! [`d2b_resource_runtime::spec_store::SpecStore::open`] enforces the 0600
 //! file / 0700 directory posture and owns the WAL setup itself, so no broker
 //! handover is needed; U14 retires the redb store.
@@ -37,9 +45,10 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
@@ -71,18 +80,34 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
+use crate::activation_driver::{
+    ActivationDriverArgs, ActivationDriverEffects, ActivationDriverFactory,
+    ProductionActivationDriverEffects, activation_spec_decoder,
+};
 use crate::binding_driver::{
     BindingDriverArgs, BindingDriverEffects, BindingDriverFactory, ProductionBindingDriverEffects,
     binding_spec_decoder,
+};
+use crate::credential_driver::{
+    CredentialDriverArgs, CredentialDriverEffects, CredentialDriverFactory, credential_spec_decoder,
 };
 use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
 use crate::process_driver::{
     ProcessDriverArgs, ProcessDriverEffects, ProcessDriverFactory, ProductionProcessDriverEffects,
     process_spec_decoder,
 };
+use crate::semantic_binding_resource_runtime::{
+    TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
+    telemetry_spec_decoder,
+};
 use crate::volume_driver::{
     ProductionVolumeDriverEffects, VolumeDriverArgs, VolumeDriverEffects, volume_spec_decoder,
 };
+use crate::shared_provider_driver::{
+    SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
+    shared_provider_spec_decoder,
+};
+use crate::shared_provider_effects::ProductionSharedProviderEffects;
 
 /// Frozen purpose of the binding-owned virtiofsd socket (old `VIRTIOFSD_PURPOSE`
 /// in `endpoint_driver.rs`).
@@ -99,7 +124,8 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 4] = ["Process", "Volume", "VolumeBinding", "Endpoint"];
+pub const CONVERTED_TYPES: [&str; 14] =
+    d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +149,21 @@ pub fn route_resource_type(type_name: &str) -> PlaneRoute {
     }
     PlaneRoute::OldPlane
 }
+
+// ---------------------------------------------------------------------------
+// Committed Provider identities (KTD7)
+// ---------------------------------------------------------------------------
+//
+// The new store carries no `Provider` rows: bundle rows of unconverted types
+// pass through to the old plane's redb store, so the per-zone v3 plane cannot
+// resolve a controller row's owning Provider from its own store. The
+// composition unit resolves the bundle's `Provider` rows through the old
+// plane's durable authority and hands the identities to
+// [`ConstructionInputs::committed_provider_identities`]; the plane publishes
+// them into [`PlaneResourceRegistry`] before its manager spawns any resource
+// actor, and the production Process effects bind them to controller rows. A
+// reference the authority does not retain stays unpublished, so the
+// controller ticket refuses closed.
 
 // ---------------------------------------------------------------------------
 // Per-zone plane registry: per-resource anchors for the production effects
@@ -158,9 +199,24 @@ struct SocketTarget {
 /// every pass; the new plane registers them once per durable row set (from
 /// the spec store at open, after every bundle ingestion, and after API
 /// applies via the merge owner's re-registration call).
-#[derive(Debug, Default)]
+///
+/// The registry is a cache of store-derived rows, so a socket-target lookup
+/// that misses consults the authority (the attached spec store) rather than
+/// assuming the load-time snapshot was complete: the manager ensures the
+/// Volume-minted `VolumeBinding` children *after* those durable loads, so
+/// the socket targets they derive are only observable through the store.
+#[derive(Default)]
 pub struct PlaneResourceRegistry {
     inner: Mutex<RegistryInner>,
+    /// The durable authority this registry caches rows from; attached by
+    /// the plane once its spec store is open.
+    store: OnceLock<Arc<SpecStore>>,
+}
+
+impl fmt::Debug for PlaneResourceRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlaneResourceRegistry").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -169,6 +225,9 @@ struct RegistryInner {
     volume_anchors_by_name: BTreeMap<String, VolumeAnchor>,
     socket_targets_by_identity: BTreeMap<String, SocketTarget>,
     socket_targets_by_ref: BTreeMap<String, SocketTarget>,
+    /// Committed `Provider` row identities (KTD7) keyed by canonical ref.
+    committed_provider_identities:
+        BTreeMap<String, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
 }
 
 impl PlaneResourceRegistry {
@@ -199,6 +258,69 @@ impl PlaneResourceRegistry {
                 .get(&producer_ref.to_canonical_string())
                 .cloned()
         })
+    }
+
+    /// Attach the durable authority (the plane's spec store) the cache
+    /// loads derived rows from. Idempotent.
+    pub fn attach_store(&self, store: Arc<SpecStore>) {
+        let _ = self.store.set(store);
+    }
+
+    /// Re-register the durable `VolumeBinding` rows (and the socket targets
+    /// they derive) from the attached spec store. Bounded to the one type;
+    /// never a full row sweep.
+    async fn load_binding_targets(&self, zone_token: &BoundedToken) {
+        let Some(store) = self.store.get() else {
+            return;
+        };
+        let selector = SpecSelector {
+            zone: Some(zone_token.as_str().to_owned()),
+            type_name: Some("VolumeBinding".to_owned()),
+            owner_uid: None,
+        };
+        match store.list(selector).await {
+            Ok(rows) => {
+                for row in &rows {
+                    register_binding_row(self, zone_token, row);
+                }
+            }
+            Err(error) => {
+                tracing::debug!(
+                    zone = %zone_token.as_str(),
+                    error = %error,
+                    "binding socket target load failed"
+                );
+            }
+        }
+    }
+
+    /// Socket target for one binding socket identity: cache first, then the
+    /// authority on a miss (the derived child may have been minted after the
+    /// plane's last durable load).
+    async fn socket_target_by_identity(
+        &self,
+        zone_token: &BoundedToken,
+        socket: &SocketIdentity,
+    ) -> Option<SocketTarget> {
+        if let Some(target) = self.lookup_socket_target_by_identity(socket) {
+            return Some(target);
+        }
+        self.load_binding_targets(zone_token).await;
+        self.lookup_socket_target_by_identity(socket)
+    }
+
+    /// Socket target for one serving-pair ref (worker Process or Endpoint):
+    /// cache first, then the authority on a miss.
+    async fn socket_target_by_ref(
+        &self,
+        zone_token: &BoundedToken,
+        producer_ref: &ResourceRef,
+    ) -> Option<SocketTarget> {
+        if let Some(target) = self.lookup_socket_target_by_ref(producer_ref) {
+            return Some(target);
+        }
+        self.load_binding_targets(zone_token).await;
+        self.lookup_socket_target_by_ref(producer_ref)
     }
 
     fn register_volume(&self, volume_uid: &str, volume_name: &str, anchor: VolumeAnchor) {
@@ -262,6 +384,39 @@ impl PlaneResourceRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Publish one committed `Provider` row's identity (KTD7): the production
+    /// Process effects bind it to controller rows that Provider owns. Fed by
+    /// the plane's construction path from
+    /// [`ConstructionInputs::committed_provider_identities`].
+    fn register_committed_provider_identity(
+        &self,
+        provider_ref: &ResourceRef,
+        uid: ResourceUid,
+        generation: d2b_contracts_resource::v3::ResourceGeneration,
+    ) {
+        self.with_inner(|inner| {
+            inner
+                .committed_provider_identities
+                .insert(provider_ref.to_canonical_string(), (uid, generation));
+        });
+    }
+}
+
+/// The committed-`Provider` identity view the production Process effects
+/// consult (KTD7), published by [`PlaneResourceRegistry`].
+impl crate::process_driver::CommittedProviderIdentitySource for PlaneResourceRegistry {
+    fn committed_provider_identity(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
+        self.with_inner(|inner| {
+            inner
+                .committed_provider_identities
+                .get(&provider_ref.to_canonical_string())
+                .cloned()
+        })
     }
 }
 
@@ -351,7 +506,7 @@ fn nix_closure_volume_anchor(
     }
 }
 
-fn decode_metadata_owner_ref(metadata: &[u8]) -> Option<ResourceRef> {
+pub(crate) fn decode_metadata_owner_ref(metadata: &[u8]) -> Option<ResourceRef> {
     let value: serde_json::Value = serde_json::from_slice(metadata).ok()?;
     value
         .get("ownerRef")
@@ -393,7 +548,7 @@ fn resource_uid_string(bytes: &[u8; 16]) -> String {
 /// contract): the private virtiofs socket path for one (volume, guest)
 /// serving pair. The rendered accessor is crate-private in the provider
 /// today; U14 collapses this mirror behind a provider-owned probe.
-fn virtiofs_socket_path(
+pub(crate) fn virtiofs_socket_path(
     socket_runtime_dir: &Path,
     zone: &BoundedToken,
     volume_ref: &ResourceRef,
@@ -464,8 +619,13 @@ struct BindingSocketProbe {
 }
 
 impl BindingSocketProbe {
-    fn path_for(&self, socket: &SocketIdentity) -> Option<PathBuf> {
-        let target = self.registry.lookup_socket_target_by_identity(socket)?;
+    /// Resolve the binding's private socket path; a registry miss loads the
+    /// derived-child rows from the authority (the spec store) first.
+    async fn path_for(&self, socket: &SocketIdentity) -> Option<PathBuf> {
+        let target = self
+            .registry
+            .socket_target_by_identity(&self.zone_token, socket)
+            .await?;
         Some(virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
@@ -478,7 +638,8 @@ impl BindingSocketProbe {
 /// Endpoint socket realization (transport-unix virtiofsd case): the worker
 /// Process child binds the private socket; the endpoint's ensure waits a
 /// bounded budget for the bind and reports a retryable failure otherwise
-/// (the actor owns the retry, R13).
+/// (the actor owns the retry, R13). The same effect answers the driver's
+/// presence probe.
 struct SocketWaitEffect {
     registry: Arc<PlaneResourceRegistry>,
     socket_runtime_dir: PathBuf,
@@ -486,14 +647,30 @@ struct SocketWaitEffect {
 }
 
 impl SocketWaitEffect {
-    fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
-        let target = self.registry.lookup_socket_target_by_ref(producer_ref)?;
+    /// Resolve the producer's private socket path; a registry miss loads the
+    /// derived-child rows from the authority (the spec store) first.
+    async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
+        let target = self
+            .registry
+            .socket_target_by_ref(&self.zone_token, producer_ref)
+            .await?;
         Some(virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
             &target.execution_ref,
         )?)
+    }
+
+    /// Whether the producer's socket is resolved and bound on the host
+    /// target.
+    async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
+        purpose == VIRTIOFSD_PURPOSE
+            && self
+                .path_for(producer_ref)
+                .await
+                .map(|path| socket_is_present(&path))
+                .unwrap_or(false)
     }
 }
 
@@ -503,13 +680,12 @@ impl AsyncSocketEffect for SocketWaitEffect {
         if purpose != VIRTIOFSD_PURPOSE {
             return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
         }
+        // Resolve the target once (a miss consults the authority); the poll
+        // below only re-checks the bound socket on the host target.
+        let path = self.path_for(producer_ref).await;
         let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
         loop {
-            if self
-                .path_for(producer_ref)
-                .map(|path| socket_is_present(&path))
-                .unwrap_or(false)
-            {
+            if path.as_deref().map(socket_is_present).unwrap_or(false) {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
@@ -533,9 +709,7 @@ impl AsyncSocketEffect for SocketRemoveEffect {
         if purpose != VIRTIOFSD_PURPOSE {
             return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
         }
-        match self
-            .path_for(producer_ref)
-        {
+        match self.path_for(producer_ref).await {
             Some(path) => remove_socket_file(&path),
             // Unknown producer: nothing was realized on this target.
             None => Ok(()),
@@ -544,8 +718,13 @@ impl AsyncSocketEffect for SocketRemoveEffect {
 }
 
 impl SocketRemoveEffect {
-    fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
-        let target = self.registry.lookup_socket_target_by_ref(producer_ref)?;
+    /// Resolve the producer's private socket path; a registry miss loads the
+    /// derived-child rows from the authority (the spec store) first.
+    async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
+        let target = self
+            .registry
+            .socket_target_by_ref(&self.zone_token, producer_ref)
+            .await?;
         Some(virtiofs_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
@@ -883,14 +1062,24 @@ pub struct ZoneAuthorityInputs {
 pub struct ConstructionInputs {
     pub zone: ZoneId,
     pub zone_token: BoundedToken,
-    /// The zone's daemon-owned state directory (`<state-root>/zones/<zone>`);
-    /// the spec store lives at `spec-store.sqlite3` underneath it.
-    pub zone_state_dir: PathBuf,
+    /// The zone's daemon-owned spec-store directory
+    /// (`<daemon-state>/zones/<zone>`); the spec store lives at
+    /// `spec-store.sqlite3` underneath it.
+    pub spec_store_dir: PathBuf,
     /// Absolute runtime root the virtiofs worker-template exports resolve
     /// under (`PrivateSocketPath::derive` input); production derives it
     /// from the broker socket's parent directory.
     pub socket_runtime_dir: PathBuf,
     pub authority: ZoneAuthorityInputs,
+    /// Committed `Provider` identities (KTD7) keyed by canonical reference,
+    /// resolved by the composition unit from the old plane's durable
+    /// authority (unconverted `Provider` rows pass through to its store, so
+    /// this plane's spec store never carries them). The plane publishes them
+    /// into [`PlaneResourceRegistry`] before its manager spawns any resource
+    /// actor; a reference absent here stays unpublished and its controller
+    /// rows refuse closed.
+    pub committed_provider_identities:
+        BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
     /// Shared per-zone registry the production effects resolve per-resource
     /// anchors from; the plane re-populates it from the spec store.
     pub registry: Arc<PlaneResourceRegistry>,
@@ -898,6 +1087,9 @@ pub struct ConstructionInputs {
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn crate::endpoint_driver::EndpointDriverEffects>,
+    pub activation_effects: Arc<dyn ActivationDriverEffects>,
+    pub credential_effects: Arc<dyn CredentialDriverEffects>,
+    pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
 }
 
 /// Production construction for one zone under `open_resource_plane`: reuse
@@ -910,13 +1102,17 @@ impl ConstructionInputs {
         zone: ZoneId,
         authority: &d2bd_runtime::zone_authority::ZoneAuthorityIdentity,
         resolver: BundleResolver,
+        credential_effects: Arc<dyn CredentialDriverEffects>,
+        committed_provider_identities: BTreeMap<
+            ResourceRef,
+            (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration),
+        >,
     ) -> Result<Self, PlaneError> {
-        let zone_state_dir = state
-            .daemon_state_dir
-            .parent()
-            .unwrap_or(state.daemon_state_dir.as_path())
-            .join("zones")
-            .join(zone.as_str());
+        // The spec store is daemon-owned, so it lives under the daemon's own
+        // state root - never in the broker-provisioned
+        // `<state-root>/zones/<zone>` directory, which the daemon may
+        // traverse but not write.
+        let spec_store_dir = state.daemon_state_dir.join("zones").join(zone.as_str());
         let broker_socket = crate::broker_socket_path(state);
         let socket_runtime_dir = broker_socket
             .parent()
@@ -945,6 +1141,8 @@ impl ConstructionInputs {
             }
         };
         let registry = Arc::new(PlaneResourceRegistry::new());
+        let controller_generation = ControllerGeneration::new(1)
+            .map_err(|error| PlaneError::Authority(error.to_string()))?;
         let endpoint_socket_runtime_dir = socket_runtime_dir.clone();
         let endpoint_zone_token = zone_token.clone();
         let probe = BindingSocketProbe {
@@ -952,72 +1150,81 @@ impl ConstructionInputs {
             socket_runtime_dir: socket_runtime_dir.clone(),
             zone_token: zone_token.clone(),
         };
+        let registry_source = Arc::clone(&registry);
         Ok(Self {
             zone: zone.clone(),
             zone_token,
-            zone_state_dir,
+            spec_store_dir,
             socket_runtime_dir,
             authority: ZoneAuthorityInputs {
                 zone_uid: Some(authority.zone_uid().clone()),
                 policy_revision: None,
                 provider_assignment_generation: None,
-                controller_generation: ControllerGeneration::new(1)
-                    .map_err(|error| PlaneError::Authority(error.to_string()))?,
+                controller_generation,
                 guest_execution: None,
                 mode: DaemonMode::Host,
                 vcpu_count: 1,
             },
+            committed_provider_identities,
             registry: Arc::clone(&registry),
-            process_effects: Arc::new(ProductionProcessDriverEffects::new(process_providers)),
+            process_effects: Arc::new(
+                ProductionProcessDriverEffects::new(process_providers)
+                    .with_committed_provider_identities(registry_source),
+            ),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
                 Arc::new({
                     let probe = probe.clone();
                     move |socket: &SocketIdentity| {
-                        probe.path_for(socket).map(|path| socket_is_present(&path)).unwrap_or(false)
+                        let probe = probe.clone();
+                        Box::pin(async move {
+                            probe
+                                .path_for(socket)
+                                .await
+                                .map(|path| socket_is_present(&path))
+                                .unwrap_or(false)
+                        })
                     }
                 }),
                 Arc::new({
                     let probe = probe;
                     move |socket: &SocketIdentity| {
-                        match probe.path_for(socket) {
-                            Some(path) => remove_socket_file(&path),
-                            None => Ok(()),
-                        }
+                        let probe = probe.clone();
+                        Box::pin(async move {
+                            match probe.path_for(socket).await {
+                                Some(path) => remove_socket_file(&path),
+                                None => Ok(()),
+                            }
+                        })
                     }
                 }),
             )),
-            endpoint_effects: Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
-                Arc::new({
-                    let registry = Arc::clone(&registry);
-                    let socket_runtime_dir = endpoint_socket_runtime_dir.clone();
-                    let zone_token = endpoint_zone_token.clone();
-                    move |producer_ref: &ResourceRef, purpose: &str| {
-                        purpose == VIRTIOFSD_PURPOSE
-                            && registry
-                                .lookup_socket_target_by_ref(producer_ref)
-                                .and_then(|target| {
-                                    virtiofs_socket_path(
-                                        &socket_runtime_dir,
-                                        &zone_token,
-                                        &target.volume_ref,
-                                        &target.execution_ref,
-                                    )
-                                })
-                                .map(|path| socket_is_present(&path))
-                                .unwrap_or(false)
-                    }
-                }),
-                Arc::new(SocketWaitEffect {
+            endpoint_effects: {
+                let wait = Arc::new(SocketWaitEffect {
                     registry: Arc::clone(&registry),
                     socket_runtime_dir: endpoint_socket_runtime_dir.clone(),
                     zone_token: endpoint_zone_token.clone(),
-                }),
-                Arc::new(SocketRemoveEffect {
-                    registry: Arc::clone(&registry),
-                    socket_runtime_dir: endpoint_socket_runtime_dir,
-                    zone_token: endpoint_zone_token,
-                }),
+                });
+                let present = Arc::clone(&wait);
+                Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
+                    Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
+                        let present = Arc::clone(&present);
+                        Box::pin(async move { present.present(producer_ref, purpose).await })
+                    }),
+                    wait,
+                    Arc::new(SocketRemoveEffect {
+                        registry: Arc::clone(&registry),
+                        socket_runtime_dir: endpoint_socket_runtime_dir,
+                        zone_token: endpoint_zone_token,
+                    }),
+                ))
+            },
+            activation_effects: Arc::new(ProductionActivationDriverEffects::new(Arc::clone(state))),
+            credential_effects,
+            shared_provider_effects: Arc::new(ProductionSharedProviderEffects::new(
+                Arc::clone(state),
+                zone.clone(),
+                controller_generation,
             )),
         })
     }
@@ -1098,12 +1305,21 @@ pub struct ResourcePlaneV3 {
     readiness: Arc<NewPlaneReadinessState>,
 }
 
+impl core::fmt::Debug for ResourcePlaneV3 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ResourcePlaneV3")
+            .field("zone", &self.zone)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ResourcePlaneV3 {
     /// The per-zone spec store path decision (documented in the module
-    /// header): `zones/<zone>/spec-store.sqlite3` under the daemon state
-    /// root - the same zone state directory composition already derives.
-    pub fn spec_store_path(zone_state_dir: &Path) -> PathBuf {
-        zone_state_dir.join("spec-store.sqlite3")
+    /// header): `spec-store.sqlite3` under the daemon-owned
+    /// `<daemon-state>/zones/<zone>` directory.
+    pub fn spec_store_path(spec_store_dir: &Path) -> PathBuf {
+        spec_store_dir.join("spec-store.sqlite3")
     }
 
     fn build_providers(inputs: &ConstructionInputs) -> Result<ProviderDirectory, PlaneError> {
@@ -1133,6 +1349,24 @@ impl ResourcePlaneV3 {
             zone: inputs.zone.as_str().to_owned(),
             effects: Arc::clone(&inputs.endpoint_effects),
         })))?;
+        providers.register(Arc::new(CredentialDriverFactory::new(CredentialDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.credential_effects),
+        })))?;
+        providers.register(Arc::new(ActivationDriverFactory::new(ActivationDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            effects: Arc::clone(&inputs.activation_effects),
+            verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
+        })))?;
+        providers.register(Arc::new(TelemetryDriverFactory::new()))?;
+        providers.register(Arc::new(SharedProviderDriverFactory::new(
+            SharedProviderDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                effects: Arc::clone(&inputs.shared_provider_effects),
+            },
+        )))?;
         Ok(providers)
     }
 
@@ -1142,23 +1376,58 @@ impl ResourcePlaneV3 {
         decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
         decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
         decoders.insert(ResourceTypeName::new("Endpoint"), endpoint_spec_decoder());
+        decoders.insert(
+            ResourceTypeName::new(crate::activation_driver::ACTIVATION_TYPE_NAME),
+            activation_spec_decoder(),
+        );
+        decoders.insert(
+            ResourceTypeName::new(TELEMETRY_SERVICE_TYPE),
+            telemetry_spec_decoder(),
+        );
+        decoders.insert(
+            ResourceTypeName::new(TELEMETRY_BINDING_TYPE),
+            telemetry_spec_decoder(),
+        );
+        decoders.insert(
+            ResourceTypeName::new("Credential"),
+            credential_spec_decoder(),
+        );
+        for resource_type in crate::shared_provider_driver::SHARED_PROVIDER_TYPES {
+            decoders.insert(
+                ResourceTypeName::new(resource_type),
+                shared_provider_spec_decoder(),
+            );
+        }
         decoders
     }
 
-    /// Open the store, register the four converted-type factories, and
+    /// Open the store, register the converted-type factories, and
     /// spawn the manager. Initial-load completion is a separate step so the
     /// readiness checklist is observable stage by stage; [`Self::open`]
     /// composes both.
     pub fn prepare(inputs: ConstructionInputs) -> Result<Self, PlaneError> {
         let readiness = Arc::new(NewPlaneReadinessState::new());
         // Stage 1: durable spec store.
-        let store_path = Self::spec_store_path(&inputs.zone_state_dir);
+        let store_path = Self::spec_store_path(&inputs.spec_store_dir);
         if let Some(parent) = store_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
-                PlaneError::Authority(format!("zone state dir create failed: {error}"))
+                PlaneError::Authority(format!("spec store dir create failed: {error}"))
             })?;
         }
         let store = Arc::new(SpecStore::open(store_path.clone())?);
+        // The registry caches store-derived rows for the production effects;
+        // the store is the authority its socket-target lookups load from on
+        // a miss (the manager mints derived children after `open`).
+        inputs.registry.attach_store(Arc::clone(&store));
+        // KTD7: publish the committed Provider identities before the manager
+        // spawns any resource actor (restart recovery spawns one per durable
+        // row), so a controller row's first reconcile never observes its
+        // owning Provider unbound.
+        for (provider_ref, (uid, generation)) in &inputs.committed_provider_identities {
+            inputs
+                .registry
+                .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
+        }
         readiness.set_spec_store_ready(true);
         // Stage 2: provider directory with production effects wired.
         let providers = Self::build_providers(&inputs)?;
@@ -1479,6 +1748,8 @@ impl ResourcePlaneV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activation_driver::{ActivationDriverEffects, HostHandoffResult};
+    use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
@@ -1624,17 +1895,140 @@ mod tests {
         }
     }
 
+    struct FakeActivationEffects;
+
+    #[async_trait::async_trait]
+    impl ActivationDriverEffects for FakeActivationEffects {
+        async fn apply_host_generation_handoff(
+            &self,
+            _target: ResourceRef,
+            _intent: HostGenerationHandoffIntent,
+        ) -> HostHandoffResult {
+            HostHandoffResult::Incomplete
+        }
+    }
+
+    struct FakeCredentialEffects;
+
+    #[async_trait::async_trait]
+    impl CredentialDriverEffects for FakeCredentialEffects {
+        async fn dependency_facts(
+            &self,
+            _provider_ref: &ResourceRef,
+            _execution_ref: &ResourceRef,
+        ) -> Option<crate::credential_driver::CredentialDependencyFacts> {
+            None
+        }
+
+        async fn lease_facts(
+            &self,
+            _credential_ref: &ResourceRef,
+        ) -> Option<crate::credential_driver::CredentialLeaseFacts> {
+            None
+        }
+
+        async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
+            false
+        }
+
+        fn session(
+            &self,
+            _provider_ref: &ResourceRef,
+        ) -> Option<Arc<dyn crate::credential_resource_runtime::CredentialSession>> {
+            None
+        }
+    }
+
+    struct FakeSharedProviderEffects;
+
+    #[async_trait::async_trait]
+    impl crate::shared_provider_driver::SharedProviderDriverEffects for FakeSharedProviderEffects {
+        async fn reconcile_network(
+            &self,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderEffectOutcome,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
+                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
+            ))
+        }
+
+        async fn reconcile_tpm(
+            &self,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderEffectOutcome,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
+                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
+            ))
+        }
+
+        async fn reconcile_usbip(
+            &self,
+            _component: crate::shared_provider_driver::UsbipComponent,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderEffectOutcome,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
+                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
+            ))
+        }
+
+        async fn reconcile_security_key(
+            &self,
+            _component: crate::shared_provider_driver::SecurityKeyComponent,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderEffectOutcome,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
+                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
+            ))
+        }
+
+        async fn reconcile_gpu(
+            &self,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderEffectOutcome,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderEffectOutcome::phase(
+                crate::shared_provider_driver::SharedProviderEffectPhase::Pending,
+            ))
+        }
+
+        async fn finalize(
+            &self,
+            _kind: crate::shared_provider_driver::SharedProviderKind,
+            _request: &crate::shared_provider_driver::SharedProviderEffectRequest<'_>,
+        ) -> Result<
+            crate::shared_provider_driver::SharedProviderFinalize,
+            crate::shared_provider_driver::SharedProviderEffectError,
+        > {
+            Ok(crate::shared_provider_driver::SharedProviderFinalize::Complete)
+        }
+    }
+
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let zone_state_dir = dir.path().join("zones/test");
+        let spec_store_dir = dir.path().join("daemon-state/zones/test");
+        let socket_runtime_dir = dir.path().join("run");
         let readiness = Arc::new(NewPlaneReadinessState::new());
         (
             dir,
             ConstructionInputs {
                 zone: ZoneId::parse("test").unwrap(),
                 zone_token: BoundedToken::parse("test".to_owned()).unwrap(),
-                zone_state_dir: zone_state_dir.clone(),
-                socket_runtime_dir: zone_state_dir.join("run"),
+                spec_store_dir: spec_store_dir.clone(),
+                socket_runtime_dir,
                 authority: ZoneAuthorityInputs {
                     zone_uid: None,
                     policy_revision: Some(1),
@@ -1644,18 +2038,22 @@ mod tests {
                     mode: DaemonMode::Host,
                     vcpu_count: 1,
                 },
+                committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 process_effects: Arc::new(FakeProcessEffects),
                 volume_effects: Arc::new(FakeVolumeEffects),
                 binding_effects: Arc::new(FakeBindingEffects),
                 endpoint_effects: Arc::new(FakeEndpointEffects),
+                activation_effects: Arc::new(FakeActivationEffects),
+                credential_effects: Arc::new(FakeCredentialEffects),
+                shared_provider_effects: Arc::new(FakeSharedProviderEffects),
             },
             readiness,
         )
     }
 
 
-    /// Partition router: the four converted types route to the new plane,
+    /// Partition router: the converted types route to the new plane,
     /// representative unconverted types to the old plane.
     #[test]
     fn partition_router_classifies_converted_and_unconverted_types() {
@@ -1669,7 +2067,40 @@ mod tests {
                 "{unconverted} must stay on the old plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 4);
+        assert_eq!(CONVERTED_TYPES.len(), 14);
+    }
+
+    /// KTD7: the committed Provider identities the composition resolves are
+    /// published into the registry the production Process effects consult
+    /// before the manager spawns any resource actor; a Provider the authority
+    /// did not retain stays unpublished so its controller rows refuse closed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn committed_provider_identities_publish_before_the_manager_starts() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        let provider_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174010").expect("provider uid");
+        let provider_generation =
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).expect("generation");
+        inputs.committed_provider_identities = BTreeMap::from([(
+            ResourceRef::parse("Provider/network-local").expect("provider ref"),
+            (provider_uid.clone(), provider_generation),
+        )]);
+        let registry = Arc::clone(&inputs.registry);
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let source = &*registry as &dyn crate::process_driver::CommittedProviderIdentitySource;
+        assert_eq!(
+            source.committed_provider_identity(
+                &ResourceRef::parse("Provider/network-local").expect("provider ref")
+            ),
+            Some((provider_uid, provider_generation))
+        );
+        assert_eq!(
+            source.committed_provider_identity(
+                &ResourceRef::parse("Provider/unretained").expect("provider ref")
+            ),
+            None
+        );
+        plane.shutdown().await;
     }
 
     /// Assembly constructs with fake effects and the readiness gate opens
@@ -1689,6 +2120,78 @@ mod tests {
         plane.complete_initial_load().await.expect("initial load");
         assert!(plane.readiness().is_ready());
         let _ = readiness;
+        plane.shutdown().await;
+    }
+
+    /// The registry is a cache of store-derived rows: a socket target that
+    /// belongs to a derived child committed after the plane's durable loads
+    /// (the manager mints the VolumeBinding) still resolves, by identity and
+    /// by producer ref, through the store on a lookup miss.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn socket_target_lookup_loads_derived_binding_rows_from_the_store() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let zone_token = inputs.zone_token.clone();
+        let registry = Arc::clone(&inputs.registry);
+        let plane = ResourcePlaneV3::prepare(inputs).expect("plane prepare");
+
+        let volume_ref = ResourceRef::parse("Volume/state").unwrap();
+        let execution_ref = ResourceRef::parse("Guest/acceptance-guest").unwrap();
+        let binding = serde_json::json!({
+            "volumeRef": volume_ref.to_canonical_string(),
+            "executionRef": execution_ref.to_canonical_string(),
+            "view": "controller",
+            "access": "read-only",
+            "mountPath": "/state",
+        });
+        // The stored envelope is the neutral binding plus the serving
+        // Provider reference, exactly as the Volume driver mints it.
+        let mut envelope = binding.as_object().cloned().expect("object");
+        envelope.insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String("Provider/volume-virtiofs".to_owned()),
+        );
+        let uid = [0x42; 16];
+        // A row the plane never loaded: exactly the state the manager leaves
+        // behind when it ensures a derived child after `open`.
+        plane
+            .store()
+            .ensure(StoredDesiredResource {
+                key: ResourceKey::new("test", "VolumeBinding", "vol-binding-derived"),
+                uid,
+                generation: 1,
+                owner_uid: Some([0x11; 16]),
+                provenance: d2b_resource_runtime::identity::ResourceProvenance::Resource,
+                deleting: false,
+                spec: serde_json::to_vec(&envelope).expect("envelope"),
+                metadata: Vec::new(),
+                created_at: 0,
+            })
+            .await
+            .expect("binding row");
+
+        let stored = d2b_provider_volume_virtiofs::StoredBinding::new(
+            serde_json::from_slice(&serde_json::to_vec(&binding).expect("binding")).expect("binding spec"),
+            resource_uid(&uid).expect("uid"),
+            d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(0),
+        );
+        let by_identity = registry
+            .socket_target_by_identity(&zone_token, &stored.socket_identity(&zone_token))
+            .await
+            .expect("identity lookup loads the derived row from the store");
+        assert_eq!(by_identity.volume_ref, volume_ref);
+        assert_eq!(by_identity.execution_ref, execution_ref);
+        for producer_ref in [
+            stored.worker_process_ref().expect("worker ref"),
+            stored.endpoint_ref().expect("endpoint ref"),
+        ] {
+            let target = registry
+                .socket_target_by_ref(&zone_token, &producer_ref)
+                .await
+                .expect("producer-ref lookup loads the derived row from the store");
+            assert_eq!(target.volume_ref, volume_ref);
+            assert_eq!(target.execution_ref, execution_ref);
+        }
         plane.shutdown().await;
     }
 

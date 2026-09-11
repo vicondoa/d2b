@@ -32,7 +32,7 @@ pub use client::ResourceApiClient;
 pub use registered::RedbRegisteredControllerApi;
 pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
-pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};
+pub use store::{RedbBackend, RedbStoreSource, ResourceStoreBackend, StoreBindingError};
 pub use service::{GuestLifecycleAdmission, ResourceService};
 pub use watch::{ManagerWatch, ManagerWatchStreams};
 
