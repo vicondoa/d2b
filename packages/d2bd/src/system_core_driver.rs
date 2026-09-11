@@ -822,6 +822,14 @@ mod tests {
             Ok(None)
         }
 
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            self.calls.lock().push("view");
+            Err(ResourceError::ManagerRpc("unexpected view".into()))
+        }
+
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
             self.calls.lock().push("delete");
             Err(ResourceError::ManagerRpc("unexpected delete".into()))
