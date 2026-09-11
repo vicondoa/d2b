@@ -53,7 +53,7 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane,
 /// never by the pre-v3 durable store.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 22] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 31] = [
     "Process",
     "Volume",
     "VolumeBinding",
@@ -76,6 +76,16 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 22] = [
     "audio.d2bus.org.AudioBinding",
     "shell-terminal.d2bus.org.ShellPool",
     "shell-terminal.d2bus.org.ShellSession",
+    // U12: the nine fixed Core controller-family types.
+    "Zone",
+    "ZoneLink",
+    "Provider",
+    "Role",
+    "RoleBinding",
+    "Quota",
+    "EmergencyPolicy",
+    "ResourceExport",
+    "ResourceImport",
 ];
 
 /// Identity class used by typed validation errors.

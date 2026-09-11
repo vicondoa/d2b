@@ -16314,6 +16314,10 @@ async fn open_resource_plane(
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
             inputs.zone = _zone.clone();
+            // U12: the Core-family driver reads the zone's live
+            // controller-session evidence (the same seam the G5 reader
+            // bridge uses), never a durable status copy.
+            inputs.core_effects = runtime.core_driver_effects();
             let plane_v3 = crate::resource_plane_v3::ResourcePlaneV3::open(inputs).await.map_err(|error| {
                 tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
                 resource_runtime::ResourceRuntimeError::HandlerNotReady

@@ -1747,21 +1747,36 @@ mod tests {
         cshare.delete_blocked.store(true, AtomicOrdering::SeqCst);
         let pshare = h.factory.shared(&parent);
         h.client.remove(subject(), parent.clone()).await.expect("remove");
-        until(|| pshare.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // Owner directive 2026-09-11: a driver's finalize finalizes every
+        // owned resource before its own drain work, so the parent's `delete`
+        // runs only after the last owned child has retired. Do NOT restore a
+        // gate that requires the parent's delete to run while a child is
+        // still tearing down - that is exactly what the directive forbids.
         until(|| cshare.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         let parent_row =
             h.client.get_row(parent.clone()).await.expect("get_row").expect("held parent row");
         assert!(parent_row.deleting, "the held parent row keeps its durable deleting mark");
+        assert_eq!(
+            pshare.delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the parent's delete runs only after its owned children retire; its finalize \
+             requeues ChildrenDraining while one is live"
+        );
         assert!(
             h.client.get_row(child.clone()).await.expect("get_row").is_some(),
             "the child row is still tearing down"
         );
 
-        // Releasing the child retires it first, then the held parent.
+        // Releasing the child retires it first, then the parent's finalize
+        // converges, its delete runs, and the held parent retires.
         cshare.open_gate();
         wait_row_gone(&h.client, &child).await;
         wait_row_gone(&h.client, &parent).await;
+        assert!(
+            pshare.delete_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the parent's delete runs once the last owned child retired"
+        );
     }
 
     /// R10 + the Ensure-during-deleting rejection: a resource with the
@@ -1889,10 +1904,12 @@ mod tests {
         )
         .await;
 
-        until(|| {
-            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst) >= 1
-        })
-        .await;
+        // Owner directive 2026-09-11: finalize finalizes every owned resource
+        // before delete, so on the resume path only the leaf children's
+        // deletes run while their gates are shut; the binding's and the
+        // Volume's deletes must wait for their children (and the binding)
+        // respectively. Do NOT restore a gate that expects a parent delete
+        // before its children retire.
         until(|| {
             factory.shared(&worker).delete_calls.load(AtomicOrdering::SeqCst) >= 1
         })
@@ -1901,6 +1918,16 @@ mod tests {
             factory.shared(&endpoint).delete_calls.load(AtomicOrdering::SeqCst) >= 1
         })
         .await;
+        assert_eq!(
+            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "a binding's delete runs only after its owned children retire"
+        );
+        assert_eq!(
+            factory.shared(&volume).delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "a Volume's delete runs only after its binding retires"
+        );
 
         // Children-first on the resume path: while the blocked child rows
         // exist, the binding and its Volume stay present with the deleting
@@ -1944,6 +1971,191 @@ mod tests {
         wait_row_gone(&restarted.client, &endpoint).await;
         wait_row_gone(&restarted.client, &binding).await;
         wait_row_gone(&restarted.client, &volume).await;
+        assert!(
+            factory.shared(&binding).delete_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the binding's delete runs once its owned children retired"
+        );
+        assert!(
+            factory.shared(&volume).delete_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the Volume's delete runs once its binding retired"
+        );
+    }
+
+    /// Owner directive 2026-09-11 at the actor level: every delete pass -
+    /// even for a resource with nothing of its own to drain - runs the
+    /// driver's `finalize` before `delete`. The gated delete holds the pass
+    /// inside the driver, so the finalize counter is the direct order
+    /// witness: a reversed pass would block with the counter still at zero.
+    #[tokio::test]
+    async fn delete_pass_runs_finalize_before_delete() {
+        let h = harness(&["Test"]).await;
+        let solo = key("test", "Test", "solo");
+        let shared = h.factory.shared(&solo);
+        h.client
+            .ensure(subject(), None, desired("Test", "solo", b"spec"))
+            .await
+            .expect("ensure");
+        wait_status(&h.client, &solo, ResourceStatus::Ready).await;
+
+        shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        h.client.remove(subject(), solo.clone()).await.expect("remove");
+        until(|| shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        assert!(
+            shared.finalize_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the pass ran finalize before entering the held delete"
+        );
+        assert!(
+            h.client.get_row(solo.clone()).await.expect("get_row").is_some(),
+            "the held delete keeps the row live"
+        );
+
+        shared.open_gate();
+        wait_row_gone(&h.client, &solo).await;
+        // Both steps are idempotent under the stop/DeletionComplete race:
+        // the respawned pass re-runs them, so only the lower bounds hold.
+        assert!(shared.finalize_calls.load(AtomicOrdering::SeqCst) >= 1);
+        assert!(shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1);
+    }
+
+    /// F3 child-first teardown at the actor level: `finalize` finalizes what
+    /// the resource owns before its own drain work, so a resource whose
+    /// owned child row is still live requeues with the retryable
+    /// `ChildrenDraining` failure and never reaches its own finalize or
+    /// delete. With the leaf's and the parent's deletes held inside their
+    /// drivers, the chain retires strictly leaf-first once the gates open.
+    #[tokio::test]
+    async fn finalize_holds_each_parent_until_its_owned_children_retire() {
+        let h = harness(&["Volume", "Worker", "Job"]).await;
+        let grandparent = key("test", "Volume", "top");
+        let parent = key("test", "Worker", "mid");
+        let leaf = key("test", "Job", "leaf");
+        let child = |type_name: &str, name: &str, spec: &[u8]| ChildEnsure {
+            type_name: ResourceTypeName::new(type_name),
+            name: name.to_owned(),
+            spec: spec.to_vec(),
+            metadata: Vec::new(),
+        };
+        h.client
+            .ensure(subject(), None, desired("Volume", "top", b"top"))
+            .await
+            .expect("grandparent");
+        wait_status(&h.client, &grandparent, ResourceStatus::Ready).await;
+        h.client
+            .reconcile_children(grandparent.clone(), vec![child("Worker", "mid", b"mid")])
+            .await
+            .expect("parent");
+        wait_status(&h.client, &parent, ResourceStatus::Ready).await;
+        h.client
+            .reconcile_children(parent.clone(), vec![child("Job", "leaf", b"leaf")])
+            .await
+            .expect("leaf");
+        wait_status(&h.client, &leaf, ResourceStatus::Ready).await;
+
+        // The leaf pins the chain; the parent's delete is held too so its
+        // own turn in the sequence is directly observable.
+        let grandparent_shared = h.factory.shared(&grandparent);
+        let parent_shared = h.factory.shared(&parent);
+        let leaf_shared = h.factory.shared(&leaf);
+        parent_shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        leaf_shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        h.client.remove(subject(), grandparent.clone()).await.expect("remove");
+
+        // The leaf drains, then blocks inside its delete.
+        until(|| leaf_shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        assert!(
+            leaf_shared.finalize_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the leaf's finalize runs before its held delete"
+        );
+
+        // Each parent's pass ran its finalize and was refused with the
+        // retryable ChildrenDraining failure while the leaf row is live:
+        // no parent drain and no parent delete may run.
+        wait_status(
+            &h.client,
+            &parent,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Delete)),
+        )
+        .await;
+        wait_status(
+            &h.client,
+            &grandparent,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Delete)),
+        )
+        .await;
+        assert_eq!(
+            parent_shared.delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the parent's delete runs only after its owned children retire"
+        );
+        assert_eq!(
+            grandparent_shared.delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the grandparent's delete runs only after its owned children retire"
+        );
+        assert_eq!(
+            parent_shared.finalize_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the refused finalize never reaches the parent's own drain"
+        );
+        assert_eq!(
+            grandparent_shared.finalize_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the refused finalize never reaches the grandparent's own drain"
+        );
+        assert!(
+            h.client.get_row(leaf.clone()).await.expect("get_row").is_some(),
+            "the leaf row stays live while its delete is held"
+        );
+        assert!(
+            h.client
+                .get_row(parent.clone())
+                .await
+                .expect("get_row")
+                .is_some_and(|row| row.deleting),
+            "the parent row is held with its durable deleting mark"
+        );
+        assert!(
+            h.client
+                .get_row(grandparent.clone())
+                .await
+                .expect("get_row")
+                .is_some_and(|row| row.deleting),
+            "the grandparent row is held with its durable deleting mark"
+        );
+
+        // Releasing the leaf retires it; the parent's next pass converges -
+        // its finalize now runs, then its held delete - while the
+        // grandparent keeps waiting for the parent.
+        leaf_shared.open_gate();
+        wait_row_gone(&h.client, &leaf).await;
+        until(|| parent_shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        assert!(
+            parent_shared.finalize_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the parent's finalize runs before its delete once the leaf retired"
+        );
+        assert_eq!(
+            grandparent_shared.delete_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "the grandparent's delete waits for the parent"
+        );
+        assert!(
+            h.client
+                .get_row(parent.clone())
+                .await
+                .expect("get_row")
+                .is_some_and(|row| row.deleting),
+            "the parent row is held while its delete runs"
+        );
+
+        // Releasing the parent retires it; the grandparent converges last.
+        parent_shared.open_gate();
+        wait_row_gone(&h.client, &parent).await;
+        until(|| grandparent_shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        assert!(
+            grandparent_shared.finalize_calls.load(AtomicOrdering::SeqCst) >= 1,
+            "the grandparent's finalize runs before its delete once the parent retired"
+        );
+        wait_row_gone(&h.client, &grandparent).await;
     }
 
     /// R35 finding: a status published for generation N and delivered after

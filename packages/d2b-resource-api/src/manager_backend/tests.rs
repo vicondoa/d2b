@@ -620,6 +620,207 @@ async fn spec_shaped_row_serves_its_stable_uid() {
     fixture.manager_actor.get_cell().stop(None);
 }
 
+/// The strict boundary the daemon's reader bridge crosses (U12): a rendered
+/// manager row must decode as a complete contract envelope whose own digest
+/// equals the row's `payload_digest` - the checks
+/// `validated_stored_resource_envelope` runs - with and without a stamped
+/// actor status. Nix-materialized rows persist spec-shaped bytes with author
+/// metadata only, so the API wire path's lenient rendering is not enough:
+/// the store-shaped readers reject a row that is missing required metadata
+/// or the status entirely.
+///
+/// Every closed classification the manager can publish is exercised: one
+/// case per phase projection (including the `Deleted` tombstone, the closed
+/// vocabulary's projection of the runtime `Deleting` classification).
+#[test]
+fn rendered_rows_round_trip_through_the_strict_envelope_reader() {
+    use d2b_contracts_resource::v3::{ResourceEnvelope, ResourcePhase};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+    use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
+
+    let zone = ZoneId::parse(TEST_ZONE).unwrap();
+    let key = ResourceKey::new(TEST_ZONE, "Role", "operator-reader");
+    // The spec shape the Nix bundle ingestion persists: the desired state
+    // alone, no envelope wrapper.
+    let spec = serde_json::to_vec(&serde_json::json!({
+        "rules": [{
+            "resourceTypes": ["Host"],
+            "verbs": ["get"],
+            "subresources": [],
+            "resourceNames": [],
+            "zones": [TEST_ZONE],
+            "executionRefs": [],
+            "sessionVerbs": [],
+        }],
+    }))
+    .unwrap();
+    // The author metadata the ingestion path persists beside it: no
+    // `managedBy`, no store-owned fields.
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "ownerRef": null,
+        "labels": {},
+        "annotations": {},
+    }))
+    .unwrap();
+    let uid = super::manager_uid(&key);
+    let view = |status, status_generation| ResourceView {
+        key: key.clone(),
+        uid,
+        generation: 1,
+        deleting: false,
+        provenance: ResourceProvenance::Nix,
+        spec: spec.clone(),
+        metadata: metadata.clone(),
+        owner_key: None,
+        status,
+        status_generation,
+    };
+
+    for (label, status, status_generation, expected_phase) in [
+        (
+            "unpublished status",
+            None,
+            None,
+            ResourcePhase::Pending,
+        ),
+        (
+            "published status",
+            Some(ResourceStatus::Ready),
+            Some(1),
+            ResourcePhase::Ready,
+        ),
+        (
+            "failed status",
+            Some(ResourceStatus::Failed(
+                d2b_resource_runtime::error::DriverFailure::retryable(
+                    d2b_resource_runtime::error::DriverOp::Reconcile,
+                ),
+            )),
+            Some(1),
+            ResourcePhase::Failed,
+        ),
+        (
+            "deleting status",
+            Some(ResourceStatus::Deleting),
+            Some(1),
+            ResourcePhase::Deleted,
+        ),
+    ] {
+        let stored = super::manager_row_stored(&view(status, status_generation))
+            .unwrap_or_else(|error| panic!("{label}: render failed: {error:?}"));
+        // `validated_stored_resource_envelope` step 1: strict decode.
+        let envelope = ResourceEnvelope::from_json(&stored.canonical_json)
+            .unwrap_or_else(|error| panic!("{label}: strict decode failed: {error:?}"));
+        // ... step 2: identity agreement with the row.
+        assert_eq!(envelope.resource_type().as_str(), "Role", "{label}");
+        assert_eq!(envelope.metadata().zone(), &zone, "{label}");
+        assert_eq!(envelope.metadata().name().as_str(), "operator-reader", "{label}");
+        assert_eq!(envelope.metadata().uid(), &stored.uid, "{label}");
+        assert_eq!(
+            envelope.metadata().generation().get(),
+            stored.generation.get(),
+            "{label}"
+        );
+        assert_eq!(
+            envelope.metadata().revision().get(),
+            stored.revision.get(),
+            "{label}"
+        );
+        // ... step 3: the digest recomputed from the decoded envelope must be
+        // the digest the row carries.
+        assert_eq!(
+            envelope.digest().unwrap(),
+            stored.payload_digest,
+            "{label}: the row digest must be the decoded envelope's digest"
+        );
+        assert_eq!(envelope.status().phase(), expected_phase, "{label}");
+        assert_eq!(
+            envelope.status().observed_generation().get(),
+            stored.generation.get(),
+            "{label}: the status is stamped at the row's own generation"
+        );
+    }
+}
+
+/// The envelope-shaped arm of the same boundary (API-created rows persist a
+/// complete envelope): a live actor status must replace the persisted status
+/// in place, and the deletion mark must stamp a `deletionRequestedAt` no
+/// earlier than `createdAt` (the strict metadata contract rejects the
+/// reverse order), without breaking the strict decode or the row digest.
+#[test]
+fn rendered_full_envelopes_keep_the_strict_reader_contract() {
+    use d2b_contracts_resource::v3::{ResourceEnvelope, ResourcePhase};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+    use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
+
+    let key = ResourceKey::new(TEST_ZONE, "Host", "host-system");
+    let uid = super::manager_uid(&key);
+    let mut stored_envelope: serde_json::Value = serde_json::from_slice(GOLDEN_HOST).unwrap();
+    stored_envelope["metadata"]["uid"] =
+        serde_json::json!(super::row_uid(&uid).as_str());
+    let canonical = CanonicalJsonValue::parse(&serde_json::to_vec(&stored_envelope).unwrap())
+        .unwrap()
+        .to_canonical_bytes();
+
+    let view = |status, status_generation, deleting| ResourceView {
+        key: key.clone(),
+        uid,
+        generation: 1,
+        deleting,
+        provenance: ResourceProvenance::Api,
+        spec: canonical.clone(),
+        metadata: serde_json::to_vec(&serde_json::json!({})).unwrap(),
+        owner_key: None,
+        status,
+        status_generation,
+    };
+    for (label, status, status_generation, deleting, expected_phase) in [
+        (
+            "live status",
+            Some(ResourceStatus::Ready),
+            Some(1),
+            false,
+            ResourcePhase::Ready,
+        ),
+        (
+            "deleting",
+            Some(ResourceStatus::Deleting),
+            Some(1),
+            true,
+            ResourcePhase::Deleted,
+        ),
+    ] {
+        let stored = super::manager_row_stored(&view(status, status_generation, deleting))
+            .unwrap_or_else(|error| panic!("{label}: render failed: {error:?}"));
+        let envelope = ResourceEnvelope::from_json(&stored.canonical_json)
+            .unwrap_or_else(|error| panic!("{label}: strict decode failed: {error:?}"));
+        assert_eq!(envelope.metadata().uid(), &stored.uid, "{label}");
+        assert_eq!(envelope.status().phase(), expected_phase, "{label}");
+        assert_eq!(
+            envelope.status().observed_generation().get(),
+            stored.generation.get(),
+            "{label}"
+        );
+        assert_eq!(
+            envelope.digest().unwrap(),
+            stored.payload_digest,
+            "{label}: the row digest must be the decoded envelope's digest"
+        );
+        if deleting {
+            let value: serde_json::Value =
+                serde_json::from_slice(&stored.canonical_json).expect("stored envelope");
+            assert!(
+                value
+                    .pointer("/metadata/deletionRequestedAt")
+                    .is_some_and(|value| !value.is_null()),
+                "{label}: the durable deletion mark stays observable on the wire"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn exact_revision_precondition_rejects_a_stale_generation() {
     let fixture = manager_fixture().await;

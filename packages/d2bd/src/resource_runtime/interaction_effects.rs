@@ -15,10 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceGeneration,
-    ResourceRef, ZoneId, ZoneRevision, canonical_digest,
-};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ZoneId};
 use d2b_provider_audio_pipewire::{AudioBindingPhase, AudioBindingSpec};
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_resource_runtime::identity::ResourceKey;
@@ -28,7 +25,7 @@ use d2b_resource_store::{
     ResourceAssignmentScope, StoreErrorKind, StoreGetRequest, StoreOperationContext,
     StoreProjection, StoredResource,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::ZoneResourceRuntime;
 use crate::ServerState;
@@ -38,7 +35,7 @@ use crate::audio_resource_runtime::{
 use crate::interaction_driver::{
     InteractionDriverEffects, InteractionEffectError, InteractionEffectOutcome,
     InteractionEffectPhase, InteractionEffectRequest, InteractionFinalize, InteractionKind,
-    key_ref, resource_uid, shell_pool_spec, shell_session_execution, shell_session_pool_ref,
+    key_ref, shell_pool_spec, shell_session_execution, shell_session_pool_ref,
 };
 use crate::resource_plane_v3::{PlaneRoute, route_resource_type};
 
@@ -149,7 +146,7 @@ impl ProductionInteractionDriverEffects {
         target: &ResourceRef,
     ) -> Result<Option<StoredResource>, InteractionEffectError> {
         if let Some(view) = self.live_view(target).await? {
-            return Ok(Some(stored_from_view(&self.zone, &view)?));
+            return Ok(Some(stored_from_view(&view)?));
         }
         if route_resource_type(target.resource_type().as_str()) == PlaneRoute::NewPlane {
             return Ok(None);
@@ -649,66 +646,16 @@ fn spec_ref_at(bytes: &[u8], path: &str) -> Result<ResourceRef, InteractionEffec
 }
 
 /// Re-render one manager view as a durable envelope (the shape the audio
-/// controller registry and the assignment fence consume): the authored
-/// metadata plus the store-authoritative identity (KTD2/KTD8: the row owns
-/// uid, generation, and wire revision).
-fn stored_from_view(
-    zone: &ZoneId,
-    view: &ResourceView,
-) -> Result<StoredResource, InteractionEffectError> {
-    let spec = spec_document_value(&view.spec)?;
-    let metadata: Value = if view.metadata.is_empty() {
-        json!({})
-    } else {
-        serde_json::from_slice(&view.metadata)
-            .map_err(|_| InteractionEffectError::InvalidResource)?
-    };
-    let uid = resource_uid(&view.uid).map_err(|_| InteractionEffectError::InvalidResource)?;
-    let envelope = json!({
-        "apiVersion": "resources.d2bus.org/v3",
-        "type": view.key.type_name,
-        "metadata": {
-            "annotations": metadata.get("annotations").cloned().unwrap_or_else(|| json!({})),
-            "createdAt": "1970-01-01T00:00:00.000Z",
-            "deletionRequestedAt": if view.deleting {
-                Value::String("1970-01-01T00:00:00.000Z".to_owned())
-            } else {
-                Value::Null
-            },
-            "finalizers": [],
-            "generation": view.generation,
-            "labels": metadata.get("labels").cloned().unwrap_or_else(|| json!({})),
-            "name": view.key.name,
-            "ownerRef": metadata.get("ownerRef").cloned().unwrap_or(Value::Null),
-            "revision": view.generation,
-            "uid": uid.as_str(),
-            "updatedAt": "1970-01-01T00:00:00.000Z",
-            "zone": zone.as_str(),
-        },
-        "spec": spec,
-        "status": {
-            "observedGeneration": view.generation,
-            "phase": view_phase(view),
-        },
-    });
-    let bytes =
-        serde_json::to_vec(&envelope).map_err(|_| InteractionEffectError::InvalidResource)?;
-    let canonical = CanonicalJsonValue::parse(&bytes)
-        .map_err(|_| InteractionEffectError::InvalidResource)?
-        .to_canonical_bytes();
-    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-    Ok(StoredResource {
-        resource_ref: key_ref(&view.key),
-        zone: zone.clone(),
-        uid,
-        owner_uid: None,
-        owner_generation: None,
-        generation: ResourceGeneration::new(view.generation)
-            .map_err(|_| InteractionEffectError::InvalidResource)?,
-        revision: ZoneRevision::new(view.generation),
-        canonical_json: canonical,
-        payload_digest,
-    })
+/// controller registry and the assignment fence consume).
+///
+/// The manager-backed projection owns this rendering: handing the view to
+/// `manager_row_stored` serves exactly the envelope the new plane publishes
+/// (store-authoritative identity per KTD2/KTD8, the strict-contract metadata
+/// and status), so the strict readers here can never drift from the public
+/// surface's shape.
+fn stored_from_view(view: &ResourceView) -> Result<StoredResource, InteractionEffectError> {
+    d2b_resource_api::manager_backend::manager_row_stored(view)
+        .map_err(|_| InteractionEffectError::InvalidResource)
 }
 
 /// Whether one dependency row is authentic and still owned by this Zone

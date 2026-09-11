@@ -579,6 +579,40 @@ impl ResourceContext {
         self.manager.list_owned(self.row.uid).await
     }
 
+    /// Finalize every resource this one owns, children first (F3; owner
+    /// directive 2026-09-11): the parent's `finalize` handler runs this before
+    /// its own drain work, so no resource tears down ahead of what it owns.
+    ///
+    /// Depth-first by construction: each owned child reaches this same call
+    /// from its own finalize pass, so a grandchild is finalized before the
+    /// child that owns it.
+    ///
+    /// Idempotent under retry, and non-blocking (R5): every owned child's
+    /// deletion is (re)requested - the manager's `Remove` is idempotent and
+    /// the child's own finalize/delete are retry-idempotent - and the call
+    /// then reports [`ResourceError::ChildrenDraining`] while any owned child
+    /// row is still live. The caller classifies that retryable and requeues,
+    /// so the parent never holds its mailbox waiting on a child.
+    pub async fn finalize_owned_resources(&mut self) -> Result<(), ResourceError> {
+        let owned = self.manager.list_owned(self.row.uid).await?;
+        if owned.is_empty() {
+            return Ok(());
+        }
+        for child in &owned {
+            // The manager already cascaded the deletion when this resource
+            // was marked deleting; requesting it again is the idempotent
+            // nudge that guarantees a child whose actor missed the first
+            // cascade (e.g. spawned between passes) runs its own
+            // finalize-before-delete pass.
+            let _ = self.manager.delete(&child.key).await;
+        }
+        Err(ResourceError::ChildrenDraining {
+            zone: self.row.key.zone.clone(),
+            type_name: self.row.key.type_name.clone(),
+            name: self.row.key.name.clone(),
+        })
+    }
+
     /// Register an internal watch on another resource (R12; spec section
     /// 15). Routed through the manager to the target actor, which evaluates
     /// and registers in one mailbox handler (AE2); satisfaction arrives as

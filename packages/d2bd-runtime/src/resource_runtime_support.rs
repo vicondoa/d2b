@@ -269,7 +269,10 @@ use sha2::{Digest, Sha256};
 const TEST_OPERATOR_SUBJECT_REF: &str = "User/d2bd-operator";
 #[cfg(feature = "test-support")]
 const TEST_OPERATOR_SUBJECT_UID: &str = "22222222-2222-4222-8222-222222222222";
-const COMMITTED_POLICY_RESOURCE_TYPES: [&str; 8] = [
+/// The resource types one committed policy compile reads. Public so the
+/// daemon's reader bridge (U12) merges the manager-served rows of exactly
+/// these types into the durable load.
+pub const COMMITTED_POLICY_RESOURCE_TYPES: [&str; 8] = [
     "Role",
     "RoleBinding",
     "Zone",

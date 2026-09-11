@@ -456,9 +456,15 @@ impl ResourceActorState {
     }
 
     /// Teardown (R10, F3): the durable deleting mark is already committed.
-    /// Success reports completion to the manager (which removes the row and
-    /// stops this actor); a retryable failure requeues another pass.
+    /// The drain step runs first - on every resource, not only the types the
+    /// old plane gave a finalizer - and a retryable failure from either step
+    /// requeues another pass. Success reports completion to the manager
+    /// (which removes the row and stops this actor).
     async fn delete_pass(&mut self, myself: ActorRef<ResourceMsg>) {
+        if let Err(failure) = self.driver.finalize(&mut self.ctx).await {
+            self.handle_driver_failure(failure);
+            return;
+        }
         match self.driver.delete(&mut self.ctx).await {
             Ok(()) => {
                 let _ = self.manager.send_message(ResourceManagerMsg::DeletionComplete {
@@ -741,6 +747,10 @@ pub(crate) mod test_support {
         pub(crate) reconcile_calls: AtomicU64,
         pub(crate) watch_calls: AtomicU64,
         pub(crate) delete_calls: AtomicU64,
+        /// Driver-body finalize (drain) invocations: the erased boundary's
+        /// owned-children step runs first, so this only advances when the
+        /// pass reaches the driver's own drain.
+        pub(crate) finalize_calls: AtomicU64,
         pub(crate) active_reconcile: AtomicU64,
         pub(crate) max_concurrent_reconcile: AtomicU64,
         pub(crate) reconcile_mode: Mutex<ReconcileMode>,
@@ -768,6 +778,7 @@ pub(crate) mod test_support {
                 reconcile_calls: AtomicU64::new(0),
                 watch_calls: AtomicU64::new(0),
                 delete_calls: AtomicU64::new(0),
+                finalize_calls: AtomicU64::new(0),
                 active_reconcile: AtomicU64::new(0),
                 max_concurrent_reconcile: AtomicU64::new(0),
                 reconcile_mode: Mutex::new(ReconcileMode::Satisfied),
@@ -891,6 +902,11 @@ pub(crate) mod test_support {
                     Ok(ReconcileOutcome::InProgress { operation })
                 }
             }
+        }
+
+        async fn finalize(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+            self.shared.finalize_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
 
         async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {

@@ -1030,6 +1030,18 @@ impl ResourceDriver for InteractionDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown, and before the Provider's teardown stage in
+    /// [`ResourceDriver::delete`]. The call nudges each owned child through
+    /// its own finalize-before-delete pass and requeues this pass while any
+    /// child row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(InteractionDriverErrorKind::DeletePending, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (old `prepare_finalize` + `execute_finalize` + `finalize`):
     /// the Provider's teardown stage runs first - the audio lease
     /// finalization, and the AudioService/ShellPool refusals that keep an
@@ -1732,6 +1744,44 @@ mod tests {
         assert_eq!(
             ResourceDriver::recover(&mut driver, &mut fixture.ctx).await.unwrap(),
             RecoveryOutcome::Adopted
+        );
+    }
+
+    // -- finalize: owned children retire before the provider stage (F3) ------
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_provider_stage() {
+        let mut fixture = fixture(audio_binding_row());
+        fixture
+            .manager
+            .seed_owned(ResourceKey::new("work", "Process", "audio-worker"), false);
+        let mut driver = driver(Arc::clone(&fixture.effects));
+
+        // A live owned child: the pass requeues and the Provider teardown
+        // stage does not run.
+        let failure = ResourceDriver::finalize(&mut driver, &mut fixture.ctx)
+            .await
+            .expect_err("owned child still live");
+        assert_eq!(driver.classify_error(&failure).class(), FailureClass::Retryable);
+        let log = fixture.log.lock().clone();
+        assert!(
+            log.iter().any(|entry| entry == "delete:Process/audio-worker"),
+            "the owned child is nudged through its own finalize-before-delete pass: {log:?}"
+        );
+        assert!(
+            !log.iter().any(|entry| entry.starts_with("finalize:")),
+            "the Provider teardown stage has not run: {log:?}"
+        );
+
+        // The child row retires: the same pass converges with no Provider
+        // stage.
+        fixture.manager.rows.lock().clear();
+        ResourceDriver::finalize(&mut driver, &mut fixture.ctx)
+            .await
+            .expect("converged once the child retired");
+        assert!(
+            !fixture.log.lock().iter().any(|entry| entry.starts_with("finalize:")),
+            "finalize runs no Provider effect"
         );
     }
 

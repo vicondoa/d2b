@@ -557,6 +557,17 @@ impl ResourceDriver for VolumeDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges each owned binding child
+    /// through its own finalize-before-delete pass and requeues this pass
+    /// while any child row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown of the Volume's own layout effect (idempotent under retry,
     /// R10; the durable deleting mark is already committed). Child teardown
     /// (bindings -> endpoint -> process last) is the manager's
@@ -1086,6 +1097,42 @@ mod tests {
             "matching child never retired, order: {:?}",
             manager.order()
         );
+    }
+
+    // -- finalize: owned children retire before the layout teardown (F3) -----
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_layout_teardown() {
+        let manager = RecordingManager::new();
+        manager.rows.lock().push(StoredDesiredResource {
+            key: ResourceKey::new("work", "VolumeBinding", "vol-binding-0"),
+            uid: [0x77; 16],
+            generation: 1,
+            owner_uid: Some([0x42; 16]),
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: Vec::new(),
+            metadata: Vec::new(),
+            created_at: 0,
+        });
+        let fake = FakeLayoutEffects::new();
+        let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        // A live owned child: the pass requeues and the Volume's own layout
+        // teardown does not run.
+        let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(
+            manager.order(),
+            vec!["delete:VolumeBinding/vol-binding-0".to_owned()],
+            "the owned child is nudged through its own finalize-before-delete pass"
+        );
+        assert!(fake.call_order().is_empty(), "the layout teardown has not run");
+
+        // The manager removed the retired child row: the same pass converges.
+        d.finalize(&mut f.ctx).await.expect("converged once the child retired");
+        assert!(fake.call_order().is_empty(), "finalize runs no layout effect");
     }
 
     // -- delete: the Volume's own layout effect -------------------------------

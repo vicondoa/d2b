@@ -58,8 +58,7 @@ pub use controller_assignment::{
     ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery, ScopedResourceScope,
 };
 pub use controllers::{
-    AggregateHealth, CORE_PROVIDER_API_BINDING_FINALIZER, CORE_RESOURCE_CONTROLLER_REGISTRATIONS,
-    CoreHandlerKind, CoreHandlerRegistry, CoreResourceControllerRegistration, CurrencyAggregation,
+    AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
     CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,
 };
 pub use d2b_controller_toolkit::{
@@ -99,8 +98,8 @@ pub use owner_reconcile::{
     OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger, ProcessSchedulingClass, TeardownPlan,
 };
 pub use runtime::{
-    CoreAdmissionCounts, CoreControllerDescriptorError, CoreControllerSource, CoreDispatchOutcome,
-    CoreReconcileError, CoreResourceReconciler, CoreSourceError, RegisteredControllerApi,
-    core_controller_descriptors, provider_observation,
+    CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,
+    CoreSourceError, RegisteredControllerApi, fixed_system_core_handlers_ready,
+    provider_observation,
 };
 pub use zone_status::{SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput};

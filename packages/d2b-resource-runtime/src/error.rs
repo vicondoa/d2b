@@ -154,6 +154,15 @@ pub enum ResourceError {
         type_name: String,
         name: String,
     },
+    /// An owned child has not finished its own finalize/delete pass yet
+    /// (F3 child-first teardown). Retryable by construction: the caller's
+    /// next pass re-drives the children and observes their retirement.
+    #[error("owned children of {zone}/{type_name}/{name} are still draining")]
+    ChildrenDraining {
+        zone: String,
+        type_name: String,
+        name: String,
+    },
 }
 
 impl From<crate::provider::ProviderDirectoryError> for ResourceError {

@@ -54,12 +54,14 @@ enum EndpointDriverErrorKind {
     ShapeUnsupported,
     /// A provider socket effect failed transiently.
     SocketEffect,
+    /// Owned children are still retiring; the delete pass requeues.
+    DrainPending,
 }
 
 impl EndpointDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::SocketEffect => FailureClass::Retryable,
+            Self::SocketEffect | Self::DrainPending => FailureClass::Retryable,
             Self::SpecInvalid | Self::ShapeUnsupported => FailureClass::Terminal,
         }
     }
@@ -85,6 +87,7 @@ impl core::fmt::Display for EndpointDriverError {
             EndpointDriverErrorKind::SpecInvalid => "endpoint-spec-invalid",
             EndpointDriverErrorKind::ShapeUnsupported => "endpoint-shape-unsupported",
             EndpointDriverErrorKind::SocketEffect => "endpoint-socket-effect-failed",
+            EndpointDriverErrorKind::DrainPending => "endpoint-drain-pending",
         })
     }
 }
@@ -372,6 +375,17 @@ impl ResourceDriver for EndpointDriver {
         Ok(ReconcileOutcome::InProgress { operation })
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges each owned child through its
+    /// own finalize-before-delete pass and requeues this pass while any child
+    /// row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(EndpointDriverErrorKind::DrainPending, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown: remove the socket realization. Endpoint-first ordering is
     /// preserved: the endpoint driver's own effect runs BEFORE the worker
     /// Process child is deleted (the binding driver's delete encodes the
@@ -474,8 +488,30 @@ mod tests {
         }
     }
 
-    /// Dead manager: these Endpoint flows make no manager calls.
-    struct DeadManager;
+    /// Dead manager: these Endpoint flows make no manager calls. It also
+    /// carries the owned-row set the finalize gate reads: `delete` records
+    /// each child retirement nudge, and every other mutating route still
+    /// fails, so an unexpected flow is caught.
+    struct DeadManager {
+        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+    }
+
+    impl DeadManager {
+        fn new() -> Self {
+            Self {
+                owned: parking_lot::Mutex::new(Vec::new()),
+                deleted: parking_lot::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
+            Arc::new(Self {
+                owned: parking_lot::Mutex::new(vec![row]),
+                deleted: parking_lot::Mutex::new(Vec::new()),
+            })
+        }
+    }
 
     #[async_trait::async_trait]
     impl ManagerEndpoint for DeadManager {
@@ -501,7 +537,9 @@ mod tests {
             Err(ResourceError::ManagerRpc("dead".into()))
         }
 
-        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            self.deleted.lock().push(key.clone());
+            self.owned.lock().retain(|row| row.key != *key);
             Err(ResourceError::ManagerRpc("dead".into()))
         }
 
@@ -509,7 +547,7 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Ok(self.owned.lock().clone())
         }
 
         async fn register_watch(
@@ -553,13 +591,20 @@ mod tests {
     }
 
     fn fixture(row: StoredDesiredResource) -> ResourceContext {
+        fixture_with(row, Arc::new(DeadManager::new()))
+    }
+
+    fn fixture_with(
+        row: StoredDesiredResource,
+        manager: Arc<dyn ManagerEndpoint>,
+    ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
             TargetHandle::Host,
             endpoint_spec_decoder(),
-            Arc::new(DeadManager),
+            manager,
             Arc::new(NullRequeue),
             effects_tx,
             notify_tx,
@@ -668,6 +713,42 @@ mod tests {
             d.recover(&mut ctx).await.expect("recover"),
             RecoveryOutcome::Adopted
         );
+    }
+
+    // -- finalize: owned children retire before the socket teardown (F3) ------
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_socket_teardown() {
+        let manager = DeadManager::with_owned(StoredDesiredResource {
+            key: ResourceKey::new("work", "Process", "vol-worker"),
+            uid: [0x77; 16],
+            generation: 1,
+            owner_uid: Some([0x42; 16]),
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: Vec::new(),
+            metadata: Vec::new(),
+            created_at: 0,
+        });
+        let fake = FakeSocketEffects::new();
+        let mut ctx = fixture_with(test_row(&virtiofsd_endpoint_spec()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        // A live owned child: the pass requeues and the socket teardown does
+        // not run.
+        let failure = d.finalize(&mut ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(
+            manager.deleted.lock().len(),
+            1,
+            "the owned child is nudged through its own finalize-before-delete pass"
+        );
+        assert!(fake.call_order().is_empty(), "the socket teardown has not run");
+
+        // The manager removed the retired child row: the same pass converges
+        // without any socket effect.
+        d.finalize(&mut ctx).await.expect("converged once the child retired");
+        assert!(fake.call_order().is_empty(), "finalize runs no socket effect");
     }
 
     // -- delete: endpoint-first teardown leg --------------------------------------

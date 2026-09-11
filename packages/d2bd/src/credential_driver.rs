@@ -993,6 +993,17 @@ impl ResourceDriver for CredentialDriver {
         }
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges the owned managed-identity
+    /// agent Process through its own finalize-before-delete pass and requeues
+    /// this pass while the child row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(CredentialDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (old `prepare_finalize`/`execute_finalize`/`finalize` fold).
     /// Revocation-first ordering is preserved: the provider RevokeToken call
     /// must confirm (or have confirmed) before any owned Process child is
@@ -1718,6 +1729,41 @@ mod tests {
                 .await
                 .expect("recover"),
             RecoveryOutcome::Missing
+        );
+    }
+
+    // -- finalize: the agent child retires before the credential (F3) --------
+
+    #[tokio::test]
+    async fn finalize_finalizes_the_owned_agent_child_before_the_revocation() {
+        let log = log();
+        let manager = RecordingManager::with_child(Arc::clone(&log), agent_child(false));
+        let effects = FakeEffects::new(Arc::clone(&log));
+        let mut ctx = context(row(MI_PROVIDER), Arc::clone(&manager));
+        let mut d = driver(effects);
+
+        // A live owned child: the pass requeues and revocation does not run.
+        let failure = d.finalize(&mut ctx).await.expect_err("agent child still live");
+        assert!(matches!(
+            d.classify_error(&failure).class(),
+            FailureClass::Retryable
+        ));
+        let entries = log.lock().clone();
+        assert!(
+            entries.iter().any(|call| call == "delete:Process/mi-agent-relay"),
+            "the owned child is nudged through its own finalize-before-delete pass: {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|call| call == "lease-facts"),
+            "the revocation stage has not run: {entries:?}"
+        );
+
+        // The child row retires: the same pass converges without effects.
+        manager.children.lock().clear();
+        d.finalize(&mut ctx).await.expect("converged once the child retired");
+        assert!(
+            !log.lock().iter().any(|call| call == "lease-facts"),
+            "finalize runs no revocation effect"
         );
     }
 

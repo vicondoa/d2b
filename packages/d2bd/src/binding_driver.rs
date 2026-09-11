@@ -822,6 +822,18 @@ impl ResourceDriver for BindingDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges each owned child - the
+    /// endpoint and worker Process rows - through its own
+    /// finalize-before-delete pass and requeues this pass while any child row
+    /// is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown with the preserved drain semantics (R9/F3, old
     /// `finalize_binding`): the guest mount is observed BEFORE anything is
     /// deleted (KTD6) - a present mount keeps the durable deleting mark and
@@ -1433,6 +1445,30 @@ mod tests {
             RecoveryOutcome::Missing,
             "no owned child rows: the realization is missing"
         );
+    }
+
+    // -- finalize: owned children retire before the binding (F3) -------------
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_binding_teardown() {
+        let manager = RecordingManager::new();
+        manager.seed_owned(ResourceKey::new("work", "Process", "worker-0"));
+        let fake = FakeServingEffects::shared(manager.log());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+
+        // A live owned child: the pass requeues and the binding's own
+        // teardown (mount gate, socket removal) does not run.
+        let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(
+            manager.order(),
+            vec!["delete:Process/worker-0".to_owned()],
+            "the owned child is nudged through its own finalize-before-delete pass"
+        );
+
+        // The manager removed the retired child row: the same pass converges.
+        d.finalize(&mut f.ctx).await.expect("converged once the child retired");
     }
 
     // -- teardown ordering -----------------------------------------------------

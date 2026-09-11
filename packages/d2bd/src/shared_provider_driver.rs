@@ -1199,6 +1199,18 @@ impl ResourceDriver for SharedProviderDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown, and before the Provider's teardown stage in
+    /// [`ResourceDriver::delete`]. The call nudges each owned child through
+    /// its own finalize-before-delete pass and requeues this pass while any
+    /// child row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(SharedProviderDriverErrorKind::FinalizePending, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (old `prepare_finalize` + `execute_finalize` + `finalize`):
     /// the Provider's teardown stage runs first, then the owned children
     /// retire in the family's preserved order. Idempotent under retry (R10).
@@ -1567,7 +1579,7 @@ mod tests {
         WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{DynResourceDriver, RecoveryOutcome, ResourceDriverFactory};
-    use d2b_resource_runtime::error::ResourceError;
+    use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
@@ -1978,6 +1990,50 @@ mod tests {
         assert_eq!(
             deletions,
             vec!["delete:Endpoint/stale-endpoint".to_owned(), "delete:Process/stale-proxy".to_owned()]
+        );
+    }
+
+    // -- finalize: owned children retire before the provider stage (F3) ------
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_provider_stage() {
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = RecordingManager::with_owned(
+            Arc::clone(&log),
+            vec![owned_row("dev", "Process", "swtpm")],
+        );
+        let mut fixture = fixture(
+            DEVICE_TYPE_NAME,
+            "dev-row",
+            device_spec(d2b_provider_device_tpm::PROVIDER_REF),
+            Arc::clone(&manager),
+            Arc::new(RecordingRequeue::default()),
+            Arc::clone(&log),
+            SharedProviderEffectPhase::Ready,
+            SharedProviderFinalize::Complete,
+        );
+        let mut driver = driver(&fixture).await;
+
+        // A live owned child: the pass requeues and the Provider teardown
+        // stage does not run.
+        let failure = driver.finalize(&mut fixture.ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        let entries = log.lock().clone();
+        assert!(
+            entries.iter().any(|entry| entry == "delete:Process/swtpm"),
+            "the owned child is nudged through its own finalize-before-delete pass: {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|entry| entry.starts_with("finalize:")),
+            "the Provider teardown stage has not run: {entries:?}"
+        );
+
+        // The manager removed the retired child row: the same pass converges
+        // without any Provider stage.
+        driver.finalize(&mut fixture.ctx).await.expect("converged once the child retired");
+        assert!(
+            !log.lock().iter().any(|entry| entry.starts_with("finalize:")),
+            "finalize runs no Provider effect"
         );
     }
 

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::context::{OperationId, ResourceContext};
 use crate::error::DriverFailure;
+use crate::error::DriverOp;
 use crate::identity::{ResourceKey, ResourceTypeName};
 
 /// Outcome of driver recovery (F2; spec sections 9-10): discovery and
@@ -96,6 +97,21 @@ pub trait ResourceDriver: Send + 'static {
     /// actor mailbox on external work (R5, KTD12).
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error>;
 
+    /// Drain step: called by the actor immediately before
+    /// [`ResourceDriver::delete`] for EVERY resource whose durable deleting
+    /// mark is already committed (R10, F3). The driver performs the
+    /// resource's drain work here - waiting for dependents to release what
+    /// the deletion must not cut through - and returns `Ok(())` once it is
+    /// safe to tear down. A failure the classification calls retryable
+    /// requeues another delete pass, so `finalize` must be idempotent under
+    /// retry.
+    ///
+    /// Default: no drain work. A driver whose type has nothing to drain
+    /// converges in `delete` exactly as before this step existed.
+    async fn finalize(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     /// Teardown (spec section 13: `prepare_finalize`, `execute_finalize`,
     /// `finalize` fold in here). Idempotent under retry: the durable
     /// deleting mark is already committed when this runs (R10).
@@ -116,6 +132,9 @@ pub trait DynResourceDriver: Send + 'static {
     async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, DriverFailure>;
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure>;
+    /// Drain step; the actor runs it immediately before
+    /// [`DynResourceDriver::delete`] on every resource.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
 }
 
@@ -131,6 +150,20 @@ impl<D: ResourceDriver> DynResourceDriver for D {
 
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure> {
         self.reconcile(ctx).await.map_err(|error| self.classify_error(&error))
+    }
+
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
+        // EVERY resource finalizes what it owns before its own drain work
+        // (owner directive 2026-09-11): the call lives here, at the erased
+        // boundary the actor drives, so no driver implementation can skip
+        // it - a driver's own `finalize` body always runs after its owned
+        // children have been driven through their finalize-before-delete
+        // pass. `ChildrenDraining` is retryable by construction, so a parent
+        // whose children are still retiring requeues instead of blocking.
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| DriverFailure::retryable(DriverOp::Delete))?;
+        ResourceDriver::finalize(self, ctx).await.map_err(|error| self.classify_error(&error))
     }
 
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {

@@ -614,6 +614,18 @@ impl ResourceDriver for TelemetryDriver {
         }
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges the collector/forwarder
+    /// Process and Endpoint children through their own finalize-before-delete
+    /// pass and requeues this pass while any child row is still live.
+    /// Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(TelemetryDriverErrorKind::Reconcile, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (old `prepare_finalize` + `execute_finalize` + `finalize`).
     ///
     /// The durable deleting mark is already committed and the manager has
@@ -727,6 +739,13 @@ mod tests {
             row.owner_uid = Some(self.parent_uid);
             row.provenance = ResourceProvenance::Resource;
             self.seed(row);
+        }
+
+        fn drop_row(&self, key: &ResourceKey) {
+            self.rows
+                .lock()
+                .expect("rows")
+                .retain(|row| row.key != *key);
         }
 
         fn log(&self) -> Vec<String> {
@@ -1344,6 +1363,35 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // -- finalize: owned children retire before the telemetry teardown (F3) ---
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_telemetry_teardown() {
+        let mut fixture = fixture(binding_row(binding_spec(TELEMETRY_PROVIDER_REF)));
+        fixture
+            .manager
+            .seed_child("dev", "Process/collector", serde_json::json!({}));
+        let mut driver = driver(&fixture).await;
+
+        // A live owned child: the pass requeues.
+        let failure = driver.finalize(&mut fixture.ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert!(
+            fixture
+                .manager
+                .log()
+                .iter()
+                .any(|entry| entry == "delete:Process/collector"),
+            "the owned child is nudged through its own finalize-before-delete pass"
+        );
+
+        // The child row retires: the same pass converges.
+        fixture
+            .manager
+            .drop_row(&ResourceKey::new("dev", "Process", "collector"));
+        driver.finalize(&mut fixture.ctx).await.expect("converged once the child retired");
     }
 
     // -- delete --------------------------------------------------------------

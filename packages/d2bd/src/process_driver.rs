@@ -88,12 +88,14 @@ enum ProcessDriverErrorKind {
     ProviderEffect,
     /// The in-memory restart budget is exhausted (spec section 32).
     StartExhausted,
+    /// Owned children are still retiring; the delete pass requeues.
+    DrainPending,
 }
 
 impl ProcessDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::ProviderEffect => FailureClass::Retryable,
+            Self::ProviderEffect | Self::DrainPending => FailureClass::Retryable,
             Self::SpecInvalid
             | Self::ProviderUnsupported
             | Self::ExecutionUnsupported
@@ -128,6 +130,7 @@ impl core::fmt::Display for ProcessDriverError {
             ProcessDriverErrorKind::IdentityAmbiguous => "process-identity-ambiguous",
             ProcessDriverErrorKind::ProviderEffect => "process-provider-effect-failed",
             ProcessDriverErrorKind::StartExhausted => "process-start-budget-exhausted",
+            ProcessDriverErrorKind::DrainPending => "process-drain-pending",
         })
     }
 }
@@ -1130,6 +1133,17 @@ impl ResourceDriver for ProcessDriver {
         }
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges each owned child through its
+    /// own finalize-before-delete pass and requeues this pass while any child
+    /// row is still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(ProcessDriverErrorKind::DrainPending, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (old prepare/execute/finalize fold). Idempotent under retry
     /// (R10): the durable deleting mark is already committed. Deletion adopts
     /// first (preserved `deletion_adoption` behavior): the exact live identity
@@ -1505,6 +1519,75 @@ mod tests {
         }
     }
 
+    /// Owner-scoped manager double for the finalize gate: one scripted owned
+    /// row set; `delete` records the retirement nudge and removes the row.
+    struct OwnershipManager {
+        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+    }
+
+    impl OwnershipManager {
+        fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
+            Arc::new(Self {
+                owned: parking_lot::Mutex::new(vec![row]),
+                deleted: parking_lot::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ManagerEndpoint for OwnershipManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            _child: ChildEnsure,
+        ) -> Result<EnsureOutcome, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+        }
+
+        async fn get(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected get".into()))
+        }
+
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected view".into()))
+        }
+
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            self.deleted.lock().push(key.clone());
+            self.owned.lock().retain(|row| row.key != *key);
+            Ok(())
+        }
+
+        async fn list_owned(
+            &self,
+            _owner_uid: [u8; 16],
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(self.owned.lock().clone())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: WatchRegistration,
+        ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected register_watch".into()))
+        }
+
+        async fn cancel_watch(
+            &self,
+            _watch: d2b_resource_runtime::context::WatchId,
+        ) -> Result<(), ResourceError> {
+            Ok(())
+        }
+    }
+
     /// Recording requeue scheduler over tokio paused time: every schedule is
     /// recorded with its exact delay and delivers one id after the backoff.
     #[derive(Clone)]
@@ -1565,6 +1648,10 @@ mod tests {
     }
 
     fn fixture(row: StoredDesiredResource) -> Fixture {
+        fixture_with(row, Arc::new(DeadManager))
+    }
+
+    fn fixture_with(row: StoredDesiredResource, manager: Arc<dyn ManagerEndpoint>) -> Fixture {
         let (effects_tx, effects_rx) = mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = mpsc::unbounded_channel();
         let (requeue, requeue_rx) = RecordingRequeue::new();
@@ -1572,7 +1659,7 @@ mod tests {
             row.clone(),
             TargetHandle::Host,
             process_spec_decoder(),
-            Arc::new(DeadManager),
+            manager,
             Arc::new(requeue.clone()),
             effects_tx,
             notify_tx,
@@ -1626,6 +1713,10 @@ mod tests {
 
         async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure> {
             self.erased.reconcile(ctx).await
+        }
+
+        async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
+            self.erased.finalize(ctx).await
         }
 
         async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
@@ -1988,6 +2079,26 @@ mod tests {
             );
             assert!(fake.launch_calls().is_empty(), "quarantined: no adopt");
         }
+    }
+
+    // -- finalize: owned children retire before the process teardown (F3) ----
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_process_teardown() {
+        let manager = OwnershipManager::with_owned(StoredDesiredResource {
+            owner_uid: Some([0x42; 16]),
+            ..test_row()
+        });
+        let mut f = fixture_with(test_row(), manager.clone());
+        let mut d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+
+        // A live owned child: the pass requeues.
+        let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
+        assert_eq!(failure, DriverFailure::retryable(DriverOp::Delete));
+        assert_eq!(manager.deleted.lock().len(), 1, "the owned child is nudged first");
+
+        // The manager removed the retired child row: the same pass converges.
+        d.finalize(&mut f.ctx).await.expect("converged once the child retired");
     }
 
     // -- delete: term then kill ----------------------------------------------

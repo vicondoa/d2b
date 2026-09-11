@@ -34,8 +34,6 @@ use crate::credential_resource_runtime::{
     is_credential_provider_ref,
 };
 use crate::process_resource_runtime::{ProcessResourceRuntimeError, list_process_resources};
-#[cfg(test)]
-use crate::process_resource_runtime::process_controller_descriptor;
 use async_trait::async_trait;
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{
@@ -76,18 +74,11 @@ use d2b_core_controller::controller_assignment::{
     ResourceClientLease,
 };
 use d2b_core_controller::controllers::HandlerPhase;
-use d2b_core_controller::{
-    CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ControllerDescriptor, ControllerIdentity,
-    CoreControllerSource, CoreResourceReconciler, Runner, RunnerConfig, SelectorField,
-    SourceError, core_controller_descriptors,
-};
+use d2b_core_controller::{SelectorField, SourceError};
 #[cfg(test)]
-use d2b_core_controller::{
-    DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult,
-    ObservationResult, ReconcileContext, ReconcileDisposition, ReconcilePlan, ReconcileResult,
-    ResourceKey, ResourceMutationBatch, ResourceReconciler, ResourceSnapshot, StatusPersistence,
-    UpdateAssessment, UpdateAssessmentState, UpgradePlan, UpgradeStage, ValidationResult,
-};
+use d2b_core_controller::ControllerDescriptor;
+#[cfg(test)]
+use d2b_core_controller::{DependencySnapshot, ResourceKey, ResourceSnapshot};
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
@@ -195,8 +186,8 @@ mod plane_controller_bridge;
 mod shared_provider_runtime;
 pub(crate) mod interaction_effects;
 use plane_controller_bridge::{
-    ControllerPlaneView, LiveControllerSessionEvidence, ManagerPlaneDependencyRows,
-    PlaneAwareControllerApi, PlaneProviderDependencies, PublishedPlaneControllerView,
+    ControllerPlaneView, LiveControllerSessionEvidence, ManagerControllerPlaneView,
+    PublishedPlaneControllerView,
 };
 use d2b_resource_runtime::manager::ResourceView;
 pub use guest_provider_runtime::{
@@ -210,8 +201,10 @@ pub use shared_provider_runtime::compose_shared_provider_runner_descriptors;
 pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
 pub(crate) use shared_provider_runtime::{
     DaemonSharedProviderEffects, GuestRuntimeReconciler, SharedProviderEffectExecutor,
-    SharedProviderResourceKind, SharedProviderResourceReconciler,
+    SharedProviderResourceKind,
 };
+#[cfg(test)]
+pub(crate) use shared_provider_runtime::SharedProviderResourceReconciler;
 use crate::interaction_driver::INTERACTION_PROVIDER_REFS;
 use shared_provider_runtime::UnavailableSharedProviderEffects;
 #[cfg(test)]
@@ -293,162 +286,6 @@ pub struct SharedProviderRunnerRegistration {
     pub watched_configuration_is_dependency: bool,
 }
 
-type SharedCoreControllerSource = CoreControllerSource<
-    PlaneAwareControllerApi<d2b_resource_api::registered::RedbRegisteredControllerApi>,
->;
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct CoreRunnerIdentity {
-    controller_ref: ResourceRef,
-    resource_type: String,
-}
-
-impl CoreRunnerIdentity {
-    fn new(controller_ref: ResourceRef, resource_type: impl Into<String>) -> Self {
-        Self {
-            controller_ref,
-            resource_type: resource_type.into(),
-        }
-    }
-}
-
-struct CoreRunnerTask {
-    identity: CoreRunnerIdentity,
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl CoreRunnerTask {
-    fn is_finished(&self) -> bool {
-        self.handle.is_finished()
-    }
-}
-
-fn core_runner_tasks_are_ready(
-    tasks: &[CoreRunnerTask],
-    required_identities: &BTreeSet<CoreRunnerIdentity>,
-) -> bool {
-    !required_identities.is_empty()
-        && tasks.iter().all(|task| !task.is_finished())
-        && required_identities.iter().all(|required| {
-            tasks
-                .iter()
-                .any(|task| task.identity == *required && !task.is_finished())
-        })
-}
-
-enum PreparedCoreRunner {
-    Core {
-        identity: CoreRunnerIdentity,
-        reconciler: Arc<CoreResourceReconciler>,
-        source: Arc<SharedCoreControllerSource>,
-        config: RunnerConfig,
-        handler: &'static str,
-        resource_type: &'static str,
-    },
-    /// Prepared Provider-class runner (the U6/U9 family legs construct
-    /// these from their own modules; the U8 legs now run on the v3 plane).
-    #[allow(dead_code)]
-    Provider {
-        identity: CoreRunnerIdentity,
-        reconciler: Arc<SharedProviderResourceReconciler>,
-        source: Arc<SharedCoreControllerSource>,
-        config: RunnerConfig,
-        controller_ref: ResourceRef,
-        resource_type: String,
-    },
-}
-
-impl PreparedCoreRunner {
-    fn identity(&self) -> &CoreRunnerIdentity {
-        match self {
-            Self::Core { identity, .. } | Self::Provider { identity, .. } => identity,
-        }
-    }
-}
-
-fn spawn_prepared_core_runner(prepared: PreparedCoreRunner) -> CoreRunnerTask {
-    match prepared {
-        PreparedCoreRunner::Core {
-            identity,
-            reconciler,
-            source,
-            config,
-            handler,
-            resource_type,
-        } => {
-            let handle = tokio::spawn(async move {
-                let zone = source.zone().clone();
-                let runner = Runner::new(reconciler, source, config);
-                match runner.run().await {
-                    Ok(report) => {
-                        tracing::debug!(
-                            handler,
-                            resource_type,
-                            dispatched = report.dispatched,
-                            relists = report.relists,
-                            "Core resource runner stopped",
-                        );
-                    }
-                    Err(error) => {
-                        let failed_resource_type = error
-                            .failed_key()
-                            .map(|key| key.resource_ref().resource_type().as_str());
-                        tracing::warn!(
-                            zone = %zone,
-                            handler,
-                            resource_type,
-                            failed_resource_type = ?failed_resource_type,
-                            failed_operation = ?error.failed_operation(),
-                            error = %error,
-                            "Core resource runner isolated failure",
-                        );
-                    }
-                }
-            });
-            CoreRunnerTask { identity, handle }
-        }
-        PreparedCoreRunner::Provider {
-            identity,
-            reconciler,
-            source,
-            config,
-            controller_ref,
-            resource_type,
-        } => {
-            let handle = tokio::spawn(async move {
-                let zone = source.zone().clone();
-                let runner = Runner::new(reconciler, source, config);
-                match runner.run().await {
-                    Ok(report) => {
-                        tracing::debug!(
-                            controller = %controller_ref,
-                            resource_type,
-                            dispatched = report.dispatched,
-                            relists = report.relists,
-                            "Shared Provider resource runner stopped",
-                        );
-                    }
-                    Err(error) => {
-                        let failed_resource_type = error
-                            .failed_key()
-                            .map(|key| key.resource_ref().resource_type().as_str());
-                        tracing::warn!(
-                            zone = %zone,
-                            controller = %controller_ref,
-                            resource_type,
-                            failed_resource_type = ?failed_resource_type,
-                            failed_operation = ?error.failed_operation(),
-                            error = %error,
-                            "Shared Provider resource runner isolated failure",
-                        );
-                    }
-                }
-            });
-            CoreRunnerTask { identity, handle }
-        }
-    }
-}
-
 /// Compat assignment-epoch value written into every newly constructed
 /// assignment fence and stored AssignmentRecord. Epochs no longer take part
 /// in any decision (succession is read off provider/controller/session
@@ -509,16 +346,150 @@ pub(super) fn assignment_fence_conflict(
     }
     conflict
 }
-async fn abort_core_runner_tasks(tasks: &mut Vec<CoreRunnerTask>) {
-    for task in tasks.drain(..) {
-        task.handle.abort();
-        let _ = task.handle.await;
-    }
-}
-
 /// Read the durable facts the Credential driver gates reconcile and delete
 /// on: the Provider row and the declared execution target, each `Ready` at
 /// its current generation (the old dependency snapshots' predicate).
+/// The manager rows of one type through a plane-view seam, rendered through
+/// the same projection the manager-backed API serves (U12 reader bridge,
+/// mirroring G5).
+///
+/// Converted types live in the manager, not in the pre-v3 store, so the
+/// readers that still take a store handle merge these in. `None` (no
+/// published plane), an unconverted type, or a manager without the rows
+/// leaves the caller on the durable store path; a manager RPC failure is an
+/// error - never reported as absence.
+async fn bridge_manager_rows(
+    plane: Option<&dyn ControllerPlaneView>,
+    resource_type: &str,
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+    let Some(plane) = plane else {
+        return Ok(Vec::new());
+    };
+    if crate::resource_plane_v3::route_resource_type(resource_type)
+        != crate::resource_plane_v3::PlaneRoute::NewPlane
+    {
+        return Ok(Vec::new());
+    }
+    let views = plane.rows_of_type(resource_type).await.map_err(|error| {
+        tracing::warn!(
+            resource_type,
+            error = %error,
+            "manager reader bridge: row list failed",
+        );
+        ResourceRuntimeError::StoreReadFailed
+    })?;
+    views
+        .iter()
+        .map(|view| {
+            d2b_resource_api::manager_backend::manager_row_stored(view)
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+        })
+        .collect()
+}
+
+/// Merge the manager-served rows of one type into a store-shaped reader
+/// result, keyed by resource reference: the manager row wins where both
+/// planes hold the same reference (the manager is the execution authority;
+/// the store copy is the pre-v3 mirror U14 deletes).
+async fn bridge_merge_rows(
+    plane: Option<&dyn ControllerPlaneView>,
+    resource_type: &str,
+    rows: &mut Vec<StoredResource>,
+) -> Result<(), ResourceRuntimeError> {
+    for row in bridge_manager_rows(plane, resource_type).await? {
+        match rows
+            .iter_mut()
+            .find(|existing| existing.resource_ref == row.resource_ref)
+        {
+            Some(existing) => *existing = row,
+            None => rows.push(row),
+        }
+    }
+    Ok(())
+}
+
+/// The multi-type form of [`bridge_merge_rows`].
+async fn bridge_merge_rows_for_types(
+    plane: Option<&dyn ControllerPlaneView>,
+    resource_types: &[&str],
+    rows: &mut Vec<StoredResource>,
+) -> Result<(), ResourceRuntimeError> {
+    for resource_type in resource_types {
+        bridge_merge_rows(plane, resource_type, rows).await?;
+    }
+    Ok(())
+}
+
+/// The committed policy inputs for one Zone, durable rows merged with the
+/// manager-served ones (U12 bridge; the policy loader itself is redb-only).
+///
+/// Role/RoleBinding/Zone/Provider and the subject rows are converted types,
+/// so the manager is their execution authority; without the merge a
+/// RoleBinding whose Role row has moved to the manager returns
+/// `AuthorizationUnavailable` and its subjects are dropped - i.e. the Zone's
+/// committed policy would empty out. A miss on both planes stays the loud,
+/// fail-closed compile failure it is today.
+async fn committed_policy_resources_bridged(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    plane: Option<&dyn ControllerPlaneView>,
+    operation_id: &str,
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+    let mut resources = d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
+        store, zone, operation_id,
+    )
+    .await?;
+    bridge_merge_rows_for_types(
+        plane,
+        &d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES,
+        &mut resources,
+    )
+    .await?;
+    Ok(resources)
+}
+
+/// The committed identities of the requested `Provider` refs, manager rows
+/// first and the durable store only for what the manager does not serve (U12
+/// bridge).
+///
+/// The controller session/policy paths compare a bootstrap context against
+/// the committed Provider identity, and `Provider` is a manager row now: the
+/// per-ref durable read would fail closed on every ref whose row moved, so
+/// the manager is consulted first and the store keeps the pre-v3 rows U14
+/// deletes.
+async fn committed_controller_provider_identities_bridged(
+    zone: &ZoneId,
+    store: &RedbResourceStore,
+    plane: Option<&dyn ControllerPlaneView>,
+    provider_refs: BTreeSet<ResourceRef>,
+) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
+    if provider_refs.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut identities = BTreeMap::new();
+    for row in bridge_manager_rows(plane, "Provider").await? {
+        if !provider_refs.contains(&row.resource_ref) {
+            continue;
+        }
+        let revision = row.revision;
+        let expected_ref = row.resource_ref.clone();
+        let (_, uid, generation, _, _) =
+            committed_provider_spec(zone, revision, &row, &expected_ref)?;
+        identities.insert(expected_ref, (uid, generation));
+    }
+    let remaining = provider_refs
+        .iter()
+        .filter(|provider_ref| !identities.contains_key(*provider_ref))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !remaining.is_empty() {
+        identities.extend(
+            load_committed_controller_provider_identities(zone, store, remaining).await?,
+        );
+    }
+    Ok(identities)
+}
+
 async fn credential_dependency_facts(
     store: &RedbResourceStore,
     zone: &ZoneId,
@@ -574,53 +545,6 @@ fn credential_row_ready(resource: &StoredResource) -> bool {
                     .and_then(serde_json::Value::as_u64)
                     == Some(resource.generation.get())
         })
-}
-
-async fn install_core_runner_tasks(
-    task_store: &Mutex<Vec<CoreRunnerTask>>,
-    mut new_tasks: Vec<CoreRunnerTask>,
-) -> Result<(), ResourceRuntimeError> {
-    let mut tasks = match task_store.lock() {
-        Ok(tasks) => tasks,
-        Err(_) => {
-            tracing::warn!("core runner task store lock poisoned; runner install failed");
-            abort_core_runner_tasks(&mut new_tasks).await;
-            return Err(ResourceRuntimeError::WatchUnavailable);
-        }
-    };
-    tasks.append(&mut new_tasks);
-    Ok(())
-}
-
-async fn reap_finished_core_runner_tasks(
-    task_store: &Mutex<Vec<CoreRunnerTask>>,
-) -> Result<(), ResourceRuntimeError> {
-    let finished = {
-        let mut tasks = task_store
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-        let mut finished = Vec::new();
-        let mut live = Vec::with_capacity(tasks.len());
-        for task in tasks.drain(..) {
-            if task.is_finished() {
-                finished.push(task);
-            } else {
-                live.push(task);
-            }
-        }
-        *tasks = live;
-        finished
-    };
-    for task in finished {
-        if let Err(error) = task.handle.await {
-            tracing::warn!(
-                controller = %task.identity.controller_ref.to_canonical_string(),
-                error = ?error,
-                "core runner task died",
-            );
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2819,16 +2743,11 @@ pub struct ZoneResourceRuntime {
         Arc<Mutex<Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>>>,
     core_controller_subject: Mutex<Option<AuthenticatedSubjectContext>>,
     system_core_rebind_pending: AtomicBool,
-    core_runner_tasks: Mutex<Vec<CoreRunnerTask>>,
-    core_runner_required_identities: Mutex<BTreeSet<CoreRunnerIdentity>>,
-    core_runner_lock: Arc<tokio::sync::Mutex<()>>,
     u6_runner_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     u6_runner_lock: Arc<tokio::sync::Mutex<()>>,
     u6_state: Mutex<Option<Arc<crate::ServerState>>>,
     u6_required: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
-    #[cfg(test)]
-    core_runner_events: Arc<Mutex<Vec<&'static str>>>,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     policy_installed: bool,
@@ -3670,16 +3589,11 @@ impl ZoneResourceRuntime {
             process_status_client: Arc::new(Mutex::new(process_status_client)),
             core_controller_subject: Mutex::new(core_controller_subject),
             system_core_rebind_pending: AtomicBool::new(false),
-            core_runner_tasks: Mutex::new(Vec::new()),
-            core_runner_required_identities: Mutex::new(BTreeSet::new()),
-            core_runner_lock: Arc::new(tokio::sync::Mutex::new(())),
             u6_runner_tasks: Mutex::new(Vec::new()),
             u6_runner_lock: Arc::new(tokio::sync::Mutex::new(())),
             u6_state: Mutex::new(None),
             u6_required: AtomicBool::new(false),
             credential_sessions: CredentialSessionRegistry::default(),
-            #[cfg(test)]
-            core_runner_events: Arc::new(Mutex::new(Vec::new())),
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
@@ -3725,16 +3639,12 @@ impl ZoneResourceRuntime {
             .controller_session_coordinator
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(coordinator);
-        if !defer_core_start && runtime.readiness.resource_api_ready {
-            if let Err(error) = runtime.start_core_controller_runners().await {
-                #[cfg(not(test))]
-                return Err(error);
-                #[cfg(test)]
-                if error != ResourceRuntimeError::ProviderPathUnavailable {
-                    return Err(error);
-                }
-            }
-        }
+        // U12: the Core runner family is deleted. The nine Core-family
+        // ResourceTypes are driven by the v3 plane's Core resource driver,
+        // and the system-core session registered above is the surviving
+        // Core-owned startup surface. `defer_core_start` (authority-identity
+        // zones defer to activate_published_bundle) still gates it.
+        let _ = defer_core_start;
         Ok(runtime)
     }
 
@@ -4035,7 +3945,6 @@ impl ZoneResourceRuntime {
         } else {
             HandlerPhase::Degraded
         };
-        self.start_core_controller_runners().await?;
         let store_metadata = retry_transient_store_read(
             &self.zone,
             "runtime-activate-metadata-after-core-runners",
@@ -4428,15 +4337,12 @@ impl ZoneResourceRuntime {
         {
             return Ok(());
         }
-        let resources = d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
-            &self.store,
-            &self.zone,
-            &format!(
+        let resources = self
+            .committed_policy_resources(&format!(
                 "authorization-policy-refresh:{}",
                 metadata.current_revision.get()
-            ),
-        )
-        .await?;
+            ))
+            .await?;
         let current_metadata = retry_transient_store_read(
             &self.zone,
             "authorization-policy-refresh-verify",
@@ -4484,11 +4390,6 @@ impl ZoneResourceRuntime {
         if rebind_core {
             self.system_core_rebind_pending.store(true, Ordering::Release);
         }
-        let _runner_guard = if rebind_core {
-            Some(self.core_runner_lock.lock().await)
-        } else {
-            None
-        };
         let _u6_runner_guard = if rebind_core {
             Some(self.u6_runner_lock.lock().await)
         } else {
@@ -4496,7 +4397,6 @@ impl ZoneResourceRuntime {
         };
 
         if rebind_core {
-            self.stop_core_controller_runners_locked().await?;
             self.stop_u6_controller_runners_locked().await?;
         }
         self.install_policy_projection(policy, state.clone(), controller_subjects)?;
@@ -4512,14 +4412,6 @@ impl ZoneResourceRuntime {
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = fingerprints;
         if rebind_core {
-            if let Err(error) = self.start_core_controller_runners_locked().await {
-                #[cfg(not(test))]
-                return Err(error);
-                #[cfg(test)]
-                if error != ResourceRuntimeError::ProviderPathUnavailable {
-                    return Err(error);
-                }
-            }
             if let Some(providers) = self
                 .controller_session_providers
                 .lock()
@@ -5038,6 +4930,66 @@ impl ZoneResourceRuntime {
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)
     }
 
+    /// The manager-served durable rows of one resource type, rendered through
+    /// the same projection the manager-backed API serves (U12 reader bridge,
+    /// mirroring G5).
+    ///
+    /// Converted types are written to the manager, not to the pre-v3 store, so
+    /// the readers that still take a store handle merge these in. The
+    /// contract is `Ok(empty)`-keeps-the-old-path: an unconverted type, an
+    /// unpublished plane, or a manager without the row leaves the caller on
+    /// the durable store. A manager RPC failure is an error - never reported
+    /// as absence (G5).
+    pub(crate) async fn manager_stored_rows(
+        &self,
+        resource_type: &str,
+    ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+        let plane = self.manager_plane_view();
+        bridge_manager_rows(plane.as_deref(), resource_type).await
+    }
+
+    /// The plane-view seam over the published per-zone plane, `None` until
+    /// the composition publishes it (U12 bridge: the same `Ok(empty)`-keeps-
+    /// the-old-path contract G5 uses).
+    fn manager_plane_view(&self) -> Option<Arc<dyn ControllerPlaneView>> {
+        let plane = self.v3_plane().ok()?;
+        Some(Arc::new(ManagerControllerPlaneView::new(
+            plane.client().clone(),
+            self.zone.clone(),
+        )))
+    }
+
+    /// Merge the manager-served rows of every requested type into a
+    /// store-shaped reader result (the multi-type form of
+    /// [`Self::manager_stored_rows`]).
+    pub(crate) async fn merge_manager_rows_for_types(
+        &self,
+        resource_types: &[&str],
+        rows: &mut Vec<StoredResource>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let plane = self.manager_plane_view();
+        bridge_merge_rows_for_types(plane.as_deref(), resource_types, rows).await
+    }
+
+    /// The committed policy inputs for this Zone, durable rows merged with
+    /// the manager-served ones (U12 bridge; the policy loader itself is
+    /// redb-only).
+    pub(crate) async fn committed_policy_resources(
+        &self,
+        operation_id: &str,
+    ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+        let plane = self.manager_plane_view();
+        committed_policy_resources_bridged(&self.zone, &self.store, plane.as_deref(), operation_id)
+            .await
+    }
+
+    /// The production Core-driver effects port (U12): this zone's live
+    /// controller-session coordinator, the same seam the G5 reader bridge
+    /// uses. The plane wires it into its Core resource driver factory.
+    pub(crate) fn core_driver_effects(&self) -> Arc<dyn crate::core_driver::CoreDriverEffects> {
+        self.controller_session_coordinator()
+    }
+
     fn manager_api_service(
         &self,
     ) -> Result<Arc<ResourceService<d2b_resource_api::manager_backend::ManagerBackend>>, ResourceRuntimeError>
@@ -5347,10 +5299,10 @@ impl ZoneResourceRuntime {
             .policy_snapshot
             .controller_generation
             .ok_or(ResourceRuntimeError::HandlerNotReady)?;
-        let resource_types = CORE_RESOURCE_CONTROLLER_REGISTRATIONS
+        let resource_types = crate::core_driver::CORE_RESOURCE_TYPES
             .iter()
-            .map(|registration| {
-                ResourceTypeName::parse(registration.resource_type().to_owned())
+            .map(|resource_type| {
+                ResourceTypeName::parse((*resource_type).to_owned())
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -5389,6 +5341,11 @@ impl ZoneResourceRuntime {
                 break;
             }
         }
+        // U12 bridge: the nine Core-family types are manager rows now; a
+        // converted row the pre-v3 store no longer holds must still fence
+        // (the manager row wins where both hold the reference).
+        self.merge_manager_rows_for_types(&crate::core_driver::CORE_RESOURCE_TYPES, &mut resources)
+            .await?;
         let provider_ref = ResourceRef::parse(CORE_CONTROLLER_PROVIDER_REF)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let provider_generation = resources
@@ -5434,31 +5391,6 @@ impl ZoneResourceRuntime {
         ))
     }
 
-    async fn stop_core_controller_runners_locked(&self) -> Result<(), ResourceRuntimeError> {
-        #[cfg(test)]
-        self.core_runner_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push("stop-enter");
-        let tasks = {
-            let mut tasks = self
-                .core_runner_tasks
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-            std::mem::take(&mut *tasks)
-        };
-        for task in tasks {
-            task.handle.abort();
-            let _ = task.handle.await;
-        }
-        #[cfg(test)]
-        self.core_runner_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push("stop-exit");
-        Ok(())
-    }
-
     async fn provider_resources_present(
         &self,
         provider_ref: &str,
@@ -5493,243 +5425,6 @@ impl ZoneResourceRuntime {
                         .and_then(Value::as_str)
                         == Some(provider_ref)
             }))
-    }
-
-    /// Bind one core runner's registered API: the durable adapter decorated
-    /// with the manager dependency bridge (G5). The bridge is present exactly
-    /// when the zone's plane is published, and it only affects the
-    /// owner-scoped `Provider` dependency read.
-    fn core_controller_source(
-        &self,
-        descriptor: ControllerDescriptor,
-        api: d2b_resource_api::registered::RedbRegisteredControllerApi,
-    ) -> Result<Arc<SharedCoreControllerSource>, ResourceRuntimeError> {
-        let merge = match self.v3_plane() {
-            Ok(plane) => {
-                let sessions: Arc<dyn LiveControllerSessionEvidence> =
-                    self.controller_session_coordinator();
-                Some(Arc::new(PlaneProviderDependencies::new(
-                    Arc::new(ManagerPlaneDependencyRows::new(
-                        plane.client().clone(),
-                        &self.zone,
-                    )),
-                    sessions,
-                )))
-            }
-            Err(_) => None,
-        };
-        Ok(CoreControllerSource::new(
-            descriptor,
-            Arc::new(PlaneAwareControllerApi::new(Arc::new(api), merge)),
-        ))
-    }
-
-    async fn start_core_controller_runners(&self) -> Result<(), ResourceRuntimeError> {
-        let _runner_guard = self.core_runner_lock.lock().await;
-        #[cfg(test)]
-        self.core_runner_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push("start-enter");
-        let result = self.start_core_controller_runners_locked().await;
-        #[cfg(test)]
-        self.core_runner_events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push("start-exit");
-        result
-    }
-
-    async fn start_core_controller_runners_locked(&self) -> Result<(), ResourceRuntimeError> {
-        if !self.readiness.resource_api_ready {
-            return Ok(());
-        }
-        let had_existing_core_runners = !self
-            .core_runner_tasks
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .is_empty()
-            || !self
-                .core_runner_required_identities
-                .lock()
-                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-                .is_empty();
-        reap_finished_core_runner_tasks(&self.core_runner_tasks).await?;
-        let subject_context = self
-            .core_controller_subject
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let authorization_state = self
-            .authorization_state
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let (
-            assignments,
-            provider_generation,
-            controller_generation,
-            _session_generation,
-            assignment_authority,
-        ) = match self.core_assignment_fences().await {
-            Ok(value) => value,
-            Err(ResourceRuntimeError::HandlerNotReady) if had_existing_core_runners => {
-                return Err(ResourceRuntimeError::HandlerNotReady);
-            }
-            Err(ResourceRuntimeError::HandlerNotReady) => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        let controller_ref = ResourceRef::parse(CORE_CONTROLLER_PROCESS_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let provider_ref = ResourceRef::parse(CORE_CONTROLLER_PROVIDER_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let host_ref = ResourceRef::parse(CORE_CONTROLLER_HOST_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let identity = ControllerIdentity::new(
-            self.zone.clone(),
-            controller_ref,
-            controller_generation,
-            provider_ref.clone(),
-            provider_generation,
-            ResourceRef::parse(CORE_CONTROLLER_PROCESS_REF)
-                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-            host_ref,
-            None,
-        )
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let descriptors =
-            core_controller_descriptors(identity).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let mut prepared = Vec::with_capacity(descriptors.len());
-        for (registration, descriptor) in descriptors {
-            let subject = self
-                .authorizer
-                .issue_authenticated_subject(subject_context.clone(), authorization_state.clone())
-                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-            let registered_resource_type = registration.resource_type().to_owned();
-            let resource_assignments = assignments
-                .iter()
-                .filter(|(target, _)| {
-                    target.resource_type().as_str() == registration.resource_type()
-                })
-                .cloned()
-                .collect();
-            let resolver_store = Arc::clone(&self.store);
-            let resolver_zone = self.zone.clone();
-            let resolver_authority = Arc::clone(&assignment_authority);
-            let resolver: AssignmentFenceResolver = Arc::new(move |target, uid, revision| {
-                let store = Arc::clone(&resolver_store);
-                let zone = resolver_zone.clone();
-                let authority = Arc::clone(&resolver_authority);
-                let resource_type = registered_resource_type.clone();
-                Box::pin(async move {
-                    if target.resource_type().as_str() != resource_type {
-                        return Err(SourceError::Integrity);
-                    }
-                    if let Some(stored) = store
-                        .assignment_fence(zone, target.clone())
-                        .await
-                        .map_err(|error| match error.kind() {
-                            StoreErrorKind::Backpressure
-                            | StoreErrorKind::StoreBackpressure => SourceError::Backpressure,
-                            StoreErrorKind::Timeout => SourceError::Timeout,
-                            _ => SourceError::Unavailable,
-                        })?
-                    {
-                        if assignment_fence_conflict(&stored, &uid, &authority) {
-                            return Err(SourceError::Integrity);
-                        }
-                        if stored.resource_revision != revision {
-                            return Err(SourceError::Conflict(stored.resource_revision));
-                        }
-                    }
-                    Ok(ResourceAssignmentFence {
-                        resource_uid: uid,
-                        resource_revision: revision,
-                        provider_generation: authority.provider_generation,
-                        controller_generation: authority.controller_generation,
-                        controller_role: authority.controller_role.clone(),
-                        target: authority.target.clone(),
-                        session_generation: authority.session_generation,
-                        epoch: ASSIGNMENT_EPOCH,
-                        scope: ResourceAssignmentScope::Primary,
-                    })
-                })
-            });
-            let api = self
-                .api
-                .registered_controller_api(subject, authorization_state.clone(), resource_assignments)
-                .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
-            let api = api.with_assignment_fence_resolver(resolver);
-            let source = self.core_controller_source(descriptor.clone(), api)?;
-            let runner_identity = CoreRunnerIdentity::new(
-                descriptor.identity().controller_ref().clone(),
-                registration.resource_type(),
-            );
-            prepared.push(PreparedCoreRunner::Core {
-                identity: runner_identity,
-                reconciler: CoreResourceReconciler::for_handler(
-                    descriptor,
-                    registration.handler(),
-                ),
-                source,
-                config: RunnerConfig {
-                    policy_revision: authorization_state.snapshot.policy_revision,
-                    api_revision: authorization_state.snapshot.api_catalog_revision,
-                    configuration_revision: authorization_state.snapshot.active_configuration_revision,
-                    deadline_tick: 30_000,
-                    max_attempts: 10,
-                },
-                handler: registration.handler().label(),
-                resource_type: registration.resource_type(),
-            });
-        }
-        if prepared.is_empty() {
-            tracing::debug!("no core runner preparations available; retrying");
-            return Err(ResourceRuntimeError::HandlerNotReady);
-        }
-        let required_identities = prepared
-            .iter()
-            .map(|runner| runner.identity().clone())
-            .collect::<BTreeSet<_>>();
-
-        reap_finished_core_runner_tasks(&self.core_runner_tasks).await?;
-        let mut present_identities = self
-            .core_runner_tasks
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
-            .iter()
-            .filter(|task| !task.is_finished())
-            .map(|task| task.identity.clone())
-            .collect::<Vec<_>>();
-        let mut new_tasks = Vec::new();
-        for runner in prepared {
-            let identity = runner.identity().clone();
-            if present_identities
-                .iter()
-                .any(|present| present == &identity)
-            {
-                continue;
-            }
-            present_identities.push(identity);
-            new_tasks.push(spawn_prepared_core_runner(runner));
-        }
-        install_core_runner_tasks(&self.core_runner_tasks, new_tasks).await?;
-        let tasks = self
-            .core_runner_tasks
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-        if !core_runner_tasks_are_ready(&tasks, &required_identities) {
-            tracing::debug!("core runner task set not ready after install");
-            return Err(ResourceRuntimeError::HandlerNotReady);
-        }
-        drop(tasks);
-        *self
-            .core_runner_required_identities
-            .lock()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)? = required_identities;
-        Ok(())
     }
 
     /// The production effect port for the v3 `Credential` driver (U12 KTD3).
@@ -5906,6 +5601,15 @@ impl ZoneResourceRuntime {
                 break;
             }
         }
+        // U12 bridge: the descriptor's types are manager rows now (the nine
+        // Core-family types), so the assignment scan merges what the store no
+        // longer holds.
+        let bridge_types = resource_types
+            .iter()
+            .map(ResourceTypeName::as_str)
+            .collect::<Vec<_>>();
+        self.merge_manager_rows_for_types(&bridge_types, &mut resources)
+            .await?;
         let target = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let resources = resources
@@ -5959,15 +5663,6 @@ impl ZoneResourceRuntime {
             })
             .collect();
         Ok((assignments, authority))
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn core_controller_runner_count(&self) -> usize {
-        self.core_runner_tasks
-            .lock()
-            .map(|tasks| tasks.len())
-            .unwrap_or_default()
     }
 
     /// Persist a provider phase together with its typed durable projection.
@@ -6265,7 +5960,7 @@ impl ZoneResourceRuntime {
         let resource_type = ResourceTypeName::parse(resource_type.to_owned())
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
         let mut cursor = None;
-        let mut out = Vec::new();
+        let mut out: Vec<Value> = Vec::new();
         loop {
             let request = StoreListRequest {
                     operation: StoreOperationContext {
@@ -6301,6 +5996,28 @@ impl ZoneResourceRuntime {
                 break;
             }
         }
+        // U12/G5 reader bridge: a converted type's rows live in the manager
+        // (the store keeps the pre-v3 mirror U14 deletes), so the manager row
+        // is authoritative where both hold the same reference. The merge is a
+        // no-op for unconverted types and when no plane is published.
+        let manager_rows = self.manager_stored_rows(resource_type.as_str()).await?;
+        for row in manager_rows {
+            let Ok(value) = serde_json::from_slice::<Value>(&row.canonical_json) else {
+                continue;
+            };
+            match out.iter_mut().find(|existing| {
+                existing.get("type").and_then(Value::as_str)
+                    == Some(row.resource_ref.resource_type().as_str())
+                    && existing
+                        .get("metadata")
+                        .and_then(|metadata| metadata.get("name"))
+                        .and_then(Value::as_str)
+                        == Some(row.resource_ref.name().as_str())
+            }) {
+                Some(existing) => *existing = value,
+                None => out.push(value),
+            }
+        }
         Ok(out)
     }
 
@@ -6309,6 +6026,18 @@ impl ZoneResourceRuntime {
         target: &ResourceRef,
         operation_id: &str,
     ) -> Result<Value, ResourceRuntimeError> {
+        // U12/G5 reader bridge: the manager is the authority for a converted
+        // type. A row the manager does not hold (or an unpublished plane)
+        // keeps the caller on the durable store path.
+        if let Some(row) = self
+            .manager_stored_rows(target.resource_type().as_str())
+            .await?
+            .into_iter()
+            .find(|row| row.resource_ref == *target)
+        {
+            return serde_json::from_slice::<Value>(&row.canonical_json)
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed);
+        }
         let request = StoreGetRequest {
                 operation: StoreOperationContext {
                     operation_id: operation_id.to_owned(),
@@ -7868,6 +7597,38 @@ impl ControllerSessionCoordinator {
             *slot = Some(plane);
         }
     }
+
+    /// The adopted plane-view seam, when the composition published one.
+    fn plane_handle(&self) -> Option<Arc<dyn ControllerPlaneView>> {
+        self.plane_view.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// The committed policy inputs for this Zone with the manager rows merged
+    /// (U12 bridge; see `committed_policy_resources_bridged`).
+    pub(crate) async fn committed_policy_resources(
+        &self,
+        operation_id: &str,
+    ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+        let plane = self.plane_handle();
+        committed_policy_resources_bridged(&self.zone, &self.store, plane.as_deref(), operation_id)
+            .await
+    }
+
+    /// The committed `Provider` identities for the requested refs, manager
+    /// rows first (U12 bridge).
+    pub(crate) async fn committed_controller_provider_identities(
+        &self,
+        provider_refs: BTreeSet<ResourceRef>,
+    ) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
+        let plane = self.plane_handle();
+        committed_controller_provider_identities_bridged(
+            &self.zone,
+            &self.store,
+            plane.as_deref(),
+            provider_refs,
+        )
+        .await
+    }
     /// The manager's row for one controller Process key, when the new plane
     /// serves it. `Ok(None)` keeps the caller on the durable store path (an
     /// unconverted or legacy row); a manager failure is reported, never
@@ -8196,12 +7957,9 @@ impl ControllerSessionCoordinator {
             .map(|context| context.provider_owner_ref().clone())
             .collect::<BTreeSet<_>>();
         for provider_ref in provider_refs {
-            match load_committed_controller_provider_identities(
-                &self.zone,
-                &self.store,
-                BTreeSet::from([provider_ref.clone()]),
-            )
-            .await
+            match self
+                .committed_controller_provider_identities(BTreeSet::from([provider_ref.clone()]))
+                .await
             {
                 Ok(identities) => {
                     for context in contexts.iter().filter(|context| {
@@ -8378,12 +8136,9 @@ impl ControllerSessionCoordinator {
             .collect::<BTreeSet<_>>();
         let mut provider_identities = BTreeMap::new();
         for provider_ref in provider_refs {
-            match load_committed_controller_provider_identities(
-                &self.zone,
-                &self.store,
-                BTreeSet::from([provider_ref.clone()]),
-            )
-            .await
+            match self
+                .committed_controller_provider_identities(BTreeSet::from([provider_ref.clone()]))
+                .await
             {
                 Ok(identities) => {
                     let mismatched = bootstrap_contexts
@@ -8447,12 +8202,8 @@ impl ControllerSessionCoordinator {
                     })
             })
             .collect::<BTreeSet<_>>();
-        let policy_resources =
-            d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
-                &self.store,
-                &self.zone,
-                "controller-session-policy",
-            )
+        let policy_resources = self
+            .committed_policy_resources("controller-session-policy")
             .await?;
         let (policy, state) =
             match d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
@@ -8955,12 +8706,11 @@ impl ControllerSessionCoordinator {
         ) {
             return Ok(false);
         }
-        let identities = match load_committed_controller_provider_identities(
-            &self.zone,
-            &self.store,
-            BTreeSet::from([context.provider_owner_ref().clone()]),
-        )
-        .await
+        let identities = match self
+            .committed_controller_provider_identities(BTreeSet::from([
+                context.provider_owner_ref().clone(),
+            ]))
+            .await
         {
             Ok(identities) => identities,
             Err(error) if !Self::controller_provider_identity_error_is_global(&error) => {
@@ -9916,12 +9666,8 @@ impl ControllerSessionCoordinator {
                 return Err(error);
             }
         };
-        let policy_resources =
-            d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
-                &self.store,
-                &self.zone,
-                "controller-policy-refresh",
-            )
+        let policy_resources = self
+            .committed_policy_resources("controller-policy-refresh")
             .await?;
         let (policy, state) =
             d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
@@ -10149,18 +9895,6 @@ impl ZoneResourceRuntime {
         }
         if !self.readiness.provider_path_ready {
             return Some(ResourceRuntimeError::ProviderPathUnavailable);
-        }
-        let core_runners_ready = match (
-            self.core_runner_required_identities.try_lock(),
-            self.core_runner_tasks.try_lock(),
-        ) {
-            (Ok(required_identities), Ok(tasks)) => {
-                core_runner_tasks_are_ready(&tasks, &required_identities)
-            }
-            _ => false,
-        };
-        if !core_runners_ready {
-            return Some(ResourceRuntimeError::HandlerNotReady);
         }
         if matches!(self.interaction_state, InteractionState::Refused) {
             return Some(ResourceRuntimeError::InteractionConfigurationUnavailable);
@@ -10852,7 +10586,6 @@ impl ZoneResourceRuntime {
             authority_persistence,
             authority_recovery,
             process_status_client,
-            core_runner_tasks,
             u6_runner_tasks,
             audio_runtime,
             controller_sessions,
@@ -10869,13 +10602,6 @@ impl ZoneResourceRuntime {
         {
             task.abort();
             let _ = task.await;
-        }
-        let core_runner_tasks = core_runner_tasks
-            .into_inner()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-        for task in core_runner_tasks {
-            task.handle.abort();
-            let _ = task.handle.await;
         }
         let u6_runner_tasks = u6_runner_tasks
             .into_inner()
@@ -12038,7 +11764,12 @@ fn overlay_manager_row_status(row: &mut StoredResource, view: &ResourceView) {
     let phase = match view.observed_status() {
         Some(d2b_resource_runtime::resource::ResourceStatus::Ready) => "Ready",
         Some(d2b_resource_runtime::resource::ResourceStatus::Failed(_)) => "Failed",
-        Some(d2b_resource_runtime::resource::ResourceStatus::Deleting) => "Deleting",
+        // `ResourcePhase`'s closed vocabulary has no `Deleting`; a row whose
+        // deletion is requested reads as `Deleted` here, exactly as the
+        // shared-provider and interaction projections read it, so the
+        // overlaid envelope still decodes under the strict contract (the
+        // deletion mark itself stays in `metadata.deletionRequestedAt`).
+        Some(d2b_resource_runtime::resource::ResourceStatus::Deleting) => "Deleted",
         _ => "Pending",
     };
     let status = root
@@ -12156,6 +11887,25 @@ fn controller_plane_resource_matches(
     process.execution().process_class()
         == d2b_contracts_resource::v3::process::ProcessClass::Controller
         && process.execution().execution_ref() == context.execution_ref()
+}
+
+/// U12: the same live controller-session evidence, exposed under the v3 Core
+/// driver's effects trait, so the plane's `Provider` observation and drain
+/// read the authoritative session (never a durable status copy).
+impl crate::core_driver::CoreDriverEffects for ControllerSessionCoordinator {
+    fn controller_session_evidence(
+        &self,
+        process_ref: &ResourceRef,
+        process_uid: &ResourceUid,
+        generation: ResourceGeneration,
+    ) -> Option<Value> {
+        <Self as LiveControllerSessionEvidence>::controller_session_evidence(
+            self,
+            process_ref,
+            process_uid,
+            generation,
+        )
+    }
 }
 
 impl LiveControllerSessionEvidence for ControllerSessionCoordinator {
@@ -14074,8 +13824,6 @@ mod tests {
     use d2b_resource_store_redb::write_provisioning_marker;
     use d2b_session_unix::{CreditPool, CreditScopeSet, OutboundPacket, prearmed_seqpacket_pair};
 
-    const TEST_PROCESS_FINALIZER: &str = "process-system-minijail.d2bus.org/cleanup";
-
     fn test_authority(
         provider_generation: u64,
         controller_generation: u64,
@@ -14240,200 +13988,6 @@ mod tests {
             &guest, &ready
         )
         .unwrap());
-    }
-
-    #[derive(Debug)]
-    struct AssignmentTestError;
-
-    impl core::fmt::Display for AssignmentTestError {
-        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            formatter.write_str("assignment test handler failed")
-        }
-    }
-
-    impl std::error::Error for AssignmentTestError {}
-
-    struct AssignmentTestReconciler {
-        descriptor: ControllerDescriptor,
-    }
-
-    fn has_test_process_finalizer(resource: &ResourceSnapshot) -> bool {
-        serde_json::from_slice::<Value>(resource.canonical_json())
-            .ok()
-            .and_then(|value| value.pointer("/metadata/finalizers").cloned())
-            .and_then(|value| value.as_array().cloned())
-            .is_some_and(|finalizers| {
-                finalizers
-                    .iter()
-                    .any(|value| value.as_str() == Some(TEST_PROCESS_FINALIZER))
-            })
-    }
-
-    impl ResourceReconciler for AssignmentTestReconciler {
-        type Error = AssignmentTestError;
-
-        fn classify_error(
-            &self,
-            _error: &Self::Error,
-        ) -> d2b_core_controller::HandlerFailure {
-            d2b_core_controller::HandlerFailure::terminal()
-        }
-
-        fn describe(
-            &self,
-        ) -> impl std::future::Future<
-            Output = Result<ControllerDescriptor, Self::Error>,
-        > + Send {
-            std::future::ready(Ok(self.descriptor.clone()))
-        }
-
-        fn validate_spec(
-            &self,
-            _context: &ReconcileContext,
-            _resource: &ResourceSnapshot,
-        ) -> impl std::future::Future<Output = Result<ValidationResult, Self::Error>> + Send {
-            std::future::ready(Ok(ValidationResult::Valid))
-        }
-
-        fn plan(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-        ) -> impl std::future::Future<Output = Result<ReconcilePlan, Self::Error>> + Send {
-            let steps = if has_test_process_finalizer(resource) {
-                Vec::new()
-            } else {
-                vec!["finalizer".to_owned()]
-            };
-            std::future::ready(
-                ReconcilePlan::new(steps, false).map_err(|_| AssignmentTestError),
-            )
-        }
-
-        fn reconcile(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-            _plan: &ReconcilePlan,
-        ) -> impl std::future::Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-            if has_test_process_finalizer(resource) {
-                return std::future::ready(Ok(ReconcileResult::converged(
-                    resource.revision(),
-                    resource.generation(),
-                )));
-            }
-            let canonical = finalizer_candidate(
-                resource.canonical_json(),
-                TEST_PROCESS_FINALIZER,
-                true,
-            )
-            .map_err(|_| AssignmentTestError);
-            let result = canonical
-                .and_then(|canonical| {
-                    let mutation = d2b_core_controller::MutationIntent::new(
-                        resource.key().resource_ref().clone(),
-                        Some(resource.key().uid().clone()),
-                        Some(resource.revision()),
-                        d2b_core_controller::MutationIntentKind::UpdateFinalizers,
-                        Some(canonical),
-                    )
-                    .map_err(|_| AssignmentTestError)?;
-                    let batch = ResourceMutationBatch::new(vec![mutation])
-                        .map_err(|_| AssignmentTestError)?;
-                    ReconcileResult::new(
-                        resource.revision(),
-                        resource.generation(),
-                        Some(batch),
-                        None,
-                        ReconcileDisposition::Pending,
-                        None,
-                        None,
-                        StatusPersistence::NotRequested,
-                    )
-                    .map_err(|_| AssignmentTestError)
-                });
-            std::future::ready(result)
-        }
-
-        fn observe(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-        ) -> impl std::future::Future<Output = Result<ObservationResult, Self::Error>> + Send {
-            std::future::ready(Ok(ObservationResult::new(ReconcileResult::converged(
-                resource.revision(),
-                resource.generation(),
-            ))))
-        }
-
-        fn finalize(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-        ) -> impl std::future::Future<Output = Result<FinalizeResult, Self::Error>> + Send {
-            std::future::ready(Ok(FinalizeResult::new(ReconcileResult::converged(
-                resource.revision(),
-                resource.generation(),
-            ))))
-        }
-
-        fn health(
-            &self,
-        ) -> impl std::future::Future<
-            Output = Result<d2b_core_controller::ControllerHealth, Self::Error>,
-        > + Send {
-            std::future::ready(Ok(d2b_core_controller::ControllerHealth::Healthy))
-        }
-
-        fn drain(
-            &self,
-            _deadline_tick: u64,
-        ) -> impl std::future::Future<Output = Result<DrainResult, Self::Error>> + Send {
-            std::future::ready(Ok(DrainResult::Drained))
-        }
-
-        fn assess_update(
-            &self,
-            _context: &ReconcileContext,
-            _resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-        ) -> impl std::future::Future<Output = Result<UpdateAssessment, Self::Error>> + Send {
-            std::future::ready(
-                UpdateAssessment::new(UpdateAssessmentState::Current, Vec::new(), true)
-                    .map_err(|_| AssignmentTestError),
-            )
-        }
-
-        fn plan_upgrade(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-        ) -> impl std::future::Future<Output = Result<UpgradePlan, Self::Error>> + Send {
-            std::future::ready(
-                UpgradePlan::new(
-                    DisruptionClass::None,
-                    true,
-                    vec![UpgradeStage::Recycle(resource.key().resource_ref().clone())],
-                )
-                .map_err(|_| AssignmentTestError),
-            )
-        }
-
-        fn execute_upgrade(
-            &self,
-            _context: &ReconcileContext,
-            resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-            _plan: &UpgradePlan,
-        ) -> impl std::future::Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-            std::future::ready(Ok(ReconcileResult::converged(
-                resource.revision(),
-                resource.generation(),
-            )))
-        }
     }
 
     fn shared_provider_test_descriptor_for(
@@ -14830,55 +14384,6 @@ mod tests {
         assert_eq!(
             value["metadata"]["finalizers"],
             serde_json::json!([registration.finalizer])
-        );
-    }
-
-    #[tokio::test]
-    async fn poisoned_core_runner_task_lock_aborts_and_awaits_new_tasks() {
-        let task_store = Mutex::new(Vec::new());
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = task_store.lock().unwrap();
-            panic!("poison Core runner task lock");
-        }));
-
-        struct DropMarker(Arc<AtomicBool>);
-
-        impl Drop for DropMarker {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let started = Arc::new(AtomicBool::new(false));
-        let dropped = Arc::new(AtomicBool::new(false));
-        let task_started = Arc::clone(&started);
-        let task_dropped = Arc::clone(&dropped);
-        let task = tokio::spawn(async move {
-            let _marker = DropMarker(task_dropped);
-            task_started.store(true, Ordering::Release);
-            std::future::pending::<()>().await;
-        });
-        while !started.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-
-        assert_eq!(
-            install_core_runner_tasks(
-                &task_store,
-                vec![CoreRunnerTask {
-                    identity: CoreRunnerIdentity::new(
-                        ResourceRef::parse("Process/test-core-runner").unwrap(),
-                        "test",
-                    ),
-                    handle: task,
-                }],
-            )
-            .await,
-            Err(ResourceRuntimeError::WatchUnavailable)
-        );
-        assert!(
-            dropped.load(Ordering::Acquire),
-            "poisoned task-list cleanup must await every spawned runner"
         );
     }
 
@@ -15364,62 +14869,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn core_runner_start_rotation_is_serialized() {
-        let fixture = PublicationStoreFixture::new().await;
-        let bundle = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "rotation");
-        let mut runtime = fixture.open(&bundle).await;
-        runtime.readiness.resource_api_ready = false;
-        runtime
-            .core_runner_tasks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(CoreRunnerTask {
-                identity: CoreRunnerIdentity::new(
-                    ResourceRef::parse("Process/test-core-runner").unwrap(),
-                    "test",
-                ),
-                handle: tokio::spawn(async {
-                    loop {
-                        tokio::task::yield_now().await;
-                    }
-                }),
-            });
-        {
-            let _runner_guard = runtime.core_runner_lock.lock().await;
-            runtime.stop_core_controller_runners_locked().await.unwrap();
-        }
-        assert!(
-            runtime
-                .core_runner_tasks
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_empty()
-        );
-
-        let first = runtime.start_core_controller_runners();
-        let second = runtime.start_core_controller_runners();
-        let (first, second) = tokio::join!(first, second);
-        assert!(first.is_ok());
-        assert!(second.is_ok());
-        assert_eq!(
-            runtime
-                .core_runner_events
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_slice(),
-            [
-                "stop-enter",
-                "stop-exit",
-                "start-enter",
-                "start-exit",
-                "start-enter",
-                "start-exit"
-            ]
-        );
-        let _ = runtime.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn system_core_refresh_waits_for_controller_session_guard() {
         let fixture = PublicationStoreFixture::new().await;
         let bundle =
@@ -15645,7 +15094,10 @@ mod tests {
         let role_ref = ResourceRef::parse("Role/public-read").unwrap();
         let role = d2b_contracts_zone_session::v3::role::RoleSpec::new(vec![
             d2b_contracts_zone_session::v3::role::RoleRule::new(
-                vec![ResourceTypeName::parse("Provider").unwrap()],
+                vec![
+                    ResourceTypeName::parse("Guest").unwrap(),
+                    ResourceTypeName::parse("EphemeralProcess").unwrap(),
+                ],
                 vec![
                     d2b_contracts_zone_session::v3::role::RoleResourceVerb::Get,
                     d2b_contracts_zone_session::v3::role::RoleResourceVerb::List,
@@ -15770,13 +15222,6 @@ mod tests {
             ))
             .unwrap();
         runtime.refresh_authorization_policy().await.unwrap();
-        {
-            let _runner_guard = runtime.core_runner_lock.lock().await;
-            runtime
-                .stop_core_controller_runners_locked()
-                .await
-                .unwrap();
-        }
         let before_rebind_authority = runtime.core_assignment_fences().await.unwrap().4;
         let before_rebind_authorization_state = runtime
             .authorization_state
@@ -15894,12 +15339,12 @@ mod tests {
             json!({
                 "method": "Get",
                 "zoneRef": "Zone/work",
-                "resourceRef": "Provider/system-minijail",
+                "resourceRef": "Guest/rebind-guest",
             }),
             json!({
                 "method": "List",
                 "zoneRef": "Zone/work",
-                "resourceType": "Provider",
+                "resourceType": "EphemeralProcess",
             }),
         ] {
             tokio::time::timeout(
@@ -15912,10 +15357,6 @@ mod tests {
         }
         drop(guard);
         let _ = service_task.await;
-        assert!(
-            runtime.core_runner_tasks.lock().unwrap().is_empty(),
-            "a failed system-core rebind must stop the old runner generation"
-        );
         *runtime.registrar.lock().unwrap() = Some(registrar);
         runtime
             .refresh_authorization_policy()
@@ -15924,15 +15365,6 @@ mod tests {
         assert!(
             runtime.service_task.lock().unwrap().is_some(),
             "recovery must re-enroll the fenced system-core session"
-        );
-        assert!(
-            runtime
-                .core_runner_tasks
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|task| !task.is_finished()),
-            "successful rebind recovery must restore the core runners"
         );
         assert!(
             coordinator.assigned_process_api.lock().unwrap().is_some(),
@@ -20086,150 +19518,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_runner_persists_core_assignment_for_generated_controller_process() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let owner_ref = ResourceRef::parse("Provider/network-local").unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![
-                bundle_resource(
-                    "Provider",
-                    "network-local",
-                    &zone,
-                    r#"{"artifactId":"acceptance-provider","config":{}}"#,
-                ),
-                {
-                    let metadata = BundleResourceMetadata::new(
-                        ResourceName::parse(
-                            "controller-e1e6335ae78671758ea381fce5d44fdd",
-                        )
-                        .unwrap(),
-                        zone.clone(),
-                        Some(owner_ref.clone()),
-                        BTreeMap::new(),
-                        BTreeMap::new(),
-                    );
-                    BundleResource::new(
-                        ResourceTypeName::parse("Process").unwrap(),
-                        metadata,
-                        CanonicalJsonObject::parse(
-                            br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"acceptance-controller"}"#,
-                        )
-                        .unwrap(),
-                    )
-                    .unwrap()
-                },
-            ],
-        )
-        .await;
-        let process_ref =
-            ResourceRef::parse("Process/controller-e1e6335ae78671758ea381fce5d44fdd").unwrap();
-        let process = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "runner-generated-process-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "runner-generated-process-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: process_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let authority = Arc::new(CoreAssignmentAuthority {
-            provider_generation: ResourceGeneration::new(17).unwrap(),
-            controller_generation: ControllerGeneration::new(23).unwrap(),
-            session_generation: ReconnectGeneration::new(19).unwrap(),
-            controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
-            target: ResourceRef::parse("Zone/work").unwrap(),
-        });
-        let authz_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        let subject_context = runtime
-            .core_controller_subject
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        let subject = runtime
-            .authorizer
-            .issue_authenticated_subject(subject_context, authz_state.clone())
-            .unwrap();
-        let api = runtime
-            .api
-            .registered_controller_api(subject, authz_state.clone(), Vec::new())
-            .unwrap()
-            .with_assignment_fence_resolver(process_assignment_fence_resolver(
-                Arc::clone(&runtime.store),
-                DaemonMode::Host,
-                Arc::clone(&authority),
-            ));
-        let identity = ControllerIdentity::new(
-            zone.clone(),
-            authority.controller_role.clone(),
-            authority.controller_generation,
-            ResourceRef::parse("Provider/system-core").unwrap(),
-            authority.provider_generation,
-            authority.controller_role.clone(),
-            ResourceRef::parse("Host/host-system").unwrap(),
-            None,
-        )
-        .unwrap();
-        let descriptor = process_controller_descriptor(identity).unwrap();
-        let source = CoreControllerSource::new(descriptor.clone(), Arc::new(api));
-        let runner = Runner::new(
-            Arc::new(AssignmentTestReconciler { descriptor }),
-            Arc::clone(&source),
-            RunnerConfig {
-                policy_revision: authz_state.snapshot.policy_revision,
-                api_revision: authz_state.snapshot.api_catalog_revision,
-                configuration_revision: authz_state.snapshot.active_configuration_revision,
-                deadline_tick: 30_000,
-                max_attempts: 10,
-            },
-        )
-        .run();
-        let runner_task = tokio::spawn(runner);
-        let fence = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                if let Some(fence) = runtime
-                    .store
-                    .assignment_fence(zone.clone(), process_ref.clone())
-                    .await
-                    .unwrap()
-                {
-                    break fence;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("generated Process finalizer assignment timeout");
-        assert_eq!(fence.resource_uid, process.uid);
-        assert_eq!(fence.provider_generation, authority.provider_generation);
-        assert_eq!(fence.controller_generation, authority.controller_generation);
-        assert_eq!(fence.session_generation, authority.session_generation);
-        assert_eq!(fence.controller_role, authority.controller_role);
-        assert_eq!(fence.target, ResourceRef::parse("Host/host-system").unwrap());
-        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
-        source.close_watch().unwrap();
-        runner_task.abort();
-        let _ = runner_task.await;
-        let _ = runtime.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn sparse_seven_row_bundle_starts_only_present_shared_provider_runners() {
         let (_directory, mut runtime, _broker_evidence) =
             open_production_guest_runtime_for_test().await;
@@ -20289,144 +19577,11 @@ mod tests {
             6
         );
         runtime.readiness.resource_api_ready = true;
-        runtime
-            .start_core_controller_runners()
-            .await
-            .expect("sparse bundles must skip absent optional shared Providers");
         runtime.set_provider_path_ready(true);
         runtime
             .require_ready()
             .expect("sparse bundle must reach Host readiness");
         assert_eq!(runtime.interaction_state, InteractionState::Absent);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn finished_core_runner_withholds_readiness_and_is_replaced_on_reconcile() {
-        let (_directory, mut runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Provider",
-                "network-local",
-                &zone,
-                r#"{"artifactId":"acceptance-provider","config":{}}"#,
-            )],
-        )
-        .await;
-        runtime.readiness.resource_api_ready = true;
-        runtime
-            .start_core_controller_runners()
-            .await
-            .expect("Core runners start for the required Provider");
-        let original_count = runtime
-            .core_runner_tasks
-            .lock()
-            .unwrap()
-            .len();
-        assert!(original_count > 1);
-        assert!(
-            runtime
-                .core_runner_tasks
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|task| !task.is_finished())
-        );
-        runtime.set_provider_path_ready(true);
-        runtime
-            .require_ready()
-            .expect("live Core runners permit readiness");
-
-        let (failed_identity, healthy_identity) = {
-            let tasks = runtime.core_runner_tasks.lock().unwrap();
-            (
-                tasks[0].identity.clone(),
-                tasks[1].identity.clone(),
-            )
-        };
-        runtime.core_runner_tasks.lock().unwrap()[0].handle.abort();
-        tokio::task::yield_now().await;
-        assert_eq!(
-            runtime.require_ready(),
-            Err(ResourceRuntimeError::HandlerNotReady)
-        );
-
-        let saved_authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .take();
-        assert_eq!(
-            runtime.start_core_controller_runners().await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        assert_eq!(
-            runtime.require_ready(),
-            Err(ResourceRuntimeError::HandlerNotReady),
-            "failed replacement setup must not restore readiness for the missing required identity"
-        );
-        {
-            let tasks = runtime.core_runner_tasks.lock().unwrap();
-            assert_eq!(tasks.len(), original_count - 1);
-            assert!(
-                tasks
-                    .iter()
-                    .any(|task| task.identity == healthy_identity && !task.is_finished()),
-                "a failed replacement setup must retain live Core siblings"
-            );
-            assert!(
-                tasks.iter().all(|task| task.identity != failed_identity),
-                "the failed Core runner must be removed before replacement setup"
-            );
-        }
-        *runtime.authorization_state.lock().unwrap() = saved_authorization_state;
-
-        runtime
-            .start_core_controller_runners()
-            .await
-            .expect("next reconciliation replaces the finished Core runner");
-        let events = runtime.core_runner_events.lock().unwrap().clone();
-        assert!(
-            !events.iter().any(|event| *event == "stop-enter"),
-            "replacement must not stop healthy Core siblings: {events:?}"
-        );
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                let tasks = runtime.core_runner_tasks.lock().unwrap();
-                if tasks.len() == original_count && tasks.iter().all(|task| !task.is_finished()) {
-                    break;
-                }
-                drop(tasks);
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("replacement Core runners become live");
-        {
-            let tasks = runtime.core_runner_tasks.lock().unwrap();
-            assert_eq!(
-                tasks
-                    .iter()
-                    .filter(|task| task.identity == healthy_identity)
-                    .count(),
-                1,
-                "healthy Core runner must not overlap with a duplicate"
-            );
-            assert_eq!(
-                tasks
-                    .iter()
-                    .filter(|task| task.identity == failed_identity)
-                    .count(),
-                1,
-                "the failed Core identity must have exactly one replacement"
-            );
-        }
-        runtime
-            .require_ready()
-            .expect("readiness returns only after replacement runners are live");
         runtime.shutdown().await.unwrap();
     }
 
@@ -20451,10 +19606,6 @@ mod tests {
                 .expect("interaction presence scan")
         );
         runtime.readiness.resource_api_ready = true;
-        runtime
-            .start_core_controller_runners()
-            .await
-            .expect("Core runners must be live before interaction readiness");
         // A present interaction Provider whose committed identity never
         // resolved leaves the interaction composition refused: readiness is
         // withheld rather than reported for a half-composed family.

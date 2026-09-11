@@ -842,6 +842,18 @@ impl ResourceDriver for ActivationDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The call nudges each owned child through its
+    /// own finalize-before-delete pass - the activation runner retires before
+    /// its generation may - and requeues this pass while any child row is
+    /// still live. Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(ActivationDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// Teardown (R10, F3): the durable deleting mark is already committed.
     /// The owned runner retires through the manager - the child has no
     /// finalizers of its own, so its row disappears once cleanup completes,
@@ -882,7 +894,7 @@ mod tests {
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::ResourceError;
+    use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
@@ -1523,6 +1535,48 @@ mod tests {
             host_driver.recover(&mut host.ctx).await.expect("recover"),
             RecoveryOutcome::Missing
         );
+    }
+
+    // -- finalize: the owned runner retires before the generation (F3) --------
+
+    #[tokio::test]
+    async fn finalize_finalizes_the_owned_runner_before_the_generation_teardown() {
+        let manager = RecordingManager::new(GENERATION_UID).with_row(StoredDesiredResource {
+            owner_uid: Some(GENERATION_UID),
+            ..generation_row(
+                "runner-gen-1",
+                "Guest/workstation",
+                ActivationMode::Switch,
+                None,
+                [0x77; 16],
+            )
+        });
+        let Fixture { mut ctx, manager } = fixture(
+            generation_row(
+                "gen-1",
+                "Guest/workstation",
+                ActivationMode::Switch,
+                None,
+                GENERATION_UID,
+            ),
+            manager,
+        );
+        let mut d = driver(
+            FakeActivationEffects::new(HostHandoffResult::Incomplete),
+            Arc::new(AllowVerifier),
+        )
+        .await;
+
+        // A live owned runner: the pass requeues instead of tearing down.
+        let failure = d.finalize(&mut ctx).await.expect_err("owned runner still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert!(
+            manager.log().iter().any(|call| call.starts_with("delete:")),
+            "the owned runner is nudged through its own finalize-before-delete pass"
+        );
+
+        // The manager removed the retired runner row: the same pass converges.
+        d.finalize(&mut ctx).await.expect("converged once the runner retired");
     }
 
     // -- teardown -------------------------------------------------------------

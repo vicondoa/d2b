@@ -112,6 +112,7 @@ use crate::shared_provider_driver::{
 };
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
+use crate::core_driver::{CoreDriverEffects, CoreResourceDriverFactory, CORE_RESOURCE_TYPES, core_spec_decoder};
 use crate::interaction_driver::{
     InteractionDriverArgs, InteractionDriverEffects, InteractionDriverFactory,
     interaction_spec_decoder,
@@ -133,7 +134,7 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 22] =
+pub const CONVERTED_TYPES: [&str; 31] =
     d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
@@ -1092,6 +1093,12 @@ pub struct ConstructionInputs {
     /// Shared per-zone registry the production effects resolve per-resource
     /// anchors from; the plane re-populates it from the spec store.
     pub registry: Arc<PlaneResourceRegistry>,
+    /// U12: the live controller-session evidence the Core `Provider` driver's
+    /// observation and drain read. Production wires the zone runtime's
+    /// controller-session coordinator (the same seam the G5 reader bridge
+    /// uses); the default fails closed, exactly as the old handler did for a
+    /// controller row without session evidence.
+    pub core_effects: Arc<dyn CoreDriverEffects>,
     pub process_effects: Arc<dyn ProcessDriverEffects>,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
@@ -1177,6 +1184,7 @@ impl ConstructionInputs {
             },
             committed_provider_identities,
             registry: Arc::clone(&registry),
+            core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
             process_effects: Arc::new(
                 ProductionProcessDriverEffects::new(process_providers)
                     .with_committed_provider_identities(registry_source),
@@ -1407,6 +1415,9 @@ impl ResourcePlaneV3 {
             },
         )))?;
         providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
+        providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
+            Arc::clone(&inputs.core_effects),
+        )))?;
         providers.register(Arc::new(InteractionDriverFactory::new(InteractionDriverArgs {
             zone: inputs.zone.as_str().to_owned(),
             controller_generation: inputs.authority.controller_generation,
@@ -1456,6 +1467,11 @@ impl ResourcePlaneV3 {
                 ResourceTypeName::new(resource_type),
                 interaction_spec_decoder(),
             );
+        }
+        // U12: the nine fixed Core controller-family types (the core spec
+        // decoder is the JSON-object envelope every core row stores).
+        for resource_type in CORE_RESOURCE_TYPES {
+            decoders.insert(ResourceTypeName::new(resource_type), core_spec_decoder());
         }
         decoders
     }
@@ -2191,6 +2207,7 @@ mod tests {
                 },
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
+                core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
                 process_effects: Arc::new(FakeProcessEffects),
                 volume_effects: Arc::new(FakeVolumeEffects),
                 binding_effects: Arc::new(FakeBindingEffects),
@@ -2212,14 +2229,14 @@ mod tests {
         for converted in CONVERTED_TYPES {
             assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
         }
-        for unconverted in ["Guest", "Provider", "Quota", "EphemeralProcess"] {
+        for unconverted in ["Guest", "EphemeralProcess"] {
             assert_eq!(
                 route_resource_type(unconverted),
                 PlaneRoute::OldPlane,
                 "{unconverted} must stay on the old plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 22);
+        assert_eq!(CONVERTED_TYPES.len(), 31);
     }
 
     /// KTD7: the committed Provider identities the composition resolves are

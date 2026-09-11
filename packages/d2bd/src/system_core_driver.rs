@@ -73,13 +73,15 @@ enum SystemCoreDriverErrorKind {
     HostObservation,
     /// Local NSS discovery failed transiently.
     UserDiscovery,
+    /// Owned children are still retiring; the delete pass requeues.
+    DrainPending,
 }
 
 impl SystemCoreDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
             Self::SpecInvalid => FailureClass::Terminal,
-            Self::HostObservation | Self::UserDiscovery => FailureClass::Retryable,
+            Self::HostObservation | Self::UserDiscovery | Self::DrainPending => FailureClass::Retryable,
         }
     }
 }
@@ -104,6 +106,7 @@ impl core::fmt::Display for SystemCoreDriverError {
             SystemCoreDriverErrorKind::SpecInvalid => "system-core-spec-invalid",
             SystemCoreDriverErrorKind::HostObservation => "system-core-host-observation-failed",
             SystemCoreDriverErrorKind::UserDiscovery => "system-core-user-discovery-failed",
+            SystemCoreDriverErrorKind::DrainPending => "system-core-drain-pending",
         })
     }
 }
@@ -661,6 +664,17 @@ impl ResourceDriver for SystemCoreDriver {
         Ok(ReconcileOutcome::Satisfied)
     }
 
+    /// Drain step (R10, F3): every owned child finalizes before this
+    /// resource's own teardown. The family owns no child in production, so
+    /// this converges immediately; an owned row still live requeues the pass.
+    /// Idempotent under retry.
+    async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        ctx.finalize_owned_resources()
+            .await
+            .map_err(|_| self.error(SystemCoreDriverErrorKind::DrainPending, DriverOp::Delete))?;
+        Ok(())
+    }
+
     /// The old `finalize` was converged: the family owns no children and
     /// carries no finalizer, so teardown is the manager's row removal (R10).
     async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
@@ -789,13 +803,30 @@ mod tests {
     /// recorded call list.
     struct RecordingManager {
         calls: parking_lot::Mutex<Vec<&'static str>>,
+        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
     }
 
     impl RecordingManager {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 calls: parking_lot::Mutex::new(Vec::new()),
+                owned: parking_lot::Mutex::new(Vec::new()),
             })
+        }
+
+        /// Seed one owned child row (the finalize gate's input).
+        fn seed_owned(&self, key: ResourceKey) {
+            self.owned.lock().push(StoredDesiredResource {
+                key,
+                uid: [0x77; 16],
+                generation: 1,
+                owner_uid: Some([0x42; 16]),
+                provenance: ResourceProvenance::Resource,
+                deleting: false,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                created_at: 0,
+            });
         }
 
         fn call_order(&self) -> Vec<&'static str> {
@@ -830,9 +861,15 @@ mod tests {
             Err(ResourceError::ManagerRpc("unexpected view".into()))
         }
 
-        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.calls.lock().push("delete");
-            Err(ResourceError::ManagerRpc("unexpected delete".into()))
+            let mut owned = self.owned.lock();
+            if owned.iter().any(|row| row.key == *key) {
+                owned.retain(|row| row.key != *key);
+                Ok(())
+            } else {
+                Err(ResourceError::ManagerRpc("unexpected delete".into()))
+            }
         }
 
         async fn list_owned(
@@ -840,7 +877,7 @@ mod tests {
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             self.calls.lock().push("list-owned");
-            Ok(Vec::new())
+            Ok(self.owned.lock().clone())
         }
 
         async fn register_watch(
@@ -1161,6 +1198,33 @@ mod tests {
         let failure = driver.reconcile(&mut ctx).await.expect_err("retryable");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(ctx.status::<SystemCoreDriverStatus>().is_none());
+    }
+
+    // -- finalize: owned children retire before the delete no-op (F3) ---------
+
+    #[tokio::test]
+    async fn finalize_finalizes_owned_children_before_the_delete_noop() {
+        let effects = RecordingEffects::new();
+        let manager = RecordingManager::new();
+        manager.seed_owned(ResourceKey::new("work", "Process", "system-core-child"));
+        let requeue = RecordingRequeue::new();
+        let mut ctx = fixture(
+            row("Host", "host-system", host_spec_bytes(Some(HOST_PROVIDER_REF))),
+            Arc::clone(&manager),
+            requeue,
+        );
+        let mut d = build_driver("Host", "host-system", effects).await;
+
+        // A live owned child: the pass requeues instead of converging.
+        let failure = d.finalize(&mut ctx).await.expect_err("owned child still live");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert!(
+            manager.call_order().contains(&"delete"),
+            "the owned child is nudged through its own finalize-before-delete pass"
+        );
+
+        // The manager removed the retired child row: the same pass converges.
+        d.finalize(&mut ctx).await.expect("converged once the child retired");
     }
 
     // -- delete --------------------------------------------------------------
