@@ -6822,7 +6822,7 @@ fn admit_gateway_zone_request(
             resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
         })?;
         composition
-            .bind_gateway_session(Arc::clone(&session))
+            .bind_gateway_session(session)
             .map_err(|error| {
                 tracing::warn!(
                     error = ?error,
@@ -6832,9 +6832,6 @@ fn admit_gateway_zone_request(
                 );
                 resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
             })?;
-        // U13: this session generation is now the realization authority for
-        // Host-zone resources targeting the gateway Guest.
-        bind_plane_guest_target(state, &session);
     }
     let gateway_guest_for_invalidation = gateway_guest.clone();
     let target_zone = composition.child_path().clone();
@@ -6870,9 +6867,6 @@ fn admit_gateway_zone_request(
                 | resource_runtime::ResourceRuntimeError::AuthenticationUnavailable
         )
     ) {
-        // U13/R21: the target went away - observed state becomes unavailable
-        // while desired resources and assignments stay exactly as they are.
-        unbind_plane_guest_target(state, &session);
         composition.fence_gateway_session();
         block_on_future(invalidate_guest_component_session_for_guest(
             state,
@@ -6880,70 +6874,6 @@ fn admit_gateway_zone_request(
         ));
     }
     result
-}
-
-/// Bind one authenticated guest session generation as the realization
-/// authority of the Zone's target directory (U13, F5).
-///
-/// A failure here never denies gateway forwarding - it leaves the target path
-/// unbound, which is the fail-closed direction: no Host-zone resource can
-/// claim realization authority through this session.
-fn bind_plane_guest_target(
-    state: &ServerState,
-    session: &Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-) {
-    let zone = session.identity().zone().as_str().to_owned();
-    let plane = state
-        .v3_planes
-        .lock()
-        .get(&zone)
-        .map(std::sync::Arc::clone);
-    let Some(plane) = plane else {
-        tracing::warn!(zone = %zone, "guest target bind skipped: Zone v3 plane unavailable");
-        return;
-    };
-    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
-    else {
-        tracing::warn!(zone = %zone, "guest target bind skipped: session subject is not a guest");
-        return;
-    };
-    let generation = session.generation();
-    let control = match crate::guest_target_control::session_target_control(
-        Arc::clone(session),
-        generation,
-    ) {
-        Ok(control) => control,
-        Err(error) => {
-            tracing::warn!(zone = %zone, error = %error, "guest target control unavailable");
-            return;
-        }
-    };
-    if let Err(error) = plane.bind_guest_target(&guest, generation, control) {
-        tracing::warn!(zone = %zone, generation, error = %error, "guest target bind refused");
-    }
-}
-
-/// Mark the guest target unavailable on the fencing path (U13, R21): the
-/// desired resources and their assignments stay, only observed state becomes
-/// unavailable, and a newer session is never torn down by a stale fence.
-fn unbind_plane_guest_target(
-    state: &ServerState,
-    session: &Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
-) {
-    let zone = session.identity().zone().as_str().to_owned();
-    let plane = state
-        .v3_planes
-        .lock()
-        .get(&zone)
-        .map(std::sync::Arc::clone);
-    let Some(plane) = plane else {
-        return;
-    };
-    let Some(guest) = crate::guest_target_control::guest_target_ref(session.identity().guest_ref())
-    else {
-        return;
-    };
-    let _ = plane.unbind_guest_target(&guest, session.generation());
 }
 
 fn gateway_route_operation_id(request: &Value, peer_uid: u32, method: &str) -> String {
@@ -16473,16 +16403,13 @@ async fn compose_gateway_zone_links(
         let composition =
             match connect_guest_component_session_for_guest(state, &gateway_guest).await {
                 Ok(session) => {
-                    if let Err(error) = composition.bind_gateway_session(Arc::clone(&session)) {
+                    if let Err(error) = composition.bind_gateway_session(session) {
                         tracing::warn!(
                             zone = %zone,
                             error = error.code(),
                             "Gateway Guest session binding refused",
                         );
                     }
-                    // U13: bind the session generation as the realization
-                    // authority for Host-zone resources targeting this Guest.
-                    bind_plane_guest_target(state, &session);
                     composition
                 }
                 Err(error) => {
