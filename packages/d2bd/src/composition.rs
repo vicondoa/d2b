@@ -4491,6 +4491,27 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 detail: error.code().to_owned(),
             })?;
     }
+    // Guest target-control (U13 guest half): one target runtime per Guest,
+    // driven by the requests the parent Zone sends over this session. The
+    // service survives reconnects so target-local realizations can be
+    // re-adopted (F5); the live generation is bound at every accept, and the
+    // types it serves are exactly the ones with registered target-local
+    // effect code (none yet - see `guest_target_service`).
+    let guest_target =
+        d2b_resource_runtime::target::TargetRef::guest(identity.guest_ref().name().as_str())
+            .map_err(|error| TypedError::InternalConfig {
+                detail: error.to_string(),
+            })?;
+    let target_service = std::sync::Arc::new(
+        crate::guest_target_service::GuestTargetService::new(
+            std::sync::Arc::new(d2b_resource_runtime::guest_target::GuestTargetRuntime::new(
+                guest_target,
+            )),
+            identity.zone().clone(),
+            std::collections::BTreeMap::new(),
+        ),
+    );
+    tracing::info!("Guest target-control service composed");
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -4549,6 +4570,15 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             continue;
                         }
                     };
+                    if let Err(error) =
+                        target_service.bind_session(route.reconnect_generation().get())
+                    {
+                        tracing::warn!(
+                            error = %error,
+                            generation = route.reconnect_generation().get(),
+                            "Guest target-control session binding refused",
+                        );
+                    }
                     let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
                         Ok(services) => services,
                         Err(error) => {
@@ -4559,6 +4589,11 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     };
                     let mut services = resource_session.ttrpc_services();
                     services.extend(config_services);
+                    services.extend(
+                        crate::guest_target_service::target_control_services(Arc::clone(
+                            &target_service,
+                        )),
+                    );
                     let ttrpc = session.into_ttrpc_handle();
                     let resource_client = Arc::new(resource_session.client());
                     let mut process_runtime =
@@ -4648,6 +4683,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     continue;
                 }
             };
+            if let Err(error) = target_service.bind_session(route.reconnect_generation().get()) {
+                tracing::warn!(
+                    error = %error,
+                    generation = route.reconnect_generation().get(),
+                    "Guest target-control session binding refused",
+                );
+            }
             let config_services =
                 match guest_config_services(&identity, &route, &options.guest_config_path) {
                     Ok(services) => services,
@@ -4659,6 +4701,9 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 };
             let mut services = resource_session.ttrpc_services();
             services.extend(config_services);
+            services.extend(crate::guest_target_service::target_control_services(
+                Arc::clone(&target_service),
+            ));
             let ttrpc = session.into_ttrpc_handle();
             let resource_client = Arc::new(resource_session.client());
             let mut process_runtime =

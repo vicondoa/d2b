@@ -13,5 +13,6 @@ pub(crate) mod interaction_driver;
 
 pub(crate) mod guest_target_control;
 pub(crate) mod resource_plane_v3;
+pub(crate) mod guest_target_service;
 
 include!("composition.rs");
