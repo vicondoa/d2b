@@ -391,7 +391,12 @@ struct WatchEntry {
 
 /// Deterministic stable uid for a key (R8): owned-child graphs and adoption
 /// identities reconstruct identically after restart.
-pub(crate) fn deterministic_uid(key: &ResourceKey) -> [u8; 16] {
+///
+/// Cross-crate contract: the v3 plane's composition derives the same value
+/// for a row the manager has not persisted yet (the KTD7 controller seed),
+/// so this derivation changes only together with every reader that
+/// reconstructs an identity from a key.
+pub fn deterministic_uid(key: &ResourceKey) -> [u8; 16] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(b"d2b-resource-uid/v1\x00");

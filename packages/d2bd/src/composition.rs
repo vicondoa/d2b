@@ -15815,6 +15815,53 @@ where
     (resolved, unresolved)
 }
 
+/// The launch identity the controller seed binds for one `Provider` ref
+/// (KTD7).
+///
+/// `Provider` is served by the v3 plane (U12 converted the Core family):
+/// the manager allocates each row's identity deterministically from its key
+/// (R8), while the pre-v3 store keeps only a mirror whose uid is an
+/// unrelated allocation. The seed must bind the manager's identity - the
+/// identity the session fence, the policy bridge, and the manager-backed
+/// reads all agree on - so a converted ref resolves to the row the bundle
+/// ingest is about to allocate. Reading the mirror here instead bound every
+/// controller row to an identity the fence could never match, which dropped
+/// each bootstrap and left the controller `Process` rows Pending forever
+/// (vmCheck `resource-operator-activation` / `...guest-preflight`,
+/// 2026-09-11).
+///
+/// Residual: a spec change committed before this boot increments the
+/// manager row's generation, which this pre-open seed cannot see; the seed
+/// binds the fresh-row generation. Unconverted types keep the durable
+/// authority.
+async fn committed_provider_seed_identity(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    provider_ref: ResourceRef,
+) -> Result<(ResourceUid, ResourceGeneration), resource_runtime::ResourceRuntimeError> {
+    if crate::resource_plane_v3::route_resource_type(provider_ref.resource_type().as_str())
+        != crate::resource_plane_v3::PlaneRoute::NewPlane
+    {
+        let mut identities = runtime
+            .committed_provider_identities(BTreeSet::from([provider_ref.clone()]))
+            .await?;
+        return identities
+            .remove(&provider_ref)
+            .ok_or(resource_runtime::ResourceRuntimeError::StoreReadFailed);
+    }
+    let key = d2b_resource_runtime::identity::ResourceKey::new(
+        runtime.zone().as_str(),
+        provider_ref.resource_type().as_str(),
+        provider_ref.name().as_str(),
+    );
+    let uid = crate::resource_plane_v3::resource_uid(
+        &d2b_resource_runtime::manager::deterministic_uid(&key),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::StoreReadFailed)?;
+    let generation = ResourceGeneration::new(1)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::StoreReadFailed)?;
+    Ok((uid, generation))
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -16235,12 +16282,12 @@ async fn open_resource_plane(
             let credential_agent_client: Arc<
                 std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>,
             > = Arc::new(std::sync::OnceLock::new());
-            // KTD7: the v3 plane cannot read unconverted `Provider` rows from
-            // its own store (they pass through to the old plane), so resolve
-            // the bundle's committed Provider identities here - the same
-            // durable rows the controller policy and session fences compare
-            // against - and let the plane publish them before its manager
-            // spawns any resource actor.
+            // KTD7: `Provider` is served by the v3 plane (U12 converted the
+            // Core family), so a controller row's launch identity must be the
+            // manager's committed row identity. Resolve that identity here and
+            // let the plane publish it before its manager spawns any resource
+            // actor: the session fence, the policy bridge, and the
+            // manager-backed reads all compare against it.
             let provider_refs = bundle
                 .resources
                 .iter()
@@ -16249,9 +16296,7 @@ async fn open_resource_plane(
                     ResourceRef::parse(&format!("Provider/{}", row.metadata().name().as_str())).ok()
                 })
                 .collect::<BTreeSet<_>>();
-            // KTD7 seeding: the snapshot races generation publication (the
-            // same window the process-resource startup read above retries
-            // through). It must not be laundered into "no committed
+            // KTD7 seeding: it must not be laundered into "no committed
             // identities": an empty map turns the race into
             // `provider-controller-provider-identity-missing` for every
             // controller Process, which the Process driver classifies
@@ -16266,16 +16311,7 @@ async fn open_resource_plane(
                     |provider_ref| {
                         let runtime = &runtime;
                         async move {
-                            runtime
-                                .committed_provider_identities(BTreeSet::from([
-                                    provider_ref.clone(),
-                                ]))
-                                .await
-                                .map(|mut identities| {
-                                    identities.remove(&provider_ref).expect(
-                                        "a single requested Provider ref resolves or errors",
-                                    )
-                                })
+                            committed_provider_seed_identity(runtime, provider_ref).await
                         }
                     },
                 )

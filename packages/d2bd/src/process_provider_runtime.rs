@@ -2441,6 +2441,19 @@ impl ProductionProcessProviders {
                         execution.execution_ref(),
                         report.identity,
                     )?;
+                    // A controller this daemon launched has already armed its
+                    // bootstrap endpoint, and session establishment consumed
+                    // it: there is nothing left to take. Re-taking here
+                    // reported the bootstrap missing on every post-launch
+                    // pass, so the driver stopped and relaunched the
+                    // controller forever and its Process row never left the
+                    // launch pass (vmCheck fixtures, 2026-09-11). Adoption
+                    // converges on the marker this daemon already holds; the
+                    // session fence owns validating it against the committed
+                    // Provider identity.
+                    if self.controller_bootstrap_present(&context.zone, context.resource_ref) {
+                        return Ok(ProviderAdoption::Adopted(report));
+                    }
                     let Some(daemon_endpoint) = self
                         .minijail
                         .port()

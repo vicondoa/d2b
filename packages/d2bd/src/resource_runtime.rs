@@ -4458,9 +4458,11 @@ impl ZoneResourceRuntime {
             &crate::process_provider_runtime::ProductionProcessProviders,
         >,
     ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
+        let plane = self.manager_plane_view();
         load_controller_policy_subjects(
             &self.zone,
             &self.store,
+            plane.as_deref(),
             providers,
             &self.controller_sessions,
         )
@@ -4638,7 +4640,18 @@ impl ZoneResourceRuntime {
                 let Ok(Some(view)) = client.get(key).await else {
                     continue;
                 };
-                overlay_manager_row_status(row, &view);
+                // `User` is served by the v3 plane (U12): the manager row is
+                // the authority for identity AND status. The compiled policy's
+                // subject bindings resolve the same manager-rendered row, so
+                // resolution must adopt its uid/generation with the live
+                // status - overlaying only the status onto the pre-v3 mirror
+                // bound a subject uid no binding could ever match and every
+                // public read was refused.
+                if let Ok(rendered) =
+                    d2b_resource_api::manager_backend::manager_row_stored(&view)
+                {
+                    *row = rendered;
+                }
             }
         }
         d2bd_runtime::resource_runtime_support::resolve_zone_user_from_rows(
@@ -9410,28 +9423,19 @@ impl ControllerSessionCoordinator {
             return Err(authentication_error("resource-peer-mismatch"));
         }
 
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "controller-process-bootstrap-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let provider_resource = committed_resource(
-            &self.zone,
-            &self.store,
-            store_metadata.current_revision,
-            context.provider_owner_ref(),
-        )
-        .await
-        .map_err(|_| authentication_error("provider-resource-load"))?;
-        let (_, provider_uid, provider_generation, _, _) = committed_provider_spec(
-            &self.zone,
-            store_metadata.current_revision,
-            &provider_resource,
-            context.provider_owner_ref(),
-        )
-        .map_err(|_| authentication_error("provider-resource-identity"))?;
+        // `Provider` is served by the v3 plane (U12): the committed identity
+        // is the manager-first bridged one - the same authority the session
+        // fence compares against. The durable pre-v3 mirror carries an
+        // unrelated uid and must never answer here.
+        let mut provider_identities = self
+            .committed_controller_provider_identities(BTreeSet::from([
+                context.provider_owner_ref().clone(),
+            ]))
+            .await
+            .map_err(|_| authentication_error("provider-resource-load"))?;
+        let (provider_uid, provider_generation) = provider_identities
+            .remove(context.provider_owner_ref())
+            .ok_or_else(|| authentication_error("provider-resource-identity"))?;
         if &provider_uid != context.provider_uid()
             || provider_generation != context.provider_generation()
         {
@@ -9653,9 +9657,11 @@ impl ControllerSessionCoordinator {
         )
         .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let plane = self.plane_handle();
         let provider_subjects = match load_controller_policy_subjects(
             &self.zone,
             &self.store,
+            plane.as_deref(),
             Some(providers),
             &self.controller_sessions,
         )
@@ -11430,6 +11436,7 @@ async fn load_committed_controller_provider_identities(
 async fn load_controller_policy_subjects(
     zone: &ZoneId,
     store: &RedbResourceStore,
+    plane: Option<&dyn ControllerPlaneView>,
     providers: Option<&crate::process_provider_runtime::ProductionProcessProviders>,
     controller_sessions: &Mutex<BTreeMap<ResourceRef, ControllerSession>>,
 ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
@@ -11456,20 +11463,21 @@ async fn load_controller_policy_subjects(
         .values()
         .map(|context| context.provider_owner_ref().clone())
         .collect::<BTreeSet<_>>();
-    let identities = load_committed_controller_provider_identities(
-        zone,
-        store,
-        provider_refs,
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(
-            zone = zone.as_str(),
-            error = ?error,
-            "controller policy subjects: committed Provider identities unavailable",
-        );
-        ResourceRuntimeError::PolicyUnavailable
-    })?;
+    // `Provider` is served by the v3 plane (U12): the committed identity is
+    // the manager-first bridged one, the same authority the session fence
+    // and the establishment path compare against. The durable pre-v3 mirror
+    // carries an unrelated uid and must never answer here.
+    let identities =
+        committed_controller_provider_identities_bridged(zone, store, plane, provider_refs)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = zone.as_str(),
+                    error = ?error,
+                    "controller policy subjects: committed Provider identities unavailable",
+                );
+                ResourceRuntimeError::PolicyUnavailable
+            })?;
     let mut subjects = BTreeSet::new();
     for context in contexts.values() {
         let Some((provider_uid, provider_generation)) =
@@ -11737,65 +11745,6 @@ pub(crate) fn controller_session_resource_fences(
                 .is_some_and(|resource| controller_resource_matches(context, resource))
         })
         .collect()
-}
-
-/// Overlay the manager's live status onto one durable `User` row.
-///
-/// A converted `User` row carries its status only in the manager (R11). The
-/// bundle-publication path still materializes every bundle row into the
-/// durable store with the create payload's `Pending` status, and nothing ever
-/// updates it, so identity resolution - which reads the durable envelope -
-/// must be handed the manager's live status for the row it is about to judge.
-///
-/// Identity is deliberately left alone: the durable row owns uid, generation
-/// and revision (KTD2/KTD8), and the compiled authorization policy's subjects
-/// are compiled from them. Only the phase and `observedGeneration` are
-/// replaced, and the stamped `observedGeneration` is the durable row's own
-/// generation: the resolved-user check compares the status against that field,
-/// while the manager's generation numbers a different view of the same row and
-/// is never substituted for it.
-fn overlay_manager_row_status(row: &mut StoredResource, view: &ResourceView) {
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&row.canonical_json) else {
-        return;
-    };
-    let Some(root) = value.as_object_mut() else {
-        return;
-    };
-    let phase = match view.observed_status() {
-        Some(d2b_resource_runtime::resource::ResourceStatus::Ready) => "Ready",
-        Some(d2b_resource_runtime::resource::ResourceStatus::Failed(_)) => "Failed",
-        // `ResourcePhase`'s closed vocabulary has no `Deleting`; a row whose
-        // deletion is requested reads as `Deleted` here, exactly as the
-        // shared-provider and interaction projections read it, so the
-        // overlaid envelope still decodes under the strict contract (the
-        // deletion mark itself stays in `metadata.deletionRequestedAt`).
-        Some(d2b_resource_runtime::resource::ResourceStatus::Deleting) => "Deleted",
-        _ => "Pending",
-    };
-    let status = root
-        .entry("status".to_owned())
-        .or_insert_with(|| serde_json::json!({}));
-    if let Some(status) = status.as_object_mut() {
-        status.insert(
-            "observedGeneration".to_owned(),
-            serde_json::json!(row.generation.get()),
-        );
-        status.insert("phase".to_owned(), serde_json::json!(phase));
-    }
-    let Ok(bytes) = serde_json::to_vec(&value) else {
-        return;
-    };
-    let Ok(canonical) = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&bytes) else {
-        return;
-    };
-    row.canonical_json = canonical.to_canonical_bytes();
-    // The row's identity and payload are validated against its digest by
-    // every reader that fences on the stored row (the policy loader refuses a
-    // row whose digest does not match), so the digest follows the edit.
-    row.payload_digest = d2b_contracts_resource::v3::resource_schema::canonical_digest(
-        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
-        &row.canonical_json,
-    );
 }
 
 fn controller_resource_matches(

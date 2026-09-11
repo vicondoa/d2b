@@ -531,7 +531,7 @@ fn decode_volume_spec(spec_bytes: &[u8]) -> Option<VolumeSpec> {
 
 /// Map the new store's 16-byte deterministic uid onto the contracts crate's
 /// UUIDv4-shaped `ResourceUid` (same mapping the converted drivers use).
-fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
+pub(crate) fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
     let mut bytes = *bytes;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -541,6 +541,40 @@ fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
         bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     );
     ResourceUid::parse(text).map_err(|_| ())
+}
+
+/// Re-resolve the provisional KTD7 seed from the plane's own store.
+///
+/// The manager is the `Provider` row's authority: a durable row already
+/// carries the identity and generation its spec history reached, which the
+/// pre-open seed (running before this store exists) cannot know. Rows this
+/// store does not hold keep their seeded identity - the ingest is about to
+/// create them exactly as seeded.
+fn corrected_committed_provider_identities(
+    store: &Arc<SpecStore>,
+    zone: &ZoneId,
+    seeded: &BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
+) -> BTreeMap<ResourceRef, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return seeded.clone();
+    };
+    let mut corrected = seeded.clone();
+    for provider_ref in seeded.keys() {
+        let key = ResourceKey::new(
+            zone.as_str(),
+            provider_ref.resource_type().as_str(),
+            provider_ref.name().as_str(),
+        );
+        let row = tokio::task::block_in_place(|| runtime.block_on(store.get(key)));
+        if let Ok(row) = row
+            && let Ok(uid) = resource_uid(&row.uid)
+            && let Ok(generation) =
+                d2b_contracts_resource::v3::ResourceGeneration::new(row.generation)
+        {
+            corrected.insert(provider_ref.clone(), (uid, generation));
+        }
+    }
+    corrected
 }
 
 /// The registry key for one volume uid: the canonical uid string.
@@ -1497,8 +1531,16 @@ impl ResourcePlaneV3 {
         // KTD7: publish the committed Provider identities before the manager
         // spawns any resource actor (restart recovery spawns one per durable
         // row), so a controller row's first reconcile never observes its
-        // owning Provider unbound.
-        for (provider_ref, (uid, generation)) in &inputs.committed_provider_identities {
+        // owning Provider unbound. The composition's seed binds the identity
+        // the manager allocates for the row the ingest is about to create; a
+        // row this store already holds (a restart, possibly after a spec
+        // change bumped its generation) answers with its own identity.
+        let committed_provider_identities = corrected_committed_provider_identities(
+            &store,
+            &inputs.zone,
+            &inputs.committed_provider_identities,
+        );
+        for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
                 .registry
                 .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
@@ -1862,18 +1904,79 @@ impl ResourcePlaneV3 {
             pass_through_count: plan.pass_through.len(),
             ..BundleIngestReport::default()
         };
-        for desired in &plan.apply {
-            self.client.apply(subject.clone(), desired.clone()).await?;
+        // Owners before owned. A bundle row that declares `metadata.ownerRef`
+        // is ensured as that owner's child, so the manager links ownership by
+        // uid the way R8 defines it: the Core `Provider` driver reads its
+        // owned controller `Process` rows through that link (an unlinked row
+        // leaves every Provider Pending forever - vmCheck fixtures,
+        // 2026-09-11) and the owner cascade follows it. Canonical
+        // `(type, name)` order puts `Process` before `Provider`, so rows
+        // whose owner is not committed yet are deferred one sweep; an owner
+        // that never appears keeps the pre-v3 top-level shape, where the
+        // authored reference still renders into the row's metadata.
+        let mut known: std::collections::HashSet<ResourceKey> = self
+            .store
+            .list(SpecSelector {
+                zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
+                owner_uid: None,
+            })
+            .await?
+            .into_iter()
+            .map(|row| row.key)
+            .collect();
+        let mut pending = plan.apply;
+        let mut applied = Vec::new();
+        while !pending.is_empty() {
+            let attempted = pending.len();
+            let mut deferred = Vec::new();
+            for desired in pending.drain(..) {
+                let owner = decode_metadata_owner_ref(&desired.metadata).map(|owner| {
+                    ResourceKey::new(
+                        self.zone.as_str(),
+                        owner.resource_type().as_str(),
+                        owner.name().as_str(),
+                    )
+                });
+                if let Some(owner) = owner.as_ref()
+                    && !known.contains(owner)
+                {
+                    deferred.push(desired);
+                    continue;
+                }
+                let key = desired.key.clone();
+                match owner {
+                    Some(owner) => {
+                        self.client
+                            .ensure(subject.clone(), Some(owner), desired)
+                            .await?;
+                    }
+                    None => {
+                        self.client.apply(subject.clone(), desired).await?;
+                    }
+                }
+                known.insert(key.clone());
+                applied.push(key);
+            }
+            if deferred.is_empty() {
+                break;
+            }
+            // A sweep that committed nothing can only be rows whose owner
+            // never appears in this plane: commit them top-level.
+            if deferred.len() == attempted {
+                for desired in deferred {
+                    applied.push(desired.key.clone());
+                    self.client.apply(subject.clone(), desired).await?;
+                }
+                break;
+            }
+            pending = deferred;
         }
         for key in &plan.remove {
             self.client.remove(subject.clone(), key.clone()).await?;
         }
-        report.applied = plan
-            .apply
-            .iter()
-            .map(|desired| desired.key.clone())
-            .collect();
-        report.removed = plan.remove.clone();
+        report.applied = applied;
+        report.removed = plan.remove;
         report.api_protected = plan.api_protected;
         // The production effects resolve per-resource anchors durably.
         self.registry
