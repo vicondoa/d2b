@@ -53,7 +53,7 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane,
 /// never by the pre-v3 durable store.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 16] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 22] = [
     "Process",
     "Volume",
     "VolumeBinding",
@@ -70,6 +70,12 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 16] = [
     "usb.d2bus.org.UsbBinding",
     "security-key.d2bus.org.SecurityKeyService",
     "security-key.d2bus.org.SecurityKeyBinding",
+    "display-wayland.d2bus.org.WaylandPolicy",
+    "display-wayland.d2bus.org.WaylandSession",
+    "audio.d2bus.org.AudioService",
+    "audio.d2bus.org.AudioBinding",
+    "shell-terminal.d2bus.org.ShellPool",
+    "shell-terminal.d2bus.org.ShellSession",
 ];
 
 /// Identity class used by typed validation errors.

@@ -16009,22 +16009,6 @@ async fn open_resource_plane(
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Err(error);
         }
-        if let Err(error) = runtime
-            .start_u9_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone(),
-                error = ?error,
-                "interaction and shell Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-            return Err(error);
-        }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
@@ -16038,7 +16022,7 @@ async fn open_resource_plane(
             tracing::error!(
                 zone = %runtime.zone(),
                 error = %error,
-                "interaction Provider readiness refused; retaining filtered U9 watches for diagnostics",
+                "interaction Provider readiness refused; interaction composition stays unavailable",
             );
         }
         // v3 resource plane (U9/U10): converted types (Process, Volume,

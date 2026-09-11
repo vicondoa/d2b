@@ -78,7 +78,7 @@ use d2b_core_controller::controller_assignment::{
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::{
     CORE_RESOURCE_CONTROLLER_REGISTRATIONS, ControllerIdentity, CoreControllerSource,
-    CoreResourceReconciler, Runner, RunnerConfig, RunnerError, SelectorField, SourceError,
+    CoreResourceReconciler, Runner, RunnerConfig, SelectorField, SourceError,
     core_controller_descriptors,
 };
 #[cfg(test)]
@@ -192,7 +192,7 @@ use serde_json::{Value, json};
 mod volume_effect_adapter;
 mod guest_provider_runtime;
 mod shared_provider_runtime;
-mod interaction_provider_runtime;
+pub(crate) mod interaction_effects;
 pub use guest_provider_runtime::{
     compose_shared_guest_runner_descriptors, SharedGuestRunnerRegistration,
     U6_SHARED_PROVIDER_RUNNERS,
@@ -201,23 +201,17 @@ pub use volume_effect_adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
 pub use shared_provider_runtime::compose_shared_provider_runner_descriptors;
-pub use interaction_provider_runtime::U9_SHARED_PROVIDER_RUNNERS;
+pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
 pub(crate) use shared_provider_runtime::{
     DaemonSharedProviderEffects, GuestRuntimeReconciler, SharedProviderEffectExecutor,
     SharedProviderResourceKind, SharedProviderResourceReconciler,
 };
-#[cfg(test)]
-pub(crate) use shared_provider_runtime::SharedProviderEffectPhase;
-use interaction_provider_runtime::U9_PROVIDER_REFS;
+use crate::interaction_driver::INTERACTION_PROVIDER_REFS;
 use shared_provider_runtime::UnavailableSharedProviderEffects;
-use interaction_provider_runtime::u9_runner_tasks_are_live;
-#[cfg(test)]
-use interaction_provider_runtime::abort_u9_runner_tasks;
 #[cfg(test)]
 use shared_provider_runtime::{
     FrameworkAcaControl, FrameworkAcaLease, FrameworkAcaState, FrameworkAzureCredential,
     FrameworkAzureEffect, FrameworkAzureState, FrameworkQemuEffect, GuestRuntimeController,
-    SharedProviderEffectContext, SharedProviderEffectError, SharedProviderEffectResult,
 };
 
 #[cfg(test)]
@@ -239,11 +233,7 @@ fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRu
     for resource_type in U6_SHARED_PROVIDER_RUNNERS
         .iter()
         .map(|registration| registration.resource_type)
-        .chain(
-            U9_SHARED_PROVIDER_RUNNERS
-                .iter()
-                .map(|registration| registration.resource_type),
-        )
+        .chain(crate::interaction_driver::INTERACTION_TYPES)
         .filter(|resource_type| resource_type.contains(".d2bus.org."))
     {
         resource_types.insert(
@@ -257,7 +247,7 @@ fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRu
 fn trusted_catalog_resource_types(
     resource_types: impl IntoIterator<Item = ResourceTypeName>,
 ) -> Result<Vec<ResourceTypeName>, ResourceRuntimeError> {
-    // Qualified API extensions come only from trusted U6-U9 runner declarations.
+    // Qualified API extensions come only from trusted U6 runner and U9 driver declarations.
     let trusted_provider_types = trusted_provider_resource_types()?
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -627,48 +617,6 @@ pub(crate) enum InteractionState {
     Absent,
     Ready,
     Refused,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ControllerRunnerFailure {
-    controller: ResourceRef,
-    resource_types: Vec<ResourceTypeName>,
-    error: RunnerError,
-}
-
-impl ControllerRunnerFailure {
-    fn new(
-        controller: ResourceRef,
-        resource_types: impl IntoIterator<Item = ResourceTypeName>,
-        error: RunnerError,
-    ) -> Self {
-        Self {
-            controller,
-            resource_types: resource_types.into_iter().collect(),
-            error,
-        }
-    }
-
-    pub(crate) fn controller(&self) -> &ResourceRef {
-        &self.controller
-    }
-
-    pub(crate) fn resource_types(&self) -> &[ResourceTypeName] {
-        &self.resource_types
-    }
-
-    pub(crate) const fn error(&self) -> RunnerError {
-        self.error
-    }
-}
-
-fn push_runner_failure(
-    slot: &Mutex<Vec<ControllerRunnerFailure>>,
-    failure: ControllerRunnerFailure,
-) {
-    if let Ok(mut slot) = slot.lock() {
-        slot.push(failure);
-    }
 }
 
 #[derive(Clone)]
@@ -2858,12 +2806,7 @@ pub struct ZoneResourceRuntime {
     u6_runner_lock: Arc<tokio::sync::Mutex<()>>,
     u6_state: Mutex<Option<Arc<crate::ServerState>>>,
     u6_required: AtomicBool,
-    u9_runner_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    u9_runner_lock: Arc<tokio::sync::Mutex<()>>,
-    u9_state: Mutex<Option<Arc<crate::ServerState>>>,
-    u9_required: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
-    u9_runner_failures: Arc<Mutex<Vec<ControllerRunnerFailure>>>,
     #[cfg(test)]
     core_runner_events: Arc<Mutex<Vec<&'static str>>>,
     core: Mutex<CoreProcess>,
@@ -3714,12 +3657,7 @@ impl ZoneResourceRuntime {
             u6_runner_lock: Arc::new(tokio::sync::Mutex::new(())),
             u6_state: Mutex::new(None),
             u6_required: AtomicBool::new(false),
-            u9_runner_tasks: Mutex::new(Vec::new()),
-            u9_runner_lock: Arc::new(tokio::sync::Mutex::new(())),
-            u9_state: Mutex::new(None),
-            u9_required: AtomicBool::new(false),
             credential_sessions: CredentialSessionRegistry::default(),
-            u9_runner_failures: Arc::new(Mutex::new(Vec::new())),
             #[cfg(test)]
             core_runner_events: Arc::new(Mutex::new(Vec::new())),
             core: Mutex::new(core),
@@ -4536,15 +4474,10 @@ impl ZoneResourceRuntime {
         } else {
             None
         };
-        let _u9_runner_guard = if rebind_core {
-            Some(self.u9_runner_lock.lock().await)
-        } else {
-            None
-        };
+
         if rebind_core {
             self.stop_core_controller_runners_locked().await?;
             self.stop_u6_controller_runners_locked().await?;
-            self.stop_u9_controller_runners_locked().await?;
         }
         self.install_policy_projection(policy, state.clone(), controller_subjects)?;
         if let Err(error) = self.refresh_system_core_session_locked(state.clone()).await {
@@ -4582,14 +4515,6 @@ impl ZoneResourceRuntime {
                 .clone();
             if let Some(state) = state {
                 self.start_u6_controller_runners_locked(state).await?;
-            }
-            let state = self
-                .u9_state
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .clone();
-            if let Some(state) = state {
-                self.start_u9_controller_runners_locked(state).await?;
             }
             self.system_core_rebind_pending
                 .store(false, Ordering::Release);
@@ -10079,29 +10004,6 @@ impl ZoneResourceRuntime {
         if matches!(self.interaction_state, InteractionState::Refused) {
             return Some(ResourceRuntimeError::InteractionConfigurationUnavailable);
         }
-        if self
-            .u9_runner_failures
-            .lock()
-            .map(|failures| !failures.is_empty())
-            .unwrap_or(true)
-        {
-            return Some(ResourceRuntimeError::HandlerNotReady);
-        }
-        // Guest runtime readiness is status-first: a live Runner task is only
-        // internal scheduling capacity. Guest controllers publish readiness
-        // after their authenticated session, VMM identity, and API socket
-        // have all been observed.
-        let u9_ready = if self.u9_required.load(Ordering::Acquire) {
-            self.u9_runner_tasks
-                .try_lock()
-                .map(|tasks| u9_runner_tasks_are_live(&tasks))
-                .unwrap_or(false)
-        } else {
-            true
-        };
-        if !u9_ready {
-            return Some(ResourceRuntimeError::HandlerNotReady);
-        }
         if !matches!(self.core_stage().ok(), Some(StartupStage::Ready)) {
             return Some(ResourceRuntimeError::HandlerNotReady);
         }
@@ -10771,7 +10673,6 @@ impl ZoneResourceRuntime {
             process_status_client,
             core_runner_tasks,
             u6_runner_tasks,
-            u9_runner_tasks,
             audio_runtime,
             controller_sessions,
             controller_session_reconcile_task,
@@ -10799,13 +10700,6 @@ impl ZoneResourceRuntime {
             .into_inner()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
         for task in u6_runner_tasks {
-            task.abort();
-            let _ = task.await;
-        }
-        let u9_runner_tasks = u9_runner_tasks
-            .into_inner()
-            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
-        for task in u9_runner_tasks {
             task.abort();
             let _ = task.await;
         }
@@ -10880,7 +10774,7 @@ impl ZoneResourceRuntime {
 }
 
 fn is_u9_provider_ref(value: &str) -> bool {
-    U9_PROVIDER_REFS.contains(&value)
+    INTERACTION_PROVIDER_REFS.contains(&value)
 }
 
 fn contains_u9_provider_ref(value: &Value) -> bool {
@@ -10905,7 +10799,7 @@ async fn interaction_resources_present(
 ) -> Result<bool, ResourceRuntimeError> {
     let provider_type =
         ResourceTypeName::parse("Provider").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let provider_names = U9_PROVIDER_REFS
+    let provider_names = INTERACTION_PROVIDER_REFS
         .iter()
         .map(|provider| {
             provider
@@ -14230,44 +14124,6 @@ mod tests {
         }
     }
 
-    struct RecordingSharedProviderEffects {
-        #[allow(dead_code)]
-        reconciles: AtomicUsize,
-        finalizes: AtomicUsize,
-        cleanup_ready: std::sync::atomic::AtomicBool,
-    }
-
-    #[async_trait]
-    impl SharedProviderEffectExecutor for RecordingSharedProviderEffects {
-
-        async fn reconcile_audio(
-            &self,
-            _kind: SharedProviderResourceKind,
-            _context: &SharedProviderEffectContext,
-            _resource: &ResourceSnapshot,
-            _dependencies: &[DependencySnapshot],
-        ) -> Result<SharedProviderEffectResult, SharedProviderEffectError> {
-            Ok(SharedProviderEffectResult {
-                phase: SharedProviderEffectPhase::Pending,
-                child_mutated: true,
-                resource_projection: None,
-            })
-        }
-
-        async fn finalize(
-            &self,
-            _kind: SharedProviderResourceKind,
-            _context: &SharedProviderEffectContext,
-            _resource: &ResourceSnapshot,
-        ) -> Result<(), SharedProviderEffectError> {
-            if !self.cleanup_ready.load(Ordering::SeqCst) {
-                return Err(SharedProviderEffectError::Unavailable);
-            }
-            self.finalizes.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
     fn shared_provider_test_descriptor_for(
         registration: SharedProviderRunnerRegistration,
     ) -> (
@@ -14449,8 +14305,16 @@ mod tests {
         for registration in U6_SHARED_PROVIDER_RUNNERS {
             check_shared_registration(registration);
         }
-        for registration in U9_SHARED_PROVIDER_RUNNERS {
-            check_shared_registration(registration);
+
+        // U12: the interaction/shell family is composed by the v3 plane's
+        // registered InteractionDriverFactory rather than shared Runner rows;
+        // every family ResourceType must route to the new plane.
+        for resource_type in crate::interaction_driver::INTERACTION_TYPES {
+            assert_eq!(
+                crate::resource_plane_v3::route_resource_type(resource_type),
+                crate::resource_plane_v3::PlaneRoute::NewPlane,
+                "the converted interaction type {resource_type} must route to the new plane",
+            );
         }
 
         // U12: the U8 shared host-provider family (Network; Device: tpm,
@@ -14515,9 +14379,6 @@ mod tests {
                 "runtime-azure-virtual-machine",
                 "volume-local",
                 "volume-virtiofs",
-                "display-wayland",
-                "audio-pipewire",
-                "shell-terminal",
                 "activation-nixos",
             ])
         );
@@ -14542,6 +14403,9 @@ mod tests {
             "device-security-key",
             "device-gpu",
             "system-core",
+            "display-wayland",
+            "audio-pipewire",
+            "shell-terminal",
         ];
         let session_only = ["clipboard-wayland", "notification-desktop"];
         let transport_only = ["transport-unix", "transport-vsock", "transport-azure-relay"];
@@ -14557,306 +14421,6 @@ mod tests {
         composed.extend(transport_only);
         composed.extend(new_plane_only);
         assert_eq!(composed, expected);
-    }
-
-    #[tokio::test]
-    async fn u9_repair_preserves_child_mutation_result() {
-        let registration = U9_SHARED_PROVIDER_RUNNERS[3];
-        let (_, descriptor) = shared_provider_test_descriptor_for(registration);
-        let effects = RecordingSharedProviderEffects {
-            reconciles: AtomicUsize::new(0),
-            finalizes: AtomicUsize::new(0),
-            cleanup_ready: std::sync::atomic::AtomicBool::new(true),
-        };
-        let resource =
-            shared_provider_test_resource_for(registration, &[registration.finalizer], false);
-        let context = SharedProviderEffectContext {
-            identity: descriptor.identity().clone(),
-            target: resource.key().clone(),
-            operation_id: "u9-repair-child-mutation".to_owned(),
-        };
-        let result = effects
-            .observe_result(
-                SharedProviderResourceKind::AudioBinding,
-                &context,
-                &resource,
-            )
-            .await
-            .expect("U9 repair result");
-        assert_eq!(result.phase, SharedProviderEffectPhase::Pending);
-        assert!(result.child_mutated);
-        assert!(result.resource_projection.is_none());
-    }
-
-    #[tokio::test]
-    async fn u9_runner_recovery_reaps_finished_sibling_before_respawn() {
-        let mut tasks = vec![
-            tokio::spawn(async {
-                std::future::pending::<()>().await;
-            }),
-            tokio::spawn(async {
-                panic!("finished U9 runner");
-            }),
-        ];
-        tokio::task::yield_now().await;
-        assert!(!u9_runner_tasks_are_live(&tasks));
-        abort_u9_runner_tasks(&mut tasks).await;
-        assert!(tasks.is_empty());
-
-        let mut replacement = vec![tokio::spawn(async {
-            std::future::pending::<()>().await;
-        })];
-        assert!(u9_runner_tasks_are_live(&replacement));
-        abort_u9_runner_tasks(&mut replacement).await;
-        assert!(replacement.is_empty());
-    }
-
-    #[tokio::test]
-    async fn production_audio_scheduled_observe_rereads_exact_dependencies() {
-        let zone = ZoneId::parse("work").unwrap();
-        let provider_ref = ResourceRef::parse("Provider/audio-pipewire").unwrap();
-        let service_ref =
-            ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").unwrap();
-        let guest_ref = ResourceRef::parse("Guest/audio-vm").unwrap();
-        let binding_ref =
-            ResourceRef::parse("audio.d2bus.org.AudioBinding/guest-audio").unwrap();
-        let bad_binding_ref =
-            ResourceRef::parse("audio.d2bus.org.AudioBinding/bad-audio").unwrap();
-        let missing_service_ref =
-            ResourceRef::parse("audio.d2bus.org.AudioService/missing").unwrap();
-        let service_spec =
-            d2b_provider_audio_pipewire::AudioServiceSpec::projection(zone.as_str()).unwrap();
-        let binding_spec = d2b_provider_audio_pipewire::AudioBindingSpec::new(
-            service_ref.clone(),
-            guest_ref.clone(),
-            zone.as_str(),
-        )
-        .unwrap();
-        let bad_binding_spec = d2b_provider_audio_pipewire::AudioBindingSpec::new(
-            missing_service_ref,
-            guest_ref.clone(),
-            zone.as_str(),
-        )
-        .unwrap();
-        let guest_spec = r#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"networkAttachments":[],"providerRef":"Provider/audio-pipewire","systemArtifactId":null,"volumeAttachmentDefaults":[]}"#;
-        let (_directory, state, plane, runtime, broker_evidence) =
-            prepare_production_audio_runner_fixture(vec![
-                bundle_resource(
-                    "Provider",
-                    "audio-pipewire",
-                    &zone,
-                    r#"{"artifactId":"audio-pipewire","config":{}}"#,
-                ),
-                bundle_resource("Guest", "audio-vm", &zone, guest_spec),
-                bundle_resource(
-                    "audio.d2bus.org.AudioService",
-                    "host-audio",
-                    &zone,
-                    &serde_json::to_string(&service_spec).unwrap(),
-                ),
-                bundle_resource(
-                    "audio.d2bus.org.AudioBinding",
-                    "guest-audio",
-                    &zone,
-                    &serde_json::to_string(&binding_spec).unwrap(),
-                ),
-                bundle_resource(
-                    "audio.d2bus.org.AudioBinding",
-                    "bad-audio",
-                    &zone,
-                    &serde_json::to_string(&bad_binding_spec).unwrap(),
-                ),
-            ])
-            .await;
-        mark_test_resource_ready(&runtime, &service_ref, &broker_evidence).await;
-        mark_test_resource_ready(&runtime, &guest_ref, &broker_evidence).await;
-
-        let provider = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "u9-audio-provider".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "u9-audio-provider".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: provider_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::MetadataOnly,
-            })
-            .await
-            .unwrap();
-        let binding = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "u9-audio-binding".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "u9-audio-binding".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: binding_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let bad_binding = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "u9-audio-bad-binding".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "u9-audio-bad-binding".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: bad_binding_ref,
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let snapshot = |stored: &StoredResource| {
-            ResourceSnapshot::new(
-                ResourceKey::new(
-                    stored.zone.clone(),
-                    stored.resource_ref.clone(),
-                    stored.uid.clone(),
-                ),
-                stored.revision,
-                stored.generation,
-                stored.canonical_json.clone(),
-                false,
-            )
-        };
-        let controller_ref =
-            ResourceRef::parse("Process/audio-pipewire-controller").unwrap();
-        let identity = ControllerIdentity::new(
-            zone.clone(),
-            controller_ref.clone(),
-            ControllerGeneration::new(1).unwrap(),
-            provider_ref,
-            provider.generation,
-            controller_ref,
-            ResourceRef::parse(CORE_CONTROLLER_HOST_REF).unwrap(),
-            None,
-        )
-        .unwrap();
-        let effects =
-            DaemonSharedProviderEffects::new(Arc::clone(&state), zone.clone());
-        let context = SharedProviderEffectContext {
-            identity: identity.clone(),
-            target: snapshot(&binding).key().clone(),
-            operation_id: "process-observe:u9-audio-binding".to_owned(),
-        };
-
-        let first = effects
-            .observe_result(
-                SharedProviderResourceKind::AudioBinding,
-                &context,
-                &snapshot(&binding),
-            )
-            .await
-            .expect("scheduled observe should read exact dependencies");
-        assert!(first.child_mutated);
-        assert!(first.resource_projection.is_none());
-
-        let stale_uid =
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
-        let stale_dependency = |stored: &StoredResource| {
-            DependencySnapshot::new(ResourceSnapshot::new(
-                ResourceKey::new(
-                    stored.zone.clone(),
-                    stored.resource_ref.clone(),
-                    stale_uid.clone(),
-                ),
-                stored.revision,
-                stored.generation,
-                stored.canonical_json.clone(),
-                false,
-            ))
-        };
-        let service = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "u9-audio-service".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "u9-audio-service".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: service_ref,
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let guest = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "u9-audio-guest".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "u9-audio-guest".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone,
-                target: guest_ref,
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let repaired = effects
-            .reconcile_audio(
-                SharedProviderResourceKind::AudioBinding,
-                &context,
-                &snapshot(&binding),
-                &[stale_dependency(&service), stale_dependency(&guest)],
-            )
-            .await
-            .expect("stale dependencies should be replaced by authoritative reads");
-        assert!(!repaired.child_mutated);
-        assert!(repaired.resource_projection.is_some());
-
-        let bad_context = SharedProviderEffectContext {
-            identity,
-            target: snapshot(&bad_binding).key().clone(),
-            operation_id: "process-observe:u9-bad-audio-binding".to_owned(),
-        };
-        assert_eq!(
-            effects
-                .observe_result(
-                    SharedProviderResourceKind::AudioBinding,
-                    &bad_context,
-                    &snapshot(&bad_binding),
-                )
-                .await,
-            Err(SharedProviderEffectError::InvalidResource)
-        );
-        let unaffected = effects
-            .observe_result(
-                SharedProviderResourceKind::AudioBinding,
-                &context,
-                &snapshot(&binding),
-            )
-            .await
-            .expect("one invalid binding must not stop its sibling");
-        assert!(!unaffected.child_mutated);
-        assert!(unaffected.resource_projection.is_some());
-
-        drop(effects);
-        drop(runtime);
-        close_production_guest_runtime_fixture(state, plane).await;
     }
 
     #[test]
@@ -14955,48 +14519,6 @@ mod tests {
             value["metadata"]["finalizers"],
             serde_json::json!([registration.finalizer])
         );
-    }
-
-    #[test]
-    fn u9_runner_enrolls_exact_finalizers_before_effects() {
-        for registration in U9_SHARED_PROVIDER_RUNNERS {
-            let (_, descriptor) = shared_provider_test_descriptor_for(registration);
-            let kind = SharedProviderResourceKind::from_registration(registration).unwrap();
-            let reconciler = SharedProviderResourceReconciler::new(
-                descriptor,
-                kind,
-                Arc::new(UnavailableSharedProviderEffects),
-            );
-            let result = reconciler
-                .first_pass_for_test(&shared_provider_test_resource_for(
-                    registration,
-                    &[],
-                    false,
-                ))
-                .expect("U9 first pass");
-            if registration.finalizer.is_empty() {
-                assert!(result.mutation_batch().is_none());
-                assert_eq!(result.disposition(), ReconcileDisposition::Pending);
-            } else {
-                let mutation = result
-                    .mutation_batch()
-                    .expect("U9 finalizer mutation")
-                    .mutations()
-                    .first()
-                    .expect("U9 finalizer");
-                assert_eq!(
-                    mutation.kind(),
-                    d2b_core_controller::MutationIntentKind::UpdateFinalizers
-                );
-                let value: Value =
-                    serde_json::from_slice(mutation.canonical_resource().unwrap())
-                        .expect("U9 finalizer candidate");
-                assert_eq!(
-                    value["metadata"]["finalizers"],
-                    serde_json::json!([registration.finalizer])
-                );
-            }
-        }
     }
 
     #[tokio::test]
@@ -20229,7 +19751,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn present_u9_provider_without_identity_refuses_readiness_but_keeps_watch() {
+    async fn present_interaction_provider_without_identity_refuses_readiness() {
         let (_directory, mut runtime, _broker_evidence) =
             open_production_guest_runtime_for_test().await;
         let zone = runtime.zone.clone();
@@ -20252,16 +19774,11 @@ mod tests {
         runtime
             .start_core_controller_runners()
             .await
-            .expect("Core runners must be live before U9 readiness");
+            .expect("Core runners must be live before interaction readiness");
+        // A present interaction Provider whose committed identity never
+        // resolved leaves the interaction composition refused: readiness is
+        // withheld rather than reported for a half-composed family.
         runtime.interaction_state = InteractionState::Refused;
-        let state = Arc::new(crate::detached_exec_routing_tests::test_state(
-            Default::default(),
-        ));
-        runtime
-            .start_u9_controller_runners(state)
-            .await
-            .expect("present U9 Provider keeps its filtered watch");
-        assert!(runtime.u9_required.load(Ordering::Acquire));
         runtime.set_provider_path_ready(true);
         assert_eq!(
             runtime.require_ready(),
@@ -20437,88 +19954,6 @@ mod tests {
         plane.insert(runtime).unwrap();
         let plane = crate::install_test_resource_plane(&state, plane);
         let runtime = plane.zone(&zone).unwrap();
-        (directory, state, plane, runtime, broker_evidence)
-    }
-
-    async fn prepare_production_audio_runner_fixture(
-        resources: Vec<BundleResource>,
-    ) -> (
-        tempfile::TempDir,
-        Arc<ServerState>,
-        Arc<ResourcePlane>,
-        Arc<ZoneResourceRuntime>,
-        Arc<BrokerEvidenceIndex>,
-    ) {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let zone = ZoneId::parse("work").unwrap();
-        let response_identity = "sha256:".to_owned() + &"a".repeat(64);
-        let identity = store_identity(&zone, &response_identity).unwrap();
-        let broker_evidence = Arc::new(BrokerEvidenceIndex::default());
-        let mut catalog_types = BTreeSet::new();
-        let catalog_resources = resources
-            .iter()
-            .filter(|resource| {
-                resource.resource_type().as_str().contains(".d2bus.org.")
-                    && catalog_types.insert(resource.resource_type().clone())
-            })
-            .cloned()
-            .collect();
-        let initial_bundle = ResourceBundle::new(
-            zone.clone(),
-            catalog_resources,
-            "sha256:".to_owned() + &"a".repeat(64),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
-        )
-        .unwrap()
-        .with_zone_uid(identity.zone_uid().clone());
-        let authority = ZoneAuthorityIdentity::from_bundle_and_storage(
-            &zone,
-            &initial_bundle,
-            &publication_storage_row(&zone, &identity),
-        )
-        .unwrap();
-        let runtime = ZoneResourceRuntime::open_internal(
-            zone,
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: response_identity,
-                    disposition: ZoneStoreDisposition::Provisioned,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-            None,
-            Arc::clone(&broker_evidence),
-            None,
-            true,
-            Some(initial_bundle),
-            Some(authority),
-        )
-        .await
-        .unwrap();
-        let state = Arc::new(crate::detached_exec_routing_tests::test_state(
-            Default::default(),
-        ));
-        let zone = runtime.zone.clone();
-        let mut plane = ResourcePlane::new();
-        plane.insert(runtime).unwrap();
-        let plane = crate::install_test_resource_plane(&state, plane);
-        let runtime = plane.zone(&zone).unwrap();
-        materialize_test_bundle(&runtime, resources).await;
         (directory, state, plane, runtime, broker_evidence)
     }
 

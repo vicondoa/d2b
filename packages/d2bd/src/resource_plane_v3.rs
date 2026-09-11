@@ -109,6 +109,11 @@ use crate::shared_provider_driver::{
 };
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
+use crate::interaction_driver::{
+    InteractionDriverArgs, InteractionDriverEffects, InteractionDriverFactory,
+    interaction_spec_decoder,
+};
+use crate::resource_runtime::ProductionInteractionDriverEffects;
 
 /// Frozen purpose of the binding-owned virtiofsd socket (old `VIRTIOFSD_PURPOSE`
 /// in `endpoint_driver.rs`).
@@ -125,7 +130,7 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 16] =
+pub const CONVERTED_TYPES: [&str; 22] =
     d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
@@ -1091,6 +1096,7 @@ pub struct ConstructionInputs {
     pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
+    pub interaction_effects: Arc<dyn InteractionDriverEffects>,
 }
 
 /// Production construction for one zone under `open_resource_plane`: reuse
@@ -1226,6 +1232,10 @@ impl ConstructionInputs {
                 Arc::clone(state),
                 zone.clone(),
                 controller_generation,
+            )),
+            interaction_effects: Arc::new(ProductionInteractionDriverEffects::new(
+                Arc::clone(state),
+                zone.clone(),
             )),
         })
     }
@@ -1369,6 +1379,11 @@ impl ResourcePlaneV3 {
             },
         )))?;
         providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
+        providers.register(Arc::new(InteractionDriverFactory::new(InteractionDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.interaction_effects),
+        })))?;
         Ok(providers)
     }
 
@@ -1408,6 +1423,12 @@ impl ResourcePlaneV3 {
             ResourceTypeName::new("User"),
             system_core_spec_decoder(),
         );
+        for resource_type in crate::interaction_driver::INTERACTION_TYPES {
+            decoders.insert(
+                ResourceTypeName::new(resource_type),
+                interaction_spec_decoder(),
+            );
+        }
         decoders
     }
 
@@ -1949,6 +1970,35 @@ mod tests {
         }
     }
 
+    struct FakeInteractionEffects;
+
+    #[async_trait::async_trait]
+    impl InteractionDriverEffects for FakeInteractionEffects {
+        async fn reconcile(
+            &self,
+            _kind: crate::interaction_driver::InteractionKind,
+            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+        ) -> Result<
+            crate::interaction_driver::InteractionEffectOutcome,
+            crate::interaction_driver::InteractionEffectError,
+        > {
+            Ok(crate::interaction_driver::InteractionEffectOutcome::phase(
+                crate::interaction_driver::InteractionEffectPhase::Pending,
+            ))
+        }
+
+        async fn finalize(
+            &self,
+            _kind: crate::interaction_driver::InteractionKind,
+            _request: &crate::interaction_driver::InteractionEffectRequest<'_>,
+        ) -> Result<
+            crate::interaction_driver::InteractionFinalize,
+            crate::interaction_driver::InteractionEffectError,
+        > {
+            Ok(crate::interaction_driver::InteractionFinalize::Complete)
+        }
+    }
+
     struct FakeSharedProviderEffects;
 
     #[async_trait::async_trait]
@@ -2057,6 +2107,7 @@ mod tests {
                 activation_effects: Arc::new(FakeActivationEffects),
                 credential_effects: Arc::new(FakeCredentialEffects),
                 shared_provider_effects: Arc::new(FakeSharedProviderEffects),
+                interaction_effects: Arc::new(FakeInteractionEffects),
             },
             readiness,
         )
@@ -2077,7 +2128,7 @@ mod tests {
                 "{unconverted} must stay on the old plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 16);
+        assert_eq!(CONVERTED_TYPES.len(), 22);
     }
 
     /// KTD7: the committed Provider identities the composition resolves are

@@ -1380,6 +1380,15 @@ mod tests {
             Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
         }
 
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            // Desired rows only: this fixture publishes no runtime status, so
+            // it serves no observed state.
+            Ok(None)
+        }
+
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log.lock().push(format!("delete:{}/{}", key.type_name, key.name));
             if let Some(row) = self.rows.lock().iter_mut().find(|row| row.key == *key) {
