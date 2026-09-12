@@ -113,6 +113,7 @@ exports_files([
     "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
     "docs/reference/host-prep-dag.md",
     "docs/reference/manifest-bundle.md",
+    "docs/reference/resource-runtime-failure-kinds.md",
     "docs/reference/schemas/v2/allocator.json",
     "docs/reference/schemas/v2/processes.json",
     "docs/reference/schemas/v2/privileges.json",

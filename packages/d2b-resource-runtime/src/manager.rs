@@ -188,7 +188,9 @@ impl ResourceView {
     /// Ready: comparing [`Self::status`] alone would let a stale `Ready` from
     /// generation N pass as readiness of generation N+1.
     pub fn observed_status(&self) -> Option<ResourceStatus> {
-        self.status.filter(|_| self.status_generation == Some(self.generation))
+        self.status
+            .clone()
+            .filter(|_| self.status_generation == Some(self.generation))
     }
 
     /// The `status.resource` layer published **for this exact row
@@ -222,6 +224,7 @@ impl ResourceView {
         let resource = match self.observed_status_projection() {
             Some(projection) => projection.clone(),
             None => status
+                .as_ref()
                 .and_then(ResourceStatus::wire_resource_layer)
                 .unwrap_or_else(|| serde_json::json!({})),
         };
@@ -231,7 +234,10 @@ impl ResourceView {
             "lastReconciledAt": serde_json::Value::Null,
             "observedGeneration": generation,
             "outcome": serde_json::Value::Null,
-            "phase": status.map(ResourceStatus::wire_phase).unwrap_or("Pending"),
+            "phase": status
+                .as_ref()
+                .map(ResourceStatus::wire_phase)
+                .unwrap_or("Pending"),
             "resource": resource,
             "startedAt": serde_json::Value::Null,
             "update": {
@@ -501,7 +507,7 @@ impl ResourceManagerState {
             spec: row.spec.clone(),
             metadata: row.metadata.clone(),
             owner_key: self.row_owner_key(key),
-            status: self.statuses.get(key).copied(),
+            status: self.statuses.get(key).cloned(),
             status_generation: self.status_generations.get(key).copied(),
             status_projection: self.status_projections.get(key).cloned(),
         })
@@ -1576,12 +1582,12 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::context::{ChildEnsure, WatchCondition, WatchSatisfied};
-    use crate::error::{DriverFailure, DriverOp};
+    use crate::error::{DriverFailure, DriverOp, FailureClass, FailureOutcome};
     use crate::error::ResourceError;
     use crate::identity::ResourceTypeName;
     use crate::resource::test_support::{
-        FakeFactory, desired, harness, harness_over, harness_over_with_factory, harness_targeted,
-        harness_with, key, subject, until, wait_row_gone, wait_status,
+        FakeFactory, desired, fake_not_yet_failure, harness, harness_over, harness_over_with_factory,
+        harness_targeted, harness_with, key, subject, until, wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -1676,7 +1682,10 @@ mod tests {
         wait_status(
             &h.client,
             &k,
-            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Recover)),
+            ResourceStatus::Failed(DriverFailure::not_yet(
+                DriverOp::Recover,
+                crate::error::FailureKinds::TARGET_UNAVAILABLE,
+            )),
         )
         .await;
         let assignment = targets.assignment(&k).expect("assignment survives the target loss");
@@ -2155,20 +2164,14 @@ mod tests {
         );
 
         // Each parent's pass ran its finalize and was refused with the
-        // retryable ChildrenDraining failure while the leaf row is live:
+        // structured `children-draining` NotYet while the leaf row is live:
         // no parent drain and no parent delete may run.
-        wait_status(
-            &h.client,
-            &parent,
-            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Delete)),
-        )
-        .await;
-        wait_status(
-            &h.client,
-            &grandparent,
-            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Delete)),
-        )
-        .await;
+        let draining = ResourceStatus::Failed(DriverFailure::not_yet(
+            DriverOp::Delete,
+            crate::error::FailureKinds::CHILDREN_DRAINING,
+        ));
+        wait_status(&h.client, &parent, draining.clone()).await;
+        wait_status(&h.client, &grandparent, draining).await;
         assert_eq!(
             parent_shared.delete_calls.load(AtomicOrdering::SeqCst),
             0,
@@ -2391,10 +2394,13 @@ mod tests {
         assert_eq!(ready["phase"], serde_json::json!("Ready"));
         assert_eq!(ready["resource"], projection);
 
-        // A failed row without a projection carries the closed
-        // classification in the free-form layer, never a top-level field.
+        // A failed row without a projection carries the structured failure
+        // in the free-form layer, never a top-level field. The layer is the
+        // failure's own wire projection verbatim (issue #508), so the status
+        // a test asserts equals the detail the operator log renders.
+        let failure = DriverFailure::retryable(DriverOp::Reconcile);
         let failed = view(
-            Some(ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile))),
+            Some(ResourceStatus::Failed(failure.clone())),
             Some(2),
             None,
         )
@@ -2402,10 +2408,12 @@ mod tests {
         assert_eq!(failed["phase"], serde_json::json!("Failed"));
         assert_eq!(
             failed["resource"],
-            serde_json::json!({
-                "driverFailure": { "operation": "Reconcile", "retryable": true },
-            })
+            serde_json::json!({ "driverFailure": failure.wire_layer() })
         );
+        assert_eq!(failed["resource"]["driverFailure"]["code"], "driver-not-yet");
+        assert_eq!(failed["resource"]["driverFailure"]["operation"], "Reconcile");
+        assert_eq!(failed["resource"]["driverFailure"]["retryable"], true);
+        assert_eq!(failed["resource"]["driverFailure"]["outcome"], "not-yet");
 
         // The deleting tombstone: the closed vocabulary has no `Deleting`.
         assert_eq!(
@@ -2833,6 +2841,63 @@ mod tests {
             2,
             "exactly one retry pass per backoff window"
         );
+    }
+
+    /// Issue #508: a driver's `NotYet` verdict is a defer - it publishes the
+    /// structured failure and schedules exactly one backoff requeue (never
+    /// terminal), and the published wire status is the failure's own
+    /// projection; the log line renders the same fields.
+    #[tokio::test]
+    async fn not_yet_failure_defers_with_a_requeue_and_publishes_its_structured_detail() {
+        let h = harness_with(&["Test"], Duration::from_millis(400)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::NotYetOnceWithDetail;
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"one"))
+            .await
+            .expect("ensure");
+        let expected = fake_not_yet_failure();
+        wait_status(&h.client, &k, ResourceStatus::Failed(expected.clone())).await;
+        assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 1);
+
+        let view = h.client.get(k.clone()).await.expect("get").expect("view");
+        let ResourceStatus::Failed(failure) =
+            view.observed_status().expect("a status is published for the row")
+        else {
+            panic!("the driver's failure must publish as Failed");
+        };
+        assert_eq!(failure.outcome(), FailureOutcome::NotYet);
+        assert!(failure.defers(), "a NotYet verdict must defer, never terminate");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        // The wire status is the failure's own projection; the operator log
+        // line carries the same structured fields.
+        assert_eq!(
+            view.wire_status()["resource"]["driverFailure"],
+            failure.wire_layer()
+        );
+        assert_eq!(view.wire_status()["phase"], "Failed");
+        let line = failure.log_line();
+        for field in [
+            failure.kind().code(),
+            failure.stage(),
+            "layout.phase",
+            "Pending",
+            "fake provider reports a pending layout",
+        ] {
+            assert!(line.contains(field), "log line misses {field:?}: {line}");
+        }
+
+        // Well inside the backoff window: the deferral must not re-enter the
+        // pass; the one requeue later delivers the converging pass.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "a NotYet deferral backs off before the next pass"
+        );
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 2);
     }
 
     /// R11/AE6: status transitions publish `RuntimeChanged` to the manager

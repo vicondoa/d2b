@@ -50,7 +50,10 @@ use d2b_resource_runtime::context::{
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use serde_json::{Value, json};
@@ -280,34 +283,45 @@ impl GuestDriverErrorKind {
         }
     }
 
-    const fn code(self) -> &'static str {
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
         match self {
-            Self::SpecInvalid => "guest-spec-invalid",
-            Self::ChildMutation => "guest-child-mutation",
-            Self::ProviderUnavailable => "guest-provider-unavailable",
-            Self::FinalizePending => "guest-finalize-pending",
+            Self::SpecInvalid => FailureKinds::GUEST_SPEC_INVALID,
+            Self::ChildMutation => FailureKinds::GUEST_CHILD_MUTATION,
+            Self::ProviderUnavailable => FailureKinds::GUEST_PROVIDER_UNAVAILABLE,
+            Self::FinalizePending => FailureKinds::GUEST_FINALIZE_PENDING,
         }
+    }
+
+    const fn code(self) -> &'static str {
+        self.failure_kind().code()
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct GuestDriverError {
     kind: GuestDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl GuestDriverError {
     const fn new(kind: GuestDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 
     /// Return the closed failure class this error is reported with.
-    pub(crate) const fn class(self) -> FailureClass {
+    pub(crate) const fn class(&self) -> FailureClass {
         self.kind.class()
     }
 
     /// Return the operation that failed.
-    pub(crate) const fn op(self) -> DriverOp {
+    pub(crate) const fn op(&self) -> DriverOp {
         self.op
     }
 }
@@ -498,6 +512,7 @@ impl GuestChildSurface for ContextChildSurface<'_> {
 pub(crate) fn view_phase(view: &d2b_resource_runtime::manager::ResourceView) -> &'static str {
     use d2b_resource_runtime::resource::ResourceStatus;
     view.observed_status()
+        .as_ref()
         .map(ResourceStatus::wire_phase)
         .unwrap_or("Pending")
 }
@@ -699,10 +714,27 @@ impl GuestDriver {
         op: DriverOp,
     ) -> Result<GuestKind, GuestDriverError> {
         if ctx.key().zone != self.zone.as_str() {
-            return Err(self.error(GuestDriverErrorKind::SpecInvalid, op));
+            return Err(self.error(GuestDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("kind/zone").comparison(FailureComparison::new(
+                    "resource.zone",
+                    self.zone.as_str(),
+                    ctx.key().zone.as_str(),
+                )),
+            ));
         }
         GuestKind::from_type_and_provider(&ctx.key().type_name, envelope.provider_ref())
-            .map_err(|_| self.error(GuestDriverErrorKind::SpecInvalid, op))
+            .map_err(|_| {
+                self.error(GuestDriverErrorKind::SpecInvalid, op).with_detail(
+                    FailureDetail::at("kind/provider").comparison(FailureComparison::new(
+                        "spec.providerRef",
+                        format!("a {} provider this family owns", ctx.key().type_name),
+                        envelope
+                            .provider_ref()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| "absent".to_owned()),
+                    )),
+                )
+            })
     }
 
     /// Register one internal dependency watch exactly once per target (R12).
@@ -752,13 +784,34 @@ impl GuestDriver {
         let provider_ref = ResourceRef::parse(kind.provider_ref())
             .map_err(|_| self.error(GuestDriverErrorKind::SpecInvalid, op))?;
         let key = self.child_key(&provider_ref);
-        match ctx.lookup(&key).await {
+        let lookup = ctx.lookup(&key).await;
+        match lookup {
             RowLookup::Present { row, .. } => serde_json::from_slice::<Value>(&row.spec)
                 .map(Some)
-                .map_err(|_| self.error(GuestDriverErrorKind::SpecInvalid, op)),
+                .map_err(|error| {
+                    self.error(GuestDriverErrorKind::SpecInvalid, op)
+                        .with_detail(
+                            FailureDetail::at("provider/decode")
+                                .comparison(FailureComparison::new(
+                                    "provider.row",
+                                    "a decodable spec",
+                                    "decode failed",
+                                ))
+                                .with_note(error.to_string()),
+                        )
+                }),
             RowLookup::Absent { .. } => Ok(None),
             RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
-                Err(self.error(GuestDriverErrorKind::ProviderUnavailable, op))
+                let mut detail = FailureDetail::at("provider/lookup");
+                if let Some(comparison) = lookup.failure_comparison("provider.row", "present") {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                Err(self
+                    .error(GuestDriverErrorKind::ProviderUnavailable, op)
+                    .with_detail(detail))
             }
         }
     }
@@ -833,12 +886,10 @@ impl GuestDriver {
             GuestEffectError::InvalidResource => {
                 self.error(GuestDriverErrorKind::SpecInvalid, op)
             }
-            GuestEffectError::Pending => {
-                self.error(GuestDriverErrorKind::FinalizePending, op)
-            }
-            GuestEffectError::Unavailable => {
-                self.error(GuestDriverErrorKind::ProviderUnavailable, op)
-            }
+            GuestEffectError::Pending => self.error(GuestDriverErrorKind::FinalizePending, op),
+            GuestEffectError::Unavailable => self
+                .error(GuestDriverErrorKind::ProviderUnavailable, op)
+                .with_detail(FailureDetail::at("effect/provider").with_note(error.to_string())),
         }
     }
 
@@ -879,10 +930,18 @@ impl ResourceDriver for GuestDriver {
     type Error = GuestDriverError;
 
     fn classify_error(&self, error: &GuestDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            GuestDriverErrorKind::SpecInvalid => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            GuestDriverErrorKind::FinalizePending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            GuestDriverErrorKind::ChildMutation | GuestDriverErrorKind::ProviderUnavailable => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Structural validation (old `validate_spec`): the stored spec decodes
@@ -2324,9 +2383,9 @@ mod tests {
             Some(ResourceStatus::Deleting),
         ];
         for deleting in [false, true] {
-            for status in statuses {
+            for status in &statuses {
                 for status_generation in [None, Some(1), Some(2), Some(3)] {
-                    let view = phase_view(status, status_generation, deleting);
+                    let view = phase_view(status.clone(), status_generation, deleting);
                     let canonical = view.wire_status()["phase"]
                         .as_str()
                         .expect("the canonical status always carries a phase")

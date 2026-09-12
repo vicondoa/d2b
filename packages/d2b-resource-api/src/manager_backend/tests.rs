@@ -945,6 +945,91 @@ fn every_converted_type_projects_a_strict_wire_view() {
     }
 }
 
+/// The other half of the issue #507 fence contract: the manager plane is the
+/// converted type's authority. For every type in the registry the manager
+/// path serves the committed row, and the only refusal shape it can render is
+/// the manager's own honest absence - never the legacy `WrongPlane` plane
+/// error (the fence lives on the legacy facade, not on the authority).
+#[tokio::test]
+async fn every_converted_type_is_served_by_the_manager_path() {
+    use crate::ResourceStoreBackend;
+    use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
+    use d2b_resource_store::{StoreGetRequest, StoreOperationContext, StoreProjection};
+
+    let fixture = manager_fixture().await;
+    let authorizer = authorizer(&[ResourceVerb::Get]);
+    let acceptor = authorizer
+        .take_store_seal(seal_identity())
+        .expect("authorizer hands the manager plane its seal acceptor");
+    let backend = crate::manager_backend::ManagerBackend::new(
+        fixture.client.clone(),
+        fixture.hub.clone(),
+        acceptor,
+    );
+
+    for resource_type in V3_CONVERTED_RESOURCE_TYPES {
+        let name = "fence-row";
+        // The fixture registers a driver factory for `Host` only: every other
+        // type still commits its row (the manager documents the row staying
+        // durable when the post-commit spawn finds no factory), which is
+        // exactly the row the authority must serve.
+        let _ = fixture
+            .client
+            .ensure(
+                d2b_resource_runtime::manager::MutationSubject {
+                    principal: "nix:test-bundle".to_owned(),
+                    origin: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+                None,
+                d2b_resource_runtime::manager::DesiredResource {
+                    key: d2b_resource_runtime::spec_store::ResourceKey::new(
+                        TEST_ZONE,
+                        resource_type,
+                        name,
+                    ),
+                    spec: serde_json::to_vec(&serde_json::json!({
+                        "providerRef": "Provider/contract-fixture",
+                    }))
+                    .unwrap(),
+                    metadata: serde_json::to_vec(&serde_json::json!({
+                        "ownerRef": null,
+                        "labels": {},
+                        "annotations": {},
+                    }))
+                    .unwrap(),
+                    provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+            )
+            .await;
+
+        let request = StoreGetRequest {
+            operation: StoreOperationContext {
+                operation_id: "manager-fence-table".to_owned(),
+                idempotency_key: None,
+                correlation_id: "manager-fence-table".to_owned(),
+                trace_id: None,
+                deadline_ms: 10_000,
+            },
+            zone: ZoneId::parse(TEST_ZONE).unwrap(),
+            target: ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
+            expected_uid: None,
+            projection: StoreProjection::Full,
+        };
+        let row = backend.get(request).await.unwrap_or_else(|error| {
+            panic!(
+                "{resource_type}: the manager path refused a converted type: {error:?}"
+            )
+        });
+        assert_eq!(
+            row.resource_ref.resource_type().as_str(),
+            resource_type,
+            "{resource_type}: the manager serves the row it holds"
+        );
+    }
+
+    fixture.manager_actor.get_cell().stop(None);
+}
+
 /// The converted types whose contracts pin a typed `status.resource` layer
 /// decode the served layer through exactly that `deny-unknown-fields`
 /// decoder: the projection cannot wrap, rename, or nest what the type's

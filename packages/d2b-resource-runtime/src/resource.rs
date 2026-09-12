@@ -60,7 +60,7 @@ pub const DEFAULT_REQUEUE_BACKOFF: Duration = Duration::from_millis(200);
 /// In-memory resource status (R11, spec section 19). Closed: the manager's
 /// runtime view and the watch hub see this classification and nothing else.
 /// Never persisted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceStatus {
     /// Actor started, no recovery yet.
     Pending,
@@ -85,7 +85,7 @@ impl ResourceStatus {
     /// reader that renders a manager row's phase (the API's canonical wire
     /// view, the daemon's effect gates) reads it here instead of re-deriving
     /// it per call site.
-    pub const fn wire_phase(self) -> &'static str {
+    pub const fn wire_phase(&self) -> &'static str {
         match self {
             // No recovery effect has converged: the honest "nothing to
             // report yet" phase of the closed vocabulary.
@@ -99,18 +99,18 @@ impl ResourceStatus {
         }
     }
 
-    /// The closed failure classification rendered into the free-form
+    /// The structured failure classification rendered into the free-form
     /// `status.resource` layer, for a row whose driver published no
     /// projection of its own: the universal status object is closed to
     /// unknown fields, so a failure classification rides the type's own
     /// layer. `None` for every non-failed classification.
-    pub fn wire_resource_layer(self) -> Option<serde_json::Value> {
+    ///
+    /// The layer is [`DriverFailure::wire_layer`] verbatim: the same
+    /// structured detail the operator log line renders (issue #508).
+    pub fn wire_resource_layer(&self) -> Option<serde_json::Value> {
         match self {
             Self::Failed(failure) => Some(serde_json::json!({
-                "driverFailure": {
-                    "operation": format!("{:?}", failure.op()),
-                    "retryable": failure.class() == crate::error::FailureClass::Retryable,
-                },
+                "driverFailure": failure.wire_layer(),
             })),
             _ => None,
         }
@@ -342,7 +342,7 @@ impl ResourceActorState {
         let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
             key: self.row.key.clone(),
             generation: self.row.generation,
-            status,
+            status: self.status.clone(),
             projection,
         });
     }
@@ -371,10 +371,32 @@ impl ResourceActorState {
         self.pending_requeue = Some(id);
     }
 
-    /// Handle a driver failure with the actor's retry policy (R13).
+    /// Handle a driver failure with the actor's retry policy (R13, issue
+    /// #508): the structured failure publishes into status, the operator log
+    /// line prints the same detail, and the actor defers with a requeue for
+    /// every `NotYet` verdict and every retryable `Error`.
     fn handle_driver_failure(&mut self, failure: DriverFailure) {
+        let report = failure.report();
+        tracing::warn!(
+            zone = %self.row.key.zone,
+            resource_type = %self.row.key.type_name,
+            name = %self.row.key.name,
+            operation = report.operation().as_str(),
+            stage = report.stage(),
+            outcome = report.outcome().as_str(),
+            kind = report.code(),
+            retryable = report.retryable(),
+            "{}",
+            failure.log_line(),
+        );
+        let defer = failure.defers();
+        debug_assert!(
+            !matches!(failure.verdict(), crate::error::DriverVerdict::NotYet { .. })
+                || failure.class() == crate::error::FailureClass::Retryable,
+            "a NotYet verdict is never terminal"
+        );
         self.transition(ResourceStatus::Failed(failure));
-        if failure.class() == crate::error::FailureClass::Retryable {
+        if defer {
             self.schedule_requeue();
         }
     }
@@ -495,7 +517,7 @@ impl ResourceActorState {
                 // the status it rides stays the pass's `Reconciling`. Only
                 // invalidation (a spec change or deletion) clears it.
                 if let Some(projection) = self.ctx.take_status_projection() {
-                    self.transition_published(self.status, Some(projection));
+                    self.transition_published(self.status.clone(), Some(projection));
                 }
                 self.pending_operation = Some(operation);
             }
@@ -708,10 +730,13 @@ impl Actor for ResourceActor {
             }
             ResourceMsg::TargetUnavailable { .. } => {
                 // Target failure is not Zone failure (R21): only the
-                // target-dependent observed state changes.
+                // target-dependent observed state changes. The structured
+                // failure is a `NotYet` - no requeue is scheduled here
+                // because the target's own reconnect drives the retry.
                 if !state.deleting {
-                    state.transition(ResourceStatus::Failed(crate::error::DriverFailure::retryable(
+                    state.transition(ResourceStatus::Failed(crate::error::DriverFailure::not_yet(
                         crate::error::DriverOp::Recover,
+                        crate::error::FailureKinds::TARGET_UNAVAILABLE,
                     )));
                 }
                 Ok(())
@@ -768,10 +793,29 @@ pub(crate) mod test_support {
     use crate::identity::{ResourceKey, ResourceTypeName};
 
     /// Scripted driver error; classification is always retryable (the actor
-    /// owns the retry decision).
+    /// owns the retry decision), except the `NotYet` scripted deferral, which
+    /// carries the structured detail of issue #508.
     #[derive(Debug, thiserror::Error)]
-    #[error("fake driver failure")]
-    pub(crate) struct FakeDriverError;
+    pub(crate) enum FakeDriverError {
+        #[error("fake driver failure")]
+        Failed,
+        #[error("fake driver deferral")]
+        NotYet,
+    }
+
+    /// The structured `NotYet` the fake driver reports in
+    /// [`ReconcileMode::NotYetOnceWithDetail`]. The actor test asserts the
+    /// published status and the log line against this exact value.
+    pub(crate) fn fake_not_yet_failure() -> DriverFailure {
+        DriverFailure::not_yet(DriverOp::Reconcile, crate::error::FailureKinds::VOLUME_LAYOUT_NOT_READY)
+            .at("reconcile/layout")
+            .with_comparison(crate::error::FailureComparison::new(
+                "layout.phase",
+                "Ready",
+                "Pending",
+            ))
+            .with_note("fake provider reports a pending layout")
+    }
 
     /// How the fake driver's `reconcile` behaves.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -791,6 +835,12 @@ pub(crate) mod test_support {
         PanicOnce,
         /// Fail retryably (requeue path, R13).
         FailRetryable,
+        /// Fail once with the structured `NotYet` deferral
+        /// ([`fake_not_yet_failure`]), then satisfy: proves the driver
+        /// default on `NotYet` is defer-with-requeue and that the published
+        /// status and the log line are projections of the same structured
+        /// detail (issue #508).
+        NotYetOnceWithDetail,
         /// First pass spawns a long effect that completes with a retryable
         /// failure; every later pass is satisfied. Proves the effect-failure
         /// path backs off through the requeue timer instead of re-entering
@@ -906,8 +956,11 @@ pub(crate) mod test_support {
     impl ResourceDriver for FakeDriver {
         type Error = FakeDriverError;
 
-        fn classify_error(&self, _error: &Self::Error) -> DriverFailure {
-            DriverFailure::retryable(DriverOp::Reconcile)
+        fn classify_error(&self, error: &Self::Error) -> DriverFailure {
+            match error {
+                FakeDriverError::Failed => DriverFailure::retryable(DriverOp::Reconcile),
+                FakeDriverError::NotYet => fake_not_yet_failure(),
+            }
         }
 
         async fn validate(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
@@ -960,7 +1013,15 @@ pub(crate) mod test_support {
                     *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
                     panic!("fake reconcile crash");
                 }
-                ReconcileMode::FailRetryable => Err(FakeDriverError),
+                ReconcileMode::FailRetryable => Err(FakeDriverError::Failed),
+                ReconcileMode::NotYetOnceWithDetail => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
+                        // The requeued pass converges.
+                        *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
+                        return Ok(ReconcileOutcome::Satisfied);
+                    }
+                    Err(FakeDriverError::NotYet)
+                }
                 ReconcileMode::EffectFailsRetryableOnce => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
                         // The requeued pass converges.
@@ -1309,7 +1370,7 @@ pub(crate) mod test_support {
     ) {
         for _ in 0..500 {
             if let Ok(Some(view)) = client.get(key.clone()).await {
-                if view.status == Some(status) {
+                if view.status.as_ref() == Some(&status) {
                     return;
                 }
             }

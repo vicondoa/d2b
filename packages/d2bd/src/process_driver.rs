@@ -54,14 +54,20 @@ use d2b_contracts_resource::v3::{
         RestartClass, RestartPolicySpec,
     },
 };
-use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, ProcessIdentityDigest};
+use d2b_process_conformance::{
+    AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, ProcessIdentityDigest,
+    ProcessStatusReport,
+};
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2bd_runtime::target_runtime::DaemonMode;
 
@@ -117,6 +123,14 @@ enum ProcessDriverErrorKind {
     ExecutionUnsupported,
     /// The trusted bundle did not contain the requested template binding.
     TemplateUnavailable,
+    /// The trusted bundle refused to resolve the launch ticket before any
+    /// launch or observation (no matching intent, wrong target/scope/
+    /// descriptor posture). Distinct from an ambiguous identity (R15 is about
+    /// observed identity) and from a missing template binding.
+    ResolutionRefused,
+    /// The row is a Guest-owned one-shot outside the guest VMM chain: no
+    /// host-minted ticket can ever describe it.
+    GuestProcessNotVmm,
     /// A process identity was ambiguous; quarantine per policy (R15).
     IdentityAmbiguous,
     /// A Provider effect failed transiently.
@@ -136,23 +150,49 @@ impl ProcessDriverErrorKind {
             | Self::ProviderUnsupported
             | Self::ExecutionUnsupported
             | Self::TemplateUnavailable
+            | Self::ResolutionRefused
+            | Self::GuestProcessNotVmm
             | Self::IdentityAmbiguous
             | Self::StartExhausted => FailureClass::Terminal,
         }
     }
+
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::PROCESS_SPEC_INVALID,
+            Self::IdentityIncomplete => FailureKinds::PROCESS_IDENTITY_INCOMPLETE,
+            Self::ProviderUnsupported => FailureKinds::PROCESS_PROVIDER_UNSUPPORTED,
+            Self::ExecutionUnsupported => FailureKinds::PROCESS_EXECUTION_UNSUPPORTED,
+            Self::TemplateUnavailable => FailureKinds::PROCESS_TEMPLATE_UNAVAILABLE,
+            Self::ResolutionRefused => FailureKinds::PROCESS_RESOLUTION_REFUSED,
+            Self::GuestProcessNotVmm => FailureKinds::PROCESS_GUEST_PROCESS_NOT_VMM,
+            Self::IdentityAmbiguous => FailureKinds::PROCESS_IDENTITY_AMBIGUOUS,
+            Self::ProviderEffect => FailureKinds::PROCESS_PROVIDER_EFFECT_FAILED,
+            Self::StartExhausted => FailureKinds::PROCESS_START_BUDGET_EXHAUSTED,
+            Self::DrainPending => FailureKinds::PROCESS_DRAIN_PENDING,
+        }
+    }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessDriverError {
     kind: ProcessDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl ProcessDriverError {
     fn new(kind: ProcessDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
@@ -164,6 +204,8 @@ impl core::fmt::Display for ProcessDriverError {
             ProcessDriverErrorKind::ProviderUnsupported => "process-provider-unsupported",
             ProcessDriverErrorKind::ExecutionUnsupported => "process-execution-unsupported",
             ProcessDriverErrorKind::TemplateUnavailable => "process-template-unavailable",
+            ProcessDriverErrorKind::ResolutionRefused => "process-resolution-refused",
+            ProcessDriverErrorKind::GuestProcessNotVmm => "process-guest-process-not-vmm",
             ProcessDriverErrorKind::IdentityAmbiguous => "process-identity-ambiguous",
             ProcessDriverErrorKind::ProviderEffect => "process-provider-effect-failed",
             ProcessDriverErrorKind::StartExhausted => "process-start-budget-exhausted",
@@ -1062,6 +1104,34 @@ impl ProcessDriver {
         ProcessDriverError::new(kind, op)
     }
 
+    /// The terminal quarantine failure for one ambiguous adoption report
+    /// (issue #508): the observed adoption condition and phase name what was
+    /// ambiguous instead of a bare code.
+    fn identity_ambiguous(&self, op: DriverOp, report: &ProcessStatusReport) -> ProcessDriverError {
+        self.error(ProcessDriverErrorKind::IdentityAmbiguous, op).with_detail(
+            FailureDetail::at("adopt/identity").comparison(FailureComparison::new(
+                "observed.adoption",
+                "exactly one matching identity",
+                format!("{:?} ({:?})", report.adoption, report.phase),
+            )),
+        )
+    }
+
+    /// The terminal failure for one row identity field that does not parse
+    /// (issue #508): the field and the parse error are the diagnosis.
+    fn identity_field_invalid(
+        &self,
+        op: DriverOp,
+        field: &'static str,
+        detail: String,
+    ) -> ProcessDriverError {
+        self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+            FailureDetail::at("identity/field")
+                .comparison(FailureComparison::new(field, "a valid contract value", "invalid"))
+                .with_note(detail),
+        )
+    }
+
     /// Decode the stored envelope and the typed family spec in one step. The
     /// row's own type name selects the contract (`Process` or
     /// `EphemeralProcess`); both are served by this factory.
@@ -1070,17 +1140,39 @@ impl ProcessDriver {
         ctx: &ResourceContext,
         op: DriverOp,
     ) -> Result<(ProcessSpecEnvelope, ProcessFamilySpec), ProcessDriverError> {
-        let envelope = ctx
-            .spec::<ProcessSpecEnvelope>()
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+        let envelope = ctx.spec::<ProcessSpecEnvelope>().map_err(|error| {
+            self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/decode").with_note(error.to_string()),
+            )
+        })?;
         let base = envelope.base.to_canonical_bytes();
         let spec = match ctx.key().type_name.as_str() {
             EPHEMERAL_PROCESS_TYPE_NAME => serde_json::from_slice::<EphemeralProcessSpec>(&base)
                 .map(ProcessFamilySpec::Ephemeral)
-                .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?,
-            _ => serde_json::from_slice::<ProcessSpec>(&base)
+                .map_err(|error| {
+                    self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                        FailureDetail::at("spec/decode")
+                            .comparison(FailureComparison::new(
+                                "spec.contract",
+                                EPHEMERAL_PROCESS_TYPE_NAME,
+                                "decode failed",
+                            ))
+                            .with_note(error.to_string()),
+                    )
+                })?,
+            other => serde_json::from_slice::<ProcessSpec>(&base)
                 .map(ProcessFamilySpec::Process)
-                .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?,
+                .map_err(|error| {
+                    self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                        FailureDetail::at("spec/decode")
+                            .comparison(FailureComparison::new(
+                                "spec.contract",
+                                other,
+                                "decode failed",
+                            ))
+                            .with_note(error.to_string()),
+                    )
+                })?,
         };
         Ok((envelope.clone(), spec))
     }
@@ -1092,17 +1184,36 @@ impl ProcessDriver {
         envelope: &ProcessSpecEnvelope,
         op: DriverOp,
     ) -> Result<(), ProcessDriverError> {
+        let expected = format!("Provider/{MINIJAIL_PROVIDER} or Provider/{SYSTEMD_PROVIDER}");
         let Some(provider_ref) = envelope.provider_ref.as_ref() else {
-            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op));
+            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
+                    "spec.providerRef",
+                    expected,
+                    "absent",
+                )),
+            ));
         };
         if provider_ref.resource_type().as_str() != "Provider" {
-            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op));
+            return Err(self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
+                    "spec.providerRef",
+                    expected,
+                    provider_ref.to_canonical_string(),
+                )),
+            ));
         }
         if !matches!(
             provider_ref.name().as_str(),
             MINIJAIL_PROVIDER | SYSTEMD_PROVIDER
         ) {
-            return Err(self.error(ProcessDriverErrorKind::ProviderUnsupported, op));
+            return Err(self.error(ProcessDriverErrorKind::ProviderUnsupported, op).with_detail(
+                FailureDetail::at("spec/provider").comparison(FailureComparison::new(
+                    "spec.providerRef",
+                    expected,
+                    provider_ref.to_canonical_string(),
+                )),
+            ));
         }
         Ok(())
     }
@@ -1123,16 +1234,18 @@ impl ProcessDriver {
     ) -> Result<ProcessResourceIdentity, ProcessDriverError> {
         let key = ctx.key();
         let resource_label = format!("{}/{}", key.type_name, key.name);
-        let resource_type = ContractResourceTypeName::parse(&key.type_name)
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+        let resource_type = ContractResourceTypeName::parse(&key.type_name).map_err(|error| {
+            self.identity_field_invalid(op, "resource.typeName", error.to_string())
+        })?;
         let name = ResourceName::parse(&key.name)
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+            .map_err(|error| self.identity_field_invalid(op, "resource.name", error.to_string()))?;
         let zone = ZoneId::parse(&key.zone)
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+            .map_err(|error| self.identity_field_invalid(op, "resource.zone", error.to_string()))?;
         let resource_uid = resource_uid_from_bytes(ctx.uid())
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
-        let resource_generation = ResourceGeneration::new(ctx.generation())
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+            .map_err(|_| self.identity_field_invalid(op, "resource.uid", "not a uid".to_owned()))?;
+        let resource_generation = ResourceGeneration::new(ctx.generation()).map_err(|_| {
+            self.identity_field_invalid(op, "resource.generation", ctx.generation().to_string())
+        })?;
         // The row's process class rides the identity: the production effects
         // bind the committed controller-provider identity for controller rows
         // and have no spec to consult when they finalize (KTD7).
@@ -1192,7 +1305,14 @@ impl ProcessDriver {
                 identity_error = error.code(),
                 "process launch identity incomplete"
             );
-            self.error(ProcessDriverErrorKind::IdentityIncomplete, op)
+            self.error(ProcessDriverErrorKind::IdentityIncomplete, op).with_detail(
+                FailureDetail::at("identity/resolve").comparison(FailureComparison::new(
+                    "launch.identity",
+                    "complete",
+                    "incomplete",
+                ))
+                .with_note(error.code()),
+            )
         })?;
         Ok(ProcessResourceIdentity {
             zone,
@@ -1345,10 +1465,35 @@ impl ProcessDriver {
                     );
                     if budget.allows(&task_spec) {
                         budget.record_restart();
-                        EffectResult::Failed(DriverFailure::retryable(DriverOp::Reconcile))
+                        EffectResult::Failed(
+                            DriverFailure::error(
+                                DriverOp::Reconcile,
+                                FailureKinds::PROCESS_PROVIDER_EFFECT_FAILED,
+                                FailureClass::Retryable,
+                            )
+                            .at("reconcile/launch")
+                            .with_comparison(FailureComparison::new(
+                                "launch.attempt",
+                                "accepted",
+                                "failed",
+                            ))
+                            .with_note(error),
+                        )
                     } else {
                         budget.mark_exhausted();
-                        EffectResult::Failed(DriverFailure::terminal(DriverOp::Reconcile))
+                        EffectResult::Failed(
+                            DriverFailure::refused(
+                                DriverOp::Reconcile,
+                                FailureKinds::PROCESS_START_BUDGET_EXHAUSTED,
+                            )
+                            .at("reconcile/launch")
+                            .with_comparison(FailureComparison::new(
+                                "restart.budget",
+                                "restarts available",
+                                "exhausted",
+                            ))
+                            .with_note(error),
+                        )
                     }
                 }
             };
@@ -1447,10 +1592,9 @@ impl ProcessDriver {
                 ctx.set_status(ProcessDriverStatus::Launching);
                 self.spawn_launch(ctx, identity, spec)
             }
-            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                ProcessDriverErrorKind::IdentityAmbiguous,
-                DriverOp::Reconcile,
-            )),
+            Ok(ProviderAdoption::Quarantined(report)) => {
+                Err(self.identity_ambiguous(DriverOp::Reconcile, &report))
+            }
             Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
         }
     }
@@ -1552,10 +1696,9 @@ impl ProcessDriver {
                 ctx.set_status(ProcessDriverStatus::Launching);
                 self.spawn_ephemeral_launch(ctx, identity, spec)
             }
-            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                ProcessDriverErrorKind::IdentityAmbiguous,
-                DriverOp::Reconcile,
-            )),
+            Ok(ProviderAdoption::Quarantined(report)) => {
+                Err(self.identity_ambiguous(DriverOp::Reconcile, &report))
+            }
             // A one-shot ticket carries no controller bootstrap endpoint, so
             // this classification is the old `start_record_plan` refusal
             // (terminal template unavailability), never a restart.
@@ -1665,7 +1808,16 @@ impl ProcessDriver {
                         error = %error,
                         "ephemeral process launch failed"
                     );
-                    EffectResult::Failed(DriverFailure::terminal(DriverOp::Reconcile))
+                    EffectResult::Failed(
+                        DriverFailure::refused(DriverOp::Reconcile, provider_error_kind(&error).failure_kind())
+                            .at("reconcile/launch")
+                            .with_comparison(FailureComparison::new(
+                                "launch.attempt",
+                                "accepted",
+                                "failed",
+                            ))
+                            .with_note(error),
+                    )
                 }
             };
             let _ = effect_sender.send(EffectCompleted { operation, result: effect_result });
@@ -1696,10 +1848,9 @@ impl ProcessDriver {
             Ok(ProviderAdoption::Absent) | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
                 Ok(())
             }
-            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                ProcessDriverErrorKind::IdentityAmbiguous,
-                DriverOp::Delete,
-            )),
+            Ok(ProviderAdoption::Quarantined(report)) => {
+                Err(self.identity_ambiguous(DriverOp::Delete, &report))
+            }
             // A row no host-minted ticket can describe (a Guest-owned one-shot
             // outside the guest VMM chain, e.g. the projected
             // `store-preflight-<guest>` intent) has no identity this daemon
@@ -1725,26 +1876,44 @@ fn resource_uid_from_bytes_bytes(bytes: &[u8; 16]) -> Option<d2b_contracts_resou
 }
 
 /// Map preserved provider error spellings onto the closed driver kinds (the
-/// same classification as the old `map_provider_error`).
+/// same classification as the old `map_provider_error`, split for issue #508
+/// so each distinct cause reports its own kind).
 ///
 /// `resolution-failed` is the supervisor's code for a launch ticket the
 /// trusted bundle refuses to resolve (no matching intent, wrong execution
 /// target/scope/descriptor posture). Nothing was launched and nothing was
 /// observed, so the probe answer is the ticket's resolution failing - the same
-/// terminal class as `template-not-found` - never an ambiguous identity to
-/// quarantine (R15 is about observed identity).
+/// terminal class as `template-not-found`, never an ambiguous identity to
+/// quarantine (R15 is about observed identity). It stays a kind of its own.
 fn map_provider_error(error: String, op: DriverOp) -> ProcessDriverError {
     tracing::warn!(operation = ?op, error = %error, "process provider effect failed");
-    let kind = if error.contains("template-not-found")
-        || error.contains("resolution-failed")
+    let kind = provider_error_kind(&error);
+    ProcessDriverError::new(kind, op).with_detail(
+        FailureDetail::at("provider/effect")
+            .comparison(FailureComparison::new(
+                "provider.effect",
+                "accepted",
+                kind.failure_kind().code(),
+            ))
+            .with_note(error),
+    )
+}
+
+/// The closed kind one provider error spelling names, shared by the effect
+/// classification and the effect completions that set their own retry class
+/// (issue #508: the kind names what failed, the class stays the driver's).
+fn provider_error_kind(error: &str) -> ProcessDriverErrorKind {
+    if error.contains("template-not-found") {
+        ProcessDriverErrorKind::TemplateUnavailable
+    } else if error.contains("resolution-failed") {
+        ProcessDriverErrorKind::ResolutionRefused
+    } else if error.contains("guest-process-not-vmm") {
         // The trusted bundle holds no host-minted intent for this row at all
         // (a Guest-owned one-shot outside the guest VMM chain, e.g. a
         // projected preflight intent): no retry can ever mint a ticket, so
         // the refusal is terminal - never an ambiguous identity to quarantine
         // (R15 is about observed identity).
-        || error.contains("guest-process-not-vmm")
-    {
-        ProcessDriverErrorKind::TemplateUnavailable
+        ProcessDriverErrorKind::GuestProcessNotVmm
     } else if error.contains("quarantined")
         || error.contains("identity")
         || error.contains("ambiguous")
@@ -1752,8 +1921,7 @@ fn map_provider_error(error: String, op: DriverOp) -> ProcessDriverError {
         ProcessDriverErrorKind::IdentityAmbiguous
     } else {
         ProcessDriverErrorKind::ProviderEffect
-    };
-    ProcessDriverError::new(kind, op)
+    }
 }
 
 #[async_trait::async_trait]
@@ -1761,10 +1929,26 @@ impl ResourceDriver for ProcessDriver {
     type Error = ProcessDriverError;
 
     fn classify_error(&self, error: &ProcessDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            ProcessDriverErrorKind::ProviderEffect => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+            }
+            ProcessDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            ProcessDriverErrorKind::SpecInvalid
+            | ProcessDriverErrorKind::IdentityIncomplete
+            | ProcessDriverErrorKind::ProviderUnsupported
+            | ProcessDriverErrorKind::ExecutionUnsupported
+            | ProcessDriverErrorKind::TemplateUnavailable
+            | ProcessDriverErrorKind::ResolutionRefused
+            | ProcessDriverErrorKind::GuestProcessNotVmm
+            | ProcessDriverErrorKind::IdentityAmbiguous
+            | ProcessDriverErrorKind::StartExhausted => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Spec decode plus provider reference and execution-target checks.
@@ -1772,10 +1956,15 @@ impl ResourceDriver for ProcessDriver {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Validate)?;
         self.check_provider(&envelope, DriverOp::Validate)?;
         if !execution_target_allowed(self.authority.mode, spec.execution().execution_ref()) {
-            return Err(self.error(
-                ProcessDriverErrorKind::ExecutionUnsupported,
-                DriverOp::Validate,
-            ));
+            return Err(self
+                .error(ProcessDriverErrorKind::ExecutionUnsupported, DriverOp::Validate)
+                .with_detail(
+                    FailureDetail::at("spec/execution").comparison(FailureComparison::new(
+                        "spec.executionRef",
+                        "a target this daemon mode drives",
+                        spec.execution().execution_ref().to_canonical_string(),
+                    )),
+                ));
         }
         Ok(())
     }
@@ -1848,9 +2037,15 @@ impl ResourceDriver for ProcessDriver {
     /// own finalize-before-delete pass and requeues this pass while any child
     /// row is still live. Idempotent under retry.
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        ctx.finalize_owned_resources()
-            .await
-            .map_err(|_| self.error(ProcessDriverErrorKind::DrainPending, DriverOp::Delete))?;
+        ctx.finalize_owned_resources().await.map_err(|_| {
+            self.error(ProcessDriverErrorKind::DrainPending, DriverOp::Delete).with_detail(
+                FailureDetail::at("delete/drain").comparison(FailureComparison::new(
+                    "owned.children",
+                    "retired",
+                    "still live",
+                )),
+            )
+        })?;
         Ok(())
     }
 
@@ -1906,10 +2101,9 @@ impl ResourceDriver for ProcessDriver {
                         // a missing exact identity as converged without effects).
                         Ok(())
                     }
-                    Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                        ProcessDriverErrorKind::IdentityAmbiguous,
-                        DriverOp::Delete,
-                    )),
+                    Ok(ProviderAdoption::Quarantined(report)) => {
+                        Err(self.identity_ambiguous(DriverOp::Delete, &report))
+                    }
                     Err(error) => Err(map_provider_error(error, DriverOp::Delete)),
                 }
             }
@@ -1947,7 +2141,9 @@ mod tests {
     use d2b_resource_runtime::driver::{
         DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{
+        DriverFailure, DriverOp, FailureClass, FailureKinds, ResourceError,
+    };
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
@@ -1956,8 +2152,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::{
-        ProcessDriver, ProcessDriverArgs, ProcessDriverFactory, ProcessDriverStatus,
-        process_spec_decoder,
+        ProcessDriver, ProcessDriverArgs, ProcessDriverErrorKind, ProcessDriverFactory,
+        ProcessDriverStatus, process_spec_decoder,
     };
     use crate::process_provider_runtime::{ProviderAdoption, ProviderLiveness};
 
@@ -3117,9 +3313,25 @@ mod tests {
     #[test]
     fn resolution_refusals_are_never_identity_ambiguity() {
         let refused = super::map_provider_error("resolution-failed".to_owned(), DriverOp::Reconcile);
-        assert_eq!(refused.to_string(), "process-template-unavailable");
+        assert_eq!(refused.to_string(), "process-resolution-refused");
+        assert_eq!(refused.kind, ProcessDriverErrorKind::ResolutionRefused);
+        let missing = super::map_provider_error("template-not-found".to_owned(), DriverOp::Reconcile);
+        assert_eq!(missing.to_string(), "process-template-unavailable");
+        let outside = super::map_provider_error("guest-process-not-vmm".to_owned(), DriverOp::Recover);
+        assert_eq!(outside.to_string(), "process-guest-process-not-vmm");
         let observed = super::map_provider_error("adoption-ambiguous".to_owned(), DriverOp::Reconcile);
         assert_eq!(observed.to_string(), "process-identity-ambiguous");
+        // Every mapping is terminal and names the provider's own code.
+        for (error, expected_kind) in [
+            (refused, ProcessDriverErrorKind::ResolutionRefused),
+            (missing, ProcessDriverErrorKind::TemplateUnavailable),
+            (outside, ProcessDriverErrorKind::GuestProcessNotVmm),
+            (observed, ProcessDriverErrorKind::IdentityAmbiguous),
+        ] {
+            assert_eq!(error.kind, expected_kind);
+            assert_eq!(error.kind.class(), FailureClass::Terminal);
+            assert!(!error.detail.is_empty(), "a provider mapping carries the provider code");
+        }
     }
 
     #[tokio::test]
@@ -3602,9 +3814,13 @@ mod tests {
         let mut f = fixture_with(test_row(), manager.clone());
         let mut d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
 
-        // A live owned child: the pass requeues.
+        // A live owned child: the erased children-first boundary refuses with
+        // the shared `children-draining` NotYet before the driver body runs.
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
-        assert_eq!(failure, DriverFailure::retryable(DriverOp::Delete));
+        assert_eq!(
+            failure,
+            DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CHILDREN_DRAINING)
+        );
         assert_eq!(manager.deleted.lock().len(), 1, "the owned child is nudged first");
 
         // The manager removed the retired child row: the same pass converges.

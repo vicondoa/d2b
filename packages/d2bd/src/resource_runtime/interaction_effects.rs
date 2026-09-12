@@ -567,6 +567,7 @@ impl InteractionDriverEffects for ProductionInteractionDriverEffects {
 /// status is not observed state of the current row and reads `Pending`.
 fn view_phase(view: &ResourceView) -> &'static str {
     view.observed_status()
+        .as_ref()
         .map(ResourceStatus::wire_phase)
         .unwrap_or("Pending")
 }
@@ -779,9 +780,9 @@ mod tests {
             Some(ResourceStatus::Deleting),
         ];
         for deleting in [false, true] {
-            for status in statuses {
+            for status in &statuses {
                 for status_generation in [None, Some(1), Some(2), Some(3)] {
-                    let view = phase_view(status, status_generation, deleting);
+                    let view = phase_view(status.clone(), status_generation, deleting);
                     let canonical = view.wire_status()["phase"]
                         .as_str()
                         .expect("the canonical status always carries a phase")

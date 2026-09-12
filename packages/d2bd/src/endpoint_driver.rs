@@ -46,7 +46,10 @@ use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_dec
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 
 /// The one resource type this factory serves (KTD4 Phase A).
@@ -181,19 +184,36 @@ impl EndpointDriverErrorKind {
             Self::SpecInvalid | Self::ShapeUnsupported => FailureClass::Terminal,
         }
     }
+
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::ENDPOINT_SPEC_INVALID,
+            Self::ShapeUnsupported => FailureKinds::ENDPOINT_SHAPE_UNSUPPORTED,
+            Self::SocketEffect => FailureKinds::ENDPOINT_SOCKET_EFFECT_FAILED,
+            Self::DrainPending => FailureKinds::ENDPOINT_DRAIN_PENDING,
+        }
+    }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct EndpointDriverError {
     kind: EndpointDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl EndpointDriverError {
     fn new(kind: EndpointDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
@@ -401,7 +421,24 @@ impl EndpointDriver {
     /// stays on the old reconciler until its conversion unit.
     fn check_shape(&self, spec: &EndpointSpec, op: DriverOp) -> Result<(), EndpointDriverError> {
         if endpoint_realization(spec).is_none() {
-            return Err(self.error(EndpointDriverErrorKind::ShapeUnsupported, op));
+            return Err(self
+                .error(EndpointDriverErrorKind::ShapeUnsupported, op)
+                .with_detail(
+                    FailureDetail::at("shape")
+                        .comparison(FailureComparison::new(
+                            "endpoint.shape",
+                            "a realized endpoint shape",
+                            format!(
+                                "class={:?} transport={:?} visibility={:?} lifecycle={:?} purpose={}",
+                                spec.endpoint_class(),
+                                spec.transport(),
+                                spec.visibility(),
+                                spec.lifecycle_policy(),
+                                spec.purpose().as_str(),
+                            ),
+                        ))
+                        .with_note("no realized shape matches this endpoint contract"),
+                ));
         }
         Ok(())
     }
@@ -421,10 +458,20 @@ impl ResourceDriver for EndpointDriver {
     type Error = EndpointDriverError;
 
     fn classify_error(&self, error: &EndpointDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            EndpointDriverErrorKind::SpecInvalid | EndpointDriverErrorKind::ShapeUnsupported => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            EndpointDriverErrorKind::SocketEffect => DriverFailure::error(
+                error.op,
+                error.kind.failure_kind(),
+                FailureClass::Retryable,
+            ),
+            EndpointDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Spec decode plus the daemon-owned shape check (old `validate_spec`).
@@ -474,8 +521,19 @@ impl ResourceDriver for EndpointDriver {
             let result = effects.ensure_socket(&producer_ref, &purpose).await;
             let effect_result = match result {
                 Ok(()) => d2b_resource_runtime::context::EffectResult::Completed,
-                Err(_) => d2b_resource_runtime::context::EffectResult::Failed(
-                    DriverFailure::retryable(DriverOp::Reconcile),
+                Err(error) => d2b_resource_runtime::context::EffectResult::Failed(
+                    DriverFailure::error(
+                        DriverOp::Reconcile,
+                        FailureKinds::ENDPOINT_SOCKET_EFFECT_FAILED,
+                        FailureClass::Retryable,
+                    )
+                    .at("reconcile/socket")
+                    .with_comparison(FailureComparison::new(
+                        "endpoint.socket",
+                        "realized",
+                        "ensure failed",
+                    ))
+                    .with_note(error),
                 ),
             };
             let _ = effect_sender.send(d2b_resource_runtime::context::EffectCompleted {
@@ -508,10 +566,22 @@ impl ResourceDriver for EndpointDriver {
             // Nothing durable to clean up; converged without effects.
             return Ok(());
         };
-        self.effects
+        let result = self
+            .effects
             .remove_socket(spec.producer_ref(), spec.purpose().as_str())
-            .await
-            .map_err(|_| self.error(EndpointDriverErrorKind::SocketEffect, DriverOp::Delete))
+            .await;
+        result.map_err(|error| {
+            self.error(EndpointDriverErrorKind::SocketEffect, DriverOp::Delete)
+                .with_detail(
+                    FailureDetail::at("delete/socket")
+                        .comparison(FailureComparison::new(
+                            "endpoint.socket",
+                            "removed",
+                            "remove failed",
+                        ))
+                        .with_note(error),
+                )
+        })
     }
 }
 

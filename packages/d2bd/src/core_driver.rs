@@ -92,7 +92,10 @@ use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_dec
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass, ResourceError};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds, ResourceError,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::resource::ResourceStatus;
@@ -159,28 +162,44 @@ impl CoreDriverErrorKind {
             Self::DependencyRead | Self::DrainPending => FailureClass::Retryable,
         }
     }
+
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::CORE_SPEC_INVALID,
+            Self::DependencyRead => FailureKinds::CORE_DEPENDENCY_READ_FAILED,
+            Self::DrainPending => FailureKinds::CORE_DRAIN_PENDING,
+        }
+    }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct CoreDriverError {
     kind: CoreDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl CoreDriverError {
-    fn new(kind: CoreDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+    const fn new(kind: CoreDriverErrorKind, op: DriverOp) -> Self {
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 
     /// Return the closed failure class this error is reported with.
-    pub(crate) const fn class(self) -> FailureClass {
+    pub(crate) const fn class(&self) -> FailureClass {
         self.kind.class()
     }
 
     /// Return the operation that failed.
-    pub(crate) const fn op(self) -> DriverOp {
+    pub(crate) const fn op(&self) -> DriverOp {
         self.op
     }
 }
@@ -366,11 +385,27 @@ impl CoreResourceDriver {
     }
 
     fn spec(&self, ctx: &ResourceContext, op: DriverOp) -> Result<Value, CoreDriverError> {
-        let spec = ctx
-            .spec::<Value>()
-            .map_err(|_| self.error(CoreDriverErrorKind::SpecInvalid, op))?;
+        let spec = ctx.spec::<Value>().map_err(|error| {
+            self.error(CoreDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/decode").with_note(error.to_string()),
+            )
+        })?;
         if !spec.is_object() {
-            return Err(self.error(CoreDriverErrorKind::SpecInvalid, op));
+            let shape = match &spec {
+                Value::Null => "null",
+                Value::Bool(_) => "bool",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+            };
+            return Err(self.error(CoreDriverErrorKind::SpecInvalid, op).with_detail(
+                FailureDetail::at("spec/shape").comparison(FailureComparison::new(
+                    "spec.shape",
+                    "object",
+                    shape,
+                )),
+            ));
         }
         Ok(spec.clone())
     }
@@ -380,8 +415,13 @@ impl CoreResourceDriver {
         ctx: &ResourceContext,
         op: DriverOp,
     ) -> Result<ResourceRef, CoreDriverError> {
-        ResourceRef::parse(&format!("{}/{}", ctx.key().type_name, ctx.key().name))
-            .map_err(|_| self.error(CoreDriverErrorKind::SpecInvalid, op))
+        ResourceRef::parse(&format!("{}/{}", ctx.key().type_name, ctx.key().name)).map_err(
+            |error| {
+                self.error(CoreDriverErrorKind::SpecInvalid, op).with_detail(
+                    FailureDetail::at("spec/ref").with_note(error.to_string()),
+                )
+            },
+        )
     }
 
     /// One resource view as the Core dependency snapshot the pure observation
@@ -486,10 +526,18 @@ impl ResourceDriver for CoreResourceDriver {
     type Error = CoreDriverError;
 
     fn classify_error(&self, error: &CoreDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            CoreDriverErrorKind::SpecInvalid => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            CoreDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            CoreDriverErrorKind::DependencyRead => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// The stored spec object fence (old `validate_spec`).
@@ -548,8 +596,18 @@ impl ResourceDriver for CoreResourceDriver {
             Err(ResourceError::ChildrenDraining { .. }) => {
                 return Err(self.error(CoreDriverErrorKind::DrainPending, DriverOp::Delete));
             }
-            Err(_) => {
-                return Err(self.error(CoreDriverErrorKind::DependencyRead, DriverOp::Delete));
+            Err(error) => {
+                return Err(self
+                    .error(CoreDriverErrorKind::DependencyRead, DriverOp::Delete)
+                    .with_detail(
+                        FailureDetail::at("finalize/children")
+                            .comparison(FailureComparison::new(
+                                "owned.children",
+                                "finalize answered",
+                                "read failed",
+                            ))
+                            .with_note(error.to_string()),
+                    ));
             }
         }
         self.finalize_pass(ctx).await
@@ -573,11 +631,28 @@ impl CoreResourceDriver {
         if ctx.key().type_name != PROVIDER_TYPE_NAME {
             return Ok(());
         }
-        let children = ctx.children().await.map_err(|_| {
+        let children = ctx.children().await.map_err(|error| {
             self.error(CoreDriverErrorKind::DependencyRead, DriverOp::Delete)
+                .with_detail(
+                    FailureDetail::at("finalize/children")
+                        .comparison(FailureComparison::new(
+                            "owned.children",
+                            "read answered",
+                            "read failed",
+                        ))
+                        .with_note(error.to_string()),
+                )
         })?;
         if children.iter().any(is_controller_process) {
-            return Err(self.error(CoreDriverErrorKind::DrainPending, DriverOp::Delete));
+            return Err(self
+                .error(CoreDriverErrorKind::DrainPending, DriverOp::Delete)
+                .with_detail(
+                    FailureDetail::at("finalize/drain").comparison(FailureComparison::new(
+                        "owned.controllerProcess",
+                        "retired",
+                        "live",
+                    )),
+                ));
         }
         Ok(())
     }
@@ -1134,7 +1209,19 @@ mod tests {
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
         assert_eq!(
             failure,
-            d2b_resource_runtime::error::DriverFailure::terminal(DriverOp::Validate)
+            d2b_resource_runtime::error::DriverFailure::refused(
+                DriverOp::Validate,
+                d2b_resource_runtime::error::FailureKinds::CORE_SPEC_INVALID,
+            )
+            .with_detail(
+                d2b_resource_runtime::error::FailureDetail::at("spec/shape").comparison(
+                    d2b_resource_runtime::error::FailureComparison::new(
+                        "spec.shape",
+                        "object",
+                        "string",
+                    ),
+                ),
+            )
         );
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Validate);
@@ -1395,7 +1482,10 @@ mod tests {
         let failure = driver.finalize(&mut ctx).await.expect_err("child draining");
         assert_eq!(
             failure,
-            d2b_resource_runtime::error::DriverFailure::retryable(DriverOp::Delete),
+            d2b_resource_runtime::error::DriverFailure::not_yet(
+                DriverOp::Delete,
+                d2b_resource_runtime::error::FailureKinds::CHILDREN_DRAINING,
+            ),
             "the actor requeues another delete pass while an owned child is live"
         );
         assert!(

@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use d2b_contracts::identity::{ResourcePlane, WrongPlane};
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
@@ -44,8 +45,6 @@ use d2b_resource_runtime::manager::{
 use d2b_resource_runtime::spec_store::ResourceProvenance;
 use d2b_resource_store::StoredResource;
 use serde_json::Value;
-
-use crate::resource_plane_v3::{PlaneRoute, route_resource_type};
 
 // ---------------------------------------------------------------------------
 // Controller-session path seam
@@ -214,15 +213,34 @@ pub(crate) enum ChildMutationRoute {
 /// is never written to the pre-v3 store (no actor would ever realize it) and
 /// an unconverted one never appears in the manager.
 pub(crate) fn child_type_route(type_name: &str) -> ChildMutationRoute {
-    match route_resource_type(type_name) {
-        PlaneRoute::NewPlane => ChildMutationRoute::Manager,
-        PlaneRoute::OldPlane => ChildMutationRoute::Legacy,
+    match d2b_contracts::identity::resource_plane(type_name) {
+        ResourcePlane::Manager => ChildMutationRoute::Manager,
+        ResourcePlane::Legacy => ChildMutationRoute::Legacy,
     }
 }
 
 /// Classify one child mutation by its target.
 pub(crate) fn child_mutation_route(target: &ResourceRef) -> ChildMutationRoute {
     child_type_route(target.resource_type().as_str())
+}
+
+/// The stable token the child-mutation bridge logs as the `caller` of a
+/// wrong-plane child access.
+pub(crate) const CHILD_MUTATION_CALLER: &str = "d2bd::resource_runtime::plane_controller_bridge";
+
+/// Refuse a child mutation the manager plane does not own (issue #507, child
+/// path): the bridge's commits are owner-scoped manager ensures/removes, so a
+/// subject that resolves to the legacy store must be refused here instead of
+/// being written into a plane that has no actor for it. The refusal is the
+/// named, non-retryable [`WrongPlane`], never a silent skip.
+pub(crate) fn child_plane_refusal(target: &ResourceRef) -> Result<(), WrongPlane> {
+    match d2b_contracts::identity::resource_plane(target.resource_type().as_str()) {
+        ResourcePlane::Manager => Ok(()),
+        ResourcePlane::Legacy => Err(WrongPlane::manager_access(
+            target.resource_type().as_str(),
+            CHILD_MUTATION_CALLER,
+        )),
+    }
 }
 
 /// Child mutation failure at the manager boundary, projected onto the
@@ -418,6 +436,7 @@ impl PlaneChildMutations {
         target: &ResourceRef,
         canonical_envelope: &[u8],
     ) -> Result<StoredResource, ChildMutationFailure> {
+        self.require_manager_owned(target)?;
         match self.lookup(target).await {
             RowLookup::Present { .. } => return Err(ChildMutationFailure::Conflict),
             RowLookup::Absent { .. } => {}
@@ -438,6 +457,7 @@ impl PlaneChildMutations {
         expected_revision: ZoneRevision,
         canonical_envelope: &[u8],
     ) -> Result<StoredResource, ChildMutationFailure> {
+        self.require_manager_owned(target)?;
         let current = match self.lookup(target).await {
             RowLookup::Present { row, .. } => row,
             RowLookup::Absent { .. } => return Err(ChildMutationFailure::NotFound),
@@ -455,6 +475,7 @@ impl PlaneChildMutations {
     /// Durable deletion: the manager marks the row deleting and cascades; the
     /// child's own actor owns the cleanup (R10, F3). Idempotent.
     pub(crate) async fn remove(&self, target: &ResourceRef) -> Result<(), ChildMutationFailure> {
+        self.require_manager_owned(target)?;
         self.plane
             .client()
             .remove(self.subject(), self.key(target))
@@ -472,6 +493,28 @@ impl PlaneChildMutations {
             self.refresh_registry().await;
         }
         Ok(())
+    }
+
+    /// Refuse a child mutation whose subject the converted partition does not
+    /// own (issue #507, child path): this bridge commits owner-scoped manager
+    /// ensures/removes, so a legacy type must never be written through it. The
+    /// typed refusal names the type and this bridge; it is logged and folded
+    /// onto the mutation protocol's closed `Invalid` (a request this bridge
+    /// cannot serve), never onto absence or unavailability.
+    fn require_manager_owned(&self, target: &ResourceRef) -> Result<(), ChildMutationFailure> {
+        match child_plane_refusal(target) {
+            Ok(()) => Ok(()),
+            Err(refusal) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    target = %target.to_canonical_string(),
+                    resource_type = refusal.resource_type(),
+                    caller = refusal.caller(),
+                    "child mutation bridge refused a legacy-plane subject",
+                );
+                Err(ChildMutationFailure::Invalid)
+            }
+        }
     }
 
     async fn apply(
@@ -585,38 +628,44 @@ pub(crate) fn desired_child_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
     use d2b_resource_runtime::identity::ResourceProvenance;
     use serde_json::json;
 
-    /// The Guest family's four deterministic child roles are converted types:
-    /// their commits must land on the manager (the pre-v3 store has no actor
-    /// to launch them), while a type outside the converted partition keeps the
-    /// durable registered-controller path - the same partition every other
-    /// surface applies.
+    /// The child-mutation path resolves the same contract plane authority as
+    /// every other surface (issue #507): every type in the converted registry
+    /// routes to the manager, a type outside the registry keeps the durable
+    /// registered-controller path, and the manager-only bridge refuses a
+    /// legacy-owned subject with the named, non-retryable `WrongPlane` instead
+    /// of writing it into a plane with no actor.
     #[test]
-    fn child_mutations_route_converted_types_to_the_manager() {
-        for converted in [
-            "Guest",
-            "Process",
-            // U12: the one-shot Process family member shares the Process
-            // driver factory, so its commits are manager commits too.
-            "EphemeralProcess",
-            "Endpoint",
-            "Volume",
-            "VolumeBinding",
-        ] {
+    fn child_mutations_route_every_converted_type_to_the_manager() {
+        for converted in V3_CONVERTED_RESOURCE_TYPES {
             assert_eq!(
                 child_type_route(converted),
                 ChildMutationRoute::Manager,
                 "{converted} is a converted type"
             );
+            let target =
+                ResourceRef::parse(&format!("{converted}/fence-row")).expect("child ref");
+            assert!(
+                child_plane_refusal(&target).is_ok(),
+                "{converted} may commit through the manager bridge"
+            );
         }
-        for legacy in ["NotAConvertedType"] {
+        for legacy in ["vendor-extension.d2bus.org.Report", "other-extension.d2bus.org.Widget"] {
             assert_eq!(
                 child_type_route(legacy),
                 ChildMutationRoute::Legacy,
                 "{legacy} stays on the pre-v3 plane"
             );
+            let target = ResourceRef::parse(&format!("{legacy}/fence-row")).expect("child ref");
+            let refusal = child_plane_refusal(&target)
+                .expect_err("a legacy type cannot commit through the manager bridge");
+            assert_eq!(refusal.resource_type(), legacy);
+            assert_eq!(refusal.caller(), CHILD_MUTATION_CALLER);
+            assert_eq!(refusal.attempted_plane(), ResourcePlane::Manager);
+            assert!(!refusal.retryable());
         }
         assert_eq!(
             child_mutation_route(

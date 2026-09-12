@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use crate::context::{OperationId, ResourceContext};
 use crate::error::DriverFailure;
 use crate::error::DriverOp;
+use crate::error::FailureKinds;
 use crate::identity::{ResourceKey, ResourceTypeName};
 
 /// Outcome of driver recovery (F2; spec sections 9-10): discovery and
@@ -48,12 +49,13 @@ pub enum ReconcileOutcome {
 /// resource-specific validate/recover/reconcile/delete behavior.
 ///
 /// Error redaction mirrors `HandlerFailure` in
-/// `packages/d2b-controller-toolkit/src/runner.rs:400-437`: `type Error`
-/// stays inside the provider and [`ResourceDriver::classify_error`] maps it
-/// onto the closed [`DriverFailure`] classification, which is all the erased
-/// boundary ([`DynResourceDriver`], what the actor holds) reports. Drivers
-/// report failures only through the closed class, so the actor owns
-/// retry/backoff and retry state stays runtime-only (R13).
+/// `packages/d2b-controller-toolkit/src/runner.rs:400-437`, extended for issue
+/// #508: `type Error` stays inside the provider and
+/// [`ResourceDriver::classify_error`] maps it onto the structured
+/// [`DriverFailure`] surface (registered kind, verdict, stage, compared
+/// values), which is all the erased boundary ([`DynResourceDriver`], what the
+/// actor holds) reports. Drivers report failures only through that surface,
+/// so the actor owns retry/backoff and retry state stays runtime-only (R13).
 ///
 /// Conversion template for a current `ResourceReconciler` implementor (spec
 /// section 13):
@@ -65,8 +67,14 @@ pub enum ReconcileOutcome {
 ///
 ///     fn classify_error(&self, error: &ProcessDriverError) -> DriverFailure {
 ///         match error {
-///             ProcessDriverError::Transient => DriverFailure::retryable(DriverOp::Reconcile),
-///             ProcessDriverError::Corrupt => DriverFailure::terminal(DriverOp::Reconcile),
+///             ProcessDriverError::NotReady => DriverFailure::not_yet(
+///                 DriverOp::Reconcile,
+///                 FailureKinds::PROCESS_DRAIN_PENDING,
+///             ),
+///             ProcessDriverError::Refused => DriverFailure::refused(
+///                 DriverOp::Reconcile,
+///                 FailureKinds::PROCESS_SPEC_INVALID,
+///             ),
 ///         }
 ///     }
 ///
@@ -76,21 +84,32 @@ pub enum ReconcileOutcome {
 /// ```
 #[async_trait]
 pub trait ResourceDriver: Send + 'static {
-    /// Driver-internal error type; stays inside the provider. Redacted at
-    /// the erased boundary through [`ResourceDriver::classify_error`].
+    /// Driver-internal error type; stays inside the provider. Mapped onto the
+    /// structured failure surface at the erased boundary through
+    /// [`ResourceDriver::classify_error`].
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Map implementation errors onto the closed redacted retry contract.
-    /// The driver knows which operations can fail how; classify accordingly.
+    /// Map implementation errors onto the structured failure surface (issue
+    /// #508): the registered [`crate::error::FailureKind`], the structural
+    /// [`crate::error::DriverVerdict`], the stage, and the compared values
+    /// where a comparison happened. The driver knows which operations can
+    /// fail how and which values were compared; classify accordingly.
     ///
-    /// Issue #511's default applies at this boundary: a
-    /// [`crate::context::RowLookup`] misclassification must not let absence
-    /// (`Absent`) or an unanswerable plane (`Unavailable`) reach
-    /// [`crate::error::FailureClass::Terminal`] - those defer through the
-    /// retryable class and the actor requeues. Terminal requires named
-    /// terminal evidence (a committed row that cannot decode, a structurally
-    /// invalid spec), surfaced through the driver's own status projection or
-    /// a log.
+    /// The verdict is the retry contract:
+    ///
+    /// - [`crate::error::DriverVerdict::NotYet`] - defer and requeue, never
+    ///   terminal. Issue #511's default applies here: absence (`Absent`) and
+    ///   an unanswerable plane (`Unavailable`) are not terminal.
+    /// - [`crate::error::DriverVerdict::Refused`] - a terminal decision
+    ///   against the row, requiring named terminal evidence (a committed row
+    ///   that cannot decode, a structurally invalid spec, a refused
+    ///   resolution). Refusals surface through the driver's status
+    ///   projection or the actor's failure log.
+    /// - [`crate::error::DriverVerdict::Error`] - an operational failure
+    ///   carrying the driver's own [`crate::error::FailureClass`].
+    ///
+    /// The actor prints the returned failure's log line and publishes its
+    /// wire layer; both are projections of the same structured detail.
     fn classify_error(&self, error: &Self::Error) -> DriverFailure;
 
     /// Structural validation of the current desired spec (spec section 13:
@@ -169,11 +188,12 @@ impl<D: ResourceDriver> DynResourceDriver for D {
         // boundary the actor drives, so no driver implementation can skip
         // it - a driver's own `finalize` body always runs after its owned
         // children have been driven through their finalize-before-delete
-        // pass. `ChildrenDraining` is retryable by construction, so a parent
-        // whose children are still retiring requeues instead of blocking.
-        ctx.finalize_owned_resources()
-            .await
-            .map_err(|_| DriverFailure::retryable(DriverOp::Delete))?;
+        // pass. The failure is a registered `NotYet` (`children-draining`):
+        // the actor defers and requeues, so a parent whose children are
+        // still retiring requeues instead of blocking.
+        ctx.finalize_owned_resources().await.map_err(|_| {
+            DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CHILDREN_DRAINING)
+        })?;
         ResourceDriver::finalize(self, ctx).await.map_err(|error| self.classify_error(&error))
     }
 

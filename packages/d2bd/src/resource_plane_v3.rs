@@ -151,18 +151,28 @@ pub enum PlaneRoute {
     OldPlane,
 }
 
+impl From<d2b_contracts::identity::ResourcePlane> for PlaneRoute {
+    fn from(plane: d2b_contracts::identity::ResourcePlane) -> Self {
+        match plane {
+            d2b_contracts::identity::ResourcePlane::Manager => Self::NewPlane,
+            d2b_contracts::identity::ResourcePlane::Legacy => Self::OldPlane,
+        }
+    }
+}
+
 /// Classify one resource type onto its plane (U9 execution decision
 /// implementing the P1 review finding): converted types are served ONLY by
 /// the new plane, unconverted types ONLY by the old plane; no type is served
 /// by both, so the spec's single-model invariant holds per type from the
 /// moment this lands (R29 completes in Phase B).
+///
+/// This is a view of the contract plane authority
+/// ([`d2b_contracts::identity::resource_plane`], issue #507): the daemon
+/// keeps the `PlaneRoute` spelling its call sites use, and any new storage
+/// entry point resolves the same mapping through the same function rather
+/// than re-deriving the converted set.
 pub fn route_resource_type(type_name: &str) -> PlaneRoute {
-    for converted in CONVERTED_TYPES {
-        if converted == type_name {
-            return PlaneRoute::NewPlane;
-        }
-    }
-    PlaneRoute::OldPlane
+    d2b_contracts::identity::resource_plane(type_name).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -2701,11 +2711,17 @@ mod tests {
 
     /// Partition router: the converted types route to the new plane; every
     /// standard catalog type is now converted, so nothing of the catalog is
-    /// left on the old plane.
+    /// left on the old plane. The router is a view of the contract plane
+    /// authority (issue #507), not a second copy of the converted set.
     #[test]
     fn partition_router_classifies_converted_and_unconverted_types() {
         for converted in CONVERTED_TYPES {
             assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
+            assert_eq!(
+                d2b_contracts::identity::resource_plane(converted),
+                d2b_contracts::identity::ResourcePlane::Manager,
+                "{converted}: the daemon router must resolve the contract authority"
+            );
         }
         for standard in d2b_contracts::identity::STANDARD_RESOURCE_TYPES {
             assert_eq!(
@@ -2718,6 +2734,11 @@ mod tests {
             route_resource_type("not-a-resource-type"),
             PlaneRoute::OldPlane,
             "a type outside the converted set still routes to the old plane"
+        );
+        assert_eq!(
+            d2b_contracts::identity::resource_plane("not-a-resource-type"),
+            d2b_contracts::identity::ResourcePlane::Legacy,
+            "the contract authority admits a non-converted type on the legacy plane"
         );
         assert_eq!(CONVERTED_TYPES.len(), 33);
     }

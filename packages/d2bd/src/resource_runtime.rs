@@ -174,7 +174,7 @@ pub(crate) mod interaction_effects;
 use plane_controller_bridge::{
     ChildMutationFailure, ChildMutationRoute, ControllerPlaneView, LiveControllerSessionEvidence,
     ManagerControllerPlaneView, PlaneChildMutations, PublishedPlaneControllerView,
-    child_mutation_route,
+    child_mutation_route, child_type_route,
 };
 use d2b_resource_runtime::manager::ResourceView;
 pub use volume_effect_adapter::{
@@ -249,6 +249,21 @@ pub(super) struct CoreAssignmentAuthority {
     controller_role: ResourceRef,
 }
 
+/// Whether a converted type's durable mirror may still answer one read
+/// (issue #507).
+///
+/// Once the zone has published its manager authority, the mirror is never an
+/// authority for a converted type: the manager's answer - the row, or the
+/// honest not-committed absence - is final, so a stale or deleted mirror row
+/// can no longer be served by a reader that forgot the manager-first bridge.
+/// Before publication (legacy boot and unit fixtures) the durable plane still
+/// answers converted rows, which keeps the pre-plane startup path on its
+/// existing behavior. An unconverted type always keeps the durable plane.
+fn durable_fallback_allowed(resource_type: &str, manager_published: bool) -> bool {
+    d2b_contracts::identity::resource_plane(resource_type) == d2b_contracts::identity::ResourcePlane::Legacy
+        || !manager_published
+}
+
 /// The manager rows of one type through a plane-view seam, rendered through
 /// the same projection the manager-backed API serves (U12 reader bridge,
 /// mirroring G5).
@@ -265,8 +280,8 @@ async fn bridge_manager_rows(
     let Some(plane) = plane else {
         return Ok(Vec::new());
     };
-    if crate::resource_plane_v3::route_resource_type(resource_type)
-        != crate::resource_plane_v3::PlaneRoute::NewPlane
+    if d2b_contracts::identity::resource_plane(resource_type)
+        != d2b_contracts::identity::ResourcePlane::Manager
     {
         return Ok(Vec::new());
     }
@@ -304,8 +319,8 @@ async fn bridge_manager_row(
     plane: Option<&dyn ControllerPlaneView>,
     target: &ResourceRef,
 ) -> Result<Option<StoredResource>, ResourceRuntimeError> {
-    if crate::resource_plane_v3::route_resource_type(target.resource_type().as_str())
-        != crate::resource_plane_v3::PlaneRoute::NewPlane
+    if d2b_contracts::identity::resource_plane(target.resource_type().as_str())
+        != d2b_contracts::identity::ResourcePlane::Manager
     {
         return Err(ResourceRuntimeError::StoreReadFailed);
     }
@@ -1508,6 +1523,21 @@ impl CloudHypervisorResourceSession {
             .map_err(child_mutation_failure)
     }
 
+    /// Whether the durable store still serves one resource type for this
+    /// session (issue #507, reader path).
+    ///
+    /// From the moment the zone's manager plane is published, the legacy
+    /// binding refuses every converted type: the manager's row or its honest
+    /// absence is final, so a converted-type read must never fall back to the
+    /// durable mirror - the refused read would surface as a retryable
+    /// transport failure forever. Before publication (legacy boot and unit
+    /// fixtures, `plane_children` is `None`) the durable plane still answers,
+    /// exactly as the legacy binding's publication latch admits it.
+    fn durable_plane_serves(&self, resource_type: &str) -> bool {
+        self.plane_children.is_none()
+            || child_type_route(resource_type) == ChildMutationRoute::Legacy
+    }
+
     async fn get_stored(
         &self,
         target: &ResourceRef,
@@ -1527,10 +1557,16 @@ impl CloudHypervisorResourceSession {
     ) -> Result<(StoredResource, StoredRowOrigin), CloudHypervisorResourceApiError> {
         // U17 child bridge: a converted row is the manager's (the session's
         // own child commits land there), so the manager is consulted first;
-        // an unconverted type or a row the manager does not hold falls
-        // through to the durable store.
+        // an unconverted type, or any type before the plane is published,
+        // falls through to the durable store.
         if let Some(resource) = self.plane_row(target).await? {
             return Ok((resource, StoredRowOrigin::Manager));
+        }
+        if !self.durable_plane_serves(target.resource_type().as_str()) {
+            // The published manager does not hold the row, and the legacy
+            // binding refuses a converted type: the honest answer is absence
+            // (issue #507), never a durable mirror read that must fail.
+            return Err(CloudHypervisorResourceApiError::NotFound);
         }
         let mut request = wire::GetRequest::new();
         request.meta = MessageField::some(public_request_meta(operation));
@@ -1559,9 +1595,18 @@ impl CloudHypervisorResourceSession {
         owner_uid: Option<&ResourceUid>,
         operation: &str,
     ) -> Result<Vec<StoredResource>, CloudHypervisorResourceApiError> {
+        // U17 child bridge, issue #507: a converted type is served by the
+        // published manager plane alone - the legacy binding refuses its
+        // durable list outright - so only the types the durable plane still
+        // serves are listed there; the manager rows are merged below.
+        let durable_types = resource_types
+            .iter()
+            .copied()
+            .filter(|resource_type| self.durable_plane_serves(resource_type))
+            .collect::<Vec<_>>();
         let mut request = wire::ListRequest::new();
         request.meta = MessageField::some(public_request_meta(operation));
-        request.resource_types = resource_types
+        request.resource_types = durable_types
             .iter()
             .map(|value| (*value).to_owned())
             .collect();
@@ -1576,7 +1621,7 @@ impl CloudHypervisorResourceSession {
             request.filters.push(owner_uid_filter);
         }
         let mut resources = Vec::new();
-        loop {
+        while !durable_types.is_empty() {
             let response = self.client.list(request.clone()).await;
             if response.error.is_some() || response.truncated {
                 return Err(Self::api_error());
@@ -2874,6 +2919,10 @@ pub struct ZoneResourceRuntime {
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     interaction_state: InteractionState,
+    /// Latched true when the composition publishes this Zone's manager plane
+    /// (issue #507): from that moment the legacy API binding refuses every
+    /// converted type, so the pre-v3 store can neither serve nor miss one.
+    manager_plane_published: Arc<AtomicBool>,
 }
 
 /// Store-derived admission evidence for one security-key Device effect.
@@ -3321,7 +3370,15 @@ impl ZoneResourceRuntime {
         // only ever sees unconverted types from outside. Legacy in-daemon
         // writers (the framework runners and controller sessions that Phase B
         // deletes) keep their redb path until their providers convert.
-        let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
+        // Issue #507: the legacy binding carries a publication latch, so from
+        // the moment this Zone's manager plane is published the legacy service
+        // refuses every converted type - a fixture runtime that never
+        // publishes a plane keeps the durable plane it drives directly.
+        let manager_plane_published = Arc::new(AtomicBool::new(false));
+        let backend = Arc::new(RedbBackend::production_when_published(
+            Arc::clone(&store),
+            Arc::clone(&manager_plane_published),
+        ));
         let api = Arc::new(
             ResourceService::new_with_zone_uid(
                 Arc::clone(&backend),
@@ -3727,6 +3784,7 @@ impl ZoneResourceRuntime {
             interaction_provider_configuration,
             interaction_identity,
             interaction_state,
+            manager_plane_published: Arc::clone(&manager_plane_published),
         };
         let coordinator = Arc::new(runtime.build_controller_session_coordinator()?);
         *runtime
@@ -4964,6 +5022,11 @@ impl ZoneResourceRuntime {
         if let Ok(mut slot) = self.v3_planes.lock() {
             *slot = Some(Arc::clone(&planes));
         }
+        // Issue #507: from this moment the zone has a manager authority, so
+        // the legacy API binding refuses every converted type (the mirror may
+        // no longer serve one), and the manager-first reader helpers treat the
+        // manager's answer as final.
+        self.manager_plane_published.store(true, Ordering::Release);
         // G5: the controller-session path (and the Provider's dependency
         // observation) read manager-served controller rows through the same
         // published table, so the session coordinator gets the zone plane's
@@ -5725,9 +5788,19 @@ impl ZoneResourceRuntime {
     ) -> Result<Vec<Value>, ResourceRuntimeError> {
         let resource_type = ResourceTypeName::parse(resource_type.to_owned())
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        // U12/G5 reader bridge: a converted type's rows live in the manager
+        // (the store keeps the pre-v3 mirror U14 deletes), so the manager row
+        // is authoritative where both hold the same reference. Once the
+        // manager plane is published it is the only source for a converted
+        // type (issue #507): the durable mirror can neither add a row the
+        // manager does not hold nor resurrect a deleted one. Before
+        // publication (legacy boot / fixtures) the durable list still serves.
+        let plane = self.manager_plane_view();
+        let manager_authority =
+            !durable_fallback_allowed(resource_type.as_str(), plane.is_some());
         let mut cursor = None;
         let mut out: Vec<Value> = Vec::new();
-        loop {
+        while !manager_authority {
             let request = StoreListRequest {
                     operation: StoreOperationContext {
                         operation_id: "network-admission-scan".to_owned(),
@@ -5762,11 +5835,10 @@ impl ZoneResourceRuntime {
                 break;
             }
         }
-        // U12/G5 reader bridge: a converted type's rows live in the manager
-        // (the store keeps the pre-v3 mirror U14 deletes), so the manager row
-        // is authoritative where both hold the same reference. The merge is a
-        // no-op for unconverted types and when no plane is published.
-        let manager_rows = self.manager_stored_rows(resource_type.as_str()).await?;
+        // The manager rows of the type, merged over whatever the durable list
+        // contributed above (nothing, once the manager is the authority for a
+        // converted type). The merge is a no-op for unconverted types.
+        let manager_rows = bridge_manager_rows(plane.as_deref(), resource_type.as_str()).await?;
         for row in manager_rows {
             let Ok(value) = serde_json::from_slice::<Value>(&row.canonical_json) else {
                 continue;
@@ -5807,10 +5879,13 @@ impl ZoneResourceRuntime {
         operation_id: &str,
     ) -> Result<Option<Value>, ResourceRuntimeError> {
         // U12/G5 reader bridge: the manager is the authority for a converted
-        // type. A row the manager does not hold (or an unpublished plane)
-        // keeps the caller on the durable store path.
-        if let Some(row) = self
-            .manager_stored_rows(target.resource_type().as_str())
+        // type. A manager without the row once its plane is published is the
+        // honest not-committed absence - the durable mirror never answers for
+        // a converted type after publication (issue #507); before publication
+        // (legacy boot / fixtures) the durable plane still answers.
+        let plane = self.manager_plane_view();
+        let manager_published = plane.is_some();
+        if let Some(row) = bridge_manager_rows(plane.as_deref(), target.resource_type().as_str())
             .await?
             .into_iter()
             .find(|row| row.resource_ref == *target)
@@ -5818,6 +5893,9 @@ impl ZoneResourceRuntime {
             return serde_json::from_slice::<Value>(&row.canonical_json)
                 .map(Some)
                 .map_err(|_| ResourceRuntimeError::StoreReadFailed);
+        }
+        if !durable_fallback_allowed(target.resource_type().as_str(), manager_published) {
+            return Ok(None);
         }
         let request = StoreGetRequest {
                 operation: StoreOperationContext {
@@ -5878,13 +5956,22 @@ impl ZoneResourceRuntime {
         target: &ResourceRef,
         operation_id: &str,
     ) -> Result<StoredResource, ResourceRuntimeError> {
-        if let Some(row) = self
-            .manager_stored_rows(target.resource_type().as_str())
+        let plane = self.manager_plane_view();
+        let manager_published = plane.is_some();
+        if let Some(row) = bridge_manager_rows(plane.as_deref(), target.resource_type().as_str())
             .await?
             .into_iter()
             .find(|row| row.resource_ref == *target)
         {
             return Ok(row);
+        }
+        if !durable_fallback_allowed(target.resource_type().as_str(), manager_published) {
+            // The manager is the published authority and does not hold the
+            // row: the caller asked for a row, so the answer is the read
+            // failure the callers retry - never the durable mirror (issue
+            // #507) and never a durable `ResourceNotFound` the store does not
+            // own.
+            return Err(ResourceRuntimeError::StoreReadFailed);
         }
         retry_transient_store_read(&self.zone, operation_id, || {
             self.store.get(StoreGetRequest {
@@ -16919,6 +17006,115 @@ mod tests {
                 .is_err(),
             "no manager authority: a read failure, never absence"
         );
+        runtime.shutdown().await.unwrap();
+    }
+
+    /// One manager-served row of any resource type, rendered the way the
+    /// manager's own view renders it (authored spec + metadata).
+    fn manager_view_of_type(resource_type: &str) -> ResourceView {
+        ResourceView {
+            key: d2b_resource_runtime::identity::ResourceKey::new("work", resource_type, "fence-row"),
+            uid: plane_uid_bytes(
+                &ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap(),
+            ),
+            generation: 1,
+            deleting: false,
+            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Resource,
+            spec: serde_json::to_vec(&json!({ "typeProbe": resource_type })).unwrap(),
+            metadata: serde_json::to_vec(&json!({
+                "ownerRef": null,
+                "labels": {},
+                "annotations": {},
+            }))
+            .unwrap(),
+            owner_key: None,
+            status: None,
+            status_generation: None,
+            status_projection: None,
+        }
+    }
+
+    /// Table-driven bridge fence (issue #507): every converted type bridges
+    /// through the manager, and once the manager authority is published the
+    /// durable mirror may no longer answer for any of them - the manager's row
+    /// or its honest absence is final. A type outside the registry keeps the
+    /// durable plane in both postures, and before publication (legacy boot /
+    /// fixtures) converted rows still resolve from the durable plane.
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_converted_type_bridges_through_the_manager_never_the_mirror() {
+        use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
+
+        let manager = ManagerRowsFixture {
+            rows: V3_CONVERTED_RESOURCE_TYPES
+                .iter()
+                .map(|resource_type| manager_view_of_type(resource_type))
+                .collect(),
+            fail: false,
+        };
+
+        for resource_type in V3_CONVERTED_RESOURCE_TYPES {
+            let bridged = bridge_manager_rows(Some(&manager), resource_type)
+                .await
+                .unwrap_or_else(|error| panic!("{resource_type}: bridge failed: {error:?}"));
+            assert!(
+                bridged.iter().any(|row| row
+                    .resource_ref
+                    .resource_type()
+                    .as_str()
+                    == resource_type),
+                "{resource_type}: the manager row bridges"
+            );
+            assert!(
+                !durable_fallback_allowed(resource_type, true),
+                "{resource_type}: the mirror must not answer once the manager authority is published"
+            );
+            assert!(
+                durable_fallback_allowed(resource_type, false),
+                "{resource_type}: before publication the durable plane still serves"
+            );
+        }
+
+        for legacy in [
+            "vendor-extension.d2bus.org.Report",
+            "other-extension.d2bus.org.Widget",
+        ] {
+            assert!(
+                bridge_manager_rows(Some(&manager), legacy)
+                    .await
+                    .expect("an unconverted type bridges to nothing")
+                    .is_empty(),
+                "{legacy}: an unconverted type never comes off the manager"
+            );
+            assert!(
+                durable_fallback_allowed(legacy, true),
+                "{legacy}: the durable plane serves an unconverted type"
+            );
+        }
+    }
+
+    /// Issue #507: the daemon's legacy API binding fences converted types
+    /// exactly from the moment the zone's manager plane is published, and a
+    /// fixture runtime that never publishes a plane keeps the durable plane it
+    /// drives directly (the pre-plane startup path and its fixtures).
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_api_fence_latches_on_manager_plane_publication() {
+        let (_directory, runtime, _broker_evidence) =
+            open_production_guest_runtime_for_test().await;
+        assert_eq!(
+            runtime.backend.check_plane("Volume", "d2bd::test::publication-latch"),
+            Ok(()),
+            "before publication the durable plane serves the fixture"
+        );
+        runtime.attach_v3_planes(Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let refusal = runtime
+            .backend
+            .check_plane("Volume", "d2bd::test::publication-latch")
+            .expect_err("after publication the legacy binding refuses converted types");
+        assert_eq!(refusal.resource_type(), "Volume");
+        assert_eq!(refusal.caller(), "d2bd::test::publication-latch");
+        assert!(!refusal.retryable());
         runtime.shutdown().await.unwrap();
     }
 

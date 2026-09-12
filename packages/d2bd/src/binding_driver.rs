@@ -65,7 +65,10 @@ use d2b_resource_runtime::context::{
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 
@@ -119,8 +122,14 @@ enum BindingDriverErrorKind {
     /// could not answer at all. Retryable by contract (issue #511): the actor
     /// requeues instead of failing the binding terminal.
     ParentUnavailable,
+    /// The parent Volume row is present but not a usable Volume row (its uid
+    /// or stored spec does not decode). Terminal: the committed row cannot
+    /// converge by retrying.
+    ParentSpecInvalid,
     /// The worker plan could not be derived (view rights, zero vcpu).
     PlanDerivation,
+    /// Owned children are still retiring before this binding may drain.
+    DrainPending,
     /// A provider serving effect failed transiently.
     ServingEffect,
     /// The manager refused a child ensure/delete.
@@ -130,28 +139,54 @@ enum BindingDriverErrorKind {
 impl BindingDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::ServingEffect | Self::ChildMutation | Self::ParentUnavailable => {
-                FailureClass::Retryable
-            }
+            Self::ServingEffect
+            | Self::ChildMutation
+            | Self::ParentUnavailable
+            | Self::DrainPending => FailureClass::Retryable,
             Self::SpecInvalid
             | Self::ProviderUnsupported
             | Self::OwnerMismatch
+            | Self::ParentSpecInvalid
             | Self::PlanDerivation => FailureClass::Terminal,
+        }
+    }
+
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::BINDING_SPEC_INVALID,
+            Self::ProviderUnsupported => FailureKinds::BINDING_PROVIDER_UNSUPPORTED,
+            Self::OwnerMismatch => FailureKinds::BINDING_OWNER_MISMATCH,
+            Self::ParentUnavailable => FailureKinds::BINDING_PARENT_UNAVAILABLE,
+            Self::ParentSpecInvalid => FailureKinds::BINDING_PARENT_SPEC_INVALID,
+            Self::PlanDerivation => FailureKinds::BINDING_PLAN_DERIVATION_INVALID,
+            // The shared child-first-teardown kind: draining is not a child
+            // mutation.
+            Self::DrainPending => FailureKinds::CHILDREN_DRAINING,
+            Self::ServingEffect => FailureKinds::BINDING_SERVING_EFFECT_FAILED,
+            Self::ChildMutation => FailureKinds::BINDING_CHILD_MUTATION_FAILED,
         }
     }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct BindingDriverError {
     kind: BindingDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl BindingDriverError {
     fn new(kind: BindingDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
@@ -162,7 +197,9 @@ impl core::fmt::Display for BindingDriverError {
             BindingDriverErrorKind::ProviderUnsupported => "binding-provider-unsupported",
             BindingDriverErrorKind::OwnerMismatch => "binding-owner-mismatch",
             BindingDriverErrorKind::ParentUnavailable => "binding-parent-unavailable",
+            BindingDriverErrorKind::ParentSpecInvalid => "binding-parent-spec-invalid",
             BindingDriverErrorKind::PlanDerivation => "binding-plan-derivation-invalid",
+            BindingDriverErrorKind::DrainPending => "children-draining",
             BindingDriverErrorKind::ServingEffect => "binding-serving-effect-failed",
             BindingDriverErrorKind::ChildMutation => "binding-child-mutation-failed",
         })
@@ -452,7 +489,19 @@ impl BindingDriver {
             Some(provider_ref)
                 if provider_ref.resource_type().as_str() == "Provider"
                     && provider_ref.name().as_str() == "volume-virtiofs" => {}
-            _ => return Err(self.error(BindingDriverErrorKind::ProviderUnsupported, op)),
+            other => {
+                return Err(self
+                    .error(BindingDriverErrorKind::ProviderUnsupported, op)
+                    .with_detail(
+                        FailureDetail::at("spec/provider").comparison(FailureComparison::new(
+                            "spec.providerRef",
+                            "Provider/volume-virtiofs",
+                            other
+                                .map(|reference| reference.to_canonical_string())
+                                .unwrap_or_else(|| "absent".to_owned()),
+                        )),
+                    ))
+            }
         }
         let binding = serde_json::from_slice::<VolumeBindingSpec>(
             &envelope.base.to_canonical_bytes(),
@@ -472,10 +521,10 @@ impl BindingDriver {
     /// silently change owner.
     ///
     /// Classified per issue #511: a row that is not observable yet (`Absent`,
-    /// or `Unavailable` when the manager cannot answer) defers retryably, so
-    /// a parent that simply has not been committed yet never fails the
-    /// binding terminal; `OwnerMismatch` applies only to a present row whose
-    /// owner uid actually differs.
+    /// `Unavailable`, or an `Error` read the manager could not answer with a
+    /// usable row) defers retryably, so a parent that simply has not been
+    /// committed yet never fails the binding terminal; `OwnerMismatch`
+    /// applies only to a present row whose owner uid actually differs.
     async fn parent_volume(
         &self,
         ctx: &mut ResourceContext,
@@ -483,36 +532,70 @@ impl BindingDriver {
         op: DriverOp,
     ) -> Result<(ResourceUid, VolumeSpec), BindingDriverError> {
         let key = self.parent_volume_key(binding);
-        let row = match ctx.lookup(&key).await {
+        let lookup = ctx.lookup(&key).await;
+        let row = match lookup {
             RowLookup::Present { row, .. } => row,
-            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
-                return Err(self.error(BindingDriverErrorKind::ParentUnavailable, op))
-            }
-            RowLookup::Error { plane, detail } => {
-                tracing::warn!(
-                    plane = ?plane,
-                    key = %key,
-                    detail,
-                    "binding parent row read answered with an unreadable row",
-                );
-                return Err(self.error(BindingDriverErrorKind::SpecInvalid, op));
+            _ => {
+                // A non-present read defers: the row may not be committed yet
+                // and an unusable payload is not terminal by itself (#511).
+                let mut detail = FailureDetail::at("parent/lookup");
+                if let Some(comparison) = lookup.failure_comparison("parent.volume", "present") {
+                    detail = detail.comparison(comparison);
+                }
+                if let Some(error) = lookup.error_detail() {
+                    detail = detail.with_note(error);
+                }
+                if let RowLookup::Error { plane, detail: error_detail } = &lookup {
+                    tracing::warn!(
+                        plane = ?plane,
+                        key = %key,
+                        detail = %error_detail,
+                        "binding parent row read answered with an unreadable row",
+                    );
+                }
+                return Err(self
+                    .error(BindingDriverErrorKind::ParentUnavailable, op)
+                    .with_detail(detail));
             }
         };
-        if ctx
-            .owner()
-            .is_some_and(|owner| owner != row.uid.as_slice())
+        if let Some(owner) = ctx.owner()
+            && owner != &row.uid
         {
             // The row's declared owner uid does not match the parent the
             // spec names: refuse rather than silently re-parent (R8).
-            return Err(self.error(BindingDriverErrorKind::OwnerMismatch, op));
+            return Err(self
+                .error(BindingDriverErrorKind::OwnerMismatch, op)
+                .with_detail(FailureDetail::at("parent/owner").comparison(
+                    FailureComparison::new("parent.ownerUid", uid_hex(owner), uid_hex(&row.uid)),
+                )));
         }
-        let uid = resource_uid(&row.uid)
-            .map_err(|_| self.error(BindingDriverErrorKind::OwnerMismatch, op))?;
-        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec)
-            .map_err(|_| self.error(BindingDriverErrorKind::OwnerMismatch, op))?;
+        let uid = resource_uid(&row.uid).map_err(|_| {
+            self.parent_spec_invalid(op)
+                .with_detail(Self::parent_row_detail("parent.uid"))
+        })?;
+        let envelope = serde_json::from_slice::<ResourceSpec>(&row.spec).map_err(|_| {
+            self.parent_spec_invalid(op)
+                .with_detail(Self::parent_row_detail("parent.spec"))
+        })?;
         let volume_spec = serde_json::from_slice::<VolumeSpec>(&envelope.base().to_canonical_bytes())
-            .map_err(|_| self.error(BindingDriverErrorKind::OwnerMismatch, op))?;
+            .map_err(|_| {
+                self.parent_spec_invalid(op)
+                    .with_detail(Self::parent_row_detail("parent.spec"))
+            })?;
         Ok((uid, volume_spec))
+    }
+
+    /// The terminal classification for a present parent row whose stored
+    /// identity or spec does not decode (issue #508: this is not an ownership
+    /// mismatch).
+    fn parent_spec_invalid(&self, op: DriverOp) -> BindingDriverError {
+        self.error(BindingDriverErrorKind::ParentSpecInvalid, op)
+    }
+
+    /// The comparison naming which part of the parent row was unusable.
+    fn parent_row_detail(field: &'static str) -> FailureDetail {
+        FailureDetail::at("parent/decode")
+            .comparison(FailureComparison::new(field, "a canonical Volume row", "decode failed"))
     }
 
     /// Record one terminal admission rejection in this pass's in-memory
@@ -527,6 +610,7 @@ impl BindingDriver {
     ) -> BindingDriverError {
         ctx.set_status(BindingDriverStatus::Rejected { reason });
         self.error(BindingDriverErrorKind::PlanDerivation, op)
+            .with_detail(FailureDetail::at("plan/derive").with_note(reason))
     }
 
     /// Re-derive the path-free launch plan from the persisted binding plus
@@ -774,15 +858,36 @@ fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
     ResourceUid::parse(text).map_err(|_| ())
 }
 
+/// The hex spelling one compared uid renders as (issue #508).
+fn uid_hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[async_trait::async_trait]
 impl ResourceDriver for BindingDriver {
     type Error = BindingDriverError;
 
     fn classify_error(&self, error: &BindingDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            BindingDriverErrorKind::SpecInvalid
+            | BindingDriverErrorKind::ProviderUnsupported
+            | BindingDriverErrorKind::OwnerMismatch
+            | BindingDriverErrorKind::ParentSpecInvalid
+            | BindingDriverErrorKind::PlanDerivation => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            BindingDriverErrorKind::ParentUnavailable | BindingDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            BindingDriverErrorKind::ServingEffect | BindingDriverErrorKind::ChildMutation => {
+                DriverFailure::error(
+                    error.op,
+                    error.kind.failure_kind(),
+                    FailureClass::Retryable,
+                )
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Spec decode, serving Provider check, and the owner-fence check: the
@@ -909,7 +1014,7 @@ impl ResourceDriver for BindingDriver {
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
-            .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+            .map_err(|_| self.error(BindingDriverErrorKind::DrainPending, DriverOp::Delete))?;
         Ok(())
     }
 
@@ -936,7 +1041,15 @@ impl ResourceDriver for BindingDriver {
                 // Old `VirtiofsBindingController::drain` returned
                 // `DrainIncomplete`: the finalizer (now the durable deleting
                 // mark) and the owned children stay, and the actor retries.
-                return Err(self.error(BindingDriverErrorKind::ServingEffect, op));
+                return Err(self
+                    .error(BindingDriverErrorKind::ServingEffect, op)
+                    .with_detail(
+                        FailureDetail::at("delete/mount").comparison(FailureComparison::new(
+                            "guest.mount",
+                            "released",
+                            "still mounted",
+                        )),
+                    ));
             }
             let [worker, endpoint] = self.desired_child_keys(&stored, op)?;
             // Endpoint-first: the endpoint child row is retired and the
@@ -949,7 +1062,18 @@ impl ResourceDriver for BindingDriver {
             self.effects
                 .remove_socket(&socket)
                 .await
-                .map_err(|_| self.error(BindingDriverErrorKind::ServingEffect, op))?;
+                .map_err(|error| {
+                    self.error(BindingDriverErrorKind::ServingEffect, op)
+                        .with_detail(
+                            FailureDetail::at("delete/socket")
+                                .comparison(FailureComparison::new(
+                                    "binding.socket",
+                                    "removed",
+                                    "remove failed",
+                                ))
+                                .with_note(error),
+                        )
+                })?;
             // Process-last.
             ctx.delete(&worker)
                 .await

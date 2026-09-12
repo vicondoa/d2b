@@ -94,6 +94,160 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "ResourceImport",
 ];
 
+/// The storage plane that owns one resource type during the v3 conversion
+/// (R35/F1: an exclusive per-type partition, no dual authority).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ResourcePlane {
+    /// The per-zone v3 manager plane: the type's spec store and resource
+    /// actors. A converted type is served only here; the pre-v3 durable store
+    /// is never its authority and must neither serve nor be consulted for it.
+    Manager,
+    /// The pre-v3 durable store plane: the type has no manager actor and the
+    /// durable store is its only authority.
+    Legacy,
+}
+
+/// Resolve one resource type onto its storage plane.
+///
+/// This is the single plane authority every storage entry point resolves
+/// before touching storage (issue #507): [`V3_CONVERTED_RESOURCE_TYPES`] above
+/// is the only mapping, so a converted type cannot silently be served by (or
+/// silently missed through) the legacy store, and adding a converted type
+/// cannot leave a read or write path behind.
+pub const fn resource_plane(resource_type: &str) -> ResourcePlane {
+    if is_converted_resource_type(resource_type) {
+        ResourcePlane::Manager
+    } else {
+        ResourcePlane::Legacy
+    }
+}
+
+/// Whether one resource type is in the v3 converted-type registry.
+pub const fn is_converted_resource_type(resource_type: &str) -> bool {
+    let mut index = 0;
+    while index < V3_CONVERTED_RESOURCE_TYPES.len() {
+        if str_eq(resource_type, V3_CONVERTED_RESOURCE_TYPES[index]) {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// Byte-wise string equality usable in `const fn` (`str::eq` is not const).
+const fn str_eq(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Refuse a legacy-store access whose subject resolves to the manager plane.
+///
+/// `Ok(())` means the legacy store owns the type and may serve the access;
+/// `Err(WrongPlane)` is the named, non-retryable refusal. Callers MUST NOT
+/// translate the refusal into absence, `NotFound`, or a retryable class.
+pub fn refuse_wrong_plane(resource_type: &str, caller: &'static str) -> Result<(), WrongPlane> {
+    match resource_plane(resource_type) {
+        ResourcePlane::Manager => Err(WrongPlane::new(resource_type, caller)),
+        ResourcePlane::Legacy => Ok(()),
+    }
+}
+
+/// Refuse a manager-plane access whose subject resolves to the legacy store:
+/// the symmetric fence for a bridge that may only touch manager-owned types
+/// (the child-mutation path, issue #507). The refusal names the type and the
+/// caller and is never absent or retryable, exactly like [`WrongPlane::new`].
+pub fn refuse_legacy_subject(resource_type: &str, caller: &'static str) -> Result<(), WrongPlane> {
+    match resource_plane(resource_type) {
+        ResourcePlane::Legacy => Err(WrongPlane::manager_access(resource_type, caller)),
+        ResourcePlane::Manager => Ok(()),
+    }
+}
+
+/// One storage access refused because its subject is served by the other
+/// plane (issue #507).
+///
+/// The refusal names the resource type and the caller that attempted the
+/// access, is never absence (`ResourceNotFound`), and is never retryable:
+/// retrying cannot change which plane owns the type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrongPlane {
+    resource_type: String,
+    caller: &'static str,
+    attempted: ResourcePlane,
+}
+
+impl WrongPlane {
+    /// One legacy-store access refused for a manager-owned type: the canonical
+    /// #507 refusal.
+    pub fn new(resource_type: impl Into<String>, caller: &'static str) -> Self {
+        Self {
+            resource_type: resource_type.into(),
+            caller,
+            attempted: ResourcePlane::Legacy,
+        }
+    }
+
+    /// One manager-plane access refused for a legacy-owned type: the mirror
+    /// refusal for a manager-only bridge.
+    pub fn manager_access(resource_type: impl Into<String>, caller: &'static str) -> Self {
+        Self {
+            resource_type: resource_type.into(),
+            caller,
+            attempted: ResourcePlane::Manager,
+        }
+    }
+
+    /// The resource type whose access was refused.
+    pub fn resource_type(&self) -> &str {
+        &self.resource_type
+    }
+
+    /// The stable token naming the storage entry point that refused.
+    pub fn caller(&self) -> &'static str {
+        self.caller
+    }
+
+    /// The plane whose storage the refused access attempted to use.
+    pub const fn attempted_plane(&self) -> ResourcePlane {
+        self.attempted
+    }
+
+    /// Wrong-plane is a partition error, not a transient one: retrying the
+    /// same access re-derives the same refusal.
+    pub const fn retryable(&self) -> bool {
+        false
+    }
+}
+
+impl core::fmt::Display for WrongPlane {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.attempted {
+            ResourcePlane::Legacy => write!(
+                f,
+                "wrong plane: {} is served by the manager plane, not the legacy store (caller: {})",
+                self.resource_type, self.caller
+            ),
+            ResourcePlane::Manager => write!(
+                f,
+                "wrong plane: {} is served by the legacy store, not the manager plane (caller: {})",
+                self.resource_type, self.caller
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WrongPlane {}
+
 /// Identity class used by typed validation errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityClass {
@@ -748,4 +902,67 @@ fn reference_string_schema(pattern: &str, min: u32, max: u32) -> Schema {
         })),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The plane authority is the only mapping: every type in the converted
+    /// registry resolves to the manager plane, every other name to the legacy
+    /// store.
+    #[test]
+    fn converted_registry_resolves_to_the_manager_plane() {
+        for resource_type in V3_CONVERTED_RESOURCE_TYPES {
+            assert_eq!(
+                resource_plane(resource_type),
+                ResourcePlane::Manager,
+                "{resource_type} is a converted type"
+            );
+            assert!(is_converted_resource_type(resource_type));
+            assert!(refuse_wrong_plane(resource_type, "test").is_err());
+        }
+        for standard in STANDARD_RESOURCE_TYPES {
+            assert_eq!(
+                resource_plane(standard),
+                ResourcePlane::Manager,
+                "{standard} is a standard type and must be manager-served"
+            );
+        }
+        assert_eq!(
+            resource_plane("vendor-extension.d2bus.org.Report"),
+            ResourcePlane::Legacy
+        );
+        assert!(!is_converted_resource_type(""));
+        assert!(!is_converted_resource_type("process"));
+        assert!(refuse_wrong_plane("vendor-extension.d2bus.org.Report", "test").is_ok());
+    }
+
+    /// The refusal names the resource type and the caller, is never retryable,
+    /// and carries no store error kind a caller could mistake for absence.
+    #[test]
+    fn wrong_plane_refusal_names_type_and_caller_and_is_terminal() {
+        let refusal = refuse_wrong_plane("Volume", "d2b::test::durable-read")
+            .expect_err("a converted type is refused on the legacy plane");
+        assert_eq!(refusal.resource_type(), "Volume");
+        assert_eq!(refusal.caller(), "d2b::test::durable-read");
+        assert!(!refusal.retryable());
+        let display = refusal.to_string();
+        assert!(display.contains("Volume"), "{display}");
+        assert!(display.contains("d2b::test::durable-read"), "{display}");
+        assert!(display.contains("manager plane"), "{display}");
+
+        // The mirror direction: a manager-only bridge refuses a legacy type
+        // with the same named, non-retryable error.
+        let mirror = refuse_legacy_subject("vendor-extension.d2bus.org.Report", "d2b::test::child")
+            .expect_err("a legacy type cannot reach a manager-only bridge");
+        assert_eq!(mirror.resource_type(), "vendor-extension.d2bus.org.Report");
+        assert_eq!(mirror.caller(), "d2b::test::child");
+        assert_eq!(mirror.attempted_plane(), ResourcePlane::Manager);
+        assert!(!mirror.retryable());
+        let display = mirror.to_string();
+        assert!(display.contains("vendor-extension.d2bus.org.Report"), "{display}");
+        assert!(display.contains("legacy store"), "{display}");
+        assert!(refuse_legacy_subject("Volume", "d2b::test::child").is_ok());
+    }
 }

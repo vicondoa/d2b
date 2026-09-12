@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error::ResourceError;
+use crate::error::{FailureComparison, ResourceError};
 use crate::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use crate::manager::ResourceView;
 use crate::spec_store::EnsureOutcome;
@@ -28,8 +28,8 @@ use crate::target::TargetHandle;
 pub struct OperationId(u64);
 
 /// Result of one long effect (spec section 14). Failures are reported only
-/// through the closed [`crate::error::DriverFailure`] classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// through the structured [`crate::error::DriverFailure`] surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectResult {
     /// The external effect completed successfully.
     Completed,
@@ -307,6 +307,22 @@ pub enum LookupPlane {
     Store,
 }
 
+impl LookupPlane {
+    /// The stable label both sides of a comparison render.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Manager => "manager",
+            Self::Store => "store",
+        }
+    }
+}
+
+impl std::fmt::Display for LookupPlane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The default disposition of one [`RowLookup`] under issue #511's rule
 /// "defer unless proven terminal".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +393,35 @@ impl<T> RowLookup<T> {
             Self::Absent { .. } | Self::Unavailable { .. } | Self::Error { .. } => {
                 LookupDisposition::Defer
             }
+        }
+    }
+
+    /// The compared values one non-present lookup yields (issue #508): the
+    /// caller expected `expected`, and the plane answered with the observed
+    /// side this renders. `Present` returns `None` (the read proceeded).
+    ///
+    /// One shared projection, so every read site names the same field and the
+    /// same observed answer instead of inventing its own wording.
+    pub fn failure_comparison(
+        &self,
+        field: &'static str,
+        expected: &str,
+    ) -> Option<FailureComparison> {
+        let observed = match self {
+            Self::Present { .. } => return None,
+            Self::Absent { plane } => format!("absent (plane={plane})"),
+            Self::Unavailable { plane } => format!("unavailable (plane={plane})"),
+            Self::Error { plane, .. } => format!("unreadable (plane={plane})"),
+        };
+        Some(FailureComparison::new(field, expected, observed))
+    }
+
+    /// The read's own detail when the plane answered with an unusable
+    /// payload; for the failure note (bounded at construction).
+    pub fn error_detail(&self) -> Option<&str> {
+        match self {
+            Self::Error { detail, .. } => Some(detail.as_str()),
+            _ => None,
         }
     }
 }

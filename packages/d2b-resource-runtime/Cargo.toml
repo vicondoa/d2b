@@ -20,6 +20,10 @@ thiserror = "2"
 sha2.workspace = true
 async-trait = "0.1"
 serde_json.workspace = true
+# Issue #508: the resource actor prints the one canonical structured failure
+# line (`DriverFailure::log_line`) so the operator log and the wire status are
+# projections of the same detail. First consumed by this crate.
+tracing = "0.1"
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 parking_lot = "0.12"
 

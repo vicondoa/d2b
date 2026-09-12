@@ -39,7 +39,10 @@ use d2b_resource_runtime::context::{
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 
 /// The one resource type this factory serves (KTD4 Phase A).
@@ -67,8 +70,13 @@ enum VolumeDriverErrorKind {
     ProviderUnsupported,
     /// A provider layout effect failed transiently.
     LayoutEffect,
+    /// The provider layout report is not Ready yet (Degraded/Pending): the
+    /// pass defers with a requeue instead of respawning the effect.
+    LayoutNotReady,
     /// The manager refused a child ensure/delete.
     ChildMutation,
+    /// Owned children are still retiring before this Volume may drain.
+    DrainPending,
     /// Deterministic child derivation failed (invalid attachment).
     ChildDerivation,
 }
@@ -76,25 +84,49 @@ enum VolumeDriverErrorKind {
 impl VolumeDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::LayoutEffect | Self::ChildMutation => FailureClass::Retryable,
+            Self::LayoutEffect | Self::ChildMutation | Self::LayoutNotReady | Self::DrainPending => {
+                FailureClass::Retryable
+            }
             Self::SpecInvalid | Self::ProviderUnsupported | Self::ChildDerivation => {
                 FailureClass::Terminal
             }
         }
     }
+
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
+        match self {
+            Self::SpecInvalid => FailureKinds::VOLUME_SPEC_INVALID,
+            Self::ProviderUnsupported => FailureKinds::VOLUME_PROVIDER_UNSUPPORTED,
+            Self::LayoutEffect => FailureKinds::VOLUME_LAYOUT_EFFECT_FAILED,
+            Self::LayoutNotReady => FailureKinds::VOLUME_LAYOUT_NOT_READY,
+            Self::ChildMutation => FailureKinds::VOLUME_CHILD_MUTATION_FAILED,
+            // The shared child-first-teardown kind: draining is not a child
+            // mutation.
+            Self::DrainPending => FailureKinds::CHILDREN_DRAINING,
+            Self::ChildDerivation => FailureKinds::VOLUME_CHILD_DERIVATION_INVALID,
+        }
+    }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct VolumeDriverError {
     kind: VolumeDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl VolumeDriverError {
     fn new(kind: VolumeDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
@@ -104,7 +136,9 @@ impl core::fmt::Display for VolumeDriverError {
             VolumeDriverErrorKind::SpecInvalid => "volume-spec-invalid",
             VolumeDriverErrorKind::ProviderUnsupported => "volume-provider-unsupported",
             VolumeDriverErrorKind::LayoutEffect => "volume-layout-effect-failed",
+            VolumeDriverErrorKind::LayoutNotReady => "volume-layout-not-ready",
             VolumeDriverErrorKind::ChildMutation => "volume-child-mutation-failed",
+            VolumeDriverErrorKind::DrainPending => "children-draining",
             VolumeDriverErrorKind::ChildDerivation => "volume-child-derivation-invalid",
         })
     }
@@ -339,7 +373,19 @@ impl VolumeDriver {
             Some(provider_ref)
                 if provider_ref.resource_type().as_str() == "Provider"
                     && provider_ref.name().as_str() == VOLUME_PROVIDER_NAME => {}
-            _ => return Err(self.error(VolumeDriverErrorKind::ProviderUnsupported, op)),
+            other => {
+                return Err(self
+                    .error(VolumeDriverErrorKind::ProviderUnsupported, op)
+                    .with_detail(
+                        FailureDetail::at("spec/provider").comparison(FailureComparison::new(
+                            "spec.providerRef",
+                            format!("Provider/{VOLUME_PROVIDER_NAME}"),
+                            other
+                                .map(|reference| reference.to_canonical_string())
+                                .unwrap_or_else(|| "absent".to_owned()),
+                        )),
+                    ))
+            }
         }
         Ok(())
     }
@@ -360,8 +406,10 @@ impl VolumeDriver {
         spec: &VolumeSpec,
         op: DriverOp,
     ) -> Result<Vec<DesiredBindingChild>, VolumeDriverError> {
-        let intents = desired_binding_intents(volume_ref.clone(), spec, false)
-            .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?;
+        let intents = desired_binding_intents(volume_ref.clone(), spec, false).map_err(|error| {
+            self.error(VolumeDriverErrorKind::ChildDerivation, op)
+                .with_detail(derivation_detail(error.code()))
+        })?;
         intents
             .into_iter()
             .map(|intent| {
@@ -469,13 +517,34 @@ impl VolumeDriver {
                     layout_ready.store(true, std::sync::atomic::Ordering::SeqCst);
                     d2b_resource_runtime::context::EffectResult::Completed
                 }
-                Ok(false) => {
-                    d2b_resource_runtime::context::EffectResult::Failed(
-                        DriverFailure::retryable(DriverOp::Reconcile),
+                // Degraded/Pending is a `NotYet`: the actor defers and
+                // requeues instead of respawning the effect at completion
+                // rate (issue #508).
+                Ok(false) => d2b_resource_runtime::context::EffectResult::Failed(
+                    DriverFailure::not_yet(
+                        DriverOp::Reconcile,
+                        FailureKinds::VOLUME_LAYOUT_NOT_READY,
                     )
-                }
-                Err(_) => d2b_resource_runtime::context::EffectResult::Failed(
-                    DriverFailure::retryable(DriverOp::Reconcile),
+                    .at("reconcile/layout")
+                    .with_comparison(FailureComparison::new(
+                        "layout.phase",
+                        "Ready",
+                        "Degraded/Pending",
+                    )),
+                ),
+                Err(error) => d2b_resource_runtime::context::EffectResult::Failed(
+                    DriverFailure::error(
+                        DriverOp::Reconcile,
+                        FailureKinds::VOLUME_LAYOUT_EFFECT_FAILED,
+                        FailureClass::Retryable,
+                    )
+                    .at("reconcile/layout")
+                    .with_comparison(FailureComparison::new(
+                        "layout.effect",
+                        "completed",
+                        "failed",
+                    ))
+                    .with_note(error),
                 ),
             };
             let _ = effect_sender.send(d2b_resource_runtime::context::EffectCompleted {
@@ -486,6 +555,18 @@ impl VolumeDriver {
         ctx.set_status(VolumeDriverStatus::EnsuringLayout);
         Ok(ReconcileOutcome::InProgress { operation })
     }
+}
+
+/// The comparison naming why deterministic child derivation refused
+/// (issue #508): the attachments were not admissible.
+fn derivation_detail(code: &str) -> FailureDetail {
+    FailureDetail::at("children/derive")
+        .comparison(FailureComparison::new(
+            "volume.attachments",
+            "admissible virtiofs attachments",
+            "refused",
+        ))
+        .with_note(code)
 }
 
 fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
@@ -505,10 +586,21 @@ impl ResourceDriver for VolumeDriver {
     type Error = VolumeDriverError;
 
     fn classify_error(&self, error: &VolumeDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            VolumeDriverErrorKind::SpecInvalid | VolumeDriverErrorKind::ProviderUnsupported => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            VolumeDriverErrorKind::ChildDerivation => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            VolumeDriverErrorKind::LayoutNotReady | VolumeDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            VolumeDriverErrorKind::LayoutEffect | VolumeDriverErrorKind::ChildMutation => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Spec decode plus provider reference check (old `validate_spec`).
@@ -578,7 +670,7 @@ impl ResourceDriver for VolumeDriver {
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         ctx.finalize_owned_resources()
             .await
-            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, DriverOp::Delete))?;
+            .map_err(|_| self.error(VolumeDriverErrorKind::DrainPending, DriverOp::Delete))?;
         Ok(())
     }
 
@@ -597,7 +689,18 @@ impl ResourceDriver for VolumeDriver {
         self.effects
             .remove_layout(&uid, &spec)
             .await
-            .map_err(|_| self.error(VolumeDriverErrorKind::LayoutEffect, DriverOp::Delete))
+            .map_err(|error| {
+                self.error(VolumeDriverErrorKind::LayoutEffect, DriverOp::Delete)
+                    .with_detail(
+                        FailureDetail::at("delete/layout")
+                            .comparison(FailureComparison::new(
+                                "layout.state",
+                                "removed",
+                                "remove failed",
+                            ))
+                            .with_note(error),
+                    )
+            })
     }
 }
 

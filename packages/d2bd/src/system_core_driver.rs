@@ -57,7 +57,10 @@ use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_dec
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
+use d2b_resource_runtime::error::{
+    DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
+    FailureKinds,
+};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 
 // ---------------------------------------------------------------------------
@@ -78,25 +81,35 @@ enum SystemCoreDriverErrorKind {
 }
 
 impl SystemCoreDriverErrorKind {
-    const fn class(self) -> FailureClass {
+    /// The registered failure kind this classification reports (issue #508).
+    const fn failure_kind(self) -> FailureKind {
         match self {
-            Self::SpecInvalid => FailureClass::Terminal,
-            Self::HostObservation | Self::UserDiscovery | Self::DrainPending => FailureClass::Retryable,
+            Self::SpecInvalid => FailureKinds::SYSTEM_CORE_SPEC_INVALID,
+            Self::HostObservation => FailureKinds::SYSTEM_CORE_HOST_OBSERVATION_FAILED,
+            Self::UserDiscovery => FailureKinds::SYSTEM_CORE_USER_DISCOVERY_FAILED,
+            Self::DrainPending => FailureKinds::SYSTEM_CORE_DRAIN_PENDING,
         }
     }
 }
 
-/// Typed driver failure; redacted at the erased boundary through
-/// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy)]
+/// Typed driver failure; mapped onto the structured failure surface at the
+/// erased boundary through [`ResourceDriver::classify_error`] (R13, issue
+/// #508).
+#[derive(Debug, Clone)]
 pub(crate) struct SystemCoreDriverError {
     kind: SystemCoreDriverErrorKind,
     op: DriverOp,
+    detail: FailureDetail,
 }
 
 impl SystemCoreDriverError {
-    fn new(kind: SystemCoreDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+    const fn new(kind: SystemCoreDriverErrorKind, op: DriverOp) -> Self {
+        Self { kind, op, detail: FailureDetail::new() }
+    }
+
+    fn with_detail(mut self, detail: FailureDetail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
@@ -199,8 +212,9 @@ impl SystemCoreDriverEffects for ProductionSystemCoreDriverEffects {
         provider_ref: &ResourceRef,
         spec: &HostSpec,
     ) -> Result<HostObservationReport, SystemCoreDriverError> {
-        let retryable =
-            |op: DriverOp| SystemCoreDriverError::new(SystemCoreDriverErrorKind::HostObservation, op);
+        let retryable = |op: DriverOp| {
+            SystemCoreDriverError::new(SystemCoreDriverErrorKind::HostObservation, op)
+        };
         match HostReconciler::new()
             .reconcile_with_probe(
                 host_ref,
@@ -213,13 +227,23 @@ impl SystemCoreDriverEffects for ProductionSystemCoreDriverEffects {
             .await
         {
             Ok(report) => Ok(report),
-            Err(_) => {
+            Err(probe_error) => {
                 // Preserved fallback: a probe that cannot complete still
                 // publishes the spec decision as a degraded observation
                 // rather than failing the resource.
                 let mut status = HostReconciler::new()
                     .reconcile(host_ref, provider_ref, spec)
-                    .map_err(|_| retryable(DriverOp::Reconcile))?;
+                    .map_err(|error| {
+                        retryable(DriverOp::Reconcile).with_detail(
+                            FailureDetail::at("host/probe")
+                                .comparison(FailureComparison::new(
+                                    "host.probe",
+                                    "completed",
+                                    "failed",
+                                ))
+                                .with_note(format!("{probe_error}; {error}")),
+                        )
+                    })?;
                 status.phase = ResourcePhase::Degraded;
                 Ok(HostObservationReport {
                     status,
@@ -242,10 +266,19 @@ impl SystemCoreDriverEffects for ProductionSystemCoreDriverEffects {
         UserReconciler::new(SystemCoreUserDiscovery)
             .reconcile(user_ref, spec)
             .await
-            .map_err(|_| {
+            .map_err(|error| {
                 SystemCoreDriverError::new(
                     SystemCoreDriverErrorKind::UserDiscovery,
                     DriverOp::Reconcile,
+                )
+                .with_detail(
+                    FailureDetail::at("user/discovery")
+                        .comparison(FailureComparison::new(
+                            "user.discovery",
+                            "discovered",
+                            "failed",
+                        ))
+                        .with_note(error.to_string()),
                 )
             })
     }
@@ -586,10 +619,19 @@ impl ResourceDriver for SystemCoreDriver {
     type Error = SystemCoreDriverError;
 
     fn classify_error(&self, error: &SystemCoreDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        let failure = match error.kind {
+            SystemCoreDriverErrorKind::SpecInvalid => {
+                DriverFailure::refused(error.op, error.kind.failure_kind())
+            }
+            SystemCoreDriverErrorKind::DrainPending => {
+                DriverFailure::not_yet(error.op, error.kind.failure_kind())
+            }
+            SystemCoreDriverErrorKind::HostObservation
+            | SystemCoreDriverErrorKind::UserDiscovery => {
+                DriverFailure::error(error.op, error.kind.failure_kind(), FailureClass::Retryable)
+            }
+        };
+        failure.with_detail(error.detail.clone())
     }
 
     /// Typed spec decode plus the Host Provider fence (old `validate_spec`).
