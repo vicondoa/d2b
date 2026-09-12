@@ -77,6 +77,46 @@ pub enum ResourceStatus {
     Deleting,
 }
 
+impl ResourceStatus {
+    /// The canonical wire phase for this runtime classification: the closed
+    /// `ResourcePhase` vocabulary projected onto the manager plane's rows.
+    ///
+    /// One mapping, declared next to the classification it projects: every
+    /// reader that renders a manager row's phase (the API's canonical wire
+    /// view, the daemon's effect gates) reads it here instead of re-deriving
+    /// it per call site.
+    pub const fn wire_phase(self) -> &'static str {
+        match self {
+            // No recovery effect has converged: the honest "nothing to
+            // report yet" phase of the closed vocabulary.
+            Self::Pending | Self::Recovering | Self::Reconciling => "Pending",
+            Self::Ready => "Ready",
+            Self::Failed(_) => "Failed",
+            // The closed wire vocabulary has no `Deleting`; `Deleted` is the
+            // tombstone the durable plane publishes for a committed
+            // deletion.
+            Self::Deleting => "Deleted",
+        }
+    }
+
+    /// The closed failure classification rendered into the free-form
+    /// `status.resource` layer, for a row whose driver published no
+    /// projection of its own: the universal status object is closed to
+    /// unknown fields, so a failure classification rides the type's own
+    /// layer. `None` for every non-failed classification.
+    pub fn wire_resource_layer(self) -> Option<serde_json::Value> {
+        match self {
+            Self::Failed(failure) => Some(serde_json::json!({
+                "driverFailure": {
+                    "operation": format!("{:?}", failure.op()),
+                    "retryable": failure.class() == crate::error::FailureClass::Retryable,
+                },
+            })),
+            _ => None,
+        }
+    }
+}
+
 /// The resource actor's message protocol (spec section 8).
 ///
 /// Deviation from the spec sketch: `DependencySatisfied` carries the

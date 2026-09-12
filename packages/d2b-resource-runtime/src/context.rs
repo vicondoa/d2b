@@ -291,6 +291,97 @@ impl ManagerEndpoint for ChannelManagerEndpoint {
 }
 
 // ---------------------------------------------------------------------------
+// Lookup classification (issue #511)
+// ---------------------------------------------------------------------------
+
+/// The plane one row read was answered from (issue #511). Every
+/// [`RowLookup`] records it, so a status, a log line, or a requeue reason
+/// can name where an answer came from instead of guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupPlane {
+    /// The v3 manager plane: the manager's row projection, the authority of
+    /// every converted resource's actor.
+    Manager,
+    /// The pre-v3 durable store plane: rows no actor serves (yet), read
+    /// through the store handle.
+    Store,
+}
+
+/// The default disposition of one [`RowLookup`] under issue #511's rule
+/// "defer unless proven terminal".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupDisposition {
+    /// The row was present; the caller proceeds with it.
+    Proceed,
+    /// The caller defers and requeues: a retryable failure (R13) - the actor
+    /// schedules exactly one reconcile after its backoff and publishes no
+    /// terminal status.
+    Defer,
+}
+
+/// One cross-plane row read's classification (issue #511): the single
+/// canonical answer to "is the row there yet?", "can the plane answer?",
+/// and "did the read fail?" - so no read site invents its own mapping from
+/// "nothing there" to defer-or-fail.
+///
+/// The defaults are issue #511's "defer unless proven terminal", fixed here
+/// rather than re-explained at each call site:
+///
+/// - [`RowLookup::Present`] - the plane answered with the row; proceed.
+/// - [`RowLookup::Absent`] - the plane answered and holds no row. This is
+///   the row-not-created-yet answer: **defer with a requeue**, never
+///   terminal, whatever the caller expected to find.
+/// - [`RowLookup::Unavailable`] - the plane could not answer (manager RPC
+///   failure, no published plane, unreachable store, uncommitted identity).
+///   Retryable by construction: **defer with a requeue**, never reported as
+///   absence.
+/// - [`RowLookup::Error`] - the read answered with an unusable payload and
+///   this detail (a row that does not decode, a malformed projection).
+///   **Defer with a requeue as well**: even a failed read is not terminal by
+///   itself.
+///
+/// [`RowLookup::disposition`] returns that default. A call site that fails
+/// terminal must first name its terminal evidence - the committed row that
+/// cannot decode, the structurally invalid spec - and surface it (status
+/// projection or log), so a terminal status is always evidence-backed and
+/// never inferred from absence or from an unanswered plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowLookup<T> {
+    /// The plane answered with the row.
+    Present { row: T, plane: LookupPlane },
+    /// The plane answered and holds no row.
+    Absent { plane: LookupPlane },
+    /// The plane could not answer.
+    Unavailable { plane: LookupPlane },
+    /// The read answered with an unusable payload and this detail.
+    Error { plane: LookupPlane, detail: String },
+}
+
+impl<T> RowLookup<T> {
+    /// The plane this lookup was answered from.
+    pub const fn plane(&self) -> LookupPlane {
+        match self {
+            Self::Present { plane, .. }
+            | Self::Absent { plane }
+            | Self::Unavailable { plane }
+            | Self::Error { plane, .. } => *plane,
+        }
+    }
+
+    /// The rule's default disposition (issue #511): `Present` proceeds;
+    /// `Absent`, `Unavailable`, and `Error` all defer with a requeue.
+    /// Terminal is never a default of this classification.
+    pub const fn disposition(&self) -> LookupDisposition {
+        match self {
+            Self::Present { .. } => LookupDisposition::Proceed,
+            Self::Absent { .. } | Self::Unavailable { .. } | Self::Error { .. } => {
+                LookupDisposition::Defer
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Requeue (R13; spec section 32)
 // ---------------------------------------------------------------------------
 
@@ -541,8 +632,35 @@ impl ResourceContext {
     }
 
     /// Fetch a resource row by key through the manager.
+    ///
+    /// The canonical classified form is [`Self::lookup`] (issue #511):
+    /// prefer it in new code so absence, an unanswerable plane, and a failed
+    /// read stay distinct.
     pub async fn get(&mut self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
         self.manager.get(key).await
+    }
+
+    /// Fetch a resource row by key through the manager, classified per
+    /// issue #511: `Present` carries the row, `Absent` is the honest
+    /// not-(yet)-created answer, and a manager that cannot answer is
+    /// `Unavailable` - never absence.
+    ///
+    /// Apply [`RowLookup::disposition`] before choosing an outcome: the
+    /// default is to defer and requeue unless the call site has named
+    /// terminal evidence.
+    pub async fn lookup(&mut self, key: &ResourceKey) -> RowLookup<StoredDesiredResource> {
+        match self.manager.get(key).await {
+            Ok(Some(row)) => RowLookup::Present {
+                row,
+                plane: LookupPlane::Manager,
+            },
+            Ok(None) => RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            },
+            Err(_) => RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            },
+        }
     }
 
     /// Live state of another resource (KTD3): the manager's in-memory
@@ -576,9 +694,30 @@ impl ResourceContext {
     /// The read is one manager mailbox round-trip answered from the
     /// manager's in-memory projection (no store access, KTD12), and it
     /// blocks nothing but the calling driver's own await - the same shape as
-    /// [`Self::get`].
+    /// [`Self::get`]. The classified form is [`Self::lookup_view`] (issue
+    /// #511).
     pub async fn get_view(&mut self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
         self.manager.view(key).await
+    }
+
+    /// The [`RowLookup`] form of [`Self::get_view`] (issue #511): the
+    /// manager plane's live runtime view for `key`, classified so absence
+    /// (`Absent` - no row exists) stays distinct from a manager that cannot
+    /// answer (`Unavailable`). Apply [`RowLookup::disposition`] before
+    /// choosing an outcome.
+    pub async fn lookup_view(&mut self, key: &ResourceKey) -> RowLookup<ResourceView> {
+        match self.manager.view(key).await {
+            Ok(Some(view)) => RowLookup::Present {
+                row: view,
+                plane: LookupPlane::Manager,
+            },
+            Ok(None) => RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            },
+            Err(_) => RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            },
+        }
     }
 
     /// Ensure an owned child resource through the manager (R8, R9): the
@@ -878,11 +1017,12 @@ mod tests {
 
     use super::test_support::{fixture, test_row, DeadManager, FailingDecoder, NullRequeue, TokioRequeue};
     use super::{
-        typed_spec_decoder, ManagerEndpoint, RequeueScheduler, WatchCondition, WatchId,
-        WatchRegistration, WatchSatisfied,
+        LookupDisposition, LookupPlane, ManagerEndpoint, RequeueScheduler, RowLookup,
+        WatchCondition, WatchId, WatchRegistration, WatchSatisfied, typed_spec_decoder,
     };
     use crate::error::ResourceError;
-    use crate::identity::{ResourceKey, ResourceTypeName};
+    use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName};
+    use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
 
     // -- Manager routing (R2; spec section 12) --------------------------------
@@ -988,6 +1128,155 @@ mod tests {
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.view(&key).await.unwrap_err();
         assert!(matches!(error, ResourceError::ManagerRpc(_)));
+    }
+
+    // -- Lookup classification (issue #511) -----------------------------------
+
+    /// Issue #511's default is "defer unless proven terminal": across all
+    /// four classifications only `Present` proceeds, and every classification
+    /// records the plane it was answered from.
+    #[test]
+    fn every_non_present_lookup_defers_by_default() {
+        let present: RowLookup<u8> = RowLookup::Present {
+            row: 7,
+            plane: LookupPlane::Manager,
+        };
+        assert_eq!(present.disposition(), LookupDisposition::Proceed);
+        assert_eq!(present.plane(), LookupPlane::Manager);
+
+        let absent: RowLookup<u8> = RowLookup::Absent {
+            plane: LookupPlane::Manager,
+        };
+        assert_eq!(absent.disposition(), LookupDisposition::Defer, "absence is not failure");
+        assert_eq!(absent.plane(), LookupPlane::Manager);
+
+        let unavailable: RowLookup<u8> = RowLookup::Unavailable {
+            plane: LookupPlane::Store,
+        };
+        assert_eq!(
+            unavailable.disposition(),
+            LookupDisposition::Defer,
+            "an unanswered plane is retryable"
+        );
+        assert_eq!(unavailable.plane(), LookupPlane::Store);
+
+        let error: RowLookup<u8> = RowLookup::Error {
+            plane: LookupPlane::Store,
+            detail: "row does not decode".to_owned(),
+        };
+        assert_eq!(
+            error.disposition(),
+            LookupDisposition::Defer,
+            "a failed read is not terminal by itself"
+        );
+        assert_eq!(error.plane(), LookupPlane::Store);
+    }
+
+    /// One classified read against a scripted manager: `respond` answers the
+    /// single call the read makes, and the returned context runs the read.
+    fn scripted_read(
+        respond: impl FnOnce(super::ManagerCall) + Send + 'static,
+    ) -> (super::ResourceContext, tokio::task::JoinHandle<()>) {
+        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
+        let stub = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(call) => respond(call),
+                None => panic!("classified read sent no call"),
+            }
+        });
+        let harness = fixture(
+            test_row("z", "Volume", "data"),
+            super::ChannelManagerEndpoint::new(tx),
+            NullRequeue,
+            Arc::new(FailingDecoder),
+        );
+        (harness.ctx, stub)
+    }
+
+    /// The classified read surface over a scripted manager: `Present` carries
+    /// the row, a manager that holds no row answers `Absent`, and a manager
+    /// that cannot answer reports `Unavailable` - never absence.
+    #[tokio::test]
+    async fn classified_lookup_maps_present_absent_and_unanswerable_manager() {
+        let key = ResourceKey::new("z", "Volume", "data");
+        let row = test_row("z", "Volume", "data");
+
+        // The manager answers with the row.
+        let answer = row.clone();
+        let (mut ctx, stub) = scripted_read(move |call| match call {
+            super::ManagerCall::Get { reply, .. } => {
+                let _ = reply.send(Ok(Some(answer)));
+            }
+            other => panic!("classified lookup sent a non-Get call: {other:?}"),
+        });
+        assert_eq!(
+            ctx.lookup(&key).await,
+            RowLookup::Present {
+                row,
+                plane: LookupPlane::Manager,
+            },
+        );
+        stub.await.unwrap();
+
+        // The manager answers that it holds no row: absence, not failure.
+        let (mut ctx, stub) = scripted_read(|call| match call {
+            super::ManagerCall::Get { reply, .. } => {
+                let _ = reply.send(Ok(None));
+            }
+            other => panic!("classified lookup sent a non-Get call: {other:?}"),
+        });
+        assert_eq!(
+            ctx.lookup(&key).await,
+            RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            },
+        );
+        stub.await.unwrap();
+
+        // The manager cannot answer: unavailable, never absence.
+        let (mut ctx, stub) = scripted_read(|call| match call {
+            super::ManagerCall::Get { reply, .. } => {
+                let _ = reply.send(Err(ResourceError::ManagerRpc("no answer".into())));
+            }
+            other => panic!("classified lookup sent a non-Get call: {other:?}"),
+        });
+        assert_eq!(
+            ctx.lookup(&key).await,
+            RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            },
+        );
+        stub.await.unwrap();
+
+        // The view read classifies the same shapes.
+        let view = ResourceView {
+            key: key.clone(),
+            uid: [0x42; 16],
+            generation: 3,
+            deleting: false,
+            provenance: ResourceProvenance::Api,
+            spec: b"spec-envelope".to_vec(),
+            metadata: Vec::new(),
+            owner_key: None,
+            status: None,
+            status_generation: None,
+            status_projection: None,
+        };
+        let answer = view.clone();
+        let (mut ctx, stub) = scripted_read(move |call| match call {
+            super::ManagerCall::GetView { reply, .. } => {
+                let _ = reply.send(Ok(Some(answer)));
+            }
+            other => panic!("classified view lookup sent a non-GetView call: {other:?}"),
+        });
+        assert_eq!(
+            ctx.lookup_view(&key).await,
+            RowLookup::Present {
+                row: view,
+                plane: LookupPlane::Manager,
+            },
+        );
+        stub.await.unwrap();
     }
 
     // -- Requeue (R13; spec section 32) ---------------------------------------

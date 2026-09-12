@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
 };
+use d2b_resource_runtime::context::{LookupPlane, RowLookup};
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_store::{StoreGetRequest, StoreProjection};
 use d2b_provider_runtime_azure_container_apps as aca_runtime;
@@ -622,13 +623,18 @@ impl ProductionGuestDriverEffects {
     }
 
     /// The old-shape document of one resource (`spec`, `metadata`, live
-    /// `status.phase`), from the manager view or the durable store.
-    async fn resource_value(
-        &self,
-        target: &ResourceRef,
-    ) -> Result<Option<Value>, GuestEffectError> {
+    /// `status.phase`), from the manager view or the durable store, answered
+    /// as one classified read (issue #511): `Present` carries the document,
+    /// `Absent` is the honest not-created answer on whichever plane owns the
+    /// type, `Unavailable` is a plane that could not answer, and `Error`
+    /// carries the projection detail of a committed row that cannot be read.
+    async fn resource_value(&self, target: &ResourceRef) -> RowLookup<Value> {
         if route_resource_type(target.resource_type().as_str()) != PlaneRoute::NewPlane {
-            let runtime = self.runtime()?;
+            let Ok(runtime) = self.runtime() else {
+                return RowLookup::Unavailable {
+                    plane: LookupPlane::Store,
+                };
+            };
             return match runtime
                 .store()
                 .get(StoreGetRequest {
@@ -646,63 +652,140 @@ impl ProductionGuestDriverEffects {
                 })
                 .await
             {
-                Ok(resource) => serde_json::from_slice::<Value>(&resource.canonical_json)
-                    .map(Some)
-                    .map_err(|_| GuestEffectError::InvalidResource),
+                Ok(resource) => match serde_json::from_slice::<Value>(&resource.canonical_json) {
+                    Ok(value) => RowLookup::Present {
+                        row: value,
+                        plane: LookupPlane::Store,
+                    },
+                    Err(error) => RowLookup::Error {
+                        plane: LookupPlane::Store,
+                        detail: error.to_string(),
+                    },
+                },
                 Err(error)
                     if error.kind() == d2b_resource_store::StoreErrorKind::ResourceNotFound =>
                 {
-                    Ok(None)
+                    RowLookup::Absent {
+                        plane: LookupPlane::Store,
+                    }
                 }
-                Err(_) => Err(GuestEffectError::Unavailable),
+                Err(_) => RowLookup::Unavailable {
+                    plane: LookupPlane::Store,
+                },
             };
         }
-        let plane = self.plane()?;
+        let Ok(plane) = self.plane() else {
+            return RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            };
+        };
         let key = ResourceKey::new(
             self.zone.as_str(),
             target.resource_type().as_str(),
             target.name().as_str(),
         );
-        let view = plane
-            .client()
-            .get(key)
-            .await
-            .map_err(|_| GuestEffectError::Unavailable)?;
-        let Some(view) = view else {
-            return Ok(None);
+        let view = match plane.client().get(key).await {
+            Ok(view) => view,
+            Err(_) => {
+                return RowLookup::Unavailable {
+                    plane: LookupPlane::Manager,
+                }
+            }
         };
-        let spec = serde_json::from_slice::<Value>(&view.spec)
-            .map_err(|_| GuestEffectError::InvalidResource)?;
+        let Some(view) = view else {
+            return RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            };
+        };
+        let spec = match serde_json::from_slice::<Value>(&view.spec) {
+            Ok(spec) => spec,
+            Err(error) => {
+                return RowLookup::Error {
+                    plane: LookupPlane::Manager,
+                    detail: error.to_string(),
+                }
+            }
+        };
         let metadata = if view.metadata.is_empty() {
             json!({})
         } else {
-            serde_json::from_slice::<Value>(&view.metadata)
-                .map_err(|_| GuestEffectError::InvalidResource)?
+            match serde_json::from_slice::<Value>(&view.metadata) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    return RowLookup::Error {
+                        plane: LookupPlane::Manager,
+                        detail: error.to_string(),
+                    }
+                }
+            }
         };
-        Ok(Some(json!({
-            "spec": spec,
-            "metadata": metadata,
-            "status": {"phase": view_phase(&view)},
-            "uid": crate::guest_driver::resource_uid(&view.uid)?.as_str(),
-            "generation": view.generation,
-        })))
+        let uid = match crate::guest_driver::resource_uid(&view.uid) {
+            Ok(uid) => uid,
+            Err(_) => {
+                return RowLookup::Error {
+                    plane: LookupPlane::Manager,
+                    detail: "manager row uid is not a valid ResourceUid".to_owned(),
+                }
+            }
+        };
+        RowLookup::Present {
+            row: json!({
+                "spec": spec,
+                "metadata": metadata,
+                "status": {"phase": view_phase(&view)},
+                "uid": uid.as_str(),
+                "generation": view.generation,
+            }),
+            plane: LookupPlane::Manager,
+        }
+    }
+
+    /// One row read that answered with an unreadable row: the plane and the
+    /// projection detail are logged, and the effect refuses with its named
+    /// terminal evidence (`InvalidResource`) - retrying cannot make a
+    /// committed row decode.
+    fn unreadable_row(plane: LookupPlane, detail: &str) -> GuestEffectError {
+        tracing::warn!(
+            plane = ?plane,
+            detail,
+            "guest effect row read answered with an unreadable row",
+        );
+        GuestEffectError::InvalidResource
+    }
+
+    /// Apply issue #511 to one classified row read on the effect surface:
+    /// `Present` is the document, `Absent` and `Unavailable` defer through
+    /// the caller's retryable refusal (`None`; the caller maps it to
+    /// [`GuestEffectError::Unavailable`]), and `Error` names its terminal
+    /// evidence. The plane and the detail never cross the driver boundary.
+    fn projected_row(lookup: RowLookup<Value>) -> Result<Option<Value>, GuestEffectError> {
+        match lookup {
+            RowLookup::Present { row, .. } => Ok(Some(row)),
+            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => Ok(None),
+            RowLookup::Error { plane, detail } => Err(Self::unreadable_row(plane, &detail)),
+        }
     }
 
     /// The live phase of one resource: the manager view for converted rows,
     /// the durable row's `/status/phase` for unconverted rows.
     async fn live_phase(&self, target: &ResourceRef) -> Result<Option<&'static str>, GuestEffectError> {
-        let value = self.resource_value(target).await?;
-        Ok(value.and_then(|value| {
-            value
-                .pointer("/status/phase")
-                .and_then(Value::as_str)
-                .map(|phase| match phase {
-                    "Ready" => "Ready",
-                    "Failed" => "Failed",
-                    "Deleted" => "Deleted",
-                    _ => "Pending",
-                })
-        }))
+        let value = match self.resource_value(target).await {
+            RowLookup::Present { row, .. } => row,
+            RowLookup::Absent { .. } => return Ok(None),
+            RowLookup::Unavailable { .. } => return Err(GuestEffectError::Unavailable),
+            RowLookup::Error { plane, detail } => {
+                return Err(Self::unreadable_row(plane, &detail))
+            }
+        };
+        Ok(value
+            .pointer("/status/phase")
+            .and_then(Value::as_str)
+            .map(|phase| match phase {
+                "Ready" => "Ready",
+                "Failed" => "Failed",
+                "Deleted" => "Deleted",
+                _ => "Pending",
+            }))
     }
 
     /// Whether one resource is present, not deleting, and live-Ready.
@@ -742,8 +825,7 @@ impl ProductionGuestDriverEffects {
         if let Some(spec) = request.provider_spec.as_ref() {
             return Ok(json!({"spec": spec.clone()}));
         }
-        self.resource_value(&provider_ref)
-            .await?
+        Self::projected_row(self.resource_value(&provider_ref).await)?
             .ok_or(GuestEffectError::Unavailable)
     }
 
@@ -849,9 +931,7 @@ impl ProductionGuestDriverEffects {
         credential_fields: &[&str],
         request: &GuestEffectRequest<'_>,
     ) -> Result<(), GuestEffectError> {
-        let provider = self
-            .resource_value(provider_ref)
-            .await?
+        let provider = Self::projected_row(self.resource_value(provider_ref).await)?
             .ok_or(GuestEffectError::Unavailable)?;
         let config = provider
             .pointer("/spec/config")
@@ -865,9 +945,7 @@ impl ProductionGuestDriverEffects {
         if gateway.resource_type().as_str() != "Guest" {
             return Err(GuestEffectError::InvalidResource);
         }
-        let gateway_resource = self
-            .resource_value(&gateway)
-            .await?
+        let gateway_resource = Self::projected_row(self.resource_value(&gateway).await)?
             .ok_or(GuestEffectError::Unavailable)?;
         if gateway_resource.pointer("/metadata/zone").and_then(Value::as_str)
             != Some(self.zone.as_str())
@@ -891,9 +969,7 @@ impl ProductionGuestDriverEffects {
             if credential_ref.resource_type().as_str() != "Credential" {
                 return Err(GuestEffectError::InvalidResource);
             }
-            let credential = self
-                .resource_value(&credential_ref)
-                .await?
+            let credential = Self::projected_row(self.resource_value(&credential_ref).await)?
                 .ok_or(GuestEffectError::Unavailable)?;
             // U10 owns token acquisition and delivery. The Guest leg consumes
             // only the stable, typed Credential scope contract at admission.

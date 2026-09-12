@@ -199,6 +199,55 @@ impl ResourceView {
             .as_ref()
             .filter(|_| self.status_generation == Some(self.generation))
     }
+
+    /// The canonical wire `status` object for this row: the closed universal
+    /// shape the resource contract defines, carrying this row's live
+    /// classification and its driver-published `status.resource` layer.
+    ///
+    /// This is the one producer of the status shape (issue #515). Every
+    /// reader - the API's wire view, a store-shaped bridge, an effect gate -
+    /// renders it here instead of re-deriving phase and layers per call site,
+    /// so a row cannot be reported with a shape its type's consumers refuse.
+    ///
+    /// Only a status published for this exact row generation is observed
+    /// state ([`Self::observed_status`]); anything else renders as the honest
+    /// `Pending` at the row's own generation, never a stale `Ready`. The
+    /// `resource` layer is the driver's own projection when one is current,
+    /// else the closed failure classification, else the empty layer. The
+    /// manager runs no update assessment, so `update` reports the empty
+    /// currency (`Unknown`, no owned/dependency sets).
+    pub fn wire_status(&self) -> serde_json::Value {
+        let generation = self.generation.max(1);
+        let status = self.observed_status();
+        let resource = match self.observed_status_projection() {
+            Some(projection) => projection.clone(),
+            None => status
+                .and_then(ResourceStatus::wire_resource_layer)
+                .unwrap_or_else(|| serde_json::json!({})),
+        };
+        serde_json::json!({
+            "completedAt": serde_json::Value::Null,
+            "conditions": [],
+            "lastReconciledAt": serde_json::Value::Null,
+            "observedGeneration": generation,
+            "outcome": serde_json::Value::Null,
+            "phase": status.map(ResourceStatus::wire_phase).unwrap_or("Pending"),
+            "resource": resource,
+            "startedAt": serde_json::Value::Null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": serde_json::Value::Null,
+                "observedGeneration": generation,
+                "operationId": serde_json::Value::Null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": generation,
+            },
+        })
+    }
 }
 
 /// Filter for [`ResourceManagerMsg::List`]. Absent fields are wildcards.
@@ -2261,6 +2310,108 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("stale status delivery was not recorded against its published generation");
+    }
+
+    /// The wire status contract (issue #515): one projection renders the
+    /// closed universal shape, and only a status published for the row's own
+    /// generation is observed state. A stale published status must never
+    /// leak a `Ready` into the served phase, and a live driver projection is
+    /// carried as the `status.resource` layer byte-for-byte.
+    #[test]
+    fn wire_status_projects_only_current_observed_state() {
+        use crate::identity::{ResourceKey, ResourceProvenance};
+        use crate::resource::ResourceStatus;
+        use super::ResourceView;
+
+        let key = ResourceKey::new("test", "Test", "data");
+        let view = |status: Option<ResourceStatus>,
+                    status_generation: Option<u64>,
+                    status_projection: Option<serde_json::Value>| ResourceView {
+            key: key.clone(),
+            uid: [0x42; 16],
+            generation: 2,
+            deleting: false,
+            provenance: ResourceProvenance::Api,
+            spec: b"{}".to_vec(),
+            metadata: b"{}".to_vec(),
+            owner_key: None,
+            status,
+            status_generation,
+            status_projection,
+        };
+
+        // Nothing published for the row: the honest Pending at the row's own
+        // generation, empty layer, and the closed universal key set.
+        let unpublished = view(None, None, None).wire_status();
+        assert_eq!(unpublished["phase"], serde_json::json!("Pending"));
+        assert_eq!(unpublished["observedGeneration"], serde_json::json!(2));
+        assert_eq!(unpublished["resource"], serde_json::json!({}));
+        let keys: std::collections::BTreeSet<&str> = unpublished
+            .as_object()
+            .expect("status object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from([
+                "completedAt",
+                "conditions",
+                "lastReconciledAt",
+                "observedGeneration",
+                "outcome",
+                "phase",
+                "resource",
+                "startedAt",
+                "update",
+            ]),
+            "the universal status object carries exactly the contract's keys"
+        );
+
+        // A stale status (published for generation 1, row at 2) is not
+        // observed state: no Ready leaks through, and neither does its layer.
+        let stale = view(
+            Some(ResourceStatus::Ready),
+            Some(1),
+            Some(serde_json::json!({ "stale": true })),
+        )
+        .wire_status();
+        assert_eq!(stale["phase"], serde_json::json!("Pending"));
+        assert_eq!(stale["resource"], serde_json::json!({}));
+
+        // Current Ready with a driver projection: the projection is the
+        // layer, and the phase comes from the classification.
+        let projection = serde_json::json!({ "runtimeReady": true, "evidence": "pass-2" });
+        let ready = view(
+            Some(ResourceStatus::Ready),
+            Some(2),
+            Some(projection.clone()),
+        )
+        .wire_status();
+        assert_eq!(ready["phase"], serde_json::json!("Ready"));
+        assert_eq!(ready["resource"], projection);
+
+        // A failed row without a projection carries the closed
+        // classification in the free-form layer, never a top-level field.
+        let failed = view(
+            Some(ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile))),
+            Some(2),
+            None,
+        )
+        .wire_status();
+        assert_eq!(failed["phase"], serde_json::json!("Failed"));
+        assert_eq!(
+            failed["resource"],
+            serde_json::json!({
+                "driverFailure": { "operation": "Reconcile", "retryable": true },
+            })
+        );
+
+        // The deleting tombstone: the closed vocabulary has no `Deleting`.
+        assert_eq!(
+            view(Some(ResourceStatus::Deleting), Some(2), None).wire_status()["phase"],
+            serde_json::json!("Deleted")
+        );
     }
 
     /// The projection channel's contract: a pass that computed a status

@@ -1559,19 +1559,63 @@ wiring hunks, family files land as delivered).
   `runtime-cloud-hypervisor-guest-preflight` FAIL only at the store-view
   Volume (see U11).
 
-**Still open in U12.** `EphemeralProcess` remains on the old plane
-(`ProcessResourceReconciler`, `process_resource_runtime.rs:1964`, hosted
-by the guest-local runner spawned from `composition.rs:4620` / `:4726`),
-so the unit's exit criterion - zero non-test `ResourceReconciler`
-implementors outside the delete list - is **unmet**. The only other
-implementors in the tree are test/bench-only (controller-toolkit
-tests/benches, `d2b-resource-api/src/registered.rs` test module), which
-this unit's charter excludes. The wave-2 Network limitation (unconverted
-`Guest` child denied by `PlaneMutationAdmission`) is lifted by the Guest
-conversion; production convergence was not re-run. The recorded
-limitations from the earlier waves otherwise stand, and U14's delete set
-is still blocked on the `EphemeralProcess` path (plus the store-DTO and
-authority moves its scout recorded), so U15/U16 remain downstream.
+**Status (2026-09-11): the final item landed; the unit's exit criterion
+is met.** One `ProcessDriverFactory` now serves both Process-family types:
+the row's own type name selects the typed decode (`ProcessFamilySpec`), and
+the one-shot arm runs the preserved ephemeral provider effects
+(`launch_ephemeral_resource`, `adopt_ephemeral_resource`,
+`probe_ephemeral_resource`, `stop_ephemeral_resource`) through the same
+`ProcessDriverEffects` port. Preserved one-shot semantics: a refused launch
+is terminal (the type carries no restart policy); a `Succeeded`/`Exited`
+probe starts the runtime-only `successfulTtl` clock; `Unknown` reports
+`identity-ambiguous` under `failedTtl`; a live process past `runtimeDeadline`
+stops through the fixed 30s/30s escalation and reports `Failed`; the TTL is
+never persisted (R11 - the old durable `completedAt`/`cleanupEligibleAt`
+fields are deliberately not ported) and an elapsed TTL asks the manager to
+retire the row; `incidentHold` keeps a failed row. The activation-runner mint
+is unchanged (KTD13: owned child through the manager, typed `activationInput`,
+argv-free).
+
+Deleted: `ProcessResourceReconciler`, `ProcessResourceRuntime`,
+`process_controller_descriptor`, `GuestProcessSource`, the Guest-local typed
+Runner (`run_guest_process_reconciliation`) and its `serve_guest`
+composition, plus the liveness-waiter machinery only that runner used.
+`process_resource_runtime.rs` 5897 -> 396 lines, keeping the canonical
+launch-identity resolver (`resolve_launch_identity`,
+`guest_runtime_process_matches`), the generic Process list the
+controller-session fences read, and `PROCESS_RESTART_ANNOTATION`.
+`EphemeralProcess` joins `V3_CONVERTED_RESOURCE_TYPES` (32 -> 33) with the
+plane decoder and the partition/child-route tests updated. Retained seams are
+marked dead-code with notes: the Guest-local credential-backend responder
+composition and `ProcessResourceContext::with_controller_provider_ref` /
+`with_guest_backend_supervisor` (their only production writer was the retired
+runner; the Guest-side realization follow-on re-composes them).
+
+Exit criterion proof: `impl ResourceReconciler for` now matches only the
+`d2b-controller-toolkit` benches/`src/runner.rs` test double and the
+`d2b-resource-api/src/registered.rs` test module - zero production
+implementors.
+
+Verification: `cargo test -p d2bd --lib` 630 passed / 0 failed;
+`cargo test -p d2b-resource-runtime --lib` 96 passed / 0 failed;
+`make check` 468/468 (after regenerating the generator-owned
+`docs/reference/daemon-api.md`, whose only drift was three shifted
+`identity.rs` line references). Lane: `resource-operator-activation` PASS
+77s. `runtime-cloud-hypervisor-guest-preflight` exposed and fixed one real
+regression of this conversion - the volume-virtiofs projection's Guest-owned
+`EphemeralProcess/store-preflight-<guest>` intent
+(`d2b-provider-volume-virtiofs/nix/default.nix`) became manager-served, and
+its ticket-less reconcile/delete (the `guest-process-not-vmm` guard,
+`process_provider_runtime.rs:3678-3685`) retried forever, blocking the
+Guest's teardown at `stage=guest-drained`; the driver now classifies that
+refusal terminally and converges the one-shot delete without provider
+effects (guard untouched), pinned by
+`ephemeral_unmintable_ticket_converges_on_delete_and_is_terminal_on_reconcile`.
+The confirming lane rerun was blocked before any VM boot by a sibling's
+uncommitted edit in `packages/d2b-broker/src/runtime.rs:4256` (E0308
+`spawn_runner::UserNamespaceSpec` vs `UserNamespaceSpec`; a new
+`serving_worker` argument is also mid-migration), so the preflight's green
+rerun is pending that sibling landing.
 
 ### U13. Guest targeting through the target layer
 
@@ -1754,9 +1798,11 @@ call sites for target-local *realization* (`TargetBinding::realize/delete`
 from converted drivers) remain unwired, because that is exactly the
 guest-side effect code the empty map above blocks; `TargetDirectory::adopt`
 and `observe` are driven from the session-establishment path and the KTD6
-gate. The guest-local Process/EphemeralProcess path stays under
-`run_guest_process_reconciliation` deliberately
-(`changelog.d/u13-guest-side.md` records it).
+gate. The guest-local Process/EphemeralProcess Runner
+(`run_guest_process_reconciliation`) was retired with the U12
+`EphemeralProcess` conversion (see `changelog.d/u12-ephemeral-process.md`):
+those rows are manager-served now, and no path serves them on the Guest side
+until the target-local effect map above is populated.
 
 ### U14. Delete the old machinery
 

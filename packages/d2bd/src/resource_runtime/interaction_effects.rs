@@ -561,21 +561,14 @@ impl InteractionDriverEffects for ProductionInteractionDriverEffects {
 // Envelope rendering and projections
 // ---------------------------------------------------------------------------
 
+/// The row's live phase: the canonical wire phase of the row's observed
+/// status (issue #515). `ResourceStatus::wire_phase` owns the vocabulary
+/// (`Deleting` renders as the `Deleted` tombstone); an unpublished or stale
+/// status is not observed state of the current row and reads `Pending`.
 fn view_phase(view: &ResourceView) -> &'static str {
-    if view.deleting {
-        return "Deleted";
-    }
-    if view.status_generation.is_some() && view.status_generation != Some(view.generation) {
-        // A status published before the committed generation is not observed
-        // state of the current row: fail closed.
-        return "Pending";
-    }
-    match view.status {
-        Some(ResourceStatus::Ready) => "Ready",
-        Some(ResourceStatus::Failed(_)) => "Failed",
-        Some(ResourceStatus::Deleting) => "Deleted",
-        _ => "Pending",
-    }
+    view.observed_status()
+        .map(ResourceStatus::wire_phase)
+        .unwrap_or("Pending")
 }
 
 fn phase_of_json(bytes: &[u8]) -> Option<&'static str> {
@@ -735,5 +728,72 @@ fn display_projection(
         policy_digest: String::new(),
     };
     crate::interaction_composition::wayland_session_resource_projection(&resource)
+}
+
+#[cfg(test)]
+mod tests {
+    use d2b_resource_runtime::error::{DriverFailure, DriverOp};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+
+    use super::view_phase;
+
+    /// One manager view carrying the given status classification, published
+    /// generation, and durable deleting mark.
+    fn phase_view(
+        status: Option<ResourceStatus>,
+        status_generation: Option<u64>,
+        deleting: bool,
+    ) -> ResourceView {
+        ResourceView {
+            key: ResourceKey::new("work", "Endpoint", "phase-view"),
+            uid: [0x42; 16],
+            generation: 2,
+            deleting,
+            provenance: ResourceProvenance::Api,
+            spec: b"{}".to_vec(),
+            metadata: b"{}".to_vec(),
+            owner_key: None,
+            status,
+            status_generation,
+            status_projection: None,
+        }
+    }
+
+    /// Issue #515: `view_phase` delegates to the canonical wire producer.
+    /// Across the closed status vocabulary - and across the runtime flags
+    /// (the durable deleting mark, an ungenerationed status, a stale
+    /// generation) - the gate's phase equals the phase
+    /// `ResourceView::wire_status` serves, so a future divergence fails here.
+    #[test]
+    fn view_phase_delegates_to_the_canonical_wire_phase() {
+        let statuses = [
+            None,
+            Some(ResourceStatus::Pending),
+            Some(ResourceStatus::Recovering),
+            Some(ResourceStatus::Reconciling),
+            Some(ResourceStatus::Ready),
+            Some(ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile))),
+            Some(ResourceStatus::Failed(DriverFailure::terminal(DriverOp::Delete))),
+            Some(ResourceStatus::Deleting),
+        ];
+        for deleting in [false, true] {
+            for status in statuses {
+                for status_generation in [None, Some(1), Some(2), Some(3)] {
+                    let view = phase_view(status, status_generation, deleting);
+                    let canonical = view.wire_status()["phase"]
+                        .as_str()
+                        .expect("the canonical status always carries a phase")
+                        .to_owned();
+                    assert_eq!(
+                        view_phase(&view),
+                        canonical,
+                        "phase divergence: status={status:?} status_generation={status_generation:?} deleting={deleting}",
+                    );
+                }
+            }
+        }
+    }
 }
 

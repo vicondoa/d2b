@@ -34,12 +34,11 @@
 //! from the accepted session's authenticated route, so the fence is the
 //! daemon's actual live generation rather than a value a request carries.
 //!
-//! Consumer situation (2026-09-10): no converted type registers target-local
-//! effect code in Guest mode yet. Process and EphemeralProcess effects run
-//! through the preserved Guest-local Resource API path
-//! (`run_guest_process_reconciliation`), which this service deliberately does
-//! not replace; every other converted type has no Guest-side consumer, so its
-//! realize frames are refused here instead of recording phantom state.
+//! Consumer situation (2026-09-11): no converted type registers target-local
+//! effect code in Guest mode yet. The U12 conversion moved Process and
+//! EphemeralProcess onto the manager plane and retired the Guest-local typed
+//! runner, so no type has a Guest-side realization path here; every converted
+//! type's realize frames are refused instead of recording phantom state.
 //! Registering the effect code is what admits a type.
 
 use std::{collections::BTreeMap, collections::HashMap, fmt, sync::Arc};
@@ -133,13 +132,16 @@ pub(crate) type GuestTargetEffects = BTreeMap<ResourceTypeName, Arc<dyn GuestTar
 ///
 /// What exists instead, and what this map deliberately does not replace:
 ///
-/// - the Guest's own children are realized by the preserved Guest-local path
-///   (`run_guest_process_reconciliation` over the Guest-local store) and by
-///   the Cloud Hypervisor controller's seed batch (U6);
+/// - the Cloud Hypervisor controller's guest-local lifecycle (the seed batch
+///   and drain the U6 path drives over the Guest Resource API);
 /// - a Host-zone resource whose spec targets a Guest is assigned to the Zone
 ///   target directory and reaches the Guest through the authenticated
 ///   ComponentSession ([`GuestTargetService`]); until its type is registered
 ///   here, that realize frame is refused with no state.
+///
+/// (The old Guest-local typed Process/EphemeralProcess runner was retired when
+/// those types converted in U12; no path serves those rows on the Guest side
+/// today.)
 ///
 /// Guest-side realization for converted types (the Guest half of those
 /// drivers, applying the host-resolved spec inside the Guest) is follow-on

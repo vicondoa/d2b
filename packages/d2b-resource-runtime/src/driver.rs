@@ -17,7 +17,9 @@ pub enum RecoveryOutcome {
     /// A live target resource matched the adoption identity; adopted.
     Adopted,
     /// Nothing on the target matched the adoption identity; the resource
-    /// must be created on the next reconcile.
+    /// must be created on the next reconcile. This is the target-probe
+    /// analogue of an `Absent` [`crate::context::RowLookup`] (issue #511):
+    /// absence waits for reconcile, it never fails the pass.
     Missing,
     /// Target state of this type exists but matches no adoption identity;
     /// quarantined per resource policy (R15).
@@ -80,6 +82,15 @@ pub trait ResourceDriver: Send + 'static {
 
     /// Map implementation errors onto the closed redacted retry contract.
     /// The driver knows which operations can fail how; classify accordingly.
+    ///
+    /// Issue #511's default applies at this boundary: a
+    /// [`crate::context::RowLookup`] misclassification must not let absence
+    /// (`Absent`) or an unanswerable plane (`Unavailable`) reach
+    /// [`crate::error::FailureClass::Terminal`] - those defer through the
+    /// retryable class and the actor requeues. Terminal requires named
+    /// terminal evidence (a committed row that cannot decode, a structurally
+    /// invalid spec), surfaced through the driver's own status projection or
+    /// a log.
     fn classify_error(&self, error: &Self::Error) -> DriverFailure;
 
     /// Structural validation of the current desired spec (spec section 13:

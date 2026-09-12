@@ -118,7 +118,6 @@ use d2b_core_controller::zone_links::{
 };
 use d2b_core_controller::zonelink::{ZoneLinkController, ZoneLinkOwnerProof};
 use d2b_host::ssh_keygen;
-use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 use d2b_provider_network_local::broker::resolve_tap_identity;
 use d2b_provider_network_local::controller::NetworkAdmissionProof;
 use d2b_provider_network_local::{
@@ -4449,29 +4448,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if gateway_zone_link.is_some() {
         tracing::info!("Guest-local ZoneLink transport Provider composed");
     }
-    let process_providers = Arc::new(
-        process_provider_runtime::ProductionProcessProviders::new_for_mode(
-            bundle,
-            options.broker_socket_path.clone(),
-            BrokerCallerRole::LauncherUid {
-                uid: options.broker_uid,
-            },
-            d2bd_runtime::target_runtime::DaemonMode::Guest,
-        )
-        .with_guest_backend_supervisor(
-            {
-                let guest_credential_sources =
-                    credential_backend_runtime::GuestCredentialBackendSources::from_guest_context(
-                        identity.guest_ref().clone(),
-                    );
-                credential_backend_runtime::ProductionGuestCredentialBackendSupervisor::new(
-                    credential_backend_runtime::GuestLocalCredentialBackend::from_sources(
-                        guest_credential_sources,
-                    ),
-                )
-            },
-        ),
-    );
     let local_private_path =
         options
             .local_private_key_path
@@ -4534,26 +4510,21 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         })?;
     let mut active: Option<(
         tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
-        tokio::task::JoinHandle<()>,
         d2bd_runtime::guest_mode::GuestSessionLease,
     )> = None;
     loop {
         let local_private = read_secret32(&local_private_path)?;
-        if let Some((mut serving, processing, lease)) = active.take() {
+        if let Some((mut serving, lease)) = active.take() {
             tokio::select! {
                 _ = sigterm.recv() => {
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     break;
                 },
                 _ = sigint.recv() => {
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     break;
                 },
@@ -4562,14 +4533,12 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                         Ok(session) => session,
                         Err(error) => {
                             tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
-                            active = Some((serving, processing, lease));
+                            active = Some((serving, lease));
                             continue;
                         }
                     };
                     serving.abort();
                     let _ = serving.await;
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                     let route = session.route_binding();
                     let resource_session = match runtime.resource_runtime().bind_session(&route) {
@@ -4605,35 +4574,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                         )),
                     );
                     let ttrpc = session.into_ttrpc_handle();
-                    let resource_client = Arc::new(resource_session.client());
-                    let mut process_runtime =
-                        process_resource_runtime::ProcessResourceRuntime::new_for_target(
-                            identity.zone().clone(),
-                            Arc::clone(&process_providers),
-                            Some(identity.guest_ref().clone()),
-                        );
-                    if let Ok(generation) =
-                        d2b_contracts_resource::v3::ControllerGeneration::new(
-                            identity.controller_generation(),
-                        )
-                    {
-                        process_runtime.set_controller_generation(generation);
-                    }
-                    process_runtime.set_guest_execution_binding(
-                        guest_process_execution_binding(
-                            &identity,
-                            route.reconnect_generation(),
-                        )?,
-                    );
-                    let process_store = resource_session.store_backend();
-                    let process_task = tokio::spawn(
-                        process_resource_runtime::run_guest_process_reconciliation(
-                            process_runtime,
-                            process_store,
-                            resource_client,
-                            identity.zone().clone(),
-                        ),
-                    );
                     let generation = route.reconnect_generation().get();
                     publish_component_session_started(generation);
                     active = Some((
@@ -4646,7 +4586,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             );
                             result
                         }),
-                        process_task,
                         new_lease,
                     ));
                 },
@@ -4654,8 +4593,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     if let Ok(Err(error)) = result {
                         tracing::debug!(error = %error, "Guest ComponentSession resource server stopped");
                     }
-                    processing.abort();
-                    let _ = processing.await;
                     drop(lease);
                 },
             }
@@ -4712,34 +4649,9 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 Arc::clone(&target_service),
             ));
             let ttrpc = session.into_ttrpc_handle();
-            let resource_client = Arc::new(resource_session.client());
-            let mut process_runtime =
-                process_resource_runtime::ProcessResourceRuntime::new_for_target(
-                    identity.zone().clone(),
-                    Arc::clone(&process_providers),
-                    Some(identity.guest_ref().clone()),
-                );
-            if let Ok(generation) = d2b_contracts_resource::v3::ControllerGeneration::new(
-                identity.controller_generation(),
-            ) {
-                process_runtime.set_controller_generation(generation);
-            }
-            process_runtime.set_guest_execution_binding(guest_process_execution_binding(
-                &identity,
-                route.reconnect_generation(),
-            )?);
-            let process_store = resource_session.store_backend();
-            let process_task =
-                tokio::spawn(process_resource_runtime::run_guest_process_reconciliation(
-                    process_runtime,
-                    process_store,
-                    resource_client,
-                    identity.zone().clone(),
-                ));
             publish_component_session_started(route.reconnect_generation().get());
             active = Some((
                 tokio::spawn(async move { ttrpc.serve_ttrpc_services(services).await }),
-                process_task,
                 lease,
             ));
         }
@@ -4768,32 +4680,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             Ok(d2b_provider_config_nixos::create_ttrpc_services(
                 std::sync::Arc::new(backend),
             ))
-        }
-
-        fn guest_process_execution_binding(
-            identity: &d2bd_runtime::guest_mode::GuestIdentity,
-            session_generation: ReconnectGeneration,
-        ) -> Result<GuestExecutionBinding, TypedError> {
-            GuestExecutionBinding::new(
-                identity.guest_uid().clone(),
-                ConfigurationDigest::from_bytes(identity.boot_identity().digest()),
-                session_generation,
-                identity.assignment_epoch(),
-                ResourceGeneration::new(identity.provider_generation()).map_err(|_| {
-                    TypedError::InternalConfig {
-                        detail: "guest Provider generation is invalid".to_owned(),
-                    }
-                })?,
-                d2b_contracts_resource::v3::ControllerGeneration::new(
-                    identity.controller_generation(),
-                )
-                .map_err(|_| TypedError::InternalConfig {
-                    detail: "guest controller generation is invalid".to_owned(),
-                })?,
-            )
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "guest Process execution binding is invalid".to_owned(),
-            })
         }
     }
     Ok(())

@@ -1,13 +1,25 @@
 //! Process resource driver (U6): the v3 `ResourceDriver` conversion of the
 //! daemon-owned generic Process path (R3, R4, R15, R16; KTD7, KTD12).
 //!
-//! The driver keeps the old `ProcessResourceReconciler` behavior and nothing
-//! else: recover probes and classifies adopt/missing/quarantine per the
-//! preserved `ProviderAdoption` classification (same Adopt/Quarantine/Missing
-//! shape as the `d2bd-runtime` supervisor precedent), reconcile launches
-//! through the preserved signed provider-ticket path (the ticket machinery
-//! stays inside `ProductionProcessProviders`), and delete reuses the exact
-//! term-then-kill escalation with pidfd retry.
+//! One factory serves both Process-family types (KTD4 Phase A): the durable
+//! `Process` and the one-shot `EphemeralProcess`. The durable arm keeps the
+//! old `ProcessResourceReconciler` behavior and nothing else: recover probes
+//! and classifies adopt/missing/quarantine per the preserved
+//! `ProviderAdoption` classification (same Adopt/Quarantine/Missing shape as
+//! the `d2bd-runtime` supervisor precedent), reconcile launches through the
+//! preserved signed provider-ticket path (the ticket machinery stays inside
+//! `ProductionProcessProviders`), and delete reuses the exact term-then-kill
+//! escalation with pidfd retry.
+//!
+//! The ephemeral arm preserves the one-shot lifecycle (KTD13): the launch
+//! goes through the Process Provider's ephemeral ticket (never a direct
+//! spawn), a refused launch is terminal (the type carries no restart policy),
+//! the bounded `runtimeDeadline` stops an over-running process and reports
+//! `Failed`, an observed exit reports `Succeeded`, and the row then waits out
+//! `successfulTtl`/`failedTtl` in runtime memory (R11: the old durable
+//! `completedAt`/`cleanupEligibleAt` status fields are deliberately not
+//! ported) before asking the manager to retire it. `incidentHold` keeps a
+//! failed row until an explicit release, exactly as the old TTL gate did.
 //!
 //! Ticket inputs (KTD7) come from the factory's zone-authority wiring - the
 //! bundle resolver and `ZoneAuthorityIdentity` path - never from the spec
@@ -15,7 +27,8 @@
 //! persisted restart-generation annotation is deliberately not ported.
 //!
 //! Conversion mapping (spec section 13):
-//! - `describe` -> [`ProcessDriverFactory`] registration under `Process`.
+//! - `describe` -> [`ProcessDriverFactory`] registration under `Process` and
+//!   `EphemeralProcess`.
 //! - `validate_spec` -> [`ResourceDriver::validate`].
 //! - `observe` -> [`ResourceDriver::recover`] plus reconcile probing.
 //! - `prepare`/`execute`/`finalize` -> [`ResourceDriver::delete`].
@@ -33,10 +46,13 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    AdoptionPolicy, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
+    AdoptionPolicy, ControllerGeneration, DurationMs, ResourceGeneration, ResourceName, ResourceRef,
     ResourceSpec, ResourceTypeName as ContractResourceTypeName, ResourceUid, SchemaFingerprint,
     ZoneId, ZoneRevision,
-    process::{DesiredLifecycle, ProcessClass, ProcessSpec, RestartClass},
+    process::{
+        DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, ProcessClass, ProcessSpec,
+        RestartClass, RestartPolicySpec,
+    },
 };
 use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, ProcessIdentityDigest};
 use d2b_resource_runtime::context::{
@@ -50,13 +66,16 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2bd_runtime::target_runtime::DaemonMode;
 
 use crate::process_provider_runtime::{
-    ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, execution_target_allowed,
+    ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, ProviderLiveness,
+    execution_target_allowed,
 };
 use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
-/// The one resource type this factory serves (KTD4 Phase A). `EphemeralProcess`
-/// stays on the old reconciler until its conversion unit.
+/// The durable Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
+
+/// The one-shot Process resource type this factory serves (KTD4 Phase A).
+pub(crate) const EPHEMERAL_PROCESS_TYPE_NAME: &str = "EphemeralProcess";
 
 const MINIJAIL_PROVIDER: &str = "system-minijail";
 const SYSTEMD_PROVIDER: &str = "system-systemd";
@@ -68,6 +87,18 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Preserved kill budget after the drain timeout elapses (old stop
 /// escalation).
 const KILL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Preserved one-shot stop escalation (old `ProcessResourceRuntime::
+/// stop_record` for `DesiredProcess::Ephemeral`: a fixed 30s term, then
+/// `KILL_TIMEOUT`).
+const EPHEMERAL_TERM_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Preserved one-shot observation cadence: the old descriptor's 5s resync
+/// (`process_controller_descriptor`, both Process types), now this driver's
+/// self-requeue while an ephemeral row has not reached its terminal state.
+/// Without it an exit would only be noticed when something else woke the
+/// actor.
+const EPHEMERAL_PROCESS_RESYNC: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -156,6 +187,9 @@ pub(crate) enum ProcessDriverStatus {
     AwaitingRestart { restart_count: u32 },
     /// The process reached a state that satisfies its desired lifecycle.
     Succeeded { code: &'static str },
+    /// A one-shot process reached a terminal failure that never restarts
+    /// (old ephemeral `runtime-deadline`).
+    Failed { code: &'static str },
     /// The realization target carried a drifted/ambiguous identity (R15).
     Quarantined { code: &'static str },
 }
@@ -191,7 +225,10 @@ impl core::fmt::Display for SpecDecodeFailure {
 
 impl core::error::Error for SpecDecodeFailure {}
 
-/// The manager-wired decode hook for Process rows.
+/// The manager-wired decode hook for Process-family rows (`Process` and
+/// `EphemeralProcess`). The envelope is type-agnostic (`ResourceSpec` layer
+/// plus the exact stored base bytes); the driver decodes the typed family
+/// spec from the row's own type name.
 pub(crate) fn process_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| {
         serde_json::from_slice::<ResourceSpec>(bytes).map(|spec| ProcessSpecEnvelope {
@@ -201,6 +238,69 @@ pub(crate) fn process_spec_decoder() -> Arc<dyn SpecDecoder> {
         })
         .map_err(|error| SpecDecodeFailure { reason: error.to_string() })
     })
+}
+
+/// The typed Process-family spec: one row is either the durable `Process`
+/// contract or the one-shot `EphemeralProcess` contract. The two share the
+/// execution fields, so the driver decodes once and dispatches on the row's
+/// type name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessFamilySpec {
+    Process(ProcessSpec),
+    Ephemeral(EphemeralProcessSpec),
+}
+
+impl ProcessFamilySpec {
+    /// Borrow the shared execution fields.
+    fn execution(&self) -> &ExecutionSpec {
+        match self {
+            Self::Process(spec) => spec.execution(),
+            Self::Ephemeral(spec) => spec.execution(),
+        }
+    }
+
+    /// The declared process class (ephemeral rows are workers by contract).
+    fn process_class(&self) -> ProcessClass {
+        self.execution().process_class()
+    }
+
+    /// Whether the desired steady state is a live process. A one-shot
+    /// `EphemeralProcess` is always Running (the old `DesiredProcess::
+    /// is_running` ephemeral arm).
+    fn wants_running(&self) -> bool {
+        match self {
+            Self::Process(spec) => spec.desired_lifecycle() == DesiredLifecycle::Running,
+            Self::Ephemeral(_) => true,
+        }
+    }
+
+    /// The adoption policy. A one-shot row has no policy field and always
+    /// adopts on restart (the old ephemeral arm called
+    /// `adopt_ephemeral_resource` unconditionally).
+    fn adoption_policy(&self) -> AdoptionPolicy {
+        match self {
+            Self::Process(spec) => spec.adoption_policy(),
+            Self::Ephemeral(_) => AdoptionPolicy::AdoptOnRestart,
+        }
+    }
+
+    /// The restart policy, when the family member has one. A one-shot row
+    /// never restarts (old `restart_delay` returned zero and every ephemeral
+    /// restart decision was `false`).
+    fn restart_policy(&self) -> Option<&RestartPolicySpec> {
+        match self {
+            Self::Process(spec) => Some(spec.restart_policy()),
+            Self::Ephemeral(_) => None,
+        }
+    }
+
+    /// The bounded graceful-drain timeout, when the family member has one.
+    fn drain_timeout(&self) -> Option<&DurationMs> {
+        match self {
+            Self::Process(spec) => Some(spec.drain_timeout()),
+            Self::Ephemeral(_) => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +413,15 @@ pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
         timeout: Duration,
     ) -> Result<ProcessIdentityDigest, String>;
 
+    /// Launch one one-shot process through the preserved ephemeral ticket
+    /// (old `launch_ephemeral_resource`; `start_deadline` is the timeout).
+    async fn launch_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProcessIdentityDigest, String>;
+
     /// Probe-and-adopt over pidfd/proc evidence with the preserved
     /// Adopt/Stale/Quarantined classification.
     async fn adopt(
@@ -321,12 +430,41 @@ pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
         spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String>;
 
+    /// Probe-and-adopt one one-shot process (old
+    /// `adopt_ephemeral_resource`): `Absent` is also the observed exit of a
+    /// process this driver launched, because the provider clears its local
+    /// authority for the missing identity.
+    async fn adopt_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderAdoption, String>;
+
+    /// Probe one already-started one-shot identity (old
+    /// `probe_ephemeral_resource`): the Alive/Exited/Unknown liveness
+    /// classification drives the steady-state observation, and the provider
+    /// clears its local authority when the exact process is gone.
+    async fn probe_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderLiveness, String>;
+
     /// Preserved term-then-kill escalation with pidfd retry; `Ok(killed)`
     /// reports whether the kill stage ran.
     async fn stop(
         &self,
         identity: &ProcessResourceIdentity,
         spec: &ProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String>;
+
+    /// Stop one exact one-shot identity (old `stop_ephemeral_resource`).
+    async fn stop_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String>;
@@ -543,6 +681,19 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
             .map(|launch| launch.identity)
     }
 
+    async fn launch_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProcessIdentityDigest, String> {
+        let context = self.resource_context(identity).await;
+        self.providers
+            .launch_ephemeral_resource(context, spec, timeout)
+            .await
+            .map(|launch| launch.identity)
+    }
+
     async fn adopt(
         &self,
         identity: &ProcessResourceIdentity,
@@ -550,6 +701,26 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
     ) -> Result<ProviderAdoption, String> {
         self.providers
             .adopt_resource(self.resource_context(identity).await, spec)
+            .await
+    }
+
+    async fn adopt_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderAdoption, String> {
+        self.providers
+            .adopt_ephemeral_resource(self.resource_context(identity).await, spec)
+            .await
+    }
+
+    async fn probe_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.providers
+            .probe_ephemeral_resource(self.resource_context(identity).await, spec)
             .await
     }
 
@@ -562,6 +733,23 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
     ) -> Result<bool, String> {
         self.providers
             .stop_resource(
+                self.resource_context(identity).await,
+                spec,
+                term_timeout,
+                kill_timeout,
+            )
+            .await
+    }
+
+    async fn stop_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.providers
+            .stop_ephemeral_resource(
                 self.resource_context(identity).await,
                 spec,
                 term_timeout,
@@ -681,18 +869,22 @@ pub(crate) struct ProcessDriverArgs {
     pub(crate) mode: DaemonMode,
 }
 
-/// [`ResourceDriverFactory`] for the `Process` resource type. Construction is
-/// infallible by contract: resource-specific failures surface through the
-/// driver's validate/recover where the actor owns retry policy (R3).
+/// [`ResourceDriverFactory`] for the Process-family resource types
+/// (`Process` and `EphemeralProcess`). Construction is infallible by
+/// contract: resource-specific failures surface through the driver's
+/// validate/recover where the actor owns retry policy (R3).
 pub(crate) struct ProcessDriverFactory {
-    types: [ResourceTypeName; 1],
+    types: [ResourceTypeName; 2],
     args: ProcessDriverArgs,
 }
 
 impl ProcessDriverFactory {
     pub(crate) fn new(args: ProcessDriverArgs) -> Self {
         Self {
-            types: [ResourceTypeName::new(PROCESS_TYPE_NAME)],
+            types: [
+                ResourceTypeName::new(PROCESS_TYPE_NAME),
+                ResourceTypeName::new(EPHEMERAL_PROCESS_TYPE_NAME),
+            ],
             args,
         }
     }
@@ -741,6 +933,84 @@ pub(crate) struct ProcessDriver {
     authority: ProcessZoneAuthority,
     effects: Arc<dyn ProcessDriverEffects>,
     budget: Arc<RestartBudget>,
+    ephemeral: Arc<EphemeralRuntime>,
+}
+
+/// Runtime-only one-shot lifecycle memory (R11: nothing here is persisted;
+/// the old durable `startedAt`/`completedAt`/`cleanupEligibleAt` fields are
+/// not ported).
+#[derive(Default)]
+struct EphemeralRuntime {
+    /// Set once this actor launched or adopted the one-shot process; a later
+    /// `Absent` classification is then the terminal exit, never a first
+    /// launch. Across a daemon restart this memory starts empty again, so the
+    /// manager-served row is re-adopted/reconciled exactly like a durable row
+    /// (no durable status exists to read).
+    started: AtomicBool,
+    /// When the process was launched or adopted: the clock for the bounded
+    /// runtime deadline.
+    started_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    /// The terminal outcome, once observed: the clock for the retention TTL.
+    completed: parking_lot::Mutex<Option<EphemeralCompletion>>,
+}
+
+/// One one-shot terminal outcome: the TTL class and when it was reached.
+#[derive(Clone, Copy)]
+struct EphemeralCompletion {
+    failed: bool,
+    code: &'static str,
+    at: tokio::time::Instant,
+}
+
+impl EphemeralRuntime {
+    fn started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+
+    fn mark_started(&self) {
+        let mut started_at = self.started_at.lock();
+        if started_at.is_none() {
+            *started_at = Some(tokio::time::Instant::now());
+        }
+        self.started.store(true, Ordering::SeqCst);
+    }
+
+    fn started_at(&self) -> Option<tokio::time::Instant> {
+        *self.started_at.lock()
+    }
+
+    /// Record the one-shot terminal state once; a second observation keeps
+    /// the first (the TTL clock must not restart).
+    fn finish(&self, failed: bool, code: &'static str) -> EphemeralCompletion {
+        let mut completed = self.completed.lock();
+        *completed.get_or_insert(EphemeralCompletion {
+            failed,
+            code,
+            at: tokio::time::Instant::now(),
+        })
+    }
+
+    fn completed(&self) -> Option<EphemeralCompletion> {
+        *self.completed.lock()
+    }
+
+    /// Test-only: backdate the runtime-deadline clock.
+    #[cfg(test)]
+    fn backdate_started(&self, elapsed: Duration) {
+        let mut started_at = self.started_at.lock();
+        if let Some(at) = started_at.as_mut() {
+            *at -= elapsed;
+        }
+        self.started.store(true, Ordering::SeqCst);
+    }
+
+    /// Test-only: backdate the retention TTL clock.
+    #[cfg(test)]
+    fn backdate_completed(&self, elapsed: Duration) {
+        if let Some(completion) = self.completed.lock().as_mut() {
+            completion.at -= elapsed;
+        }
+    }
 }
 
 /// Zone-authority inputs folded into every derived identity (KTD7).
@@ -778,6 +1048,7 @@ impl ProcessDriver {
             },
             effects,
             budget: Arc::new(RestartBudget::default()),
+            ephemeral: Arc::new(EphemeralRuntime::default()),
         }
     }
 
@@ -791,17 +1062,26 @@ impl ProcessDriver {
         ProcessDriverError::new(kind, op)
     }
 
-    /// Decode the stored envelope and the typed spec in one step.
+    /// Decode the stored envelope and the typed family spec in one step. The
+    /// row's own type name selects the contract (`Process` or
+    /// `EphemeralProcess`); both are served by this factory.
     fn decoded_spec(
         &self,
         ctx: &ResourceContext,
         op: DriverOp,
-    ) -> Result<(ProcessSpecEnvelope, ProcessSpec), ProcessDriverError> {
+    ) -> Result<(ProcessSpecEnvelope, ProcessFamilySpec), ProcessDriverError> {
         let envelope = ctx
             .spec::<ProcessSpecEnvelope>()
             .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
-        let spec = serde_json::from_slice::<ProcessSpec>(&envelope.base.to_canonical_bytes())
-            .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
+        let base = envelope.base.to_canonical_bytes();
+        let spec = match ctx.key().type_name.as_str() {
+            EPHEMERAL_PROCESS_TYPE_NAME => serde_json::from_slice::<EphemeralProcessSpec>(&base)
+                .map(ProcessFamilySpec::Ephemeral)
+                .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?,
+            _ => serde_json::from_slice::<ProcessSpec>(&base)
+                .map(ProcessFamilySpec::Process)
+                .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?,
+        };
         Ok((envelope.clone(), spec))
     }
 
@@ -1076,6 +1356,368 @@ impl ProcessDriver {
         });
         Ok(ReconcileOutcome::InProgress { operation })
     }
+
+    /// One-shot recovery (old `start_record` ephemeral arm + the start
+    /// classification): an exact live identity is adopted and remembered, an
+    /// absent one waits for the first reconcile launch, and drifted or
+    /// ambiguous evidence quarantines. `ControllerBootstrapMissing` cannot
+    /// describe a one-shot ticket and stays terminal, exactly as the old
+    /// `start_record_plan` refused it (`TemplateUnavailable`).
+    async fn recover_ephemeral(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<RecoveryOutcome, ProcessDriverError> {
+        match self.effects.adopt_ephemeral(identity, spec).await {
+            Ok(ProviderAdoption::Adopted(_)) => {
+                self.ephemeral.mark_started();
+                ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                Ok(RecoveryOutcome::Adopted)
+            }
+            Ok(ProviderAdoption::Absent) => Ok(RecoveryOutcome::Missing),
+            Ok(ProviderAdoption::Stale { .. }) | Ok(ProviderAdoption::Quarantined(_)) => {
+                ctx.set_status(ProcessDriverStatus::Quarantined { code: "identity-ambiguous" });
+                Ok(RecoveryOutcome::Quarantined)
+            }
+            Ok(ProviderAdoption::ControllerBootstrapMissing) => Err(self.error(
+                ProcessDriverErrorKind::TemplateUnavailable,
+                DriverOp::Recover,
+            )),
+            Err(error) => Err(map_provider_error(error, DriverOp::Recover)),
+        }
+    }
+
+    /// The durable arm: preserved adopt/launch/stop-stale behavior.
+    async fn reconcile_process(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: ProcessResourceIdentity,
+        spec: &ProcessSpec,
+    ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
+            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+
+        // A retryable launch failure from the previous pass: schedule exactly
+        // one runtime-only requeue with the policy restart delay (R13; spec
+        // section 32 - nothing is persisted).
+        if self.budget.take_restart_scheduled() {
+            let restart_count = self.budget.count();
+            let delay = restart_delay(spec, restart_count);
+            let _ = ctx.requeue_after(delay);
+            ctx.set_status(ProcessDriverStatus::AwaitingRestart { restart_count });
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+
+        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt {
+            if self
+                .effects
+                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
+            {
+                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile).await?;
+            }
+            ctx.set_status(ProcessDriverStatus::Launching);
+            return self.spawn_launch(ctx, identity, spec);
+        }
+
+        match self.effects.adopt(&identity, spec).await {
+            Ok(ProviderAdoption::Adopted(_)) => {
+                ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                Ok(ReconcileOutcome::Satisfied)
+            }
+            Ok(ProviderAdoption::Absent) => {
+                ctx.set_status(ProcessDriverStatus::Launching);
+                self.spawn_launch(ctx, identity, spec)
+            }
+            Ok(ProviderAdoption::ControllerBootstrapMissing) => {
+                // The Provider owns the exact stop and finalization before the
+                // replacement launch (preserved controller-bootstrap effect
+                // ordering).
+                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile).await?;
+                ctx.set_status(ProcessDriverStatus::Launching);
+                self.spawn_launch(ctx, identity, spec)
+            }
+            Ok(ProviderAdoption::Stale { candidate }) => {
+                self.effects
+                    .stop_stale(&identity.provider_ref, &candidate)
+                    .await
+                    .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
+                ctx.set_status(ProcessDriverStatus::Launching);
+                self.spawn_launch(ctx, identity, spec)
+            }
+            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
+                ProcessDriverErrorKind::IdentityAmbiguous,
+                DriverOp::Reconcile,
+            )),
+            Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
+        }
+    }
+
+    /// The one-shot arm (old `DesiredProcess::Ephemeral` per-record block).
+    ///
+    /// Preserved ordering: a terminal row only waits out its retention TTL; a
+    /// live row that outlived its bounded runtime stops exactly and turns
+    /// terminal `Failed`; a row this actor already started is observed
+    /// through the liveness probe (`Alive` requeues, `Exited` reports
+    /// `Succeeded`, `Unknown` reports `identity-ambiguous`); and a first-sight
+    /// row runs the adoption classification (adopt, launch, exact stale
+    /// replacement, or fail closed). A one-shot never restarts.
+    async fn reconcile_ephemeral(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        if let Some(completion) = self.ephemeral.completed() {
+            return self.ephemeral_retention(ctx, spec, completion).await;
+        }
+
+        // Runtime deadline (old `ephemeral runtime-deadline` arm): the process
+        // this actor started outlived its bounded run, so it stops exactly and
+        // the terminal outcome is `Failed`.
+        if self.ephemeral.started()
+            && let Some(started_at) = self.ephemeral.started_at()
+            && started_at.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
+        {
+            if self
+                .effects
+                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
+            {
+                self.stop_and_finalize_ephemeral(identity, spec, DriverOp::Reconcile)
+                    .await?;
+            } else {
+                // Nothing live to stop; the provider's exact finalization
+                // still runs (old `stop_record` no-op + `finalize_resource`).
+                self.effects
+                    .finalize(identity)
+                    .await
+                    .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
+            }
+            let completion = self.ephemeral.finish(true, "runtime-deadline");
+            ctx.set_status(ProcessDriverStatus::Failed { code: "runtime-deadline" });
+            return self.ephemeral_retention(ctx, spec, completion).await;
+        }
+
+        // Steady state: the process this actor started is observed through
+        // the preserved liveness probe (old `probe_record`), and `Exited` is
+        // the one-shot's terminal exit - never a relaunch. `Unknown` (an
+        // identity that no longer verifies) is the preserved terminal
+        // `identity-ambiguous` failure.
+        if self.ephemeral.started() {
+            return match self.effects.probe_ephemeral(identity, spec).await {
+                Ok(ProviderLiveness::Alive) => {
+                    ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                    // Observe the bounded runtime and the exit while the row
+                    // is live: the old descriptor resynced both Process types
+                    // at 5s.
+                    let _ = ctx.requeue_after(EPHEMERAL_PROCESS_RESYNC);
+                    Ok(ReconcileOutcome::Satisfied)
+                }
+                Ok(ProviderLiveness::Exited) => {
+                    let completion = self.ephemeral.finish(false, "process-exited");
+                    ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-exited" });
+                    self.ephemeral_retention(ctx, spec, completion).await
+                }
+                Ok(ProviderLiveness::Unknown) => {
+                    let completion = self.ephemeral.finish(true, "identity-ambiguous");
+                    ctx.set_status(ProcessDriverStatus::Failed { code: "identity-ambiguous" });
+                    self.ephemeral_retention(ctx, spec, completion).await
+                }
+                Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
+            };
+        }
+
+        // First sight of the row (first pass, or the first after a daemon
+        // restart): the preserved adoption classification decides adopt (an
+        // already-live identity), launch (absent), exact stale replacement,
+        // or a fail-closed refusal.
+        match self.effects.adopt_ephemeral(identity, spec).await {
+            Ok(ProviderAdoption::Adopted(_)) => {
+                self.ephemeral.mark_started();
+                ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                let _ = ctx.requeue_after(EPHEMERAL_PROCESS_RESYNC);
+                Ok(ReconcileOutcome::Satisfied)
+            }
+            Ok(ProviderAdoption::Absent) => {
+                ctx.set_status(ProcessDriverStatus::Launching);
+                self.spawn_ephemeral_launch(ctx, identity, spec)
+            }
+            Ok(ProviderAdoption::Stale { candidate }) => {
+                self.effects
+                    .stop_stale(&identity.provider_ref, &candidate)
+                    .await
+                    .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
+                ctx.set_status(ProcessDriverStatus::Launching);
+                self.spawn_ephemeral_launch(ctx, identity, spec)
+            }
+            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
+                ProcessDriverErrorKind::IdentityAmbiguous,
+                DriverOp::Reconcile,
+            )),
+            // A one-shot ticket carries no controller bootstrap endpoint, so
+            // this classification is the old `start_record_plan` refusal
+            // (terminal template unavailability), never a restart.
+            Ok(ProviderAdoption::ControllerBootstrapMissing) => Err(self.error(
+                ProcessDriverErrorKind::TemplateUnavailable,
+                DriverOp::Reconcile,
+            )),
+            Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
+        }
+    }
+
+    /// The one-shot retention wait (old `ephemeral_ttl_elapsed` +
+    /// `request_delete`). R11: the TTL clock is the driver's runtime memory,
+    /// never a persisted status field; the manager owns row retirement, so an
+    /// elapsed TTL asks it to delete this row and the delete pass runs the
+    /// preserved stop/finalize cleanup. `incidentHold` blocks a failed row's
+    /// cleanup until an explicit release, exactly as the old TTL gate did.
+    async fn ephemeral_retention(
+        &mut self,
+        ctx: &mut ResourceContext,
+        spec: &EphemeralProcessSpec,
+        completion: EphemeralCompletion,
+    ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        ctx.set_status(if completion.failed {
+            ProcessDriverStatus::Failed { code: completion.code }
+        } else {
+            ProcessDriverStatus::Succeeded { code: completion.code }
+        });
+        if completion.failed && spec.incident_hold() {
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+        let ttl = Duration::from_millis(if completion.failed {
+            spec.failed_ttl().as_millis()
+        } else {
+            spec.successful_ttl().as_millis()
+        });
+        let elapsed = completion.at.elapsed();
+        if elapsed < ttl {
+            let _ = ctx.requeue_after(ttl - elapsed);
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+        let key = ctx.key().clone();
+        ctx.delete(&key)
+            .await
+            .map_err(|_| self.error(ProcessDriverErrorKind::ProviderEffect, DriverOp::Reconcile))?;
+        Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Preserved one-shot stop: the fixed 30s term, the 30s kill budget, then
+    /// the provider's exact finalization (old `stop_record` ephemeral arm).
+    async fn stop_and_finalize_ephemeral(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+        op: DriverOp,
+    ) -> Result<(), ProcessDriverError> {
+        tracing::warn!(
+            resource = %identity.resource_ref.to_canonical_string(),
+            operation = ?op,
+            "stopping a managed one-shot process for its driver operation"
+        );
+        self.effects
+            .stop_ephemeral(identity, spec, EPHEMERAL_TERM_TIMEOUT, KILL_TIMEOUT)
+            .await
+            .map_err(|error| map_provider_error(error, op))?;
+        self.effects
+            .finalize(identity)
+            .await
+            .map_err(|error| map_provider_error(error, op))?;
+        Ok(())
+    }
+
+    /// Spawn the one-shot signed-ticket launch as a long effect (R5, KTD12);
+    /// completion arrives as [`EffectCompleted`] with the operation id. A
+    /// one-shot row has no restart policy, so a refused launch is terminal
+    /// (old `handle_start_failure` with no ephemeral restart arm) and the
+    /// start is remembered only on success.
+    fn spawn_ephemeral_launch(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        let operation = ctx.begin_operation();
+        let effects = Arc::clone(&self.effects);
+        let effect_sender = ctx.effect_sender();
+        let ephemeral = Arc::clone(&self.ephemeral);
+        // The bounded start deadline is the launch budget (old
+        // `launch_timeout` for the ephemeral arm).
+        let timeout = Duration::from_millis(spec.start_deadline().as_millis());
+        let task_spec = spec.clone();
+        let identity = identity.clone();
+        tokio::spawn(async move {
+            let effect_result = match effects.launch_ephemeral(&identity, &task_spec, timeout).await {
+                Ok(_) => {
+                    ephemeral.mark_started();
+                    EffectResult::Completed
+                }
+                Err(error) => {
+                    // The provider's reason is the only diagnostic: status is
+                    // memory-only (R11) and the closed classification is all
+                    // that reaches the actor. `ResourceRef`'s `Display` is the
+                    // redaction stub, so both refs render canonically.
+                    tracing::warn!(
+                        resource = %identity.resource_ref.to_canonical_string(),
+                        provider = %identity.provider_ref.to_canonical_string(),
+                        error = %error,
+                        "ephemeral process launch failed"
+                    );
+                    EffectResult::Failed(DriverFailure::terminal(DriverOp::Reconcile))
+                }
+            };
+            let _ = effect_sender.send(EffectCompleted { operation, result: effect_result });
+        });
+        Ok(ReconcileOutcome::InProgress { operation })
+    }
+
+    /// One-shot teardown: deletion adopts first (old `deletion_adoption`),
+    /// then stops the exact live identity or the uniquely identified stale
+    /// candidate, and finalizes the provider's local authority. An ambiguous
+    /// identity refuses destructive action.
+    async fn delete_ephemeral(
+        &mut self,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<(), ProcessDriverError> {
+        match self.effects.adopt_ephemeral(identity, spec).await {
+            Ok(ProviderAdoption::Adopted(_)) => {
+                self.stop_and_finalize_ephemeral(identity, spec, DriverOp::Delete)
+                    .await
+            }
+            Ok(ProviderAdoption::Stale { candidate }) => {
+                self.effects
+                    .stop_stale(&identity.provider_ref, &candidate)
+                    .await
+                    .map_err(|error| map_provider_error(error, DriverOp::Delete))
+            }
+            Ok(ProviderAdoption::Absent) | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
+                Ok(())
+            }
+            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
+                ProcessDriverErrorKind::IdentityAmbiguous,
+                DriverOp::Delete,
+            )),
+            // A row no host-minted ticket can describe (a Guest-owned one-shot
+            // outside the guest VMM chain, e.g. the projected
+            // `store-preflight-<guest>` intent) has no identity this daemon
+            // could ever have realized, so its deletion converges with no
+            // provider effect. The guard's real intent is preserved: nothing
+            // is stopped, so no process the row does not claim is ever
+            // touched.
+            Err(error) if error.contains("guest-process-not-vmm") => {
+                tracing::warn!(
+                    resource = %identity.resource_ref.to_canonical_string(),
+                    error = %error,
+                    "one-shot delete converged without provider effects: no host ticket can describe this row"
+                );
+                Ok(())
+            }
+            Err(error) => Err(map_provider_error(error, DriverOp::Delete)),
+        }
+    }
 }
 
 fn resource_uid_from_bytes_bytes(bytes: &[u8; 16]) -> Option<d2b_contracts_resource::v3::ResourceUid> {
@@ -1093,7 +1735,15 @@ fn resource_uid_from_bytes_bytes(bytes: &[u8; 16]) -> Option<d2b_contracts_resou
 /// quarantine (R15 is about observed identity).
 fn map_provider_error(error: String, op: DriverOp) -> ProcessDriverError {
     tracing::warn!(operation = ?op, error = %error, "process provider effect failed");
-    let kind = if error.contains("template-not-found") || error.contains("resolution-failed") {
+    let kind = if error.contains("template-not-found")
+        || error.contains("resolution-failed")
+        // The trusted bundle holds no host-minted intent for this row at all
+        // (a Guest-owned one-shot outside the guest VMM chain, e.g. a
+        // projected preflight intent): no retry can ever mint a ticket, so
+        // the refusal is terminal - never an ambiguous identity to quarantine
+        // (R15 is about observed identity).
+        || error.contains("guest-process-not-vmm")
+    {
         ProcessDriverErrorKind::TemplateUnavailable
     } else if error.contains("quarantined")
         || error.contains("identity")
@@ -1137,36 +1787,43 @@ impl ResourceDriver for ProcessDriver {
         self.check_provider(&envelope, DriverOp::Recover)?;
         let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Recover).await?;
 
-        if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
-            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
-            return Ok(RecoveryOutcome::Missing);
-        }
-        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt {
-            // NeverAdopt never adopts; an unexpected live identity is stopped
-            // exactly (preserved behavior) and the next launch starts fresh.
-            if self
-                .effects
-                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-            {
-                self.stop_and_finalize(&identity, &spec, DriverOp::Recover).await?;
+        match &spec {
+            ProcessFamilySpec::Ephemeral(ephemeral) => {
+                self.recover_ephemeral(ctx, &identity, ephemeral).await
             }
-            return Ok(RecoveryOutcome::Missing);
-        }
+            ProcessFamilySpec::Process(process) => {
+                if process.desired_lifecycle() == DesiredLifecycle::Stopped {
+                    ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
+                    return Ok(RecoveryOutcome::Missing);
+                }
+                if process.adoption_policy() == AdoptionPolicy::NeverAdopt {
+                    // NeverAdopt never adopts; an unexpected live identity is stopped
+                    // exactly (preserved behavior) and the next launch starts fresh.
+                    if self
+                        .effects
+                        .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
+                    {
+                        self.stop_and_finalize(&identity, process, DriverOp::Recover).await?;
+                    }
+                    return Ok(RecoveryOutcome::Missing);
+                }
 
-        match self.effects.adopt(&identity, &spec).await {
-            Ok(ProviderAdoption::Adopted(_)) => {
-                ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
-                Ok(RecoveryOutcome::Adopted)
+                match self.effects.adopt(&identity, process).await {
+                    Ok(ProviderAdoption::Adopted(_)) => {
+                        ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                        Ok(RecoveryOutcome::Adopted)
+                    }
+                    Ok(ProviderAdoption::Absent) => Ok(RecoveryOutcome::Missing),
+                    // A static controller without its exact bootstrap endpoint:
+                    // nothing to adopt; reconcile restarts it.
+                    Ok(ProviderAdoption::ControllerBootstrapMissing) => Ok(RecoveryOutcome::Missing),
+                    Ok(ProviderAdoption::Stale { .. }) | Ok(ProviderAdoption::Quarantined(_)) => {
+                        ctx.set_status(ProcessDriverStatus::Quarantined { code: "identity-ambiguous" });
+                        Ok(RecoveryOutcome::Quarantined)
+                    }
+                    Err(error) => Err(map_provider_error(error, DriverOp::Recover)),
+                }
             }
-            Ok(ProviderAdoption::Absent) => Ok(RecoveryOutcome::Missing),
-            // A static controller without its exact bootstrap endpoint:
-            // nothing to adopt; reconcile restarts it.
-            Ok(ProviderAdoption::ControllerBootstrapMissing) => Ok(RecoveryOutcome::Missing),
-            Ok(ProviderAdoption::Stale { .. }) | Ok(ProviderAdoption::Quarantined(_)) => {
-                ctx.set_status(ProcessDriverStatus::Quarantined { code: "identity-ambiguous" });
-                Ok(RecoveryOutcome::Quarantined)
-            }
-            Err(error) => Err(map_provider_error(error, DriverOp::Recover)),
         }
     }
 
@@ -1176,63 +1833,13 @@ impl ResourceDriver for ProcessDriver {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         self.check_provider(&envelope, DriverOp::Reconcile)?;
         let identity = self.identity(ctx, &envelope.provider_ref.clone().expect("checked"), DriverOp::Reconcile).await?;
-        if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
-            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-stopped" });
-            return Ok(ReconcileOutcome::Satisfied);
-        }
-
-        // A retryable launch failure from the previous pass: schedule exactly
-        // one runtime-only requeue with the policy restart delay (R13; spec
-        // section 32 - nothing is persisted).
-        if self.budget.take_restart_scheduled() {
-            let restart_count = self.budget.count();
-            let delay = restart_delay(&spec, restart_count);
-            let _ = ctx.requeue_after(delay);
-            ctx.set_status(ProcessDriverStatus::AwaitingRestart { restart_count });
-            return Ok(ReconcileOutcome::Satisfied);
-        }
-
-        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt {
-            if self
-                .effects
-                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-            {
-                self.stop_and_finalize(&identity, &spec, DriverOp::Reconcile).await?;
+        match &spec {
+            ProcessFamilySpec::Ephemeral(ephemeral) => {
+                self.reconcile_ephemeral(ctx, &identity, ephemeral).await
             }
-            ctx.set_status(ProcessDriverStatus::Launching);
-            return self.spawn_launch(ctx, identity, &spec);
-        }
-
-        match self.effects.adopt(&identity, &spec).await {
-            Ok(ProviderAdoption::Adopted(_)) => {
-                ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
-                Ok(ReconcileOutcome::Satisfied)
+            ProcessFamilySpec::Process(process) => {
+                self.reconcile_process(ctx, identity, process).await
             }
-            Ok(ProviderAdoption::Absent) => {
-                ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, &spec)
-            }
-            Ok(ProviderAdoption::ControllerBootstrapMissing) => {
-                // The Provider owns the exact stop and finalization before the
-                // replacement launch (preserved controller-bootstrap effect
-                // ordering).
-                self.stop_and_finalize(&identity, &spec, DriverOp::Reconcile).await?;
-                ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, &spec)
-            }
-            Ok(ProviderAdoption::Stale { candidate }) => {
-                self.effects
-                    .stop_stale(&identity.provider_ref, &candidate)
-                    .await
-                    .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
-                ctx.set_status(ProcessDriverStatus::Launching);
-                self.spawn_launch(ctx, identity, &spec)
-            }
-            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                ProcessDriverErrorKind::IdentityAmbiguous,
-                DriverOp::Reconcile,
-            )),
-            Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
         }
     }
 
@@ -1266,40 +1873,49 @@ impl ResourceDriver for ProcessDriver {
             Err(_) => return Ok(()),
         };
 
-        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt {
-            // NeverAdopt never adopts; an unexpected live identity stops
-            // exactly through its retained authority.
-            if self
-                .effects
-                .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
-            {
-                self.stop_and_finalize(&identity, &spec, DriverOp::Delete).await?;
+        match &spec {
+            ProcessFamilySpec::Ephemeral(ephemeral) => {
+                return self.delete_ephemeral(&identity, ephemeral).await;
             }
-            return Ok(());
-        }
+            ProcessFamilySpec::Process(process) => {
+                if process.adoption_policy() == AdoptionPolicy::NeverAdopt {
+                    // NeverAdopt never adopts; an unexpected live identity stops
+                    // exactly through its retained authority.
+                    if self
+                        .effects
+                        .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
+                    {
+                        self.stop_and_finalize(&identity, process, DriverOp::Delete).await?;
+                    }
+                    return Ok(());
+                }
 
-        match self.effects.adopt(&identity, &spec).await {
-            Ok(ProviderAdoption::Adopted(_)) => {
-                self.stop_and_finalize(&identity, &spec, DriverOp::Delete).await
+                match self.effects.adopt(&identity, process).await {
+                    Ok(ProviderAdoption::Adopted(_)) => {
+                        self.stop_and_finalize(&identity, process, DriverOp::Delete).await
+                    }
+                    Ok(ProviderAdoption::Stale { candidate }) => {
+                        self.effects
+                            .stop_stale(&identity.provider_ref, &candidate)
+                            .await
+                            .map_err(|error| map_provider_error(error, DriverOp::Delete))
+                    }
+                    Ok(ProviderAdoption::Absent)
+                    | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
+                        // Nothing this daemon can stop exactly (old deletion treated
+                        // a missing exact identity as converged without effects).
+                        Ok(())
+                    }
+                    Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
+                        ProcessDriverErrorKind::IdentityAmbiguous,
+                        DriverOp::Delete,
+                    )),
+                    Err(error) => Err(map_provider_error(error, DriverOp::Delete)),
+                }
             }
-            Ok(ProviderAdoption::Stale { candidate }) => {
-                self.effects
-                    .stop_stale(&identity.provider_ref, &candidate)
-                    .await
-                    .map_err(|error| map_provider_error(error, DriverOp::Delete))
-            }
-            Ok(ProviderAdoption::Absent) | Ok(ProviderAdoption::ControllerBootstrapMissing) => {
-                // Nothing this daemon can stop exactly (old deletion treated
-                // a missing exact identity as converged without effects).
-                Ok(())
-            }
-            Ok(ProviderAdoption::Quarantined(_)) => Err(self.error(
-                ProcessDriverErrorKind::IdentityAmbiguous,
-                DriverOp::Delete,
-            )),
-            Err(error) => Err(map_provider_error(error, DriverOp::Delete)),
         }
     }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1931,8 @@ mod tests {
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, ProcessSpec, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+        ControllerGeneration, EphemeralProcessSpec, ProcessSpec, ResourceGeneration, ResourceRef,
+        ResourceUid, ZoneId,
         process::ProcessClass,
     };
     use d2b_process_conformance::testing::fixtures;
@@ -1342,13 +1959,15 @@ mod tests {
         ProcessDriver, ProcessDriverArgs, ProcessDriverFactory, ProcessDriverStatus,
         process_spec_decoder,
     };
-    use crate::process_provider_runtime::ProviderAdoption;
+    use crate::process_provider_runtime::{ProviderAdoption, ProviderLiveness};
 
     // -- fake effect port ----------------------------------------------------
 
     /// One recorded launch with the ticket inputs the driver derived.
     #[derive(Clone, Debug)]
     struct RecordedLaunch {
+        /// Which family arm launched: `Process` or `EphemeralProcess`.
+        kind: &'static str,
         resource_ref: String,
         resource_uid: String,
         generation: u64,
@@ -1358,10 +1977,14 @@ mod tests {
         provider_ref: String,
         template: String,
         execution_ref: String,
+        /// The one-shot launch budget (`startDeadline`) the driver derived.
+        start_deadline_ms: Option<u64>,
     }
 
     #[derive(Clone, Debug)]
     struct RecordedStop {
+        /// Which family arm stopped: `Process` or `EphemeralProcess`.
+        kind: &'static str,
         term_timeout: Duration,
         kill_timeout: Duration,
     }
@@ -1370,6 +1993,11 @@ mod tests {
     struct FakeEffectsConfig {
         /// Scripted adoption results; the last one repeats once exhausted.
         adoption: VecDeque<ProviderAdoption>,
+        /// When set, one-shot adoption refuses with this provider error.
+        adopt_error: Option<String>,
+        /// Scripted liveness results; the last one repeats once exhausted
+        /// (default `Alive`).
+        liveness: VecDeque<ProviderLiveness>,
         launch: Result<ProcessIdentityDigest, String>,
         /// Whether the fake reports a live retained identity.
         active: bool,
@@ -1379,6 +2007,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 adoption: VecDeque::from([ProviderAdoption::Absent]),
+                adopt_error: None,
+                liveness: VecDeque::new(),
                 launch: Ok(ProcessIdentityDigest::from_bytes([0x51; 32])),
                 active: true,
             }
@@ -1411,6 +2041,10 @@ mod tests {
             self.config.lock().adoption.push_back(adoption);
         }
 
+        fn push_liveness(&self, liveness: ProviderLiveness) {
+            self.config.lock().liveness.push_back(liveness);
+        }
+
         fn set_launch(&self, result: Result<ProcessIdentityDigest, String>) {
             self.config.lock().launch = result;
         }
@@ -1432,6 +2066,27 @@ mod tests {
         }
     }
 
+    fn recorded_launch(
+        kind: &'static str,
+        identity: &super::ProcessResourceIdentity,
+        execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        start_deadline_ms: Option<u64>,
+    ) -> RecordedLaunch {
+        RecordedLaunch {
+            kind,
+            resource_ref: identity.resource_ref.to_canonical_string(),
+            resource_uid: identity.resource_uid.as_str().to_owned(),
+            generation: identity.resource_generation.get(),
+            zone: identity.zone.clone(),
+            zone_uid: identity.zone_uid.clone(),
+            policy_revision: identity.policy_revision,
+            provider_ref: identity.provider_ref.to_canonical_string(),
+            template: execution.template().as_str().to_owned(),
+            execution_ref: execution.execution_ref().to_canonical_string(),
+            start_deadline_ms,
+        }
+    }
+
     #[async_trait::async_trait]
     impl super::ProcessDriverEffects for FakeEffects {
         async fn launch(
@@ -1441,17 +2096,33 @@ mod tests {
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
             self.calls.lock().push("launch");
-            self.launches.lock().push(RecordedLaunch {
-                resource_ref: identity.resource_ref.to_canonical_string(),
-                resource_uid: identity.resource_uid.as_str().to_owned(),
-                generation: identity.resource_generation.get(),
-                zone: identity.zone.clone(),
-                zone_uid: identity.zone_uid.clone(),
-                policy_revision: identity.policy_revision,
-                provider_ref: identity.provider_ref.to_canonical_string(),
-                template: spec.execution().template().as_str().to_owned(),
-                execution_ref: spec.execution().execution_ref().to_canonical_string(),
-            });
+            self.launches.lock().push(recorded_launch(
+                "Process",
+                identity,
+                spec.execution(),
+                None,
+            ));
+            self.config.lock().launch.clone()
+        }
+
+        async fn launch_ephemeral(
+            &self,
+            identity: &super::ProcessResourceIdentity,
+            spec: &EphemeralProcessSpec,
+            timeout: Duration,
+        ) -> Result<ProcessIdentityDigest, String> {
+            self.calls.lock().push("launch-ephemeral");
+            assert_eq!(
+                timeout,
+                Duration::from_millis(spec.start_deadline().as_millis()),
+                "the one-shot launch budget is the spec's startDeadline",
+            );
+            self.launches.lock().push(recorded_launch(
+                "EphemeralProcess",
+                identity,
+                spec.execution(),
+                Some(spec.start_deadline().as_millis()),
+            ));
             self.config.lock().launch.clone()
         }
 
@@ -1465,6 +2136,29 @@ mod tests {
             Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
         }
 
+        async fn adopt_ephemeral(
+            &self,
+            _identity: &super::ProcessResourceIdentity,
+            _spec: &EphemeralProcessSpec,
+        ) -> Result<ProviderAdoption, String> {
+            self.calls.lock().push("adopt-ephemeral");
+            let mut config = self.config.lock();
+            if let Some(error) = config.adopt_error.clone() {
+                return Err(error);
+            }
+            Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
+        }
+
+        async fn probe_ephemeral(
+            &self,
+            _identity: &super::ProcessResourceIdentity,
+            _spec: &EphemeralProcessSpec,
+        ) -> Result<ProviderLiveness, String> {
+            self.calls.lock().push("probe-ephemeral");
+            let mut config = self.config.lock();
+            Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
+        }
+
         async fn stop(
             &self,
             _identity: &super::ProcessResourceIdentity,
@@ -1473,7 +2167,27 @@ mod tests {
             kill_timeout: Duration,
         ) -> Result<bool, String> {
             self.calls.lock().push("stop");
-            self.stops.lock().push(RecordedStop { term_timeout, kill_timeout });
+            self.stops.lock().push(RecordedStop {
+                kind: "Process",
+                term_timeout,
+                kill_timeout,
+            });
+            Ok(true)
+        }
+
+        async fn stop_ephemeral(
+            &self,
+            _identity: &super::ProcessResourceIdentity,
+            _spec: &EphemeralProcessSpec,
+            term_timeout: Duration,
+            kill_timeout: Duration,
+        ) -> Result<bool, String> {
+            self.calls.lock().push("stop-ephemeral");
+            self.stops.lock().push(RecordedStop {
+                kind: "EphemeralProcess",
+                term_timeout,
+                kill_timeout,
+            });
             Ok(true)
         }
 
@@ -1526,6 +2240,36 @@ mod tests {
             provenance: ResourceProvenance::Api,
             deleting: false,
             spec: spec_bytes(None),
+            metadata: Vec::new(),
+            created_at: 0,
+        }
+    }
+
+    /// One one-shot row: the activation-runner shape the NixosGeneration
+    /// driver mints (KTD13) - the typed `activationInput` on the sanctioned
+    /// channel plus an explicit runtime/retention policy.
+    fn ephemeral_spec_bytes(
+        start_deadline: &str,
+        runtime_deadline: &str,
+        successful_ttl: &str,
+        failed_ttl: &str,
+        incident_hold: bool,
+    ) -> Vec<u8> {
+        format!(
+            r#"{{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"activation-nixos-runner","activationInput":{{"systemArtifactId":"system-artifact","targetGeneration":1,"activationMode":"switch"}},"startDeadline":"{start_deadline}","runtimeDeadline":"{runtime_deadline}","successfulTtl":"{successful_ttl}","failedTtl":"{failed_ttl}","incidentHold":{incident_hold}}}"#
+        )
+        .into_bytes()
+    }
+
+    fn ephemeral_row() -> StoredDesiredResource {
+        StoredDesiredResource {
+            key: ResourceKey::new("work", "EphemeralProcess", "activation-nixos--runner--gen-1"),
+            uid: [0x43; 16],
+            generation: 1,
+            owner_uid: None,
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: ephemeral_spec_bytes("7s", "5m", "1h", "24h", false),
             metadata: Vec::new(),
             created_at: 0,
         }
@@ -1631,6 +2375,16 @@ mod tests {
     }
 
     impl OwnershipManager {
+        /// An owner-scoped manager with no owned rows: the retention delete
+        /// path's double.
+        fn empty() -> Arc<Self> {
+            Arc::new(Self {
+                owned: parking_lot::Mutex::new(Vec::new()),
+                rows: parking_lot::Mutex::new(Vec::new()),
+                deleted: parking_lot::Mutex::new(Vec::new()),
+            })
+        }
+
         fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
             Arc::new(Self {
                 owned: parking_lot::Mutex::new(vec![row]),
@@ -1853,6 +2607,20 @@ mod tests {
 
         fn restart_count(&self) -> u32 {
             self.typed.restart_count()
+        }
+
+        /// Test-only: backdate the one-shot runtime clock past its deadline.
+        fn backdate_runtime(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_started(elapsed);
+        }
+
+        /// Test-only: backdate the one-shot retention clock.
+        fn backdate_completion(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_completed(elapsed);
+        }
+
+        fn ephemeral_completed(&self) -> bool {
+            self.typed.ephemeral.completed().is_some()
         }
     }
 
@@ -2355,13 +3123,382 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn factory_registers_only_the_process_resource_type() {
+    async fn factory_registers_both_process_family_resource_types() {
         let args = driver_args(Arc::new(FakeEffects::new(FakeEffectsConfig::default())));
         let factory = ProcessDriverFactory::new(args);
-        assert_eq!(factory.resource_types().len(), 1);
+        assert_eq!(factory.resource_types().len(), 2);
         assert_eq!(factory.resource_types()[0].as_str(), "Process");
-        let key = ResourceKey::new("work", "Process", "worker");
-        let _erased = factory.create(&key).await;
+        assert_eq!(factory.resource_types()[1].as_str(), "EphemeralProcess");
+        let process_key = ResourceKey::new("work", "Process", "worker");
+        let _erased = factory.create(&process_key).await;
+        let ephemeral_key = ResourceKey::new("work", "EphemeralProcess", "runner");
+        let _erased = factory.create(&ephemeral_key).await;
+    }
+
+    // -- one-shot EphemeralProcess arm (KTD13) -------------------------------
+
+    /// One-shot launch: the typed activation-input spec decodes on the same
+    /// factory, the launch runs through the ephemeral provider effect with the
+    /// spec's `startDeadline` as its budget, and the retained identity is
+    /// adopted on the next pass - exactly the old
+    /// `launch_ephemeral_resource`/`adopt_ephemeral_resource` pairing.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_launch_uses_the_one_shot_effect_and_start_deadline() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        driver.validate(&mut f.ctx).await.expect("validate");
+        assert_eq!(
+            driver.recover(&mut f.ctx).await.expect("recover"),
+            RecoveryOutcome::Missing
+        );
+
+        let operation = expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        let completed = f.effects.recv().await.expect("typed completion");
+        assert_eq!(completed.operation, operation);
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Completed
+        ));
+
+        let launch = fake.launch_calls().pop().expect("launch recorded");
+        assert_eq!(launch.kind, "EphemeralProcess");
+        assert_eq!(
+            launch.resource_ref,
+            "EphemeralProcess/activation-nixos--runner--gen-1"
+        );
+        assert_eq!(launch.resource_uid, "43434343-4343-4343-8343-434343434343");
+        assert_eq!(launch.provider_ref, "Provider/system-minijail");
+        assert_eq!(launch.template, "activation-nixos-runner");
+        assert_eq!(launch.execution_ref, "Host/host-system");
+        assert_eq!(
+            launch.start_deadline_ms,
+            Some(7_000),
+            "the bounded startDeadline is the launch budget"
+        );
+
+        // Post-launch the Provider retains the exact identity: the row goes
+        // Ready through the liveness probe and the driver arms its own
+        // observation requeue (the preserved 5s resync) so the exit and the
+        // bounded runtime are seen without an external wake.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Ready { adopted: true }
+        );
+        assert_eq!(f.requeue_calls(), [Duration::from_secs(5)]);
+        assert_eq!(fake.launch_calls().len(), 1, "no second launch");
+        assert!(
+            fake.call_order().contains(&"probe-ephemeral"),
+            "the live identity is observed through the liveness probe"
+        );
+    }
+
+    /// The one-shot exit: the process this actor launched is gone, so the row
+    /// reports `Succeeded` and waits out `successfulTtl` in runtime memory
+    /// (R11); an elapsed TTL asks the manager to retire the row.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_exit_is_terminal_succeeded_and_the_ttl_retires_the_row() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            ..FakeEffectsConfig::default()
+        }));
+        let manager = OwnershipManager::empty();
+        let mut f = fixture_with(ephemeral_row(), manager.clone());
+        let mut driver = driver(fake.clone()).await;
+
+        expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        f.effects.recv().await.expect("launch completion");
+
+        // The process exited: never a relaunch, and the successful TTL starts.
+        fake.push_liveness(ProviderLiveness::Exited);
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Succeeded { code: "process-exited" }
+        );
+        assert_eq!(
+            f.requeue_calls(),
+            [Duration::from_secs(3600)],
+            "successfulTtl is the retention delay"
+        );
+        assert_eq!(fake.launch_calls().len(), 1, "a one-shot never relaunches");
+        assert!(
+            manager.deleted.lock().is_empty(),
+            "the retention window has not elapsed"
+        );
+
+        // TTL elapsed: the driver asks the manager to retire its own row.
+        driver.backdate_completion(Duration::from_secs(3600));
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(manager.deleted.lock().clone(), vec![f.row.key.clone()]);
+    }
+
+    /// The bounded runtime: a one-shot that outlived `runtimeDeadline` stops
+    /// through the preserved fixed escalation, reports `Failed`, and retains
+    /// the row for `failedTtl`.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_runtime_deadline_stops_and_reports_a_terminal_failure() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        f.effects.recv().await.expect("launch completion");
+
+        driver.backdate_runtime(Duration::from_secs(300));
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        let stops = fake.stop_calls();
+        assert_eq!(stops.len(), 1, "one preserved one-shot stop escalation");
+        assert_eq!(stops[0].kind, "EphemeralProcess");
+        assert_eq!(stops[0].term_timeout, Duration::from_secs(30), "fixed one-shot term");
+        assert_eq!(stops[0].kill_timeout, Duration::from_secs(30), "preserved kill budget");
+        assert_eq!(fake.finalize_calls(), 1, "finalize after the exact stop");
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Failed { code: "runtime-deadline" }
+        );
+        assert_eq!(
+            f.requeue_calls(),
+            [Duration::from_secs(24 * 3600)],
+            "failedTtl is the retention delay"
+        );
+    }
+
+    /// `incidentHold` blocks a failed one-shot's cleanup until an explicit
+    /// release: no retention requeue, and no elapsed TTL ever retires it.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_incident_hold_keeps_a_failed_row() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            ..FakeEffectsConfig::default()
+        }));
+        let manager = OwnershipManager::empty();
+        let mut row = ephemeral_row();
+        row.spec = ephemeral_spec_bytes("7s", "5m", "1h", "24h", true);
+        let mut f = fixture_with(row, manager.clone());
+        let mut driver = driver(fake.clone()).await;
+
+        expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        f.effects.recv().await.expect("launch completion");
+
+        driver.backdate_runtime(Duration::from_secs(300));
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Failed { code: "runtime-deadline" }
+        );
+        assert!(f.requeue_calls().is_empty(), "no cleanup timer under incident hold");
+        assert!(driver.ephemeral_completed(), "the terminal state is recorded");
+
+        driver.backdate_completion(Duration::from_secs(365 * 24 * 3600));
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert!(
+            manager.deleted.lock().is_empty(),
+            "an incident-held failure is never auto-retired"
+        );
+    }
+
+    /// A refused one-shot launch is terminal: the type carries no restart
+    /// policy, so no restart backoff is ever scheduled (old
+    /// `handle_start_failure` ephemeral arm).
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_launch_refusal_is_terminal_and_never_restarts() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            launch: Err("provider-effect:launch-failed".to_owned()),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        let operation = expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        let completed = f.effects.recv().await.expect("typed completion");
+        assert_eq!(completed.operation, operation);
+        match completed.result {
+            d2b_resource_runtime::context::EffectResult::Failed(failure) => {
+                assert_eq!(failure.class(), FailureClass::Terminal);
+                assert_eq!(failure.op(), DriverOp::Reconcile);
+            }
+            other => panic!("expected a terminal failure, got {other:?}"),
+        }
+        assert!(
+            f.requeue_calls().is_empty(),
+            "a one-shot never schedules a restart"
+        );
+    }
+
+    /// Recovery adopts a live one-shot without launching it, and the next pass
+    /// observes the same identity without relaunching.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn ephemeral_recover_adopts_a_live_process_without_launching() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+        assert_eq!(
+            driver.recover(&mut f.ctx).await.expect("recover"),
+            RecoveryOutcome::Adopted
+        );
+        assert!(fake.launch_calls().is_empty(), "adopted without launch");
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Ready { adopted: true }
+        );
+
+        // The next pass observes the live identity without relaunching.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert!(fake.launch_calls().is_empty(), "no relaunch on a live identity");
+        assert_eq!(f.requeue_calls(), [Duration::from_secs(5)]);
+    }
+
+    /// Drifted/ambiguous evidence during a one-shot reconcile is terminal and
+    /// never launches.
+    #[tokio::test]
+    async fn ephemeral_quarantined_classification_never_launches() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert!(
+            fake.launch_calls().is_empty(),
+            "an ambiguous identity never launches"
+        );
+    }
+
+    /// One-shot deletion adopts first (old `deletion_adoption`), stops the
+    /// exact live identity through the fixed escalation, and finalizes the
+    /// provider's local authority.
+    #[tokio::test]
+    async fn ephemeral_delete_stops_the_exact_identity_and_finalizes() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        driver.delete(&mut f.ctx).await.expect("delete");
+        assert_eq!(
+            fake.call_order(),
+            ["adopt-ephemeral", "stop-ephemeral", "finalize"]
+        );
+        let stops = fake.stop_calls();
+        assert_eq!(stops.len(), 1);
+        assert_eq!(stops[0].kind, "EphemeralProcess");
+        assert_eq!(stops[0].term_timeout, Duration::from_secs(30));
+        assert_eq!(stops[0].kill_timeout, Duration::from_secs(30));
+    }
+
+    /// Deletion converges without effects when no exact identity remains, and
+    /// stops a uniquely identified stale candidate after a restart.
+    #[tokio::test]
+    async fn ephemeral_delete_converges_absent_and_stops_a_stale_candidate() {
+        let absent = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut absent_driver = driver(absent.clone()).await;
+        absent_driver.delete(&mut f.ctx).await.expect("delete");
+        assert!(absent.stop_calls().is_empty());
+        assert_eq!(absent.finalize_calls(), 0);
+
+        let stale = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Stale {
+                candidate: stale_candidate(),
+            }]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut stale_driver = driver(stale.clone()).await;
+        stale_driver.delete(&mut f.ctx).await.expect("delete");
+        assert_eq!(stale.call_order(), ["adopt-ephemeral", "stop-stale"]);
+    }
+
+    /// An ambiguous one-shot identity refuses destructive action.
+    #[tokio::test]
+    async fn ephemeral_delete_refuses_an_ambiguous_identity() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        let failure = driver.delete(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Delete);
+        assert!(fake.stop_calls().is_empty(), "no destructive action on ambiguity");
+    }
+
+    /// A row no host-minted ticket can describe - a Guest-owned one-shot
+    /// outside the guest VMM chain, like the projected
+    /// `store-preflight-<guest>` intent - converges on delete without
+    /// provider effects: this daemon never realized an identity for it, and
+    /// retrying the ticket forever blocked its owner's teardown. Reconcile
+    /// classifies the same refusal terminally, never as a retryable identity
+    /// fault.
+    #[tokio::test]
+    async fn ephemeral_unmintable_ticket_converges_on_delete_and_is_terminal_on_reconcile() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adopt_error: Some("provider-ticket:guest-process-not-vmm".to_owned()),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(ephemeral_row());
+        let mut driver = driver(fake.clone()).await;
+
+        let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert!(fake.launch_calls().is_empty(), "an unmintable ticket never launches");
+
+        driver.delete(&mut f.ctx).await.expect("delete converges");
+        assert!(fake.stop_calls().is_empty(), "no provider effect ran");
+        assert_eq!(fake.finalize_calls(), 0);
     }
 
     // -- launch happy path ---------------------------------------------------

@@ -60,7 +60,7 @@ use d2b_provider_volume_virtiofs::{
     StoredBinding, VirtiofsBindingError, VirtiofsdWorkerPlan, WORKER_TEMPLATE,
 };
 use d2b_resource_runtime::context::{
-    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
+    ChildEnsure, ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
@@ -110,10 +110,15 @@ enum BindingDriverErrorKind {
     SpecInvalid,
     /// The spec selects a Provider this driver does not own.
     ProviderUnsupported,
-    /// The binding names a Volume this driver cannot resolve through the
-    /// manager (missing parent, or an owner mismatch the manager would
-    /// silently re-parent).
+    /// The binding's declared parent Volume row is present but its owner uid
+    /// differs from this binding's owner: the manager would silently
+    /// re-parent. Terminal - the committed rows cannot converge by retrying.
     OwnerMismatch,
+    /// The parent Volume row the binding names is not observable yet: the
+    /// manager answered `Absent` (the row may simply not be committed yet) or
+    /// could not answer at all. Retryable by contract (issue #511): the actor
+    /// requeues instead of failing the binding terminal.
+    ParentUnavailable,
     /// The worker plan could not be derived (view rights, zero vcpu).
     PlanDerivation,
     /// A provider serving effect failed transiently.
@@ -125,7 +130,9 @@ enum BindingDriverErrorKind {
 impl BindingDriverErrorKind {
     const fn class(self) -> FailureClass {
         match self {
-            Self::ServingEffect | Self::ChildMutation => FailureClass::Retryable,
+            Self::ServingEffect | Self::ChildMutation | Self::ParentUnavailable => {
+                FailureClass::Retryable
+            }
             Self::SpecInvalid
             | Self::ProviderUnsupported
             | Self::OwnerMismatch
@@ -154,6 +161,7 @@ impl core::fmt::Display for BindingDriverError {
             BindingDriverErrorKind::SpecInvalid => "binding-spec-invalid",
             BindingDriverErrorKind::ProviderUnsupported => "binding-provider-unsupported",
             BindingDriverErrorKind::OwnerMismatch => "binding-owner-mismatch",
+            BindingDriverErrorKind::ParentUnavailable => "binding-parent-unavailable",
             BindingDriverErrorKind::PlanDerivation => "binding-plan-derivation-invalid",
             BindingDriverErrorKind::ServingEffect => "binding-serving-effect-failed",
             BindingDriverErrorKind::ChildMutation => "binding-child-mutation-failed",
@@ -462,6 +470,12 @@ impl BindingDriver {
     /// touches the spec store). The binding's declared Volume must be the
     /// row the manager reports as this resource's owner - a child cannot
     /// silently change owner.
+    ///
+    /// Classified per issue #511: a row that is not observable yet (`Absent`,
+    /// or `Unavailable` when the manager cannot answer) defers retryably, so
+    /// a parent that simply has not been committed yet never fails the
+    /// binding terminal; `OwnerMismatch` applies only to a present row whose
+    /// owner uid actually differs.
     async fn parent_volume(
         &self,
         ctx: &mut ResourceContext,
@@ -469,11 +483,21 @@ impl BindingDriver {
         op: DriverOp,
     ) -> Result<(ResourceUid, VolumeSpec), BindingDriverError> {
         let key = self.parent_volume_key(binding);
-        let row = ctx
-            .get(&key)
-            .await
-            .map_err(|_| self.error(BindingDriverErrorKind::OwnerMismatch, op))?
-            .ok_or_else(|| self.error(BindingDriverErrorKind::OwnerMismatch, op))?;
+        let row = match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => row,
+            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
+                return Err(self.error(BindingDriverErrorKind::ParentUnavailable, op))
+            }
+            RowLookup::Error { plane, detail } => {
+                tracing::warn!(
+                    plane = ?plane,
+                    key = %key,
+                    detail,
+                    "binding parent row read answered with an unreadable row",
+                );
+                return Err(self.error(BindingDriverErrorKind::SpecInvalid, op));
+            }
+        };
         if ctx
             .owner()
             .is_some_and(|owner| owner != row.uid.as_slice())
@@ -1038,6 +1062,7 @@ mod tests {
         rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
         watch_targets: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
         next_uid: Arc<std::sync::atomic::AtomicU64>,
+        fail_reads: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl RecordingManager {
@@ -1048,7 +1073,13 @@ mod tests {
                 rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
                 watch_targets: Arc::new(parking_lot::Mutex::new(Vec::new())),
                 next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                fail_reads: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }
+        }
+
+        /// Make `get` answer `ManagerRpc` (the unanswerable plane).
+        fn set_fail_reads(&self, fail: bool) {
+            self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
 
         fn with_parent(self, volume_uid: [u8; 16], spec: &[u8]) -> Self {
@@ -1147,6 +1178,9 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+            }
             Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
         }
 
@@ -1857,6 +1891,51 @@ mod tests {
         let mut d = driver(fake).await;
         let failure = d.validate(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal, "owner mismatch is terminal");
+    }
+
+    /// Issue #511 at the parent-row read (`BindingDriver::parent_volume`): a
+    /// parent Volume row that is not observable yet defers retryably - the row
+    /// may simply not be committed yet - while a present row with a different
+    /// owner uid stays terminal (the owner guard above is unchanged).
+    #[tokio::test]
+    async fn absent_parent_row_defers_retryably_while_owner_mismatch_stays_terminal() {
+        let fake = FakeServingEffects::new();
+
+        // Not committed yet: the manager holds no parent Volume row.
+        let manager = RecordingManager::new();
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(Arc::clone(&fake)).await;
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("absent parent row");
+        assert_eq!(
+            failure.class(),
+            FailureClass::Retryable,
+            "a parent row that simply does not exist yet must defer, not fail terminal"
+        );
+        assert!(
+            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            "no child is minted before the parent row is observable"
+        );
+
+        // The manager cannot answer: the same retryable defer.
+        manager.set_fail_reads(true);
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("unanswerable manager");
+        assert_eq!(
+            failure.class(),
+            FailureClass::Retryable,
+            "an unanswerable manager defers as well and is never reported as absence"
+        );
+        manager.set_fail_reads(false);
+
+        // Present but a different owner uid: still terminal.
+        let manager = RecordingManager::new().with_parent([0x99; 16], &parent_volume_bytes());
+        let mut f = fixture(binding_row([0x42; 16]), manager);
+        let mut d = driver(fake).await;
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("owner mismatch");
+        assert_eq!(
+            failure.class(),
+            FailureClass::Terminal,
+            "a present row whose owner actually differs stays terminal"
+        );
     }
 
     // -- deterministic child identity -------------------------------------------

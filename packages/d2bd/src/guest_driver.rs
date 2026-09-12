@@ -45,7 +45,7 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
 };
 use d2b_resource_runtime::context::{
-    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
+    ChildEnsure, ResourceContext, RowLookup, SpecDecoder, WatchCondition, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -472,10 +472,12 @@ impl GuestChildSurface for ContextChildSurface<'_> {
             .map_err(|_| GuestEffectError::Unavailable)?;
         let mut observations = Vec::with_capacity(children.len());
         for child in children {
-            let phase = match ctx.get_view(&child.key).await {
-                Ok(Some(view)) => Some(view_phase(&view)),
-                Ok(None) => None,
-                Err(_) => return Err(GuestEffectError::Unavailable),
+            let phase = match ctx.lookup_view(&child.key).await {
+                RowLookup::Present { row: view, .. } => Some(view_phase(&view)),
+                RowLookup::Absent { .. } => None,
+                RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                    return Err(GuestEffectError::Unavailable)
+                }
             };
             observations.push(GuestChildObservation {
                 key: child.key,
@@ -487,18 +489,17 @@ impl GuestChildSurface for ContextChildSurface<'_> {
     }
 }
 
-/// The row's live phase as the old effects read `/status/phase`.
+/// The row's live phase as the old effects read `/status/phase`: the
+/// canonical wire phase of the row's observed status (issue #515).
+/// `ResourceStatus::wire_phase` owns the vocabulary (`Deleting` renders as
+/// the `Deleted` tombstone); a status published for another generation is
+/// not observed state of the current row, so it reads `Pending`, never a
+/// stale `Ready`.
 pub(crate) fn view_phase(view: &d2b_resource_runtime::manager::ResourceView) -> &'static str {
     use d2b_resource_runtime::resource::ResourceStatus;
-    if view.deleting {
-        return "Deleted";
-    }
-    match view.status {
-        Some(ResourceStatus::Ready) => "Ready",
-        Some(ResourceStatus::Failed(_)) => "Failed",
-        Some(ResourceStatus::Deleting) => "Deleted",
-        _ => "Pending",
-    }
+    view.observed_status()
+        .map(ResourceStatus::wire_phase)
+        .unwrap_or("Pending")
 }
 
 /// The sink one Cloud Hypervisor Guest effect call captures the Provider
@@ -751,12 +752,14 @@ impl GuestDriver {
         let provider_ref = ResourceRef::parse(kind.provider_ref())
             .map_err(|_| self.error(GuestDriverErrorKind::SpecInvalid, op))?;
         let key = self.child_key(&provider_ref);
-        match ctx.get(&key).await {
-            Ok(Some(row)) => serde_json::from_slice::<Value>(&row.spec)
+        match ctx.lookup(&key).await {
+            RowLookup::Present { row, .. } => serde_json::from_slice::<Value>(&row.spec)
                 .map(Some)
                 .map_err(|_| self.error(GuestDriverErrorKind::SpecInvalid, op)),
-            Ok(None) => Ok(None),
-            Err(_) => Err(self.error(GuestDriverErrorKind::ProviderUnavailable, op)),
+            RowLookup::Absent { .. } => Ok(None),
+            RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                Err(self.error(GuestDriverErrorKind::ProviderUnavailable, op))
+            }
         }
     }
 
@@ -1349,7 +1352,7 @@ mod tests {
     use d2b_resource_runtime::driver::{
         ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverOp, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
@@ -1360,6 +1363,7 @@ mod tests {
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverEffects,
         GuestDriverFactory, GuestDriverStatus, GuestEffectError, GuestEffectOutcome,
         GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind, guest_spec_decoder,
+        view_phase,
     };
 
     /// The Guest row uid `[0x11; …]`, UUIDv4-shaped once mapped.
@@ -1512,6 +1516,11 @@ mod tests {
 
         fn set_children_ready(&self, ready: bool) {
             self.children_ready.store(ready, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        /// Make every read answer `ManagerRpc` (the unanswerable plane).
+        fn set_fail_reads(&self, fail: bool) {
+            self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
 
         fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
@@ -2013,6 +2022,58 @@ mod tests {
         assert!(manager.ensure_order().is_empty());
     }
 
+    /// Issue #511 at the migrated provider-row read
+    /// ([`GuestDriver::provider_spec`], classified): an absent row and
+    /// an unanswerable manager both defer (retryable - the actor requeues),
+    /// while a present row that cannot be decoded names its terminal evidence
+    /// (the closed `guest-spec-invalid` refusal) instead of deferring
+    /// forever.
+    #[tokio::test]
+    async fn classified_provider_row_read_defers_absence_and_requires_terminal_evidence() {
+        // Absent: the manager answers that it holds no provider row.
+        let effects = ScriptedEffects::new();
+        let manager = RecordingManager::new();
+        let mut ctx = context(
+            guest_row("work-vm", qemu_guest_spec()),
+            Arc::clone(&manager),
+            RecordingRequeue::new(),
+        );
+        let mut driver = driver(Arc::clone(&effects));
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("absent provider row");
+        assert_eq!(failure.class(), FailureClass::Retryable, "absence defers");
+        assert_eq!(format!("{failure}"), "guest-provider-unavailable");
+        assert!(effects.call_order().is_empty(), "absence never reaches the effect");
+
+        // Unavailable: the manager cannot answer - the same defer, and never
+        // reported as absence.
+        manager.set_fail_reads(true);
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("unanswerable manager");
+        assert_eq!(failure.class(), FailureClass::Retryable, "an unanswered plane defers");
+        assert_eq!(format!("{failure}"), "guest-provider-unavailable");
+        manager.set_fail_reads(false);
+
+        // Present but undecodable: terminal on named evidence, not a deferral.
+        let mut row = provider_row("runtime-qemu-media", qemu_provider_spec());
+        row.spec = b"{ not json".to_vec();
+        manager.add(row, ResourceStatus::Ready);
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("undecodable provider row");
+        assert_eq!(
+            failure.class(),
+            FailureClass::Terminal,
+            "a committed row that cannot decode is the named terminal evidence"
+        );
+        assert_eq!(format!("{failure}"), "guest-spec-invalid");
+    }
+
     /// Dependency edges of the spec are registered exactly once (R12).
     #[tokio::test]
     async fn reconcile_watches_declared_dependencies_once() {
@@ -2219,5 +2280,64 @@ mod tests {
         let status = guest_status(&ctx);
         assert_eq!(status.phase, GuestEffectPhase::Ready);
         assert_eq!(status.resource, Some(projection));
+    }
+
+    // -- canonical phase (issue #515) ----------------------------------------
+
+    /// One manager view carrying the given status classification, published
+    /// generation, and durable deleting mark.
+    fn phase_view(
+        status: Option<ResourceStatus>,
+        status_generation: Option<u64>,
+        deleting: bool,
+    ) -> ResourceView {
+        ResourceView {
+            key: ResourceKey::new("work", "Guest", "phase-view"),
+            uid: [0x42; 16],
+            generation: 2,
+            deleting,
+            provenance: ResourceProvenance::Api,
+            spec: b"{}".to_vec(),
+            metadata: b"{}".to_vec(),
+            owner_key: None,
+            status,
+            status_generation,
+            status_projection: None,
+        }
+    }
+
+    /// Issue #515: `view_phase` delegates to the canonical wire producer.
+    /// Across the closed status vocabulary - and across the runtime flags
+    /// (the durable deleting mark, an ungenerationed status, a stale
+    /// generation) - the gate's phase equals the phase
+    /// `ResourceView::wire_status` serves, so a future divergence fails here.
+    #[test]
+    fn view_phase_delegates_to_the_canonical_wire_phase() {
+        let statuses = [
+            None,
+            Some(ResourceStatus::Pending),
+            Some(ResourceStatus::Recovering),
+            Some(ResourceStatus::Reconciling),
+            Some(ResourceStatus::Ready),
+            Some(ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile))),
+            Some(ResourceStatus::Failed(DriverFailure::terminal(DriverOp::Delete))),
+            Some(ResourceStatus::Deleting),
+        ];
+        for deleting in [false, true] {
+            for status in statuses {
+                for status_generation in [None, Some(1), Some(2), Some(3)] {
+                    let view = phase_view(status, status_generation, deleting);
+                    let canonical = view.wire_status()["phase"]
+                        .as_str()
+                        .expect("the canonical status always carries a phase")
+                        .to_owned();
+                    assert_eq!(
+                        view_phase(&view),
+                        canonical,
+                        "phase divergence: status={status:?} status_generation={status_generation:?} deleting={deleting}",
+                    );
+                }
+            }
+        }
     }
 }

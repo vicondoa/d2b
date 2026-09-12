@@ -36,6 +36,7 @@ use d2b_provider_network_local::{
 };
 use d2b_resource_runtime::context::ChildEnsure;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::ResourceStatus;
 use d2b_resource_store::{
     ResourceAssignmentFence, ResourceAssignmentScope, StoreErrorKind, StoreGetRequest,
@@ -131,17 +132,7 @@ impl ProductionSharedProviderEffects {
                 .get(key)
                 .await
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
-            return Ok(view.map(|view| {
-                if view.deleting {
-                    return "Deleted";
-                }
-                match view.status {
-                    Some(ResourceStatus::Ready) => "Ready",
-                    Some(ResourceStatus::Failed(_)) => "Failed",
-                    Some(ResourceStatus::Deleting) => "Deleted",
-                    _ => "Pending",
-                }
-            }));
+            return Ok(view.map(|view| view_phase(&view)));
         }
         let runtime = self.runtime()?;
         match runtime
@@ -222,16 +213,7 @@ impl ProductionSharedProviderEffects {
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?
         };
         let uid = crate::shared_provider_driver::resource_uid(&view.uid)?;
-        let phase = if view.deleting {
-            "Deleted"
-        } else {
-            match view.status {
-                Some(ResourceStatus::Ready) => "Ready",
-                Some(ResourceStatus::Failed(_)) => "Failed",
-                Some(ResourceStatus::Deleting) => "Deleted",
-                _ => "Pending",
-            }
-        };
+        let phase = view_phase(&view);
         Ok(Some(json!({
             "spec": spec,
             "metadata": metadata,
@@ -476,6 +458,16 @@ impl<'a> NetworkChildPort<'a> {
             attachment_ready,
         })
     }
+}
+
+/// The row's live phase: the canonical wire phase of the row's observed
+/// status (issue #515). `ResourceStatus::wire_phase` owns the vocabulary
+/// (`Deleting` renders as the `Deleted` tombstone); an unpublished or stale
+/// status is not observed state of the current row and reads `Pending`.
+fn view_phase(view: &ResourceView) -> &'static str {
+    view.observed_status()
+        .map(ResourceStatus::wire_phase)
+        .unwrap_or("Pending")
 }
 
 fn child_ref(resource_type: &str, name: &str) -> ResourceRef {
@@ -2960,6 +2952,74 @@ impl ProductionSharedProviderEffects {
                 retain_gpu_opened_devices(request.state, &request.uid, opened_devices)?;
                 controllers.insert(request.uid.clone(), controller);
                 Err(error)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use d2b_resource_runtime::error::{DriverFailure, DriverOp};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+
+    use super::view_phase;
+
+    /// One manager view carrying the given status classification, published
+    /// generation, and durable deleting mark.
+    fn phase_view(
+        status: Option<ResourceStatus>,
+        status_generation: Option<u64>,
+        deleting: bool,
+    ) -> ResourceView {
+        ResourceView {
+            key: ResourceKey::new("work", "Volume", "phase-view"),
+            uid: [0x42; 16],
+            generation: 2,
+            deleting,
+            provenance: ResourceProvenance::Api,
+            spec: b"{}".to_vec(),
+            metadata: b"{}".to_vec(),
+            owner_key: None,
+            status,
+            status_generation,
+            status_projection: None,
+        }
+    }
+
+    /// Issue #515: the phase gate (`live_phase` and `resource_value`, which
+    /// both read `view_phase`) delegates to the canonical wire producer.
+    /// Across the closed status vocabulary - and across the runtime flags
+    /// (the durable deleting mark, an ungenerationed status, a stale
+    /// generation) - the gate's phase equals the phase
+    /// `ResourceView::wire_status` serves, so a future divergence fails here.
+    #[test]
+    fn view_phase_delegates_to_the_canonical_wire_phase() {
+        let statuses = [
+            None,
+            Some(ResourceStatus::Pending),
+            Some(ResourceStatus::Recovering),
+            Some(ResourceStatus::Reconciling),
+            Some(ResourceStatus::Ready),
+            Some(ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile))),
+            Some(ResourceStatus::Failed(DriverFailure::terminal(DriverOp::Delete))),
+            Some(ResourceStatus::Deleting),
+        ];
+        for deleting in [false, true] {
+            for status in statuses {
+                for status_generation in [None, Some(1), Some(2), Some(3)] {
+                    let view = phase_view(status, status_generation, deleting);
+                    let canonical = view.wire_status()["phase"]
+                        .as_str()
+                        .expect("the canonical status always carries a phase")
+                        .to_owned();
+                    assert_eq!(
+                        view_phase(&view),
+                        canonical,
+                        "phase divergence: status={status:?} status_generation={status_generation:?} deleting={deleting}",
+                    );
+                }
             }
         }
     }

@@ -823,6 +823,411 @@ fn rendered_full_envelopes_keep_the_strict_reader_contract() {
     }
 }
 
+/// The per-type half of the projection contract (issue #515): every
+/// converted type the API can serve renders through the one producer, and
+/// each rendered row is a complete strict envelope - with and without a live
+/// status projection - whose status object is exactly the contract's closed
+/// shape and whose `status.resource` layer is the driver's own value carried
+/// unchanged.
+///
+/// A type whose rendering lost a required member, wrapped the driver's layer,
+/// or grew a non-contract status field (the historical top-level
+/// `driverFailure`) fails here, per type, instead of in a consumer.
+#[test]
+fn every_converted_type_projects_a_strict_wire_view() {
+    use d2b_contracts_resource::v3::{
+        ResourceEnvelope, ResourcePhase, V3_CONVERTED_RESOURCE_TYPES,
+    };
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+    use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
+
+    // The universal status object's exact key set: the only free-form layer
+    // is `resource`; everything else is closed.
+    const UNIVERSAL_STATUS_KEYS: [&str; 9] = [
+        "completedAt",
+        "conditions",
+        "lastReconciledAt",
+        "observedGeneration",
+        "outcome",
+        "phase",
+        "resource",
+        "startedAt",
+        "update",
+    ];
+
+    for resource_type in V3_CONVERTED_RESOURCE_TYPES {
+        let key = ResourceKey::new(TEST_ZONE, resource_type, "canonical-row");
+        let uid = super::manager_uid(&key);
+        // Spec-shaped desired bytes (the Nix ingestion shape) plus authored
+        // metadata: the projection must reconstruct the complete envelope.
+        let spec = serde_json::to_vec(&serde_json::json!({
+            "providerRef": "Provider/contract-fixture",
+            "typeProbe": resource_type,
+        }))
+        .unwrap();
+        let metadata = serde_json::to_vec(&serde_json::json!({
+            "ownerRef": null,
+            "labels": {},
+            "annotations": {},
+        }))
+        .unwrap();
+        // The layer a driver of this type may publish is free-form by
+        // contract, so the projection must carry it byte-for-byte.
+        let projection = serde_json::json!({ "typeProbe": resource_type, "ready": true });
+
+        for live in [false, true] {
+            let label = format!("{resource_type} (live status: {live})");
+            let view = ResourceView {
+                key: key.clone(),
+                uid,
+                generation: 1,
+                deleting: false,
+                provenance: ResourceProvenance::Nix,
+                spec: spec.clone(),
+                metadata: metadata.clone(),
+                owner_key: None,
+                status: live.then_some(ResourceStatus::Ready),
+                status_generation: live.then_some(1),
+                status_projection: live.then_some(projection.clone()),
+            };
+            let stored = super::manager_row_stored(&view)
+                .unwrap_or_else(|error| panic!("{label}: render failed: {error:?}"));
+            let envelope = ResourceEnvelope::from_json(&stored.canonical_json)
+                .unwrap_or_else(|error| panic!("{label}: strict decode failed: {error:?}"));
+            assert_eq!(envelope.resource_type().as_str(), resource_type, "{label}");
+            assert_eq!(envelope.metadata().name().as_str(), "canonical-row", "{label}");
+            assert_eq!(
+                envelope.metadata().zone(),
+                &ZoneId::parse(TEST_ZONE).unwrap(),
+                "{label}"
+            );
+            assert_eq!(envelope.metadata().uid(), &stored.uid, "{label}");
+            assert_eq!(envelope.metadata().generation().get(), 1, "{label}");
+            assert_eq!(envelope.metadata().revision().get(), 1, "{label}");
+            assert_eq!(
+                envelope.status().observed_generation().get(),
+                1,
+                "{label}: the status reports the row's own generation"
+            );
+            assert_eq!(
+                envelope.status().phase(),
+                if live { ResourcePhase::Ready } else { ResourcePhase::Pending },
+                "{label}"
+            );
+            assert_eq!(
+                envelope.digest().expect("envelope digest"),
+                stored.payload_digest,
+                "{label}: the row digest must be the decoded envelope's digest"
+            );
+            assert_eq!(
+                envelope.canonical_bytes().expect("canonical bytes"),
+                stored.canonical_json,
+                "{label}: the served bytes must be the canonical envelope"
+            );
+
+            let value: serde_json::Value =
+                serde_json::from_slice(&stored.canonical_json).expect("envelope json");
+            let status = value["status"].as_object().expect("status object");
+            let keys: std::collections::BTreeSet<&str> =
+                status.keys().map(String::as_str).collect();
+            assert_eq!(
+                keys,
+                std::collections::BTreeSet::from(UNIVERSAL_STATUS_KEYS),
+                "{label}: the status object carries exactly the contract's keys"
+            );
+            assert_eq!(
+                value["status"]["resource"],
+                if live { projection.clone() } else { serde_json::json!({}) },
+                "{label}: the driver's `status.resource` layer is carried unchanged"
+            );
+        }
+    }
+}
+
+/// The converted types whose contracts pin a typed `status.resource` layer
+/// decode the served layer through exactly that `deny-unknown-fields`
+/// decoder: the projection cannot wrap, rename, or nest what the type's
+/// consumers read. The remaining converted types publish free-form evidence
+/// layers, for which the universal strict envelope is the whole boundary.
+#[test]
+fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
+    use d2b_contracts_resource::v3::{
+        DeviceStatusResource, QuotaStatusResource, VolumeBindingStatusResource,
+    };
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+    use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};
+
+    let decode: [(&str, serde_json::Value, fn(&serde_json::Value) -> Result<serde_json::Value, String>); 3] = [
+        (
+            "VolumeBinding",
+            serde_json::json!({
+                "ready": true,
+                "fence": {
+                    "uid": "123e4567-e89b-42d3-a456-426614174000",
+                    "generation": 1,
+                    "revision": 9,
+                },
+            }),
+            |served| {
+                serde_json::from_value::<VolumeBindingStatusResource>(served.clone())
+                    .map(|typed| serde_json::to_value(typed).expect("serialize typed layer"))
+                    .map_err(|error| error.to_string())
+            },
+        ),
+        (
+            "Device",
+            serde_json::json!({
+                "present": true,
+                "health": "healthy",
+                "holderRefs": [],
+                "claims": [],
+                "provisionedAt": null,
+                "lastProbedAt": null,
+                "providerDiagnostic": null,
+            }),
+            |served| {
+                serde_json::from_value::<DeviceStatusResource>(served.clone())
+                    .map(|typed| serde_json::to_value(typed).expect("serialize typed layer"))
+                    .map_err(|error| error.to_string())
+            },
+        ),
+        (
+            "Quota",
+            serde_json::json!({
+                "usedResources": 2,
+                "usedCpu": 4,
+                "usedMemoryMib": 512,
+                "usedStorageGib": null,
+                "overQuota": false,
+                "overQuotaTypes": [],
+                "lastCheckedAt": null,
+                "dependentCount": 1,
+            }),
+            |served| {
+                serde_json::from_value::<QuotaStatusResource>(served.clone())
+                    .map(|typed| serde_json::to_value(typed).expect("serialize typed layer"))
+                    .map_err(|error| error.to_string())
+            },
+        ),
+    ];
+
+    for (resource_type, layer, decode) in decode {
+        let key = ResourceKey::new(TEST_ZONE, resource_type, "typed-layer");
+        let view = ResourceView {
+            key,
+            uid: super::manager_uid(&ResourceKey::new(TEST_ZONE, resource_type, "typed-layer")),
+            generation: 1,
+            deleting: false,
+            provenance: ResourceProvenance::Api,
+            spec: serde_json::to_vec(&serde_json::json!({ "providerRef": "Provider/typed-layer" }))
+                .unwrap(),
+            metadata: serde_json::to_vec(&serde_json::json!({})).unwrap(),
+            owner_key: None,
+            status: Some(ResourceStatus::Ready),
+            status_generation: Some(1),
+            status_projection: Some(layer.clone()),
+        };
+        let stored = super::manager_row_stored(&view)
+            .unwrap_or_else(|error| panic!("{resource_type}: render failed: {error:?}"));
+        let value: serde_json::Value =
+            serde_json::from_slice(&stored.canonical_json).expect("envelope json");
+        let served = value["status"]["resource"].clone();
+        let decoded = decode(&served).unwrap_or_else(|error| {
+            panic!("{resource_type}: the served layer must decode through its type's decoder: {error}")
+        });
+        assert_eq!(
+            decoded, layer,
+            "{resource_type}: the served typed layer must be the driver's value"
+        );
+    }
+}
+
+/// The caller-side half of the contract: every API path that returns a row
+/// returns the canonical projection of the manager state it observed, byte
+/// for byte - GET, LIST, a no-op UPDATE_SPEC confirmation, and the DELETE
+/// confirmation. A caller that re-introduces its own envelope or status
+/// assembly diverges from `manager_row_stored` here and fails, whatever the
+/// shapes it invents.
+#[tokio::test]
+async fn every_api_read_path_serves_the_canonical_projection() {
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
+    use d2b_resource_runtime::spec_store::ResourceKey;
+
+    let fixture = manager_fixture().await;
+    let service = wired_service(
+        &fixture,
+        authorizer(&[
+            ResourceVerb::Create,
+            ResourceVerb::Get,
+            ResourceVerb::List,
+            ResourceVerb::UpdateSpec,
+            ResourceVerb::Delete,
+        ]),
+    );
+    let created = service.create(trusted(create_request())).await;
+    assert!(
+        created.error.is_none(),
+        "create failed: kind={:?} reason={}",
+        error_kind(&created),
+        error_reason(&created)
+    );
+    let uid = created
+        .resource
+        .as_ref()
+        .unwrap()
+        .identity
+        .as_ref()
+        .unwrap()
+        .uid
+        .clone()
+        .unwrap();
+
+    // The driver publishes status asynchronously: wait for its single Ready
+    // publication so the byte comparisons below cannot race a transition.
+    let key = ResourceKey::new(TEST_ZONE, "Host", "host-system");
+    let mut settled = None;
+    for _ in 0..500 {
+        let view = fixture
+            .client
+            .get(key.clone())
+            .await
+            .expect("manager read")
+            .expect("row");
+        if view.observed_status() == Some(ResourceStatus::Ready) {
+            settled = Some(view);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let view = settled.expect("the fixture row never reached Ready");
+    let canonical = super::manager_row_stored(&view).expect("canonical render");
+
+    // GET.
+    let fetched = service.get(trusted(get_request())).await;
+    assert!(fetched.error.is_none(), "get failed: {:?}", fetched.error);
+    assert_eq!(
+        fetched.resource.as_ref().unwrap().canonical_json,
+        canonical.canonical_json,
+        "GET must serve the canonical projection"
+    );
+
+    // LIST.
+    let listed = service.list(trusted(list_request())).await;
+    assert!(listed.error.is_none(), "list failed: {:?}", listed.error);
+    assert_eq!(listed.resources.len(), 1, "one Host row is committed");
+    assert_eq!(
+        listed.resources[0].canonical_json,
+        canonical.canonical_json,
+        "LIST must serve the canonical projection"
+    );
+
+    // A byte-identical UPDATE_SPEC is a no-op: the confirmation is the same
+    // live view a read serves, never a second rendering of the desired bytes
+    // (which would report the persisted status instead of the live one).
+    let row = fixture
+        .client
+        .get_row(key.clone())
+        .await
+        .expect("get_row")
+        .expect("row");
+    let mut noop = wire::UpdateSpecRequest::new();
+    noop.meta = request_meta();
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_SPEC);
+    mutation.target = identity();
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(view.generation);
+    precondition.expected_uid = Some(uid.clone());
+    mutation.precondition = MessageField::some(precondition);
+    mutation.resource = update_body(row.spec.clone(), &uid, view.generation);
+    noop.mutation = MessageField::some(mutation);
+    let unchanged = service.update_spec(trusted(noop)).await;
+    assert!(
+        unchanged.error.is_none(),
+        "no-op update failed: kind={:?} reason={}",
+        error_kind(&unchanged),
+        error_reason(&unchanged)
+    );
+    assert_eq!(
+        unchanged.resource.as_ref().unwrap().canonical_json,
+        canonical.canonical_json,
+        "a no-op UPDATE_SPEC confirmation must be the canonical projection"
+    );
+
+    // DELETE: the confirmation is the canonical projection of the row state
+    // the removal commit produced (deleting at its own generation, the
+    // closed deleting classification, projection dropped). The single-delete
+    // response exposes only the identity, so the batch form - which carries
+    // each committed row's envelope - is where a divergent confirmation would
+    // show on the wire.
+    let deleting = ResourceView {
+        key: key.clone(),
+        uid: row.uid,
+        generation: row.generation,
+        deleting: true,
+        provenance: row.provenance,
+        spec: row.spec.clone(),
+        metadata: row.metadata.clone(),
+        owner_key: None,
+        status: Some(ResourceStatus::Deleting),
+        status_generation: Some(row.generation),
+        status_projection: None,
+    };
+    let deleting_canonical = super::manager_row_stored(&deleting).expect("deleting render");
+    let mut batch = wire::CommitBatchRequest::new();
+    batch.meta = request_meta();
+    let mut delete = wire::Mutation::new();
+    delete.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+    delete.target = identity();
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(view.generation);
+    precondition.expected_uid = Some(uid.clone());
+    delete.precondition = MessageField::some(precondition);
+    batch.mutations = vec![delete];
+    let committed = service.commit_batch(trusted(batch)).await;
+    assert!(
+        committed.error.is_none(),
+        "batch delete failed: kind={:?} reason={}",
+        committed.error.as_ref().map(|error| error.kind.enum_value()),
+        committed
+            .error
+            .as_ref()
+            .map(|error| error.reason.clone())
+            .unwrap_or_default()
+    );
+    assert_eq!(committed.resources.len(), 1, "one committed mutation");
+    let confirmation = &committed.resources[0];
+    assert_eq!(
+        confirmation.canonical_json, deleting_canonical.canonical_json,
+        "the DELETE confirmation must be the projection of the deleting row"
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&confirmation.canonical_json).expect("confirmation envelope");
+    assert_eq!(value["status"]["phase"], serde_json::json!("Deleted"));
+    assert!(
+        value
+            .pointer("/metadata/deletionRequestedAt")
+            .is_some_and(|value| !value.is_null()),
+        "the delete confirmation reports the deletion request"
+    );
+
+    let gone = service.get(trusted(get_request())).await;
+    assert_eq!(
+        error_kind(&gone),
+        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND,
+        "the deleted row is absent from the manager"
+    );
+
+    fixture.manager_actor.get_cell().stop(None);
+}
+
 #[tokio::test]
 async fn exact_revision_precondition_rejects_a_stale_generation() {
     let fixture = manager_fixture().await;

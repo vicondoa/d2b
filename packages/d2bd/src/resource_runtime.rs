@@ -14907,13 +14907,22 @@ mod tests {
                 "resourceType": "EphemeralProcess",
             }),
         ] {
-            tokio::time::timeout(
+            let result = tokio::time::timeout(
                 std::time::Duration::from_millis(100),
                 runtime.dispatch_public_cli_request(&request, uid.as_raw()),
             )
             .await
-            .expect("public read must not wait for controller-session policy refresh")
-            .expect("public read should use the installed authorization projection");
+            .expect("public read must not wait for controller-session policy refresh");
+            // `EphemeralProcess` is manager-served since U12 and this fixture
+            // publishes no manager plane, so the read must fail on exactly
+            // that absence - never on the authorization projection (the
+            // fenced refresh would otherwise rebuild it) and never by
+            // waiting.
+            assert_eq!(
+                result.expect_err("no manager plane is published in this fixture"),
+                ResourceRuntimeError::CapabilityUnavailable,
+                "public read must use the installed authorization projection",
+            );
         }
         drop(guard);
         let _ = service_task.await;
@@ -16769,7 +16778,7 @@ mod tests {
         );
 
         assert!(
-            bridge_manager_rows(Some(&manager), "EphemeralProcess")
+            bridge_manager_rows(Some(&manager), "vendor-extension.d2bus.org.Report")
                 .await
                 .expect("unconverted types bridge")
                 .is_empty(),
@@ -16885,7 +16894,7 @@ mod tests {
         assert!(
             bridge_manager_row(
                 Some(&manager),
-                &ResourceRef::parse("EphemeralProcess/worker").expect("unconverted"),
+                &ResourceRef::parse("vendor-extension.d2bus.org.Report/worker").expect("unconverted"),
             )
             .await
             .is_err(),

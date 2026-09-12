@@ -51,7 +51,7 @@ use d2b_resource_runtime::watch::{
     WatchRegistration as RuntimeWatchRegistration, WatchSelector as RuntimeWatchSelector,
 };
 use d2b_resource_runtime::{
-    error::{DriverFailure, ResourceError},
+    error::ResourceError,
     identity::ResourceKey as RuntimeResourceKey,
 };
 use d2b_resource_store::mutation_seal::MutationSealAcceptor;
@@ -448,10 +448,19 @@ fn stored_of(
 /// the actor's in-memory status onto the read (R11): the durable row has no
 /// status, the live actor does.
 ///
-/// Public because it is the canonical manager-row projection: the daemon's
-/// reader bridges (G5, U12) merge manager rows into the old plane's
-/// store-shaped readers through exactly this rendering, so a bridged row is
-/// identical to the row the manager-backed API serves.
+/// **This is the one wire-view producer for converted types** (issue #515):
+/// envelope, metadata, spec, and status are rendered here and nowhere else,
+/// so no reader - public API, internal scan, dependency probe - can serve a
+/// row whose shape differs from what any other reader serves for the same
+/// manager state. The universal status layer is
+/// [`ResourceView::wire_status`]'s output, the row's identity and desired
+/// state come from the view, and the rendered bytes are always a complete
+/// envelope the strict readers (`ResourceEnvelope::from_json`) decode.
+///
+/// Public because it is also the canonical manager-row projection for the
+/// daemon's reader bridges (G5, U12): they merge manager rows into the old
+/// plane's store-shaped readers through exactly this rendering, so a bridged
+/// row is identical to the row the manager-backed API serves.
 pub fn manager_row_stored(view: &ResourceView) -> Result<StoredResource, StoreError> {
     stored_from_view(view)
 }
@@ -465,6 +474,7 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
         &view.spec,
         view.owner_key.as_ref(),
         view.provenance,
+        &view.wire_status(),
     )?;
     let mut stored = stored_of(
         &view.key.zone,
@@ -475,42 +485,53 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
         view.generation,
         &canonical,
     );
-    let mut stamped = false;
-    if let Some(status) = view.status
-        && view.status_generation == Some(view.generation)
-    {
-        // Only a status the actor published for this exact row generation is
-        // observed state of it; a status carried over from an older
-        // generation is not (see `ResourceView::status_generation`).
-        stamp_status(
-            &mut stored,
-            status,
-            view.generation,
-            view.observed_status_projection(),
-        )?;
-        stamped = true;
-    }
     if view.deleting {
         stamp_deletion_request(&mut stored)?;
-        stamped = true;
-    }
-    if stamped {
-        // The stamps above edit the rendered envelope after `stored_of`
-        // derived the digest; refresh it so the strict readers' recomputed
-        // envelope digest keeps matching the row.
+        // The stamp edits the rendered envelope after `stored_of` derived the
+        // digest; refresh it so the strict readers' recomputed envelope digest
+        // keeps matching the row.
         reseal_envelope(&mut stored)?;
     }
     Ok(stored)
 }
 
+/// The canonical manager state of a row immediately after its removal
+/// commit: marked deleting at its own generation, its status the closed
+/// deleting classification, and the status projection dropped (it was
+/// published for a live row and is obsolete once the removal commits).
+///
+/// The resolved owner key is the one every read resolves, so the deleting
+/// rendering carries the same `ownerRef` a GET of the same row carries.
+///
+/// Feeding the row through the one projection ([`manager_row_stored`]) is
+/// what makes a delete confirmation identical to any concurrent read of the
+/// same manager state - the confirmations do not assemble a second shape.
+fn deleting_view(row: &StoredDesiredResource, owner_key: Option<&RuntimeResourceKey>) -> ResourceView {
+    ResourceView {
+        key: row.key.clone(),
+        uid: row.uid,
+        generation: row.generation,
+        deleting: true,
+        provenance: row.provenance,
+        spec: row.spec.clone(),
+        metadata: row.metadata.clone(),
+        owner_key: owner_key.cloned(),
+        status: Some(ResourceStatus::Deleting),
+        status_generation: Some(row.generation),
+        status_projection: None,
+    }
+}
+
 /// The wire envelope of one manager row.
 ///
-/// API-created rows persist the full canonical envelope minus status (KTD2);
-/// Nix-materialized rows persist the compiled spec with its authored metadata
-/// beside it. Reads always answer with the envelope shape - the public
-/// surface stays uniform across both provenances - so a spec-shaped row is
-/// rendered against its metadata and the row's authoritative identity, and
-/// the rendered bytes are always a complete envelope the strict readers
+/// API-created rows persist the canonical envelope as authored (its `status`
+/// member is never observed state on the manager plane, R11); Nix-materialized
+/// rows persist the compiled spec with its authored metadata beside it. Reads
+/// always answer with the envelope shape - the public surface stays uniform
+/// across both provenances - so a spec-shaped row is rendered against its
+/// metadata and the row's authoritative identity, the supplied canonical
+/// status replaces whatever `status` the row persisted, and the rendered bytes
+/// are always a complete envelope the strict readers
 /// (`ResourceEnvelope::from_json`) decode: a rendered row that misses a
 /// required member is a row every store-shaped consumer refuses.
 fn render_envelope(
@@ -521,12 +542,30 @@ fn render_envelope(
     spec: &[u8],
     resolved_owner: Option<&RuntimeResourceKey>,
     provenance: ResourceProvenance,
+    status: &serde_json::Value,
 ) -> Result<Vec<u8>, StoreError> {
     let spec_value = CanonicalJsonValue::parse(spec).map_err(|_| envelope_invalid())?;
     if spec_value.as_object().is_some_and(|root| {
         root.contains_key("apiVersion") && root.contains_key("spec")
     }) {
-        return Ok(spec.to_vec());
+        // Envelope-shaped rows are served from their persisted bytes - the
+        // stored envelope is authoritative for identity and desired state -
+        // but the `status` object is never persisted on the manager plane
+        // (R11): the served status is the canonical projection of the row's
+        // live state, exactly as it is for a spec-shaped row.
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(spec).map_err(|_| envelope_invalid())?;
+        let Some(root) = envelope.as_object_mut() else {
+            return Err(envelope_invalid());
+        };
+        root.insert("status".to_owned(), status.clone());
+        let canonical = CanonicalJsonValue::parse(
+            &serde_json::to_vec(&envelope).map_err(|_| envelope_invalid())?,
+        )
+        .map_err(|_| envelope_invalid())?;
+        let envelope = ResourceEnvelope::from_json(&canonical.to_canonical_bytes())
+            .map_err(|_| envelope_invalid())?;
+        return envelope.canonical_bytes().map_err(|_| envelope_invalid());
     }
     let authored: serde_json::Value =
         serde_json::from_slice(metadata).unwrap_or(serde_json::Value::Null);
@@ -575,9 +614,10 @@ fn render_envelope(
         None if managed_by.as_str() == Some("configuration") => serde_json::json!(generation),
         None => serde_json::Value::Null,
     };
-    // Always a complete status: the actor's classification when one is
-    // stamped for this generation (see `stamp_status`, which replaces this
-    // fallback), `Pending` at the row's own generation otherwise - the
+    // Always a complete status: the canonical projection of the row's live
+    // classification and its driver-published layer
+    // ([`ResourceView::wire_status`], the one status producer) - `Pending`
+    // at the row's own generation for a row that published nothing, the
     // honest "nothing published yet" phase, unlike a fabricated `Ready`.
     let envelope = serde_json::json!({
         "apiVersion": "resources.d2bus.org/v3",
@@ -608,7 +648,7 @@ fn render_envelope(
             "zone": key.zone,
         },
         "spec": serde_json::to_value(&spec_value).map_err(|_| envelope_invalid())?,
-        "status": manager_status_value("Pending", None, generation, None),
+        "status": status,
         "type": key.type_name,
     });
     let canonical =
@@ -621,103 +661,6 @@ fn render_envelope(
     let envelope = ResourceEnvelope::from_json(&canonical.to_canonical_bytes())
         .map_err(|_| envelope_invalid())?;
     envelope.canonical_bytes().map_err(|_| envelope_invalid())
-}
-
-/// The manager plane's wire status for one row: the actor classification
-/// projected onto the contract's closed status shape (the shape the durable
-/// plane materializes and the strict readers decode) at the row's own
-/// generation.
-///
-/// The manager runs no update assessment, so the currency object reports
-/// `Unknown` with empty owned/dependency sets. The free-form `resource` layer
-/// carries the row's driver-published projection when it has one; otherwise a
-/// failed actor's closed failure classification rides there (the status
-/// object itself is closed to unknown fields).
-fn manager_status_value(
-    phase: &str,
-    failure: Option<&DriverFailure>,
-    generation: u64,
-    projection: Option<&serde_json::Value>,
-) -> serde_json::Value {
-    let resource = match projection {
-        // The driver published this row's own `status.resource` layer (the
-        // Cloud Hypervisor Guest runtime status): it is what the type's
-        // consumers read, so it stands in for the default empty layer.
-        Some(projection) => projection.clone(),
-        None => match failure {
-            Some(failure) => serde_json::json!({
-                "driverFailure": {
-                    "operation": format!("{:?}", failure.op()),
-                    "retryable": failure.class()
-                        == d2b_resource_runtime::error::FailureClass::Retryable,
-                },
-            }),
-            None => serde_json::json!({}),
-        },
-    };
-    serde_json::json!({
-        "completedAt": serde_json::Value::Null,
-        "conditions": [],
-        "lastReconciledAt": serde_json::Value::Null,
-        "observedGeneration": generation,
-        "outcome": serde_json::Value::Null,
-        "phase": phase,
-        "resource": resource,
-        "startedAt": serde_json::Value::Null,
-        "update": {
-            "dependencies": {"count": 0, "refs": []},
-            "disruption": "None",
-            "lastAssessedAt": serde_json::Value::Null,
-            "observedGeneration": generation,
-            "operationId": serde_json::Value::Null,
-            "owned": {"count": 0, "refs": []},
-            "preserveState": true,
-            "reasons": [],
-            "state": "Unknown",
-            "targetGeneration": generation,
-        },
-    })
-}
-
-/// Project the closed runtime classification onto the wire status.
-///
-/// The manager's view carries the runtime classification and nothing else,
-/// so the projection is the phase and the row generation the status is
-/// current for; a failed actor's closed failure classification rides under
-/// the free-form status `resource` layer (`status` itself is closed). A
-/// Ready row reports `observedGeneration == metadata.generation`, the
-/// manager-view form of the old plane's converged status.
-fn stamp_status(
-    stored: &mut StoredResource,
-    status: ResourceStatus,
-    generation: u64,
-    projection: Option<&serde_json::Value>,
-) -> Result<(), StoreError> {
-    let (phase, failure) = match status {
-        ResourceStatus::Pending | ResourceStatus::Recovering | ResourceStatus::Reconciling => {
-            ("Pending", None)
-        }
-        ResourceStatus::Ready => ("Ready", None),
-        ResourceStatus::Failed(failure) => ("Failed", Some(failure)),
-        // The closed wire vocabulary has no `Deleting` phase; `Deleted` is
-        // the tombstone projection the other manager-row planners
-        // (`interaction_effects::view_phase`,
-        // `shared_provider_effects::live_phase`) already apply.
-        ResourceStatus::Deleting => ("Deleted", None),
-    };
-    let projected = manager_status_value(phase, failure.as_ref(), generation, projection);
-    let mut value =
-        CanonicalJsonValue::parse(&stored.canonical_json).map_err(|_| envelope_invalid())?;
-    let CanonicalJsonValue::Object(root) = &mut value else {
-        return Err(envelope_invalid());
-    };
-    let status = CanonicalJsonValue::parse(
-        &serde_json::to_vec(&projected).map_err(|_| envelope_invalid())?,
-    )
-    .map_err(|_| envelope_invalid())?;
-    root.insert("status".to_owned(), status);
-    stored.canonical_json = value.to_canonical_bytes();
-    Ok(())
 }
 
 /// Re-seal a rendered row after a post-render stamp: the stamped bytes are
@@ -774,28 +717,6 @@ fn stamp_deletion_request(stored: &mut StoredResource) -> Result<(), StoreError>
     );
     stored.canonical_json = value.to_canonical_bytes();
     Ok(())
-}
-
-fn stored_from_row(row: &StoredDesiredResource) -> StoredResource {
-    let canonical = render_envelope(
-        &row.key,
-        &row.uid,
-        row.generation,
-        &row.metadata,
-        &row.spec,
-        None,
-        row.provenance,
-    )
-    .unwrap_or_else(|_| row.spec.clone());
-    stored_of(
-        &row.key.zone,
-        &row.key.type_name,
-        &row.key.name,
-        &row.uid,
-        row.owner_uid.map(|uid| row_uid(&uid)),
-        row.generation,
-        &canonical,
-    )
 }
 
 /// Watch selectors narrow by the closed metadata.name and type filters; the
@@ -964,9 +885,11 @@ impl ManagerBackend {
                     _ => mutation.canonical_resource.clone().ok_or_else(envelope_invalid)?,
                 };
                 // A byte-identical desired envelope is a no-op: the manager
-                // keeps the row and generation unchanged.
+                // keeps the row and generation unchanged, so the response is
+                // the same canonical wire view a read of that row serves -
+                // never a second rendering of the desired bytes alone.
                 if next == row.spec {
-                    return Ok(Some(stored_from_row(&row)));
+                    return Ok(Some(self.committed(&key).await?));
                 }
                 let (stamped, _) =
                     stamp_envelope(&next, row_uid(&row.uid).as_str(), row.generation + 1)?;
@@ -995,13 +918,21 @@ impl ManagerBackend {
             ResourceMutationKind::Delete => {
                 let row = self.row(&key).await?.ok_or_else(not_found)?;
                 check_precondition(mutation, &row)?;
+                // Resolve the owner the way every read does: the deleting
+                // view carries the same owner reference a GET of the same
+                // row resolves, so the confirmation cannot differ from the
+                // canonical projection of the post-commit state.
+                let owner_key = self.owner_key_for(&row).await?;
                 self.manager
                     .remove(subject.clone(), key.clone())
                     .await
                     .map_err(map_manager_error)?;
-                // The identity of the deleted resource is what the wire
-                // delete response carries.
-                Ok(Some(stored_from_row(&row)))
+                // The removal commit marked the row deleting at its own
+                // generation; the confirmation is the canonical projection
+                // of exactly that state (identity, desired bytes, and the
+                // deletion the caller just requested), never a second shape
+                // assembled for the response.
+                Ok(Some(stored_from_view(&deleting_view(&row, owner_key.as_ref()))?))
             }
         }
     }
@@ -1018,6 +949,18 @@ impl ManagerBackend {
         if let Some(owner) = &mutation.owner {
             return Ok(Some(Self::runtime_key(&mutation.zone, owner)));
         }
+        self.owner_key_for(row).await
+    }
+
+    /// The owning resource's manager key for one desired row, resolved
+    /// through the manager's own uid index (the same lookup
+    /// [`ResourceManagerState::view`](d2b_resource_runtime::manager::ResourceView)
+    /// performs): `None` for a root, and for a row whose owner is not in
+    /// this manager.
+    async fn owner_key_for(
+        &self,
+        row: &StoredDesiredResource,
+    ) -> Result<Option<RuntimeResourceKey>, StoreError> {
         let Some(owner_uid) = row.owner_uid else {
             return Ok(None);
         };

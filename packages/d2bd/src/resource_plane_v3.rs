@@ -139,7 +139,7 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 32] =
+pub const CONVERTED_TYPES: [&str; 33] =
     d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
@@ -1733,6 +1733,12 @@ impl ResourcePlaneV3 {
     fn decoders() -> HashMap<ResourceTypeName, Arc<dyn SpecDecoder>> {
         let mut decoders = HashMap::new();
         decoders.insert(ResourceTypeName::new("Process"), process_spec_decoder());
+        // U12: the one-shot Process family member shares the Process driver's
+        // type-agnostic envelope decoder.
+        decoders.insert(
+            ResourceTypeName::new("EphemeralProcess"),
+            process_spec_decoder(),
+        );
         decoders.insert(ResourceTypeName::new("Volume"), volume_spec_decoder());
         decoders.insert(ResourceTypeName::new("VolumeBinding"), binding_spec_decoder());
         decoders.insert(ResourceTypeName::new("Endpoint"), endpoint_spec_decoder());
@@ -2350,6 +2356,43 @@ mod tests {
             Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
         }
 
+        async fn launch_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+            _timeout: Duration,
+        ) -> Result<ProcessIdentityDigest, String> {
+            self.launches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ProcessIdentityDigest::from_bytes([0u8; 32]))
+        }
+
+        async fn adopt_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
+            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        }
+
+        async fn probe_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        }
+
+        async fn stop_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+            _term_timeout: Duration,
+            _kill_timeout: Duration,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
         async fn stop(
             &self,
             _identity: &crate::process_driver::ProcessResourceIdentity,
@@ -2656,21 +2699,27 @@ mod tests {
     }
 
 
-    /// Partition router: the converted types route to the new plane,
-    /// representative unconverted types to the old plane.
+    /// Partition router: the converted types route to the new plane; every
+    /// standard catalog type is now converted, so nothing of the catalog is
+    /// left on the old plane.
     #[test]
     fn partition_router_classifies_converted_and_unconverted_types() {
         for converted in CONVERTED_TYPES {
             assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
         }
-        for unconverted in ["EphemeralProcess"] {
+        for standard in d2b_contracts::identity::STANDARD_RESOURCE_TYPES {
             assert_eq!(
-                route_resource_type(unconverted),
-                PlaneRoute::OldPlane,
-                "{unconverted} must stay on the old plane"
+                route_resource_type(standard),
+                PlaneRoute::NewPlane,
+                "{standard} is a standard type and must be served by the new plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 32);
+        assert_eq!(
+            route_resource_type("not-a-resource-type"),
+            PlaneRoute::OldPlane,
+            "a type outside the converted set still routes to the old plane"
+        );
+        assert_eq!(CONVERTED_TYPES.len(), 33);
     }
 
     /// KTD7: the committed Provider identities the composition resolves are
@@ -2811,7 +2860,7 @@ mod tests {
                 serde_json::json!({"providerRef": "Provider/volume-local"}),
             ),
             bundle_row("Guest", "work", serde_json::json!({"systemArtifactId": "a"})),
-            bundle_row("EphemeralProcess", "runner", serde_json::json!({})),
+            bundle_row("vendor-extension.d2bus.org.Report", "runner", serde_json::json!({})),
         ]);
 
         let report = plane.ingest_nix_bundle(&bundle).await.expect("ingest");
@@ -2846,7 +2895,7 @@ mod tests {
         assert_eq!(old_bundle.resources.len(), 1);
         assert_eq!(
             old_bundle.resources[0].resource_type().as_str(),
-            "EphemeralProcess"
+            "vendor-extension.d2bus.org.Report"
         );
         old_bundle.verify().expect("rebuilt bundle verifies");
 
@@ -3051,6 +3100,42 @@ mod tests {
             } else {
                 Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
             }
+        }
+
+        async fn launch_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+            _timeout: Duration,
+        ) -> Result<ProcessIdentityDigest, String> {
+            self.launched.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(ProcessIdentityDigest::from_bytes([0x51; 32]))
+        }
+
+        async fn adopt_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
+            Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        }
+
+        async fn probe_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
+        }
+
+        async fn stop_ephemeral(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+            _term_timeout: Duration,
+            _kill_timeout: Duration,
+        ) -> Result<bool, String> {
+            Ok(true)
         }
 
         async fn stop(

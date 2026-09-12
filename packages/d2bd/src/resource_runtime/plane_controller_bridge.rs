@@ -35,6 +35,7 @@ use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
+use d2b_resource_runtime::context::{LookupPlane, RowLookup};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::ResourceKey as ManagerKey;
 use d2b_resource_runtime::manager::{
@@ -295,32 +296,62 @@ impl PlaneChildMutations {
         ))
     }
 
-    /// The committed row through the canonical manager-row rendering, or
-    /// `None` when the manager does not hold it. A manager RPC failure is an
-    /// error, never absence (G5).
-    pub(crate) async fn current(
-        &self,
-        target: &ResourceRef,
-    ) -> Result<Option<StoredResource>, ChildMutationFailure> {
-        let view = self
-            .plane
-            .client()
-            .get(self.key(target))
-            .await
-            .map_err(|error| {
+    /// The committed row through the canonical manager-row rendering,
+    /// classified per issue #511: `Present` carries the store-shaped row,
+    /// `Absent` is the manager's honest not-committed answer, an unanswerable
+    /// manager is `Unavailable` (a manager RPC failure is never absence, G5),
+    /// and a manager row that does not project onto the store shape is
+    /// `Error` with the projection detail.
+    pub(crate) async fn lookup(&self, target: &ResourceRef) -> RowLookup<StoredResource> {
+        let view = match self.plane.client().get(self.key(target)).await {
+            Ok(view) => view,
+            Err(error) => {
                 tracing::warn!(
                     zone = %self.zone.as_str(),
                     target = %target.to_canonical_string(),
                     error = %error,
                     "child mutation bridge: manager row read failed",
                 );
-                ChildMutationFailure::Unavailable
-            })?;
-        view.map(|view| {
-            d2b_resource_api::manager_backend::manager_row_stored(&view)
-                .map_err(|_| ChildMutationFailure::Invalid)
-        })
-        .transpose()
+                return RowLookup::Unavailable {
+                    plane: LookupPlane::Manager,
+                };
+            }
+        };
+        let Some(view) = view else {
+            return RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            };
+        };
+        match d2b_resource_api::manager_backend::manager_row_stored(&view) {
+            Ok(row) => RowLookup::Present {
+                row,
+                plane: LookupPlane::Manager,
+            },
+            Err(error) => RowLookup::Error {
+                plane: LookupPlane::Manager,
+                detail: error.to_string(),
+            },
+        }
+    }
+
+    /// The committed row through the canonical manager-row rendering, or
+    /// `None` when the manager does not hold it, folded onto the mutation
+    /// protocol's closed error shape. A manager RPC failure is an error,
+    /// never absence (G5); a row that cannot be projected is a conflict-free
+    /// `Invalid`, the mutation protocol's named evidence that the row is not
+    /// a decodable envelope.
+    pub(crate) async fn current(
+        &self,
+        target: &ResourceRef,
+    ) -> Result<Option<StoredResource>, ChildMutationFailure> {
+        match self.lookup(target).await {
+            RowLookup::Present { row, .. } => Ok(Some(row)),
+            RowLookup::Absent { .. } => Ok(None),
+            RowLookup::Unavailable { .. } => Err(ChildMutationFailure::Unavailable),
+            RowLookup::Error { plane, detail } => {
+                Err(Self::unprojectable_row(target, plane, &detail))
+            }
+        }
     }
 
     /// Every manager row of the requested converted types (the relist and
@@ -363,16 +394,37 @@ impl PlaneChildMutations {
         Ok(rows)
     }
 
+    /// A manager row that does not project onto the store shape: the closed
+    /// `Invalid` refusal, with the plane and the projection detail logged.
+    /// Retrying cannot make the committed row decode, so this is the mutation
+    /// protocol's named evidence - never absence, never unavailability.
+    fn unprojectable_row(target: &ResourceRef, plane: LookupPlane, detail: &str) -> ChildMutationFailure {
+        tracing::warn!(
+            target = %target.to_canonical_string(),
+            plane = ?plane,
+            detail,
+            "child mutation bridge: manager row does not project",
+        );
+        ChildMutationFailure::Invalid
+    }
+
     /// Commit one provider-authored child envelope under the create-absent
     /// fence (the store mutation's `ExpectedRevision::CreateAbsent`): an
-    /// existing row is a conflict, never an overwrite.
+    /// existing row is a conflict, never an overwrite. Only `Absent` proceeds
+    /// to the commit; an unanswerable manager and a row that cannot be
+    /// projected refuse first.
     pub(crate) async fn ensure(
         &self,
         target: &ResourceRef,
         canonical_envelope: &[u8],
     ) -> Result<StoredResource, ChildMutationFailure> {
-        if self.current(target).await?.is_some() {
-            return Err(ChildMutationFailure::Conflict);
+        match self.lookup(target).await {
+            RowLookup::Present { .. } => return Err(ChildMutationFailure::Conflict),
+            RowLookup::Absent { .. } => {}
+            RowLookup::Unavailable { .. } => return Err(ChildMutationFailure::Unavailable),
+            RowLookup::Error { plane, detail } => {
+                return Err(Self::unprojectable_row(target, plane, &detail))
+            }
         }
         self.apply(target, canonical_envelope).await
     }
@@ -386,10 +438,14 @@ impl PlaneChildMutations {
         expected_revision: ZoneRevision,
         canonical_envelope: &[u8],
     ) -> Result<StoredResource, ChildMutationFailure> {
-        let current = self
-            .current(target)
-            .await?
-            .ok_or(ChildMutationFailure::NotFound)?;
+        let current = match self.lookup(target).await {
+            RowLookup::Present { row, .. } => row,
+            RowLookup::Absent { .. } => return Err(ChildMutationFailure::NotFound),
+            RowLookup::Unavailable { .. } => return Err(ChildMutationFailure::Unavailable),
+            RowLookup::Error { plane, detail } => {
+                return Err(Self::unprojectable_row(target, plane, &detail))
+            }
+        };
         if current.uid != *expected_uid || current.revision != expected_revision {
             return Err(ChildMutationFailure::Conflict);
         }
@@ -443,9 +499,15 @@ impl PlaneChildMutations {
         if matches!(target.resource_type().as_str(), "Volume" | "VolumeBinding") {
             self.refresh_registry().await;
         }
-        self.current(target)
-            .await?
-            .ok_or(ChildMutationFailure::Unavailable)
+        match self.lookup(target).await {
+            RowLookup::Present { row, .. } => Ok(row),
+            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
+                Err(ChildMutationFailure::Unavailable)
+            }
+            RowLookup::Error { plane, detail } => {
+                Err(Self::unprojectable_row(target, plane, &detail))
+            }
+        }
     }
 
     /// Re-register the durable rows the production effects resolve
@@ -528,19 +590,28 @@ mod tests {
 
     /// The Guest family's four deterministic child roles are converted types:
     /// their commits must land on the manager (the pre-v3 store has no actor
-    /// to launch them), while a type that is still unconverted keeps the
+    /// to launch them), while a type outside the converted partition keeps the
     /// durable registered-controller path - the same partition every other
     /// surface applies.
     #[test]
     fn child_mutations_route_converted_types_to_the_manager() {
-        for converted in ["Guest", "Process", "Endpoint", "Volume", "VolumeBinding"] {
+        for converted in [
+            "Guest",
+            "Process",
+            // U12: the one-shot Process family member shares the Process
+            // driver factory, so its commits are manager commits too.
+            "EphemeralProcess",
+            "Endpoint",
+            "Volume",
+            "VolumeBinding",
+        ] {
             assert_eq!(
                 child_type_route(converted),
                 ChildMutationRoute::Manager,
                 "{converted} is a converted type"
             );
         }
-        for legacy in ["EphemeralProcess"] {
+        for legacy in ["NotAConvertedType"] {
             assert_eq!(
                 child_type_route(legacy),
                 ChildMutationRoute::Legacy,

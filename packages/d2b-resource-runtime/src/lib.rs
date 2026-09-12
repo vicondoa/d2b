@@ -42,6 +42,10 @@ pub use crate::resource::{
     DEFAULT_REQUEUE_BACKOFF, ResourceActor, ResourceActorArgs, ResourceMsg, ResourceStatus,
 };
 
+// Lookup classification (issue #511): the canonical classified row-read
+// result every driver and effect maps onto.
+pub use crate::context::{LookupDisposition, LookupPlane, RowLookup};
+
 // Target layer (U13): the Host/Guest directory, the generation-bound guest
 // handle it mints, and the Guest-side target runtime behind the
 // target-control port.
