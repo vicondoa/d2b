@@ -122,8 +122,8 @@ use d2b_resource_store_redb::{
     StoreRuntimeMetadata, write_provisioning_marker,
 };
 use d2b_session::{
-    ComponentSessionDriver, HandshakeCredentials, SessionDriverHandle, SessionEngine,
-    SessionServerError, StreamEvent, StreamId, TransportEvidence,
+    ComponentSessionDriver, HandshakeCredentials, OwnedTransport, SessionDriverHandle,
+    SessionEngine, SessionServerError, StreamEvent, StreamId, TransportEvidence,
 };
 use d2b_session_unix::{
     AncillaryCapacity, CONTROLLER_BOOTSTRAP_TIMEOUT, PeerCredentials, SeqpacketSocket,
@@ -9482,7 +9482,7 @@ impl ControllerSessionCoordinator {
             .component_session_acceptor(policy.clone(), verified_peer)
             .map_err(|_| authentication_error("session-acceptor"))?;
         let transport = unix_transport(resource_socket, &policy)?;
-        let responder = SessionEngine::establish_responder(
+        let mut responder = SessionEngine::establish_responder(
             transport,
             policy,
             HandshakeCredentials::Nn,
@@ -9490,6 +9490,17 @@ impl ControllerSessionCoordinator {
         )
         .await
         .map_err(|_| authentication_error("session-handshake"))?;
+        if credential_session {
+            // Named-stream registration is local to this endpoint, so the
+            // Provider can send on a stream before this side has registered
+            // it. Register the Provider session streams on the engine before
+            // admission turns it into a driver: once the driver task exists it
+            // may route an inbound fragment first, and a fragment for an
+            // unregistered stream fails the whole session as an invalid
+            // channel.
+            preregister_provider_session_streams(&mut responder)
+                .map_err(|_| authentication_error("provider-session-stream-open"))?;
+        }
         let candidate = acceptor
             .admit(
                 responder,
@@ -9520,14 +9531,6 @@ impl ControllerSessionCoordinator {
                 .map_err(|_| authentication_error("provider-session-bootstrap"))?;
             let stream = StreamId::new(PROVIDER_BOOTSTRAP_STREAM_ID)
                 .map_err(|_| authentication_error("provider-session-stream"))?;
-            driver
-                .open_named_stream(
-                    stream,
-                    PROVIDER_BOOTSTRAP_STREAM_CREDIT,
-                    PROVIDER_BOOTSTRAP_STREAM_CREDIT,
-                )
-                .await
-                .map_err(|_| authentication_error("provider-session-stream-open"))?;
             driver
                 .send_named_stream(stream, metadata)
                 .await
@@ -9565,14 +9568,6 @@ impl ControllerSessionCoordinator {
             let key_stream = StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID)
                 .map_err(|_| authentication_error("provider-delivery-key-stream"))?;
             driver
-                .open_named_stream(
-                    key_stream,
-                    PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-                    PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-                )
-                .await
-                .map_err(|_| authentication_error("provider-delivery-key-stream-open"))?;
-            driver
                 .send_named_stream(
                     key_stream,
                     delivery_key_handoff
@@ -9586,16 +9581,6 @@ impl ControllerSessionCoordinator {
                 .close_named_stream(key_stream)
                 .await
                 .map_err(|_| authentication_error("provider-delivery-key-stream-close"))?;
-            let ready_stream = StreamId::new(PROVIDER_READY_STREAM_ID)
-                .map_err(|_| authentication_error("provider-session-ready-stream"))?;
-            driver
-                .open_named_stream(
-                    ready_stream,
-                    PROVIDER_READY_STREAM_CREDIT,
-                    PROVIDER_READY_STREAM_CREDIT,
-                )
-                .await
-                .map_err(|_| authentication_error("provider-session-ready-open"))?;
             receive_provider_ready(&driver)
                 .await
                 .map_err(|_| authentication_error("provider-session-ready"))?;
@@ -11199,6 +11184,34 @@ async fn receive_controller_bootstrap(
         return Err(ResourceRuntimeError::AuthenticationUnavailable);
     }
     Ok((resource_socket, credentials))
+}
+
+/// Registers the Provider session's named streams on the engine before the
+/// session driver exists.
+///
+/// Named-stream registration is local to each endpoint, so the Provider can
+/// send on a fixed stream id as soon as its own handshake completes. Once the
+/// driver task is spawned it may route an inbound fragment first, and a
+/// fragment for an unregistered stream fails the whole session as an invalid
+/// channel.
+fn preregister_provider_session_streams<T: OwnedTransport>(
+    engine: &mut SessionEngine<T>,
+) -> Result<(), ResourceRuntimeError> {
+    for (stream, credit) in [
+        (PROVIDER_BOOTSTRAP_STREAM_ID, PROVIDER_BOOTSTRAP_STREAM_CREDIT),
+        (
+            PROVIDER_DELIVERY_KEY_STREAM_ID,
+            PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+        ),
+        (PROVIDER_READY_STREAM_ID, PROVIDER_READY_STREAM_CREDIT),
+    ] {
+        let stream = StreamId::new(stream)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        engine
+            .open_named_stream(stream, credit, credit)
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+    }
+    Ok(())
 }
 
 async fn receive_provider_ready(
@@ -17789,6 +17802,60 @@ mod tests {
             receive_controller_bootstrap(&receiver).await,
             Err(ResourceRuntimeError::AuthenticationUnavailable)
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_ready_survives_a_fragment_that_precedes_the_session_driver() {
+        let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
+        let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
+        let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).unwrap();
+        let policy = credential_provider_endpoint_policy();
+        let (initiator, responder) = tokio::join!(
+            SessionEngine::establish_initiator(
+                unix_transport(initiator_socket, &policy).unwrap(),
+                policy.clone(),
+                HandshakeCredentials::Nn,
+                std::time::Instant::now(),
+            ),
+            SessionEngine::establish_responder(
+                unix_transport(responder_socket, &policy).unwrap(),
+                policy.clone(),
+                HandshakeCredentials::Nn,
+                std::time::Instant::now(),
+            ),
+        );
+        let mut responder = responder.unwrap();
+        // The Provider writes its readiness receipt as soon as its own
+        // handshake completes, which can precede the daemon-side driver. The
+        // streams must already be registered on the engine when that fragment
+        // is the first record the driver routes.
+        preregister_provider_session_streams(&mut responder).unwrap();
+        let initiator = initiator.unwrap().into_driver();
+        let ready = StreamId::new(PROVIDER_READY_STREAM_ID).unwrap();
+        initiator
+            .open_named_stream(
+                ready,
+                PROVIDER_READY_STREAM_CREDIT,
+                PROVIDER_READY_STREAM_CREDIT,
+            )
+            .await
+            .unwrap();
+        initiator
+            .send_named_stream(ready, PROVIDER_READY_MARKER.to_vec())
+            .await
+            .unwrap();
+        initiator.close_named_stream(ready).await.unwrap();
+        let driver = responder.into_driver();
+        let ready_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            receive_provider_ready(&driver),
+        )
+        .await
+        .expect("an early provider fragment must not stall the session");
+        assert!(
+            ready_result.is_ok(),
+            "an early provider fragment must be routed rather than fail the session as an invalid channel: {ready_result:?}",
+        );
     }
 
     #[test]

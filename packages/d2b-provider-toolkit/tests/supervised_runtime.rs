@@ -221,7 +221,7 @@ fn run_supervised_binary(path: &str, provider: &str) {
         .expect("bootstrap receive timeout")
         .expect("bootstrap receive");
         let policy = credential_provider_endpoint_policy();
-        let responder = SessionEngine::establish_responder(
+        let mut responder = SessionEngine::establish_responder(
             provider_transport(resource_socket, credentials),
             policy,
             HandshakeCredentials::Nn,
@@ -229,21 +229,43 @@ fn run_supervised_binary(path: &str, provider: &str) {
         )
         .await
         .expect("provider handshake");
+        // Stream registration is local to this endpoint, so the provider can
+        // send as soon as its own handshake completes. Register every stream
+        // this side consumes on the engine before the session driver exists:
+        // once the driver task is spawned it may route a peer fragment first,
+        // and a fragment for an unregistered stream fails the session as an
+        // invalid channel.
+        let stream = StreamId::new(PROVIDER_BOOTSTRAP_STREAM_ID).expect("bootstrap stream");
+        let key_stream =
+            StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID).expect("delivery key stream");
+        let ready_stream = StreamId::new(PROVIDER_READY_STREAM_ID).expect("ready stream");
+        responder
+            .open_named_stream(
+                stream,
+                PROVIDER_BOOTSTRAP_STREAM_CREDIT,
+                PROVIDER_BOOTSTRAP_STREAM_CREDIT,
+            )
+            .expect("open bootstrap stream");
+        responder
+            .open_named_stream(
+                key_stream,
+                PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+                PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
+            )
+            .expect("open delivery key stream");
+        responder
+            .open_named_stream(
+                ready_stream,
+                PROVIDER_READY_STREAM_CREDIT,
+                PROVIDER_READY_STREAM_CREDIT,
+            )
+            .expect("open ready stream");
         let driver = responder.into_driver();
         let route = route(provider);
         let metadata = ProviderSessionMetadata::from_route(&route)
             .expect("route metadata")
             .encode()
             .expect("metadata encoding");
-        let stream = StreamId::new(PROVIDER_BOOTSTRAP_STREAM_ID).expect("bootstrap stream");
-        driver
-            .open_named_stream(
-                stream,
-                PROVIDER_BOOTSTRAP_STREAM_CREDIT,
-                PROVIDER_BOOTSTRAP_STREAM_CREDIT,
-            )
-            .await
-            .expect("open bootstrap stream");
         driver
             .send_named_stream(stream, metadata)
             .await
@@ -269,16 +291,6 @@ fn run_supervised_binary(path: &str, provider: &str) {
             .expect("bind backend responder route");
         let key_handoff = CredentialDeliveryKeyHandoff::new(provider_private, backend_public)
             .expect("delivery key handoff");
-        let key_stream =
-            StreamId::new(PROVIDER_DELIVERY_KEY_STREAM_ID).expect("delivery key stream");
-        driver
-            .open_named_stream(
-                key_stream,
-                PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-                PROVIDER_DELIVERY_KEY_STREAM_CREDIT,
-            )
-            .await
-            .expect("open delivery key stream");
         driver
             .send_named_stream(key_stream, {
                 let bytes = key_handoff
@@ -293,15 +305,6 @@ fn run_supervised_binary(path: &str, provider: &str) {
             .close_named_stream(key_stream)
             .await
             .expect("close delivery key stream");
-        let ready_stream = StreamId::new(PROVIDER_READY_STREAM_ID).expect("ready stream");
-        driver
-            .open_named_stream(
-                ready_stream,
-                PROVIDER_READY_STREAM_CREDIT,
-                PROVIDER_READY_STREAM_CREDIT,
-            )
-            .await
-            .expect("open ready stream");
         let mut ready = Vec::new();
         loop {
             match tokio::time::timeout(
