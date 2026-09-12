@@ -19,17 +19,13 @@ use std::sync::{
 type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
 type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
 type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
-    d2bd_runtime::resource_runtime_support::ZoneStoreBackend,
+    d2bd_runtime::resource_runtime_support::ZoneApiBackend,
     d2b_resource_api::service::UnavailableUpgradeDispatcher,
 >;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use d2b_audit::{
-    AuditSink, DurabilityEvidence, OperationIdentity, ZoneId as AuditZoneId, ZoneOperationKey,
-    evidence_from_decision_result,
-};
 use d2b_contracts::workload_identity::{WorkloadIdentity, WorkloadTarget};
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
@@ -38,15 +34,14 @@ use d2b_contracts::{
 use d2b_contracts_broker::broker_wire::{
     ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
     ApplyNftablesRequest as BrokerApplyNftablesRequest,
-    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, AuditJoinContext, BrokerCallerRole,
+    ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest, BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
+    DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest, HelloRequest,
     LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
-    OpenPidfdRequest as BrokerOpenPidfdRequest, OpenZoneStoreRequest as BrokerOpenZoneStoreRequest,
+    OpenPidfdRequest as BrokerOpenPidfdRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
     QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
-    ResourceActivationAuditRequest as BrokerResourceActivationAuditRequest,
     RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
     RunHostInstallRequest as BrokerRunHostInstallRequest,
     RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
@@ -65,7 +60,6 @@ use d2b_contracts_control::public_wire::{
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
     NetworkProvenance, ResourceEnvelope,
     ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
@@ -4406,7 +4400,6 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         options.broker_socket_path.clone(),
         options.broker_uid,
         d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
-        &options.state_dir,
     )
     .await
     .map_err(|error| TypedError::InternalConfig {
@@ -7977,13 +7970,9 @@ fn dispatch_wave6_resource_reconcile(
         "Network" => {
             let resolver = load_bundle_resolver(state)
                 .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            block_on_future(runtime.persist_public_reconcile_status(
-                &resource_ref,
-                &uid,
-                operation_id,
-                "Pending",
-                None,
-            ))?;
+            // U14: the "Pending" status write this used to make went to the
+            // durable store; the plane's status projection is the manager's
+            // now, and this simulation only drives the effect.
             ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
                 state,
                 peer,
@@ -8371,10 +8360,10 @@ fn reconcile_wave6_network_effect(
         peer,
         runtime,
         resolver,
-        resource_ref,
+        resource_ref: _,
         uid,
         resource,
-        operation_id,
+        operation_id: _,
         ensure_host_base,
     } = request;
     let caller_role = broker_caller_role_for_peer(peer);
@@ -8475,7 +8464,7 @@ fn reconcile_wave6_network_effect(
     );
     let reconciler = NetworkReconciler::new(effects, resources);
     let mut durable_resource = resource.clone();
-    for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
+    for _pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
         let observed_before = network_child_readiness_from_resource(&durable_resource);
         input.volume_ready = observed_before.volume_ready;
         input.guest_ready = observed_before.guest_ready;
@@ -8492,41 +8481,11 @@ fn reconcile_wave6_network_effect(
                     );
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
-                let projection =
-                    network_child_readiness_projection_for_resource(&durable_resource, completed);
-                let status_operation_id = format!("{operation_id}-network-status-{pass}");
-                block_on_future(runtime.persist_public_reconcile_status(
-                    resource_ref,
-                    uid,
-                    &status_operation_id,
-                    "Ready",
-                    Some(&projection),
-                ))?;
-                durable_resource = fetch_public_resource(runtime, peer, resource_ref)?;
-                let committed_generation = durable_resource
-                    .get("metadata")
-                    .and_then(|metadata| metadata.get("generation"))
-                    .and_then(Value::as_u64);
-                let committed_ready = committed_generation == Some(generation.get())
-                    && durable_resource
-                        .get("status")
-                        .and_then(|status| status.get("phase"))
-                        .and_then(Value::as_str)
-                        == Some("Ready")
-                    && durable_resource
-                        .get("status")
-                        .and_then(|status| status.get("observedGeneration"))
-                        .and_then(Value::as_u64)
-                        == Some(generation.get())
-                    && network_child_readiness_from_resource(&durable_resource).is_ready();
-                if committed_ready {
-                    return Ok(true);
-                }
-                tracing::warn!(
-                    stage = "network-reconciler",
-                    "Network Provider status commit did not produce durable Ready"
-                );
-                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                // U14: the Provider's status commit is the manager's status
+                // projection now, so the simulated durable re-read that used
+                // to verify it here retired with the store; the completed
+                // child readiness is the evidence.
+                return Ok(true);
             }
             Ok(ReconcileProgress::Pending(_)) => {
                 let observed_after = observer
@@ -8539,28 +8498,15 @@ fn reconcile_wave6_network_effect(
                     );
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
+                // U14: the status write goes to the manager's in-memory
+                // status projection, so this simulation carries the observed
+                // progress in its local row view instead of re-reading a
+                // durable row that no longer exists.
                 let projection = network_child_readiness_projection_for_resource(
                     &durable_resource,
                     observed_after,
                 );
-                let status_operation_id = format!("{operation_id}-network-status-{pass}");
-                block_on_future(runtime.persist_public_reconcile_status(
-                    resource_ref,
-                    uid,
-                    &status_operation_id,
-                    "Pending",
-                    Some(&projection),
-                ))?;
-                let committed = fetch_public_resource(runtime, peer, resource_ref)?;
-                let committed_after = network_child_readiness_from_resource(&committed);
-                if committed_after == observed_before {
-                    tracing::warn!(
-                        stage = "network-reconciler",
-                        "Network Provider child readiness was not durably observed"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-                }
-                durable_resource = committed;
+                durable_resource["status"]["resource"] = projection;
             }
             Ok(progress) => {
                 tracing::warn!(
@@ -15626,10 +15572,6 @@ fn dispatch_broker_request(
     )
 }
 
-fn records_broker_response_evidence(request: &BrokerRequest) -> bool {
-    !matches!(request, BrokerRequest::ResourceActivationAudit(_))
-}
-
 fn dispatch_broker_request_as(
     state: &ServerState,
     request: BrokerRequest,
@@ -15637,7 +15579,6 @@ fn dispatch_broker_request_as(
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
@@ -15654,9 +15595,6 @@ fn dispatch_broker_request_as(
             path: socket_path,
             detail: err.to_string(),
         })?;
-    if ingest_response_evidence {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
-    }
     Ok(decoded)
 }
 
@@ -15682,49 +15620,7 @@ fn dispatch_broker_request_with_timeout_as(
     timeout: Duration,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
-    let result =
-        dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout));
-    if ingest_response_evidence && let Ok(response) = &result {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), response);
-    }
-    result
-}
-
-fn ingest_broker_response_evidence(
-    state: &ServerState,
-    audit_join: Option<&AuditJoinContext>,
-    response: &BrokerResponse,
-) {
-    let Some(join) = audit_join else {
-        return;
-    };
-    let Ok(zone) = AuditZoneId::parse(join.zone_id.as_str()) else {
-        return;
-    };
-    let Ok(operation) = OperationIdentity::parse(join.operation_identity.as_str()) else {
-        return;
-    };
-    let evidence = DurabilityEvidence {
-        key: ZoneOperationKey::new(zone, operation),
-        outcome: if matches!(response, BrokerResponse::Error(_)) {
-            d2b_audit::DurabilityOutcome::Failure
-        } else {
-            d2b_audit::DurabilityOutcome::Success
-        },
-        effect_durable: !matches!(response, BrokerResponse::Error(_)),
-    };
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|plane| plane.clone());
-    if let Some(plane) = plane
-        && let Err(error) = plane.record_broker_evidence(evidence)
-    {
-        tracing::debug!(error = ?error, "broker evidence ingestion skipped");
-    }
+    dispatch_broker_request_to_socket(&socket_path, request, caller_role, Some(timeout))
 }
 
 fn poll_broker_child_reaped(state: &ServerState) -> Result<usize, TypedError> {
@@ -15867,7 +15763,6 @@ fn dispatch_broker_request_with_optional_request_fds(
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
     let audit_join = default_audit_join_context(&request);
-    let ingest_response_evidence = records_broker_response_evidence(&request);
     let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
@@ -15899,9 +15794,6 @@ fn dispatch_broker_request_with_optional_request_fds(
             detail: err.to_string(),
         }
     })?;
-    if ingest_response_evidence {
-        ingest_broker_response_evidence(state, audit_join.as_ref(), &decoded);
-    }
     Ok((decoded, received_fds))
 }
 
@@ -16000,111 +15892,6 @@ fn load_bundle_resolver(state: &ServerState) -> Result<BundleResolver, TypedErro
             detail: other.to_string(),
         },
     })
-}
-
-fn open_zone_store_from_broker(
-    state: &ServerState,
-    zone: &ZoneId,
-) -> Result<d2bd_runtime::resource_store_runtime::OpenedZoneStore, TypedError> {
-    let zone_store_id =
-        ZoneStoreId::parse(format!("zone-store-{}", zone.as_str())).map_err(|_| {
-            TypedError::InternalConfig {
-                detail: "trusted Zone store id is invalid".to_owned(),
-            }
-        })?;
-    let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
-        state,
-        BrokerRequest::OpenZoneStore(BrokerOpenZoneStoreRequest { zone_store_id }),
-        Duration::from_secs(60),
-    )?;
-    if received_fds.len() != 1 {
-        close_received_fds(&received_fds);
-        return Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: "OpenZoneStore did not return exactly one descriptor".to_owned(),
-        });
-    }
-    let fd = match duplicate_received_fd(&received_fds, 0, "duplicate Zone store fd") {
-        Ok(fd) => fd,
-        Err(error) => {
-            close_received_fds(&received_fds);
-            return Err(error);
-        }
-    };
-    close_received_fds(&received_fds);
-    match response {
-        BrokerResponse::OpenZoneStore(response) => {
-            if response.fd_index != 0
-                || response.zone_store_id.as_str() != format!("zone-store-{}", zone.as_str())
-            {
-                return Err(TypedError::InternalBrokerUnavailable {
-                    path: broker_socket_path(state),
-                    detail: "OpenZoneStore response did not match its request".to_owned(),
-                });
-            }
-            Ok(d2bd_runtime::resource_store_runtime::OpenedZoneStore {
-                response,
-                database_fd: fd,
-                external_inventory: None,
-            })
-        }
-        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("OpenZoneStore refused: {}", error.kind),
-        }),
-        other => Err(TypedError::InternalBrokerUnavailable {
-            path: broker_socket_path(state),
-            detail: format!("OpenZoneStore returned unexpected response: {other:?}"),
-        }),
-    }
-}
-
-async fn ensure_resource_activation_broker_evidence(
-    state: &ServerState,
-    zone: &ZoneId,
-    operation_id: &str,
-    broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
-) -> Result<DurabilityEvidence, resource_runtime::ResourceRuntimeError> {
-    let zone_identity = AuditZoneId::derive(zone.as_str())
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let operation_identity = OperationIdentity::derive(operation_id)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-    let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
-    let evidence = if let Some(evidence) = broker_evidence
-        .get(&key)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
-    {
-        evidence
-    } else {
-        let audit_join = AuditJoinContext {
-            zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-            operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
-                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
-        };
-        let response = dispatch_broker_request_with_timeout(
-            state,
-            BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest {
-                audit_join,
-            }),
-            Duration::from_secs(10),
-        )
-        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
-        match response {
-            BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
-                DurabilityEvidence {
-                    key,
-                    outcome: d2b_audit::DurabilityOutcome::Success,
-                    effect_durable: true,
-                }
-            }
-            BrokerResponse::Error(_) => {
-                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-            }
-            _ => return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
-        }
-    };
-    Ok(evidence)
 }
 
 async fn shutdown_unpublished_runtimes(
@@ -16253,36 +16040,22 @@ where
 /// The launch identity the controller seed binds for one `Provider` ref
 /// (KTD7).
 ///
-/// `Provider` is served by the v3 plane (U12 converted the Core family):
-/// the manager allocates each row's identity deterministically from its key
-/// (R8), while the pre-v3 store keeps only a mirror whose uid is an
-/// unrelated allocation. The seed must bind the manager's identity - the
-/// identity the session fence, the policy bridge, and the manager-backed
-/// reads all agree on - so a converted ref resolves to the row the bundle
-/// ingest is about to allocate. Reading the mirror here instead bound every
-/// controller row to an identity the fence could never match, which dropped
-/// each bootstrap and left the controller `Process` rows Pending forever
+/// `Provider` is served by the manager: the plane allocates each row's
+/// identity deterministically from its key (R8). The seed must bind that
+/// identity - the identity the session fence, the policy bridge, and the
+/// manager-backed reads all agree on - so the ref resolves to the row the
+/// bundle ingest is about to allocate. Binding a different identity dropped
+/// every bootstrap and left the controller `Process` rows Pending forever
 /// (vmCheck `resource-operator-activation` / `...guest-preflight`,
 /// 2026-09-11).
 ///
 /// Residual: a spec change committed before this boot increments the
 /// manager row's generation, which this pre-open seed cannot see; the seed
-/// binds the fresh-row generation. Unconverted types keep the durable
-/// authority.
+/// binds the fresh-row generation.
 async fn committed_provider_seed_identity(
     runtime: &resource_runtime::ZoneResourceRuntime,
     provider_ref: ResourceRef,
 ) -> Result<(ResourceUid, ResourceGeneration), resource_runtime::ResourceRuntimeError> {
-    if crate::resource_plane_v3::route_resource_type(provider_ref.resource_type().as_str())
-        != crate::resource_plane_v3::PlaneRoute::NewPlane
-    {
-        let mut identities = runtime
-            .committed_provider_identities(BTreeSet::from([provider_ref.clone()]))
-            .await?;
-        return identities
-            .remove(&provider_ref)
-            .ok_or(resource_runtime::ResourceRuntimeError::StoreReadFailed);
-    }
     let key = d2b_resource_runtime::identity::ResourceKey::new(
         runtime.zone().as_str(),
         provider_ref.resource_type().as_str(),
@@ -16306,13 +16079,6 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
-    let broker_evidence = match load_broker_audit_evidence(state) {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            tracing::error!(error = ?error, "Zone resource broker evidence load failed");
-            return Err(error);
-        }
-    };
     let zones = match d2bd_runtime::zone_authority::authoritative_zone_ids(resolver) {
         Ok(zones) => zones,
         Err(error) => {
@@ -16383,48 +16149,10 @@ async fn open_resource_plane(
             "resource plane Zone bundle loaded"
         );
         let materialization_bundle = desired_bundle.clone();
-        let opened = match open_zone_store_from_broker(state, &zone) {
-            Ok(opened) => opened,
-            Err(error) => {
-                tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-        };
-        let zone_state_dir = state
-            .daemon_state_dir
-            .parent()
-            .unwrap_or(state.daemon_state_dir.as_path())
-            .join("zones")
-            .join(zone.as_str());
-        let audit_dir = zone_state_dir.join("audit");
-        let telemetry_path = zone_state_dir.join("telemetry").join("emitter.sock");
-        #[cfg(not(test))]
-        if !audit_dir.is_absolute() {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        }
-        let audit_sink = match AuditSink::open(&audit_dir) {
-            Ok(sink) => Arc::new(sink),
-            Err(error) => {
-                tracing::error!(
-                    zone = %zone.as_str(),
-                    audit_dir = %audit_dir.display(),
-                    error = ?error,
-                    "Zone resource audit sink open failed",
-                );
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-        };
         let zone_name = zone.as_str().to_owned();
         let mut runtime =
             match resource_runtime::ZoneResourceRuntime::open_production_with_identity(
                 zone.clone(),
-                opened,
-                audit_sink,
-                Arc::clone(&broker_evidence),
-                telemetry_path,
                 desired_bundle,
                 authority,
             )
@@ -16432,7 +16160,7 @@ async fn open_resource_plane(
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
+                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime open failed");
                     shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                     return Err(error);
                 }
@@ -16478,26 +16206,6 @@ async fn open_resource_plane(
         prepared_runtimes.push((zone, runtime, materialization_bundle));
     }
 
-    for index in 0..prepared_runtimes.len() {
-        let validation = {
-            let (zone, runtime, bundle) = &prepared_runtimes[index];
-            runtime
-                .validate_desired_bundle(bundle)
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %zone.as_str(),
-                        error = ?error,
-                        "resource plane Zone bundle validation failed"
-                    );
-                })
-        };
-        if let Err(error) = validation {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
     let coordinator_index = prepared_runtimes
         .iter()
         .position(|(zone, _, _)| zone == &topology.root)
@@ -16518,64 +16226,6 @@ async fn open_resource_plane(
         return Err(error);
     }
 
-    for index in 0..prepared_runtimes.len() {
-        let preparation = {
-            let (zone, runtime, bundle) = &prepared_runtimes[index];
-            runtime
-                .prepare_published_bundle(bundle)
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %zone.as_str(),
-                        error = ?error,
-                        "resource plane Zone bundle preparation failed"
-                    );
-                })
-        };
-        if let Err(error) = preparation {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
-    for index in 0..prepared_runtimes.len() {
-        let (zone, runtime, _) = &prepared_runtimes[index];
-        let pending_operation_ids = match runtime.pending_trusted_activation_operation_ids().await {
-            Ok(operation_ids) => operation_ids,
-            Err(error) => {
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(error);
-            }
-        };
-        for operation_id in pending_operation_ids {
-            let evidence = match ensure_resource_activation_broker_evidence(
-                state,
-                zone,
-                &operation_id,
-                &broker_evidence,
-            )
-            .await
-            {
-                Ok(evidence) => evidence,
-                Err(error) => {
-                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                    return Err(error);
-                }
-            };
-            if let Err(error) = runtime
-                .ingest_broker_evidence(&operation_id, evidence)
-                .await
-            {
-                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-                return Err(error);
-            }
-        }
-        if let Err(error) = runtime.require_trusted_activation_outboxes_drained().await {
-            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
-            return Err(error);
-        }
-    }
-
     let commit_result = prepared_runtimes[coordinator_index]
         .1
         .commit_generation_publication(&set_generation, &prepared_generations)
@@ -16592,101 +16242,19 @@ async fn open_resource_plane(
         return Err(error);
     }
 
-    let mut remaining = prepared_runtimes.into_iter();
-
-    // v3 resource plane (U9/U10): assemble the new-plane runtime per zone
-    // after generation publication, then flow converted types (Process,
-    // Volume, VolumeBinding, Endpoint) through the per-zone ResourceManager;
-    // unconverted types keep flowing through the old materialization path
-    // above (exclusive per-type partition, no dual-write).
-    // (published into ServerState below; the local map threads them through
-    // the publication loop).
+    // v3 resource plane (U9/U10): assemble each Zone's manager plane once the
+    // generation publication is committed, and publish the whole table into
+    // `state.v3_planes` before any runtime activates. The runtime's
+    // manager-backed API service resolves its manager client + watch hub from
+    // that table, so a Zone whose plane is not published yet cannot activate.
     let mut v3_planes: BTreeMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>> =
         BTreeMap::new();
-    while let Some((_zone, mut runtime, materialization_bundle)) = remaining.next() {
-        // F1 wiring: the runtime's manager-backed API service resolves the
-        // Zone's v3 plane client and watch hub from the published table.
-        runtime.attach_v3_planes(std::sync::Arc::clone(&state.v3_planes));
-        let installed_provider_count = state
-            .provider_runtime
-            .registered_provider_count()
-            .try_into()
-            .unwrap_or(u32::MAX);
-        if let Err(error) = runtime.activate_published_bundle().await {
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-            return Err(error);
-        }
-        let _ = runtime.publish_provider_counts(
-            installed_provider_count,
-            if provider_ready {
-                installed_provider_count
-            } else {
-                0
-            },
-        );
-        // The generation publication above is the write; this startup read
-        // must not race it. Under a fast CPU the read can land before the
-        // published rows are visible, so retry instead of failing the
-        // plane - the resources are committed, the reader is just early.
-        let mut controller_session_startup =
-            Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-        // 30 x 2s: with fast fixture IO the reader outruns the broker's
-        // publication by a wide margin, and 10 attempts (20s) exhausted
-        // before the rows landed. Give the publication a full minute.
-        for attempt in 0..30 {
-            controller_session_startup = runtime
-                .reconcile_controller_sessions(Arc::new(state.clone()))
-                .await;
-            match &controller_session_startup {
-                Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
-                    tracing::warn!(
-                        zone = %runtime.zone().as_str(),
-                        attempt,
-                        "controller session startup raced publication; retrying",
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
-                _ => break,
-            }
-        }
-        if let Err(error) = controller_session_startup {
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-            return Err(error);
-        }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let _ = runtime.audio_binding_statuses();
-        if let Err(error) = runtime.require_ready() {
-            if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
-                let _ = runtime.shutdown().await;
-                let _ = plane.shutdown().await;
-                while let Some((_, runtime, _)) = remaining.next() {
-                    let _ = runtime.shutdown().await;
-                }
-                return Err(error);
-            }
-            tracing::error!(
-                zone = %runtime.zone(),
-                error = %error,
-                "interaction Provider readiness refused; interaction composition stays unavailable",
-            );
-        }
-        // v3 resource plane (U9/U10): converted types (Process, Volume,
-        // VolumeBinding, Endpoint) flow through the per-zone ResourceManager
-        // with provenance Nix; unconverted types already flowed through the
-        // old materialization path above. Exclusive per-type partition.
-        {
+    for index in 0..prepared_runtimes.len() {
+        let (_zone, runtime, materialization_bundle) = &prepared_runtimes[index];
+        // v3 resource plane (U9/U10): the manager plane carries every
+        // type, so the zone's bundle is ingested into the per-zone
+        // ResourceManager with provenance Nix here.
+        let plane_v3 = {
             let bundle = &materialization_bundle;
             let credential_agent_client: Arc<
                 std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>,
@@ -16786,10 +16354,98 @@ async fn open_resource_plane(
                 applied = report.applied.len(),
                 removed = report.removed.len(),
                 api_protected = report.api_protected.len(),
-                pass_through = report.pass_through_count,
                 "v3 resource plane nix ingestion complete"
             );
-            v3_planes.insert(_zone.as_str().to_owned(), std::sync::Arc::new(plane_v3));
+            plane_v3
+        };
+        v3_planes.insert(_zone.as_str().to_owned(), std::sync::Arc::new(plane_v3));
+    }
+    // U14: publish the complete table before any Zone activates; the
+    // manager-backed API service resolves the Zone's client + watch hub here.
+    {
+        let mut parked = state.v3_planes.lock();
+        *parked = v3_planes.into_iter().collect();
+    }
+
+    let mut remaining = prepared_runtimes.into_iter();
+    while let Some((_zone, mut runtime, _)) = remaining.next() {
+        // F1 wiring: the runtime's manager-backed API service resolves the
+        // Zone's v3 plane client and watch hub from the published table.
+        runtime.attach_v3_planes(std::sync::Arc::clone(&state.v3_planes));
+        let installed_provider_count = state
+            .provider_runtime
+            .registered_provider_count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        if let Err(error) = runtime.activate_published_bundle().await {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
+        let _ = runtime.publish_provider_counts(
+            installed_provider_count,
+            if provider_ready {
+                installed_provider_count
+            } else {
+                0
+            },
+        );
+        // The generation publication above is the write; this startup read
+        // must not race it. Under a fast CPU the read can land before the
+        // published rows are visible, so retry instead of failing the
+        // plane - the resources are committed, the reader is just early.
+        let mut controller_session_startup =
+            Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+        // 30 x 2s: with fast fixture IO the reader outruns the broker's
+        // publication by a wide margin, and 10 attempts (20s) exhausted
+        // before the rows landed. Give the publication a full minute.
+        for attempt in 0..30 {
+            controller_session_startup = runtime
+                .reconcile_controller_sessions(Arc::new(state.clone()))
+                .await;
+            match &controller_session_startup {
+                Err(resource_runtime::ResourceRuntimeError::HandlerNotReady) => {
+                    tracing::warn!(
+                        zone = %runtime.zone().as_str(),
+                        attempt,
+                        "controller session startup raced publication; retrying",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                _ => break,
+            }
+        }
+        if let Err(error) = controller_session_startup {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
+        // Stagger runner-family startups: each family's initial full-zone
+        // list is expensive, and starting every family concurrently on a
+        // small VM creates a store-read thundering herd that trips their
+        // own startup deadlines.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let _ = runtime.audio_binding_statuses();
+        if let Err(error) = runtime.require_ready() {
+            if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
+                let _ = runtime.shutdown().await;
+                let _ = plane.shutdown().await;
+                while let Some((_, runtime, _)) = remaining.next() {
+                    let _ = runtime.shutdown().await;
+                }
+                return Err(error);
+            }
+            tracing::error!(
+                zone = %runtime.zone(),
+                error = %error,
+                "interaction Provider readiness refused; interaction composition stays unavailable",
+            );
         }
         match plane.insert(runtime) {
             Ok(_) => {}
@@ -16801,13 +16457,6 @@ async fn open_resource_plane(
                 return Err(error);
             }
         }
-    }
-    // Publish the per-zone v3 planes (F1 wiring): the resource runtime's
-    // manager-backed API backend resolves its manager client + watch hub
-    // from here.
-    {
-        let mut parked = state.v3_planes.lock();
-        *parked = v3_planes.into_iter().collect();
     }
     compose_gateway_zone_links(state, &mut plane, &topology).await;
     if plane.ready_zone_count() == 0 {
@@ -17036,147 +16685,6 @@ fn is_gateway_zone_link(link: &Value) -> bool {
         .and_then(|spec| spec.get("transportProviderRef"))
         .and_then(Value::as_str)
         == Some(d2b_provider_transport_azure_relay::PROVIDER_REF)
-}
-
-const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
-
-#[derive(serde::Deserialize)]
-struct BrokerAuditEvidenceLine {
-    #[serde(default)]
-    zone_id: Option<AuditZoneId>,
-    #[serde(default)]
-    operation_identity: Option<OperationIdentity>,
-    #[serde(default)]
-    decision: Option<String>,
-    #[serde(default)]
-    result: Option<String>,
-    #[serde(default)]
-    zone_operation_key: Option<ZoneOperationKey>,
-}
-
-fn load_broker_audit_evidence(
-    state: &ServerState,
-) -> Result<Arc<d2b_resource_store_redb::BrokerEvidenceIndex>, resource_runtime::ResourceRuntimeError>
-{
-    let mut evidence: BTreeMap<d2b_audit::ZoneOperationKey, d2b_audit::DurabilityEvidence> =
-        BTreeMap::new();
-    let mut cursor = None;
-    for _ in 0..1024 {
-        let response = dispatch_broker_request_as(
-            state,
-            BrokerRequest::ExportBrokerAudit(ExportBrokerAuditRequest {
-                filter: None,
-                since: None,
-                cursor: cursor.clone(),
-                limit: BROKER_AUDIT_EVIDENCE_PAGE_LIMIT,
-            }),
-            BrokerCallerRole::AdminUid {
-                uid: state.daemon_uid,
-            },
-        )
-        .inspect_err(|error| {
-            tracing::error!(
-                error = ?error,
-                "broker audit evidence export dispatch failed",
-            );
-        })
-        .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-        let BrokerResponse::ExportBrokerAudit(response) = response else {
-            tracing::error!("broker audit evidence export returned an unexpected response");
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        };
-        for entry in response.entries {
-            if let Some(error) = entry.error {
-                tracing::error!(
-                    error = ?error,
-                    "broker audit evidence entry reported an error",
-                );
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            }
-            let value = entry
-                .record
-                .ok_or(resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let record_class = value
-                .get("record_class")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            let diagnostic_or_legacy = record_class.as_deref() != Some("durability")
-                || value
-                    .get("durability")
-                    .and_then(Value::as_bool)
-                    .is_some_and(|durability| !durability);
-            if diagnostic_or_legacy {
-                continue;
-            }
-            let parsed = serde_json::from_value::<BrokerAuditEvidenceLine>(value)
-                .inspect_err(|_| {
-                    tracing::error!("broker durability evidence entry failed schema decoding");
-                })
-                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let (
-                Some(zone_id),
-                Some(operation_identity),
-                Some(decision),
-                Some(result),
-                Some(zone_operation_key),
-            ) = (
-                parsed.zone_id,
-                parsed.operation_identity,
-                parsed.decision,
-                parsed.result,
-                parsed.zone_operation_key,
-            )
-            else {
-                tracing::error!(
-                    record_class = ?record_class,
-                    "broker durability evidence entry is incomplete",
-                );
-                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-            };
-            let item = evidence_from_decision_result(
-                zone_id,
-                operation_identity,
-                Some(&zone_operation_key),
-                Some(&decision),
-                Some(&result),
-            )
-            .inspect_err(|_| {
-                tracing::error!("broker durability evidence entry failed semantic conversion");
-            })
-            .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?;
-            let key = item.key.clone();
-            if let Some(previous) = evidence.get(&key) {
-                let retry_succeeded = previous.outcome == d2b_audit::DurabilityOutcome::Failure
-                    && !previous.effect_durable
-                    && item.outcome == d2b_audit::DurabilityOutcome::Success
-                    && item.effect_durable;
-                if previous != &item && !retry_succeeded {
-                    tracing::error!(
-                        operation_identity = %item.key.operation().as_str(),
-                        previous_outcome = ?previous.outcome,
-                        current_outcome = ?item.outcome,
-                        previous_effect_durable = previous.effect_durable,
-                        current_effect_durable = item.effect_durable,
-                        "broker durability evidence entries conflict for one operation",
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-                }
-            }
-            evidence.insert(key, item);
-        }
-        if response.complete {
-            return Ok(Arc::new(d2b_resource_store_redb::BrokerEvidenceIndex::new(
-                evidence,
-            )));
-        }
-        cursor = response.next_cursor;
-        if cursor.is_none() {
-            tracing::error!("broker audit evidence pagination omitted its continuation cursor");
-            return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
-        }
-    }
-    tracing::error!("broker audit evidence pagination exceeded its bounded page count");
-    Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed)
 }
 
 fn audit_resource_plane(

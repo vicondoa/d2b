@@ -1,6 +1,6 @@
 //! Storage-neutral resource store errors.
 
-use d2b_contracts_resource::v3::{MAX_BATCH_MUTATIONS, RetryClass, ZoneRevision};
+use crate::v3::{MAX_BATCH_MUTATIONS, RetryClass, ZoneRevision};
 
 /// Upper bound on the stores one composition root may open.
 pub const MAX_STORE_SLOTS: usize = 64;

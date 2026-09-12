@@ -57,8 +57,6 @@ members = [
     "packages/d2b-core-controller",
     "packages/d2b-provider-test-controller",
     "packages/d2b-resource-api",
-    "packages/d2b-resource-store",
-    "packages/d2b-resource-store-redb",
     "packages/d2b-resource-runtime",
     "packages/d2b",
     "packages/d2bd-runtime",

@@ -49,9 +49,9 @@ use d2b_resource_api::authz::{
     ResourceVerb, SessionVerb,
 };
 use d2b_resource_api::{ResourceBusAdapter, ResourceService, ResourceStoreBackend};
-use d2b_resource_store::PolicySnapshot;
-use d2b_resource_store::mutation_seal::{MutationSealAcceptor, MutationSealBody};
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::PolicySnapshot;
+use d2b_contracts_resource::v3::operations::seal::{MutationSealAcceptor, MutationSealBody};
+use d2b_contracts_resource::v3::{
     ResourceMutationKind, StoreCommitResult, StoreError, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
     StoreResolvedIdentity, StoreSealIdentity, StoreSlot, StoreWatchReceipt, StoreWatchRequest,
@@ -1331,7 +1331,7 @@ impl ResourceStoreBackend for ScopedStore {
 
     async fn commit_verified(
         &self,
-        mutation: d2b_resource_store::SealedMutation,
+        mutation: d2b_contracts_resource::v3::SealedMutation,
     ) -> Result<StoreCommitResult, StoreError> {
         let body: MutationSealBody = self.acceptor.open(mutation).unwrap().into_body();
         let observed = body

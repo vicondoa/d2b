@@ -8,21 +8,19 @@
 //! dyn-erased [`GuestDriverEffects`] boundary; the daemon owns every side
 //! effect behind it, and the driver owns the child rows.
 //!
-//! Live readiness is read through the manager view for converted rows (a
-//! converted row's actor status is the only status there is, R11) and through
-//! the durable store for unconverted rows - the same split the old Runner's
-//! dependency snapshots had after the plane's overlay. The driver never sees
-//! either.
+//! Live readiness is read through the manager view: a row's actor status is
+//! the only status there is (R11), and U14 retired the durable store. The
+//! driver never sees the read path.
 //!
 //! The Cloud Hypervisor provider controller publishes the Guest's layered
 //! runtime status (`phase`, `runtimeReady`, `bootstrapReady`,
-//! `activeProcessCount`). `Guest` is a converted type, so that status is the
-//! row's actor's to own (R11) and there is no durable row to write: the
-//! session captures the controller's write into the effect call's
-//! [`GuestStatusSink`] and the driver publishes it as the row's
-//! `status.resource` projection. The provider controller's finalizer requests
-//! are acknowledged without a store write for the same reason - the manager's
-//! deleting-row hold replaces the old durable finalizer (F3).
+//! `activeProcessCount`). That status is the row's actor's to own (R11) and
+//! there is no durable row to write: the session captures the controller's
+//! write into the effect call's [`GuestStatusSink`] and the driver publishes
+//! it as the row's `status.resource` projection. The provider controller's
+//! finalizer requests are acknowledged without a store write for the same
+//! reason - the manager's deleting-row hold replaces the old durable
+//! finalizer (F3).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,7 +31,6 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_resource_runtime::context::{LookupPlane, RowLookup};
 use d2b_resource_runtime::identity::ResourceKey;
-use d2b_resource_store::{StoreGetRequest, StoreProjection};
 use d2b_provider_runtime_azure_container_apps as aca_runtime;
 use d2b_provider_runtime_azure_virtual_machine as azure_vm_runtime;
 use d2b_provider_runtime_qemu_media as qemu_media_runtime;
@@ -46,7 +43,7 @@ use crate::guest_driver::{
     GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind,
     declared_dependency_refs, view_phase,
 };
-use crate::resource_plane_v3::{PlaneRoute, ResourcePlaneV3, route_resource_type};
+use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::ZoneResourceRuntime;
 
 /// Framework-only QEMU effect evidence for non-Cloud-Hypervisor Guest owners.
@@ -623,57 +620,12 @@ impl ProductionGuestDriverEffects {
     }
 
     /// The old-shape document of one resource (`spec`, `metadata`, live
-    /// `status.phase`), from the manager view or the durable store, answered
-    /// as one classified read (issue #511): `Present` carries the document,
-    /// `Absent` is the honest not-created answer on whichever plane owns the
-    /// type, `Unavailable` is a plane that could not answer, and `Error`
-    /// carries the projection detail of a committed row that cannot be read.
+    /// `status.phase`) from the manager view, answered as one classified read
+    /// (issue #511): `Present` carries the document, `Absent` is the honest
+    /// not-created answer, `Unavailable` is a plane that could not answer,
+    /// and `Error` carries the projection detail of a committed row that
+    /// cannot be read.
     async fn resource_value(&self, target: &ResourceRef) -> RowLookup<Value> {
-        if route_resource_type(target.resource_type().as_str()) != PlaneRoute::NewPlane {
-            let Ok(runtime) = self.runtime() else {
-                return RowLookup::Unavailable {
-                    plane: LookupPlane::Store,
-                };
-            };
-            return match runtime
-                .store()
-                .get(StoreGetRequest {
-                    operation: d2b_resource_store::StoreOperationContext {
-                        operation_id: "guest-effect-read".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "guest-effect-read".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    target: target.clone(),
-                    expected_uid: None,
-                    projection: StoreProjection::Full,
-                })
-                .await
-            {
-                Ok(resource) => match serde_json::from_slice::<Value>(&resource.canonical_json) {
-                    Ok(value) => RowLookup::Present {
-                        row: value,
-                        plane: LookupPlane::Store,
-                    },
-                    Err(error) => RowLookup::Error {
-                        plane: LookupPlane::Store,
-                        detail: error.to_string(),
-                    },
-                },
-                Err(error)
-                    if error.kind() == d2b_resource_store::StoreErrorKind::ResourceNotFound =>
-                {
-                    RowLookup::Absent {
-                        plane: LookupPlane::Store,
-                    }
-                }
-                Err(_) => RowLookup::Unavailable {
-                    plane: LookupPlane::Store,
-                },
-            };
-        }
         let Ok(plane) = self.plane() else {
             return RowLookup::Unavailable {
                 plane: LookupPlane::Manager,

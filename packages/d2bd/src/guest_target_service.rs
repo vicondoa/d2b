@@ -830,13 +830,11 @@ mod tests {
 
     #[tokio::test]
     async fn frames_round_trip_over_a_real_authenticated_session() {
-        let state_dir = tempfile::tempdir().expect("state directory");
         let guest_runtime = GuestRuntime::new(
             guest_identity(1),
             "/run/d2b/guest-broker.sock".into(),
             997,
             AdmissionLimits::guest_default(),
-            state_dir.path(),
         )
         .await
         .expect("Guest runtime");

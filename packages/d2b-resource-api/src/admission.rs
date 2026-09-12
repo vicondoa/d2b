@@ -4,8 +4,8 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
 };
-use d2b_resource_store::mutation_seal::MutationSealIssuer;
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::operations::seal::MutationSealIssuer;
+use d2b_contracts_resource::v3::{
     AdmittedAuthorization, ExpectedRevision, MutationOrdinal, MutationSealBody, PolicySnapshot,
     PreparedStoreMutation, ResourceMutationKind, SealedMutation, StoreError, StoreErrorKind,
     StoreMutation, StoreOperationContext,
@@ -525,10 +525,10 @@ mod tests {
             zone: ZoneId::parse(zone).unwrap(),
             subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
             subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-            targets: vec![d2b_resource_store::AdmittedAuthorizationTarget {
+            targets: vec![d2b_contracts_resource::v3::AdmittedAuthorizationTarget {
                 resource_type: ResourceTypeName::parse("Host").unwrap(),
                 resource_name: Some(ResourceName::parse("local").unwrap()),
-                verb: d2b_resource_store::AdmittedVerb::Create,
+                verb: d2b_contracts_resource::v3::AdmittedVerb::Create,
                 subresource: None,
                 execution_ref: None,
             }],
@@ -556,10 +556,10 @@ mod tests {
 
     fn mutation(zone: &str) -> StoreMutation {
         StoreMutation {
-            kind: d2b_resource_store::ResourceMutationKind::Create,
+            kind: d2b_contracts_resource::v3::ResourceMutationKind::Create,
             zone: ZoneId::parse(zone).unwrap(),
             target: ResourceRef::parse("Host/local").unwrap(),
-            expected: d2b_resource_store::ExpectedRevision::CreateAbsent,
+            expected: d2b_contracts_resource::v3::ExpectedRevision::CreateAbsent,
             expected_uid: None,
             owner: None,
             canonical_resource: None,
@@ -601,7 +601,7 @@ mod tests {
             lease.subject_uid().as_str(),
             "123e4567-e89b-42d3-a456-426614174000"
         );
-        assert_eq!(lease.operation(), d2b_resource_store::AdmittedVerb::Create);
+        assert_eq!(lease.operation(), d2b_contracts_resource::v3::AdmittedVerb::Create);
         assert_eq!(lease.policy_revision(), 1);
         assert_eq!(lease.operation_id(), "op-1");
     }
@@ -708,10 +708,10 @@ mod tests {
             zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             subject_ref: ResourceRef::parse(&format!("Provider/{REF_SENTINEL}")).unwrap(),
             subject_uid: ResourceUid::parse(UID_SENTINEL).unwrap(),
-            targets: vec![d2b_resource_store::AdmittedAuthorizationTarget {
+            targets: vec![d2b_contracts_resource::v3::AdmittedAuthorizationTarget {
                 resource_type: ResourceTypeName::parse("Host").unwrap(),
                 resource_name: Some(ResourceName::parse(NAME_SENTINEL).unwrap()),
-                verb: d2b_resource_store::AdmittedVerb::Delete,
+                verb: d2b_contracts_resource::v3::AdmittedVerb::Delete,
                 subresource: Some(PAYLOAD_SENTINEL.to_owned()),
                 execution_ref: Some(
                     ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap(),
@@ -724,10 +724,10 @@ mod tests {
         let permit = issuer.record_allow(protected_authorization, snapshot());
         let permit_debug = format!("{permit:?}");
         let mut protected_mutation = mutation(ZONE_SENTINEL);
-        protected_mutation.kind = d2b_resource_store::ResourceMutationKind::Delete;
+        protected_mutation.kind = d2b_contracts_resource::v3::ResourceMutationKind::Delete;
         protected_mutation.target = ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap();
         protected_mutation.expected =
-            d2b_resource_store::ExpectedRevision::Exact(ZoneRevision::new(1));
+            d2b_contracts_resource::v3::ExpectedRevision::Exact(ZoneRevision::new(1));
         protected_mutation.expected_uid = Some(ResourceUid::parse(UID_SENTINEL).unwrap());
         protected_mutation.owner =
             Some(ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap());

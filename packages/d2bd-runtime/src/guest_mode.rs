@@ -403,14 +403,12 @@ impl GuestRuntime {
         broker_socket: PathBuf,
         broker_uid: u32,
         limits: AdmissionLimits,
-        state_dir: impl AsRef<Path>,
     ) -> Result<Self, GuestModeError> {
         let admission = AdmissionBudget::new(limits).map_err(GuestModeError::Admission)?;
         let deployment = ProviderDeployment::new(DaemonMode::Guest, limits)
             .map_err(GuestModeError::Admission)?;
-        let resource_runtime = GuestResourceRuntime::new(identity.clone(), state_dir)
-            .await
-            .map_err(GuestModeError::Resource)?;
+        let resource_runtime =
+            GuestResourceRuntime::new(identity.clone()).map_err(GuestModeError::Resource)?;
         let active_generation = resource_runtime.active_generation();
         let broker = ModeBoundBrokerAdapter::guest(broker_socket, broker_uid);
         broker.validate_instance().map_err(GuestModeError::Broker)?;
@@ -966,13 +964,11 @@ mod tests {
     #[tokio::test]
     async fn guest_runtime_exposes_no_host_authority_surfaces() {
         let identity = identity(1);
-        let state_dir = tempfile::tempdir().expect("state directory");
         let runtime = GuestRuntime::new(
             identity,
             PathBuf::from("/run/d2b/guest-broker.sock"),
             997,
             AdmissionLimits::guest_default(),
-            state_dir.path(),
         )
         .await
         .expect("runtime");

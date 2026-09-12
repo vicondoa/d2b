@@ -875,11 +875,8 @@ dependencies = [
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-controller-toolkit",
  "d2b-core-controller",
  "d2b-resource-api",
- "d2b-resource-store",
- "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
  "d2b-telemetry",
@@ -984,24 +981,10 @@ dependencies = [
 name = "d2b-controller-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-bus",
- "d2b-contracts",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-core-controller",
- "d2b-process",
- "d2b-process-conformance",
- "d2b-provider-supervisor",
- "d2b-provider-system-minijail",
- "d2b-resource-api",
- "d2b-resource-store",
- "d2b-resource-store-redb",
  "schemars",
  "serde",
  "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 
@@ -1029,13 +1012,10 @@ dependencies = [
 name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-audit",
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
- "d2b-telemetry",
  "serde",
  "serde_json",
  "sha2",
@@ -1637,8 +1617,6 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core-controller",
  "d2b-resource-runtime",
- "d2b-resource-store",
- "d2b-resource-store-redb",
  "d2b-telemetry",
  "protobuf",
  "ractor",
@@ -1698,36 +1676,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
-
-
-[[package]]
-name = "d2b-resource-store"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-resource",
-]
-
-
-[[package]]
-name = "d2b-resource-store-redb"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-audit",
- "d2b-contracts-provider",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-controller-toolkit",
- "d2b-resource-store",
- "d2b-telemetry",
- "redb",
- "rustix 0.38.44",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
  "tokio",
  "tracing",
 ]
@@ -3409,16 +3357,6 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
-
-
-[[package]]
-name = "redb"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
-dependencies = [
- "libc",
-]
 
 
 [[package]]

@@ -321,8 +321,6 @@ filegroup(
         "//packages/d2b-resource-api:cargo_workspace_sources",
         "//packages/d2b-resource-client:cargo_workspace_sources",
         "//packages/d2b-resource-compiler:cargo_workspace_sources",
-        "//packages/d2b-resource-store:cargo_workspace_sources",
-        "//packages/d2b-resource-store-redb:cargo_workspace_sources",
         "//packages/d2b-session:cargo_workspace_sources",
         "//packages/d2b-session-unix:cargo_workspace_sources",
         "//packages/d2b-sk-frontend:cargo_workspace_sources",

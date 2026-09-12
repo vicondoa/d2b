@@ -2,9 +2,10 @@
 //! manager view (G5, KTD3/KTD4).
 //!
 //! Since KTD4 the bundle's controller-class `Process` rows (and every other
-//! converted type) are served by the per-zone manager, while the controller
-//! session machinery and the Core `Provider` handler still read the redb
-//! store. Two readers are blinded by that split:
+//! converted type) are served by the per-zone manager; U14 retired the redb
+//! store and the type partition with it, so the manager is the one plane
+//! every type is served by. Two readers take that plane's view through this
+//! seam:
 //!
 //! - the controller-session path (`controller_context_is_current`,
 //!   `persist_controller_session_evidence`, `fence_process_resources`), which
@@ -17,16 +18,15 @@
 //! surface ([`ResourceManagerClient::get`] / [`ResourceManagerClient::list`]):
 //! [`ControllerPlaneView`] answers one `Process` row read for the
 //! controller-session path; a manager RPC failure is never reported as
-//! absence, and a row the manager does not hold (`Ok(None)`) keeps the
-//! caller on the durable store path.
+//! absence, and a row the manager does not hold (`Ok(None)`) is reported as
+//! absent - there is no second plane left to fall back to.
 //!
-//! Nothing here writes *status*: converted rows keep the manager's
-//! single-writer discipline (the row's actor owns its status, R11), and rows
-//! the manager does not serve keep the durable store. The one write seam is
-//! [`PlaneChildMutations`]: a provider controller's child commits for
-//! converted types are owner-scoped manager ensures/removes, exactly the
-//! shape the plane's Nix ingest uses, because a converted child written to
-//! the pre-v3 store has no actor and therefore no launch path.
+//! Nothing here writes *status*: rows keep the manager's single-writer
+//! discipline (the row's actor owns its status, R11). The one write seam is
+//! [`PlaneChildMutations`]: a provider controller's child commits are
+//! owner-scoped manager ensures/removes, exactly the shape the plane's Nix
+//! ingest uses, because a child row with no actor behind it has no launch
+//! path.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ use d2b_resource_runtime::manager::{
     DesiredResource, MutationSubject, ResourceManagerClient, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::spec_store::ResourceProvenance;
-use d2b_resource_store::StoredResource;
+use d2b_contracts_resource::v3::StoredResource;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -66,6 +66,14 @@ pub(crate) trait ControllerPlaneView: Send + Sync + 'static {
         &self,
         _resource_type: &str,
     ) -> Result<Vec<ResourceView>, ResourceError> {
+        Ok(Vec::new())
+    }
+
+    /// Every manager row of this Zone, whatever its type (U14: the Zone's
+    /// committed-resource count and the Core startup summary read the whole
+    /// row set, which the store used to page as a type-less list). The
+    /// default is empty for a fixture that serves no rows.
+    async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
         Ok(Vec::new())
     }
 }
@@ -107,6 +115,16 @@ impl ControllerPlaneView for ManagerControllerPlaneView {
             .list(ResourceSelector {
                 zone: Some(self.zone.as_str().to_owned()),
                 type_name: Some(resource_type.to_owned()),
+                owner: None,
+            })
+            .await
+    }
+
+    async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
+        self.client
+            .list(ResourceSelector {
+                zone: Some(self.zone.as_str().to_owned()),
+                type_name: None,
                 owner: None,
             })
             .await
@@ -154,6 +172,15 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
             .rows_of_type(resource_type)
+            .await
+    }
+
+    async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return Ok(Vec::new());
+        };
+        ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
+            .all_rows()
             .await
     }
 }
@@ -208,10 +235,9 @@ pub(crate) enum ChildMutationRoute {
     Legacy,
 }
 
-/// Classify one child type onto its committing plane, exactly as
-/// [`route_resource_type`] classifies every other surface: a converted child
-/// is never written to the pre-v3 store (no actor would ever realize it) and
-/// an unconverted one never appears in the manager.
+/// Classify one child type onto its committing plane: U14 collapsed the
+/// partition, so every type is manager-served and the legacy arm is the
+/// residual refusal for a type the identity table has not converted.
 pub(crate) fn child_type_route(type_name: &str) -> ChildMutationRoute {
     match d2b_contracts::identity::resource_plane(type_name) {
         ResourcePlane::Manager => ChildMutationRoute::Manager,
@@ -523,9 +549,20 @@ impl PlaneChildMutations {
         canonical_envelope: &[u8],
     ) -> Result<StoredResource, ChildMutationFailure> {
         let desired = desired_child_resource(&self.zone, target, canonical_envelope)?;
+        // Every child commit is an owner-scoped ensure (R8): the manager
+        // links the child to this session's owner by uid, the way the ingest
+        // links a row whose `metadata.ownerRef` names a committed owner. An
+        // ownerless commit left the row's linkage empty, and the guest
+        // session identity (which fences the VMM Process to its owning Guest)
+        // then never matched.
+        let owner = ManagerKey::new(
+            self.zone.as_str(),
+            self.owner_ref.resource_type().as_str(),
+            self.owner_ref.name().as_str(),
+        );
         self.plane
             .client()
-            .ensure(self.subject(), None, desired)
+            .ensure(self.subject(), Some(owner), desired)
             .await
             .map_err(|error| {
                 tracing::warn!(
@@ -699,11 +736,6 @@ mod tests {
                 child_mutation_route(&child),
                 ChildMutationRoute::Manager,
                 "the Cloud Hypervisor child {child} must commit through the manager",
-            );
-            assert_eq!(
-                crate::resource_plane_v3::route_resource_type(child.resource_type().as_str()),
-                crate::resource_plane_v3::PlaneRoute::NewPlane,
-                "the child's type must be served by a converted driver",
             );
         }
         let worker_binding =

@@ -38,15 +38,12 @@ use d2b_resource_runtime::context::ChildEnsure;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::ResourceStatus;
-use d2b_resource_store::{
-    ResourceAssignmentFence, ResourceAssignmentScope, StoreErrorKind, StoreGetRequest,
-    StoreOperationContext, StoreProjection,
-};
+use d2b_contracts_resource::v3::{ResourceAssignmentFence, ResourceAssignmentScope};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::ServerState;
-use crate::resource_plane_v3::{PlaneRoute, ResourcePlaneV3, route_resource_type};
+use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::{ASSIGNMENT_EPOCH, ZoneResourceRuntime};
 use crate::shared_provider_driver::{
     SharedProviderResourceState,
@@ -104,92 +101,31 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)
     }
 
-    fn operation(&self, operation_id: &str) -> StoreOperationContext {
-        StoreOperationContext {
-            operation_id: operation_id.to_owned(),
-            idempotency_key: None,
-            correlation_id: operation_id.to_owned(),
-            trace_id: None,
-            deadline_ms: 10_000,
-        }
-    }
-
-    /// The live phase of one resource: the manager view for converted rows,
-    /// the durable row's `/status/phase` for unconverted rows.
+    /// The live phase of one resource from the manager view.
     async fn live_phase(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<&'static str>, SharedProviderEffectError> {
-        if route_resource_type(target.resource_type().as_str()) == PlaneRoute::NewPlane {
-            let plane = self.plane()?;
-            let key = ResourceKey::new(
+        let plane = self.plane()?;
+        let key = ResourceKey::new(
             self.zone.as_str(),
             target.resource_type().as_str(),
             target.name().as_str(),
         );
-            let view = plane
-                .client()
-                .get(key)
-                .await
-                .map_err(|_| SharedProviderEffectError::Unavailable)?;
-            return Ok(view.map(|view| view_phase(&view)));
-        }
-        let runtime = self.runtime()?;
-        match runtime
-            .store()
-            .get(StoreGetRequest {
-                operation: self.operation("shared-provider-phase"),
-                zone: self.zone.clone(),
-                target: target.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
+        let view = plane
+            .client()
+            .get(key)
             .await
-        {
-            Ok(resource) => Ok(serde_json::from_slice::<Value>(&resource.canonical_json)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/status/phase")
-                        .and_then(Value::as_str)
-                        .map(|phase| match phase {
-                            "Ready" => "Ready",
-                            "Deleted" => "Deleted",
-                            "Failed" => "Failed",
-                            _ => "Pending",
-                        })
-                })),
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => Ok(None),
-            Err(_) => Err(SharedProviderEffectError::Unavailable),
-        }
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        Ok(view.map(|view| view_phase(&view)))
     }
 
     /// The old-shape document of one resource (`spec`, `metadata`, live
-    /// `status.phase`), from the manager view or the durable store.
+    /// `status.phase`) from the manager view.
     async fn resource_value(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<Value>, SharedProviderEffectError> {
-        if route_resource_type(target.resource_type().as_str()) != PlaneRoute::NewPlane {
-            let runtime = self.runtime()?;
-            return match runtime
-                .store()
-                .get(StoreGetRequest {
-                    operation: self.operation("shared-provider-read"),
-                    zone: self.zone.clone(),
-                    target: target.clone(),
-                    expected_uid: None,
-                    projection: StoreProjection::Full,
-                })
-                .await
-            {
-                Ok(resource) => serde_json::from_slice::<Value>(&resource.canonical_json)
-                    .map(Some)
-                    .map_err(|_| SharedProviderEffectError::InvalidResource),
-                Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => Ok(None),
-                Err(_) => Err(SharedProviderEffectError::Unavailable),
-            };
-        }
         let plane = self.plane()?;
         let key = ResourceKey::new(
             self.zone.as_str(),
@@ -253,21 +189,21 @@ impl ProductionSharedProviderEffects {
         &self,
         kind: SharedProviderKind,
     ) -> Result<ResourceGeneration, SharedProviderEffectError> {
-        let runtime = self.runtime()?;
         let provider_ref = ResourceRef::parse(kind.provider_ref())
             .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        match runtime
-            .store()
-            .get(StoreGetRequest {
-                operation: self.operation("shared-provider-provider"),
-                zone: self.zone.clone(),
-                target: provider_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::MetadataOnly,
-            })
+        let plane = self.plane()?;
+        let key = ResourceKey::new(
+            self.zone.as_str(),
+            provider_ref.resource_type().as_str(),
+            provider_ref.name().as_str(),
+        );
+        let view = plane
+            .client()
+            .get(key)
             .await
-        {
-            Ok(resource) if resource.generation.get() != 0 => Ok(resource.generation),
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        match view.and_then(|view| ResourceGeneration::new(view.generation).ok()) {
+            Some(generation) if generation.get() != 0 => Ok(generation),
             _ => Err(SharedProviderEffectError::Unavailable),
         }
     }

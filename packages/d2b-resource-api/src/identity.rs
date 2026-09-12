@@ -79,7 +79,7 @@ mod tests {
     use d2b_contracts_resource::v3::{
         ConfigurationGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneRevision,
     };
-    use d2b_resource_store::PolicySnapshot;
+    use d2b_contracts_resource::v3::PolicySnapshot;
 
     #[test]
     fn authenticated_subject_debug_redacts_every_protected_claim() {

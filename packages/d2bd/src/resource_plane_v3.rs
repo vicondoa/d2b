@@ -1,45 +1,31 @@
-//! Per-zone v3 resource plane assembly and the Phase A type partition
-//! (U9/U10; KTD4, KTD5, R26, R27, R31).
+//! Per-zone v3 resource plane assembly (U9/U10; KTD4, KTD5, R26, R27, R31).
 //!
 //! ## What this module owns
 //!
-//! - [`route_resource_type`] classifies a resource type onto the new plane
-//!   (`Process`, `Volume`, `VolumeBinding`, `Endpoint`) or the old plane,
-//!   and the public surface dispatches by that classification: converted
-//!   types are served to callers ONLY by the new plane, unconverted types
-//!   ONLY by the old one. Legacy in-daemon writers of converted types (the
-//!   framework runners and controller sessions that U12 carries over) still
-//!   write the redb plane until their providers convert, so the exclusive
-//!   rule holds on the API surface, not yet inside the daemon. R29's
-//!   "exactly one model" completes in Phase B when the remaining types
-//!   convert and those writers are deleted.
-//! - [`ResourcePlaneV3`] is the per-zone NEW assembly (KTD5): it opens the
-//!   per-zone SQLite spec store, registers the four converted-type driver
-//!   factories over the production effects the old reconcilers compose from
-//!   (KTD7: ticket inputs from the bundle resolver / `ZoneAuthorityIdentity`,
-//!   never from the spec store), spawns the per-zone manager, and reports
-//!   the U9 readiness checklist.
+//! - [`ResourcePlaneV3`] is the per-zone assembly (KTD5): it opens the
+//!   per-zone SQLite spec store, registers the driver factories over the
+//!   production effects (KTD7: ticket inputs from the bundle resolver /
+//!   `ZoneAuthorityIdentity`, never from the spec store), spawns the
+//!   per-zone manager, and reports the U9 readiness checklist. U14 retired
+//!   the redb store and the Phase A type partition with it: the manager is
+//!   the one plane every resource type is served by.
 //! - [`ResourcePlaneV3::ingest_nix_bundle`] is U10: the Nix bundle flows
 //!   into the manager as desired specs with provenance `Nix` under the
-//!   bundle subject; unconverted rows pass through to the existing
-//!   `materialize_zone_resource_bundle` path unchanged; Nix applies never
-//!   clobber API-provenance rows (the partition consults durable provenance,
-//!   and removals only touch Nix-provenance rows).
+//!   bundle subject; Nix applies never clobber API-provenance rows (the
+//!   ingest plan consults durable provenance, and removals only touch
+//!   Nix-provenance rows).
 //!
 //! ## Spec store path decision
 //!
-//! The old redb store is opened through a broker fd handover
-//! (`open_zone_store_from_broker`), so the daemon never derived its path and
-//! never needed write access to the directory holding it. That directory
-//! (`<state-root>/zones/<zone>`) is broker-provisioned and owned by the
-//! zone-store principal; the daemon may traverse it but not create entries in
-//! it, so a spec store placed there fails to open with `SQLITE_CANTOPEN`.
-//! The new SQLite store is a plain daemon-owned file and therefore lives
-//! under the daemon's own state root:
-//! `<daemon-state>/zones/<zone>/spec-store.sqlite3`.
-//! [`d2b_resource_runtime::spec_store::SpecStore::open`] enforces the 0600
-//! file / 0700 directory posture and owns the WAL setup itself, so no broker
-//! handover is needed; U14 retires the redb store.
+//! The store is a plain daemon-owned file under
+//! `<daemon-state>/zones/<zone>/spec-store.sqlite3`. It is never opened
+//! through a broker fd handover: the broker-provisioned
+//! `<state-root>/zones/<zone>` directory is owned by the zone-store
+//! principal, so a spec store placed there fails to open with
+//! `SQLITE_CANTOPEN`. [`d2b_resource_runtime::spec_store::SpecStore::open`]
+//! enforces the 0600 file / 0700 directory posture and owns the WAL setup
+//! itself, so no broker handover is needed; U14 retired the redb store and
+//! its handover.
 
 #![allow(dead_code)]
 
@@ -70,9 +56,8 @@ use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    AdmissionDecision, DesiredResource, MutationAdmission, MutationRequest,
-    MutationSubject, ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceManagerMsg,
-    ResourceSelector,
+    AllowAll, DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
+    ResourceManagerMsg, ResourceSelector,
 };
 use d2b_resource_runtime::provider::ProviderDirectory;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
@@ -135,55 +120,11 @@ const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
-// U9 type partition router (KTD4)
-// ---------------------------------------------------------------------------
-
-/// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 33] =
-    d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
-
-/// Which runtime serves a resource type during Phase A.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaneRoute {
-    /// The v3 runtime owns the type end to end (KTD4).
-    NewPlane,
-    /// The old reconciler plane serves the type until Phase B.
-    OldPlane,
-}
-
-impl From<d2b_contracts::identity::ResourcePlane> for PlaneRoute {
-    fn from(plane: d2b_contracts::identity::ResourcePlane) -> Self {
-        match plane {
-            d2b_contracts::identity::ResourcePlane::Manager => Self::NewPlane,
-            d2b_contracts::identity::ResourcePlane::Legacy => Self::OldPlane,
-        }
-    }
-}
-
-/// Classify one resource type onto its plane (U9 execution decision
-/// implementing the P1 review finding): converted types are served ONLY by
-/// the new plane, unconverted types ONLY by the old plane; no type is served
-/// by both, so the spec's single-model invariant holds per type from the
-/// moment this lands (R29 completes in Phase B).
-///
-/// This is a view of the contract plane authority
-/// ([`d2b_contracts::identity::resource_plane`], issue #507): the daemon
-/// keeps the `PlaneRoute` spelling its call sites use, and any new storage
-/// entry point resolves the same mapping through the same function rather
-/// than re-deriving the converted set.
-pub fn route_resource_type(type_name: &str) -> PlaneRoute {
-    d2b_contracts::identity::resource_plane(type_name).into()
-}
-
-// ---------------------------------------------------------------------------
 // Committed Provider identities (KTD7)
 // ---------------------------------------------------------------------------
 //
-// The new store carries no `Provider` rows: bundle rows of unconverted types
-// pass through to the old plane's redb store, so the per-zone v3 plane cannot
-// resolve a controller row's owning Provider from its own store. The
-// composition unit resolves the bundle's `Provider` rows through the old
-// plane's durable authority and hands the identities to
+// The composition unit resolves the bundle's `Provider` rows through the
+// Zone's durable authority and hands the identities to
 // [`ConstructionInputs::committed_provider_identities`]; the plane publishes
 // them into [`PlaneResourceRegistry`] before its manager spawns any resource
 // actor, and the production Process effects bind them to controller rows. A
@@ -1565,30 +1506,17 @@ impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
 // Manager-boundary admission (U9/U10 subjects)
 // ---------------------------------------------------------------------------
 
-/// Manager-boundary admission for the new plane (KTD2 execution decision):
+/// Manager-boundary admission for the plane (KTD2 execution decision):
 /// Nix ingestion presents the bundle subject (`nix:<generation>`), the API
 /// path (U8) presents the api caller subject, owned cascades present the
-/// resource-owner subject. Defense in depth for the type partition:
-/// mutations against unconverted types are denied - the new plane never
-/// serves them (U9 notes the API/resource-owner subject call sites for the
-/// merge owner's U8 wiring).
-struct PlaneMutationAdmission;
+/// resource-owner subject. U14 retired the Phase A type partition, so the
+/// manager serves every type; the DriverFactory's registered directory is
+/// the only gate on which types can spawn actors. The manager's default
+/// [`AllowAll`] admission is therefore the whole policy.
 
-impl MutationAdmission for PlaneMutationAdmission {
-    fn admit(&self, _subject: &MutationSubject, request: &MutationRequest) -> AdmissionDecision {
-        if route_resource_type(&request.key.type_name) != PlaneRoute::NewPlane {
-            return AdmissionDecision::Deny(format!(
-                "resource type {} is not served by the v3 plane",
-                request.key.type_name
-            ));
-        }
-        AdmissionDecision::Allow
-    }
-}
-
-/// Default spec decode hook for rows no per-type decoder covers (unconverted
-/// rows persist in the new store per KTD4 but never spawn actors, so this
-/// only ever sees converted types in error paths).
+/// Default spec decode hook for rows no per-type decoder covers (a row whose
+/// type has no driver never spawns an actor, so this only ever sees
+/// registered types in error paths).
 struct PassthroughDecoder;
 
 impl SpecDecoder for PassthroughDecoder {
@@ -1852,7 +1780,7 @@ impl ResourcePlaneV3 {
             store: Arc::clone(&store),
             providers,
             hub: Arc::clone(&hub),
-            admission: Arc::new(PlaneMutationAdmission),
+            admission: Arc::new(AllowAll),
             decoders: Self::decoders(),
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
@@ -2023,73 +1951,23 @@ impl ResourcePlaneV3 {
 // U10: Nix ingestion into the manager (R26, F1)
 // ---------------------------------------------------------------------------
 
-/// The type-partitioned Nix bundle ingest plan (U10).
+/// The Nix bundle ingest plan (U10).
 pub struct BundleIngestPlan {
-    /// Converted rows to route through `ResourceManager::Apply` with
+    /// Bundle rows to route through `ResourceManager::Apply` with
     /// provenance `Nix` under the bundle subject.
     pub apply: Vec<DesiredResource>,
-    /// Durable Nix-provenance rows of converted types that the new bundle
-    /// no longer declares: configuration changes mark them deleting (R26).
+    /// Durable Nix-provenance rows the bundle no longer declares:
+    /// configuration changes mark them deleting (R26).
     pub remove: Vec<ResourceKey>,
     /// Durable API-provenance rows the bundle names: never touched by a
     /// Nix apply (provenance respected; the API owns them).
     pub api_protected: Vec<ResourceKey>,
-    /// Unconverted bundle rows for the existing materialization path.
-    pub pass_through: Vec<BundleResource>,
 }
 
-impl BundleIngestPlan {
-    /// The pass-through bundle for the old `materialize_zone_resource_bundle`
-    /// path, rebuilt through the canonical bundle constructor so its
-    /// integrity pin stays verifiable.
-    pub fn old_bundle(&self, bundle: &ResourceBundle) -> Result<ResourceBundle, PlaneError> {
-        let rebuilt = ResourceBundle::new(
-            bundle.zone.clone(),
-            self.pass_through.clone(),
-            bundle.integrity.artifact_catalog_digest.clone(),
-            bundle.integrity.schema_fingerprints.clone(),
-            bundle.integrity.provider_schema_digests.clone(),
-            bundle.generated_at.clone(),
-        )
-        .map_err(|error| PlaneError::Bundle(error.to_string()))?;
-        Ok(match bundle.zone_uid.clone() {
-            Some(zone_uid) => rebuilt.with_zone_uid(zone_uid),
-            None => rebuilt,
-        })
-    }
-}
-
-/// The old-plane view of a bundle: converted types removed so the legacy
-/// materialization path never sees them (exclusive partition without a
-/// store handle - the manager is the only writer for converted types).
-pub fn old_plane_bundle(bundle: &ResourceBundle) -> Result<ResourceBundle, PlaneError> {
-    let pass_through: Vec<BundleResource> = bundle
-        .resources
-        .iter()
-        .filter(|resource| {
-            route_resource_type(resource.resource_type().as_str()) == PlaneRoute::OldPlane
-        })
-        .cloned()
-        .collect();
-    let rebuilt = ResourceBundle::new(
-        bundle.zone.clone(),
-        pass_through,
-        bundle.integrity.artifact_catalog_digest.clone(),
-        bundle.integrity.schema_fingerprints.clone(),
-        bundle.integrity.provider_schema_digests.clone(),
-        bundle.generated_at.clone(),
-    )
-    .map_err(|error| PlaneError::Bundle(error.to_string()))?;
-    Ok(match bundle.zone_uid.clone() {
-        Some(zone_uid) => rebuilt.with_zone_uid(zone_uid),
-        None => rebuilt,
-    })
-}
-
-/// Partition one verified Zone bundle per the Phase A type partition (U10):
-/// converted rows become manager applies/removals; unconverted rows flow to
-/// the old materialization path unchanged. API-provenance rows of converted
-/// types are never clobbered by a Nix apply.
+/// Plan one verified Zone bundle for the manager (U10/R26): every bundle row
+/// is an apply or a provenance-protected skip, and durable Nix-provenance
+/// rows the bundle no longer declares are removals. U14 retired the Phase A
+/// type partition, so no row is passed through to a second plane.
 pub async fn partition_nix_bundle(
     zone: &ZoneId,
     bundle: &ResourceBundle,
@@ -2108,30 +1986,29 @@ pub async fn partition_nix_bundle(
         .collect();
     let mut apply = Vec::new();
     let mut api_protected = Vec::new();
-    let mut pass_through = Vec::new();
     for row in &bundle.resources {
         let key = ResourceKey::new(
             zone.as_str(),
             row.resource_type().as_str(),
             row.metadata().name().as_str(),
         );
-        match route_resource_type(row.resource_type().as_str()) {
-            PlaneRoute::NewPlane => match durable_by_key.get(&key) {
-                // API-created rows are never clobbered by a Nix apply
-                // (R26: provenance is respected).
-                Some(existing) if existing.provenance == d2b_resource_runtime::spec_store::ResourceProvenance::Api => {
-                    api_protected.push(key);
-                }
-                Some(existing) if existing.deleting => {
-                    // Already retiring; a re-declare re-adds on the next
-                    // bundle once the deletion completed.
-                }
-                _ => apply.push(bundle_desired(zone, row)),
-            },
-            PlaneRoute::OldPlane => pass_through.push(row.clone()),
+        match durable_by_key.get(&key) {
+            // API-created rows are never clobbered by a Nix apply
+            // (R26: provenance is respected).
+            Some(existing)
+                if existing.provenance
+                    == d2b_resource_runtime::spec_store::ResourceProvenance::Api =>
+            {
+                api_protected.push(key);
+            }
+            Some(existing) if existing.deleting => {
+                // Already retiring; a re-declare re-adds on the next
+                // bundle once the deletion completed.
+            }
+            _ => apply.push(bundle_desired(zone, row)),
         }
     }
-    // Removed Nix rows of converted types: mark deleting (R26).
+    // Removed Nix rows: mark deleting (R26).
     let declared: HashMap<ResourceKey, ()> = bundle
         .resources
         .iter()
@@ -2139,9 +2016,6 @@ pub async fn partition_nix_bundle(
         .collect();
     let mut remove = Vec::new();
     for (key, existing) in &durable_by_key {
-        if route_resource_type(&key.type_name) != PlaneRoute::NewPlane {
-            continue;
-        }
         if existing.provenance != d2b_resource_runtime::spec_store::ResourceProvenance::Nix
             || existing.deleting
             || declared.contains_key(key)
@@ -2154,9 +2028,7 @@ pub async fn partition_nix_bundle(
         apply,
         remove,
         api_protected,
-        pass_through,
     })
-
 }
 
 fn bundle_row_key(zone: &ZoneId, row: &BundleResource) -> ResourceKey {
@@ -2191,7 +2063,6 @@ pub struct BundleIngestReport {
     pub applied: Vec<ResourceKey>,
     pub removed: Vec<ResourceKey>,
     pub api_protected: Vec<ResourceKey>,
-    pub pass_through_count: usize,
 }
 
 impl ResourcePlaneV3 {
@@ -2202,10 +2073,7 @@ impl ResourcePlaneV3 {
     pub async fn ingest_nix_bundle(&self, bundle: &ResourceBundle) -> Result<BundleIngestReport, PlaneError> {
         let plan = partition_nix_bundle(&self.zone, bundle, &self.store).await?;
         let subject = nix_bundle_subject(&bundle.integrity.content_hash);
-        let mut report = BundleIngestReport {
-            pass_through_count: plan.pass_through.len(),
-            ..BundleIngestReport::default()
-        };
+        let mut report = BundleIngestReport::default();
         // Owners before owned. A bundle row that declares `metadata.ownerRef`
         // is ensured as that owner's child, so the manager links ownership by
         // uid the way R8 defines it: the Core `Provider` driver reads its
@@ -2709,40 +2577,6 @@ mod tests {
     }
 
 
-    /// Partition router: the converted types route to the new plane; every
-    /// standard catalog type is now converted, so nothing of the catalog is
-    /// left on the old plane. The router is a view of the contract plane
-    /// authority (issue #507), not a second copy of the converted set.
-    #[test]
-    fn partition_router_classifies_converted_and_unconverted_types() {
-        for converted in CONVERTED_TYPES {
-            assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
-            assert_eq!(
-                d2b_contracts::identity::resource_plane(converted),
-                d2b_contracts::identity::ResourcePlane::Manager,
-                "{converted}: the daemon router must resolve the contract authority"
-            );
-        }
-        for standard in d2b_contracts::identity::STANDARD_RESOURCE_TYPES {
-            assert_eq!(
-                route_resource_type(standard),
-                PlaneRoute::NewPlane,
-                "{standard} is a standard type and must be served by the new plane"
-            );
-        }
-        assert_eq!(
-            route_resource_type("not-a-resource-type"),
-            PlaneRoute::OldPlane,
-            "a type outside the converted set still routes to the old plane"
-        );
-        assert_eq!(
-            d2b_contracts::identity::resource_plane("not-a-resource-type"),
-            d2b_contracts::identity::ResourcePlane::Legacy,
-            "the contract authority admits a non-converted type on the legacy plane"
-        );
-        assert_eq!(CONVERTED_TYPES.len(), 33);
-    }
-
     /// KTD7: the committed Provider identities the composition resolves are
     /// published into the registry the production Process effects consult
     /// before the manager spawns any resource actor; a Provider the authority
@@ -2868,10 +2702,10 @@ mod tests {
         plane.shutdown().await;
     }
 
-    /// U10: converted rows route through the manager with provenance Nix;
-    /// unconverted rows pass through to the old materialization path.
+    /// U10: every bundle row routes through the manager with provenance Nix;
+    /// the retired Phase A partition leaves no row behind for a second plane.
     #[tokio::test(flavor = "multi_thread")]
-    async fn bundle_ingest_partitions_converted_and_unconverted_rows() {
+    async fn bundle_ingest_applies_every_row_to_the_manager() {
         let (_dir, inputs, _readiness) = test_inputs();
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
         let bundle = test_bundle(vec![
@@ -2881,19 +2715,16 @@ mod tests {
                 serde_json::json!({"providerRef": "Provider/volume-local"}),
             ),
             bundle_row("Guest", "work", serde_json::json!({"systemArtifactId": "a"})),
-            bundle_row("vendor-extension.d2bus.org.Report", "runner", serde_json::json!({})),
         ]);
 
         let report = plane.ingest_nix_bundle(&bundle).await.expect("ingest");
         assert!(report.applied.contains(&ResourceKey::new("test", "Volume", "state")));
         assert!(report.applied.contains(&ResourceKey::new("test", "Guest", "work")));
-        assert_eq!(report.applied.len(), 2, "the converted rows route through the manager");
+        assert_eq!(report.applied.len(), 2, "every row routes through the manager");
         assert!(report.removed.is_empty());
         assert!(report.api_protected.is_empty());
-        assert_eq!(report.pass_through_count, 1);
 
-        // Converted rows persist with provenance Nix before any actor effect
-        // ran (F1).
+        // Rows persist with provenance Nix before any actor effect ran (F1).
         for key in [
             ResourceKey::new("test", "Volume", "state"),
             ResourceKey::new("test", "Guest", "work"),
@@ -2903,28 +2734,46 @@ mod tests {
                 .get_row(key)
                 .await
                 .expect("get_row")
-                .expect("converted row");
+                .expect("committed row");
             assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
             assert_eq!(row.generation, 1);
         }
-
-        // Unconverted rows pass through with the bundle's integrity intact.
-        let plan = partition_nix_bundle(&ZoneId::parse("test").unwrap(), &bundle, plane.store())
-            .await
-            .expect("partition");
-        let old_bundle = plan.old_bundle(&bundle).expect("old bundle");
-        assert_eq!(old_bundle.resources.len(), 1);
-        assert_eq!(
-            old_bundle.resources[0].resource_type().as_str(),
-            "vendor-extension.d2bus.org.Report"
-        );
-        old_bundle.verify().expect("rebuilt bundle verifies");
 
         // Re-ingest is idempotent: no new generation, nothing removed.
         let again = plane.ingest_nix_bundle(&bundle).await.expect("re-ingest");
         assert!(again.applied.contains(&ResourceKey::new("test", "Volume", "state")));
         let row = plane.client().get_row(ResourceKey::new("test", "Volume", "state")).await.unwrap().unwrap();
         assert_eq!(row.generation, 1);
+        plane.shutdown().await;
+    }
+
+    /// The single plane has no second destination: a bundle row whose type has
+    /// no registered driver still commits durably through the manager (its
+    /// F1 durability boundary) but fails the ingest, where the deleted Phase A
+    /// partition used to pass the row through to the redb store.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bundle_ingest_refuses_a_row_without_a_registered_driver() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let key = ResourceKey::new("test", "vendor-extension.d2bus.org.Report", "runner");
+        let bundle = test_bundle(vec![bundle_row(
+            "vendor-extension.d2bus.org.Report",
+            "runner",
+            serde_json::json!({}),
+        )]);
+
+        let error = plane
+            .ingest_nix_bundle(&bundle)
+            .await
+            .expect_err("no driver serves the type");
+        assert!(matches!(error, PlaneError::ManagerRpc(_)), "got {error}");
+        let row = plane
+            .client()
+            .get_row(key)
+            .await
+            .expect("get_row")
+            .expect("the manager committed the row before the spawn failed");
+        assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
         plane.shutdown().await;
     }
 
@@ -3021,6 +2870,17 @@ mod tests {
             launches: Arc::clone(&launches),
         });
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        // The owner row the child commit is linked under: the production
+        // manager holds the Guest (bundle ingest) before any provider
+        // controller session commits its children.
+        plane
+            .ingest_nix_bundle(&test_bundle(vec![bundle_row(
+                "Guest",
+                "acceptance-guest",
+                serde_json::json!({"systemArtifactId": "acceptance-system"}),
+            )]))
+            .await
+            .expect("owner ingest");
         let owner = ResourceRef::parse("Guest/acceptance-guest").expect("owner");
         let target = ResourceRef::parse("Process/acceptance-guest-vmm").expect("target");
         let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
@@ -3050,6 +2910,25 @@ mod tests {
         assert!(
             launched,
             "the controller-committed Process child never reached a launch effect"
+        );
+        // R8: the child commit links this session's owner by uid - the
+        // linkage the guest session identity fence compares against.
+        let stored = plane
+            .client()
+            .get_row(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
+            .await
+            .expect("row")
+            .expect("committed child");
+        let owner_row = plane
+            .client()
+            .get_row(ResourceKey::new("test", "Guest", "acceptance-guest"))
+            .await
+            .expect("owner row")
+            .expect("ingested owner");
+        assert_eq!(
+            stored.owner_uid,
+            Some(owner_row.uid),
+            "the controller-committed child must be linked to its owner by uid"
         );
         let view = plane
             .client()
@@ -3210,6 +3089,17 @@ mod tests {
         let planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
             Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        // The owner row the child commits are linked under, exactly as the
+        // production ingest commits the Guest before its provider controller
+        // session runs.
+        plane
+            .ingest_nix_bundle(&test_bundle(vec![bundle_row(
+                "Guest",
+                "acceptance-guest",
+                serde_json::json!({"systemArtifactId": "acceptance-system"}),
+            )]))
+            .await
+            .expect("owner ingest");
         planes
             .lock()
             .insert(zone.as_str().to_owned(), Arc::clone(&plane));

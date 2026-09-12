@@ -20,7 +20,7 @@ use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
 };
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
     ResourceAssignmentFence, ResourceAssignmentScope, StoreMutation, StoreOperationContext,
     StoreSealIdentity, StoreSlot,
@@ -1161,7 +1161,7 @@ pub fn assignment_fence(
         target,
         session_generation: identity.session_generation(),
         epoch: identity.epoch().get(),
-        scope: d2b_resource_store::ResourceAssignmentScope::Primary,
+        scope: d2b_contracts_resource::v3::ResourceAssignmentScope::Primary,
     })
 }
 
@@ -1371,7 +1371,7 @@ pub struct NativeAuthorizer {
     store_binding: Mutex<Option<StoreAdmissionBinding>>,
     session_store_binding: Option<StoreAdmissionBinding>,
     store_seal:
-        std::sync::Arc<Mutex<Option<d2b_resource_store::mutation_seal::MutationSealIssuer>>>,
+        std::sync::Arc<Mutex<Option<d2b_contracts_resource::v3::operations::seal::MutationSealIssuer>>>,
 }
 
 impl core::fmt::Debug for NativeAuthorizer {
@@ -1447,7 +1447,7 @@ impl NativeAuthorizer {
     pub fn take_store_seal(
         &self,
         store: StoreSealIdentity,
-    ) -> Result<d2b_resource_store::mutation_seal::MutationSealAcceptor, StoreSealHandoffError>
+    ) -> Result<d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor, StoreSealHandoffError>
     {
         let slot = store.slot();
         let zone = store.zone().clone();
@@ -1461,16 +1461,9 @@ impl NativeAuthorizer {
         if issuer.is_some() {
             return Err(StoreSealHandoffError::AlreadyTaken { slot, zone });
         }
-        let (new_issuer, acceptor) = d2b_resource_store::mutation_seal::mutation_seal_pair(store);
+        let (new_issuer, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store);
         *issuer = Some(new_issuer);
         Ok(acceptor)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_store_seal_issuer_slot(
-        &self,
-    ) -> Arc<Mutex<Option<d2b_resource_store::mutation_seal::MutationSealIssuer>>> {
-        Arc::clone(&self.store_seal)
     }
 
     pub fn replace_policy(

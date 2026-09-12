@@ -11,7 +11,7 @@ use d2b_contracts_resource::v3::{
     CanonicalJsonValue, DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef,
     ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
 };
-use d2b_core_controller::{HintTarget, ObservedChild, OwnerIndex, OwnerLimits};
+use d2b_core_controller::{ResourceKey, ObservedChild, OwnerIndex, OwnerLimits};
 
 use crate::{
     adoption::ProcessAdoptionStatus,
@@ -2923,7 +2923,7 @@ where
                 return Err(CloudHypervisorError::ChildConflict);
             }
         }
-        let owner = HintTarget::new(
+        let owner = ResourceKey::new(
             guest.zone.clone(),
             guest.resource_ref.clone(),
             guest.uid.clone(),
@@ -2931,7 +2931,7 @@ where
         let indexed = children
             .values()
             .map(|child| {
-                let target = HintTarget::new(
+                let target = ResourceKey::new(
                     child.zone.clone(),
                     child.resource_ref.clone(),
                     child.uid.clone(),

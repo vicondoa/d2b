@@ -4,7 +4,7 @@ use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     ResourceError, ResourceErrorKind, ResourceErrorReason, RetryClass,
 };
-use d2b_resource_store::{StoreError, StoreErrorKind};
+use d2b_contracts_resource::v3::{StoreError, StoreErrorKind};
 use protobuf::EnumOrUnknown;
 
 /// Map every store error kind onto the closed API set.

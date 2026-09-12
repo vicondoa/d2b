@@ -6,7 +6,7 @@
 //! row: the fenced readiness projection and the typed spec parse.
 
 use d2b_contracts_resource::v3::volume_binding::{VolumeBindingSpec, VolumeBindingStatusResource};
-use d2b_resource_store::StoredResource;
+use d2b_contracts_resource::v3::StoredResource;
 
 /// Whether one stored VolumeBinding carries a current fenced readiness
 /// projection.  Unparseable or unfenced projections fail closed.

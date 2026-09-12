@@ -1,21 +1,29 @@
-//! Storage-neutral resource store contract.
+//! Storage-neutral resource operation contract.
 //!
-//! This crate intentionally contains no database or executor dependency.
+//! These are the resource-domain envelopes the Resource API facade and its
+//! manager backend exchange: read requests and their projections, mutation
+//! requests and their admission evidence, the bounded error shape, and the
+//! mutation seal that binds a verified commit to one declared plane identity.
+//! The module carries no database or executor dependency; the pre-v3 durable
+//! backend that once consumed it is deleted (spec §26, R29).
 
-pub mod error;
-pub mod mutation_seal;
-
-use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::{
+use crate::v3::identity::ReconnectGeneration;
+use crate::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
+
+pub mod error;
+pub mod seal;
 
 pub use error::{
     MAX_STORE_SLOTS, MutationOrdinal, MutationOrdinalError, SealIdentityMismatch, StoreError,
     StoreErrorKind, StoreSlot, StoreSlotError,
 };
-pub use mutation_seal::{MutationSealBody, OpenedMutation, SealedMutation, StoreSealIdentity};
+pub use seal::{
+    MutationSealAcceptor, MutationSealBody, MutationSealIssuer, OpenedMutation, SealedMutation,
+    StoreSealIdentity,
+};
 
 /// Exact optimistic precondition for a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

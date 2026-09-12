@@ -16,7 +16,7 @@ use d2b_contracts_resource::v3::{
     ResourceUid, ZoneId, ZoneRevision, canonical_digest,
 };
 use d2b_core_controller::controller_assignment::{AssignmentVerb, ScopedResourceMutation};
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
     StoreMutation, StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest,
@@ -120,7 +120,7 @@ pub enum UpgradeAction {
 #[derive(Clone, PartialEq, Eq)]
 pub struct UpgradeResult {
     pub resource: StoredResource,
-    pub plan: Vec<d2b_resource_store::StoreResolvedIdentity>,
+    pub plan: Vec<d2b_contracts_resource::v3::StoreResolvedIdentity>,
     pub revision: ZoneRevision,
 }
 
@@ -183,17 +183,6 @@ impl<S, U> core::fmt::Debug for ResourceService<S, U> {
 }
 
 impl<S, U> ResourceService<S, U> {
-    pub(crate) fn checked_store(&self) -> crate::store::CheckedResourceStore<S> {
-        self.store.clone()
-    }
-
-    pub(crate) fn authorizer_arc(&self) -> Arc<NativeAuthorizer> {
-        Arc::clone(&self.authorizer)
-    }
-
-    pub(crate) fn zone_uid(&self) -> Option<ResourceUid> {
-        self.zone_uid.clone()
-    }
 }
 
 impl<S> ResourceService<S, UnavailableUpgradeDispatcher>
@@ -280,7 +269,7 @@ where
                 zone: zone.clone(),
                 target: target.clone(),
                 expected_uid: None,
-                projection: d2b_resource_store::StoreProjection::Full,
+                projection: d2b_contracts_resource::v3::StoreProjection::Full,
             })
             .await
             .map_err(map_store_error)?;
@@ -322,7 +311,7 @@ where
                 zone: zone.clone(),
                 target: provider_ref,
                 expected_uid: None,
-                projection: d2b_resource_store::StoreProjection::Full,
+                projection: d2b_contracts_resource::v3::StoreProjection::Full,
             })
             .await
             .map_err(map_store_error)?;
@@ -2172,7 +2161,7 @@ fn to_wire_identity(resource: &StoredResource) -> wire::ResourceIdentity {
 }
 
 fn to_wire_resolved_identity(
-    resource: d2b_resource_store::StoreResolvedIdentity,
+    resource: d2b_contracts_resource::v3::StoreResolvedIdentity,
 ) -> wire::ResourceIdentity {
     let mut identity = wire::ResourceIdentity::new();
     identity.zone = resource.zone.to_canonical_string();
@@ -2291,8 +2280,8 @@ mod tests {
         SchemaFingerprint, ZoneId,
     };
     use d2b_core_controller::controller_assignment::ScopedCommitTransport;
-    use d2b_resource_store::mutation_seal::MutationSealAcceptor;
-    use d2b_resource_store::{
+    use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
+    use d2b_contracts_resource::v3::{
         MutationOrdinal, StoreError, StoreErrorKind, StoreListResult, StoreResolvedIdentity,
         StoreSealIdentity, StoreSlot, StoreWatchReceipt, StoredSchema,
     };
@@ -2399,7 +2388,7 @@ mod tests {
 
         async fn commit_verified(
             &self,
-            mutation: d2b_resource_store::SealedMutation,
+            mutation: d2b_contracts_resource::v3::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
             let acceptor = self.acceptor.lock().unwrap();
             let Some(acceptor) = acceptor.as_ref() else {
@@ -2473,7 +2462,7 @@ mod tests {
 
     fn state(controller_generation: Option<u64>) -> AuthorizationState {
         AuthorizationState {
-            snapshot: d2b_resource_store::PolicySnapshot {
+            snapshot: d2b_contracts_resource::v3::PolicySnapshot {
                 policy_revision: 4,
                 api_catalog_revision: 5,
                 active_configuration_revision: ConfigurationGeneration::new(6).unwrap(),
@@ -3138,7 +3127,7 @@ mod tests {
             attach_scoped_fences(&mut parsed, transport.mutations(), &routes).unwrap();
             assert!(matches!(
                 &parsed[0].store.assignment.as_ref().unwrap().scope,
-                d2b_resource_store::ResourceAssignmentScope::OwnerChild { .. }
+                d2b_contracts_resource::v3::ResourceAssignmentScope::OwnerChild { .. }
             ));
         }
     }
@@ -3207,7 +3196,7 @@ mod tests {
         assert_eq!(fence.resource_revision, ZoneRevision::new(7));
         assert!(matches!(
             &fence.scope,
-            d2b_resource_store::ResourceAssignmentScope::OwnerChild {
+            d2b_contracts_resource::v3::ResourceAssignmentScope::OwnerChild {
                 owner_ref,
                 owner_uid,
                 owner_revision,

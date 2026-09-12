@@ -29,11 +29,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
-#[path = "emergency_policy.rs"]
-pub mod emergency_policy;
-#[path = "quota.rs"]
-pub mod quota;
-
 /// Domain tag for the Core-derived external physical-NIC identity.
 pub const EXTERNAL_PHYSICAL_NIC_IDENTITY_DOMAIN: &str = "external-physical-nic/v1";
 /// Authority class used in the Host-global index.

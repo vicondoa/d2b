@@ -57,8 +57,6 @@
     "d2b-resource-client",
     "d2b-resource-compiler",
     "d2b-resource-runtime",
-    "d2b-resource-store",
-    "d2b-resource-store-redb",
     "d2b-session",
     "d2b-session-unix",
     "d2b-sk-frontend",
@@ -69,7 +67,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "d780bab966bc4d570eac39000ac4f74b5e01bb233678138746c939c58bd1339d",
+  "lock_sha256": "8bca59b57c6e30d78d5c7938864cff4f94b678dc10ca5aa1b8bb23fc668113a8",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -962,22 +960,6 @@
     {
       "id": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "name": "d2b-resource-runtime",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "x86_64-unknown-linux-gnu"
-    },
-    {
-      "id": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "name": "d2b-resource-store-redb",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "x86_64-unknown-linux-gnu"
-    },
-    {
-      "id": "d2b-resource-store@0.0.0-bootstrap#path",
-      "name": "d2b-resource-store",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -2101,14 +2083,6 @@
       "version": "0.9.5",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c",
-      "target": "x86_64-unknown-linux-gnu"
-    },
-    {
-      "id": "redb@4.1.0#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "redb",
-      "version": "4.1.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839",
       "target": "x86_64-unknown-linux-gnu"
     },
     {
@@ -3861,12 +3835,6 @@
     },
     {
       "from": "d2b-bus@0.0.0-bootstrap#path",
-      "to": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-bus@0.0.0-bootstrap#path",
       "to": "d2b-core-controller@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -3874,18 +3842,6 @@
     {
       "from": "d2b-bus@0.0.0-bootstrap#path",
       "to": "d2b-resource-api@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-bus@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-bus@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -4263,74 +4219,8 @@
     },
     {
       "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-bus@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-contracts@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-core-controller@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-process-conformance@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-process@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-provider-supervisor@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-provider-system-minijail@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-resource-api@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store@0.0.0-bootstrap#path",
-      "kind": "dev",
       "target": null
     },
     {
@@ -4349,36 +4239,6 @@
       "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "tempfile@3.27.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-core-controller@0.0.0-bootstrap#path",
-      "to": "d2b-audit@0.0.0-bootstrap#path",
-      "kind": "normal",
       "target": null
     },
     {
@@ -4401,19 +4261,7 @@
     },
     {
       "from": "d2b-core-controller@0.0.0-bootstrap#path",
-      "to": "d2b-contracts@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-core-controller@0.0.0-bootstrap#path",
       "to": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-core-controller@0.0.0-bootstrap#path",
-      "to": "d2b-telemetry@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6639,18 +6487,6 @@
     },
     {
       "from": "d2b-resource-api@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-api@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-api@0.0.0-bootstrap#path",
       "to": "d2b-telemetry@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6904,108 +6740,6 @@
     {
       "from": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-audit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-resource-store@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "d2b-telemetry@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "redb@4.1.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "tempfile@3.27.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "dev",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store-redb@0.0.0-bootstrap#path",
-      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-resource-store@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

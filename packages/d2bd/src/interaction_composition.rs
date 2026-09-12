@@ -83,8 +83,8 @@ use d2b_resource_api::authz::{
     NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
 };
 use d2b_resource_api::{ResourceApiClient, service::UnavailableUpgradeDispatcher};
-use d2bd_runtime::resource_runtime_support::ZoneStoreBackend;
-use d2b_resource_store::{PolicySnapshot, StoredResource};
+use d2bd_runtime::resource_runtime_support::ZoneApiBackend;
+use d2b_contracts_resource::v3::PolicySnapshot;
 use d2b_session::{
     AuthenticatedSessionRouteBinding, ComponentSessionDriver, OwnedAttachment, OwnedTransport,
     SessionAcceptor, SessionEngine, TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
@@ -415,7 +415,7 @@ where
         BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
     notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
     display_resource_client:
-        Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
+        Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     clipboard_configuration: Option<CommittedClipboardProviderConfiguration>,
@@ -1019,7 +1019,7 @@ where
     /// owned by the system-core Resource API client.
     pub(crate) fn bind_display_resource_client(
         &mut self,
-        client: Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
+        client: Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
     ) {
         self.display_resource_client = Some(client);
     }
@@ -2318,74 +2318,7 @@ where
             self.reconcile_dependents()
                 .map_err(|_| DisplayRuntimeError::ObservationUnavailable)?;
         }
-        self.persist_display_status(zone, &result)?;
         Ok(result)
-    }
-
-    fn persist_display_status(
-        &self,
-        zone: ZoneId,
-        result: &d2b_provider_display_wayland::ReconcileResult,
-    ) -> Result<(), DisplayRuntimeError> {
-        let (Some(client), Some(identity)) = (
-            self.display_resource_client.clone(),
-            self.interaction_identity.clone(),
-        ) else {
-            return Ok(());
-        };
-        let resource_ref = identity.wayland_session_ref().clone();
-        let resource_uid = identity.wayland_session_uid().clone();
-        let phase = format!("{:?}", result.status.phase);
-        let projection = wayland_session_resource_projection(&result.status.resource);
-        run_effect(move || async move {
-            let response = client
-                .get(resource_get_request(
-                    &zone,
-                    &resource_ref,
-                    "display-wayland-status-get",
-                ))
-                .await;
-            if response.error.is_some() {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            let resource = response
-                .resource
-                .0
-                .ok_or(WorkerEffectError::WorkerUnavailable)?;
-            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-            if envelope.resource_type().as_str() != "display-wayland.d2bus.org.WaylandSession"
-                || envelope.metadata().uid() != &resource_uid
-                || envelope.metadata().zone() != &zone
-                || ResourceRef::new(
-                    envelope.resource_type().clone(),
-                    envelope.metadata().name().clone(),
-                ) != resource_ref
-            {
-                return Err(WorkerEffectError::LaunchRejected);
-            }
-            let stored = StoredResource {
-                resource_ref,
-                zone,
-                uid: envelope.metadata().uid().clone(),
-                owner_uid: None,
-                owner_generation: None,
-                generation: envelope.metadata().generation().clone(),
-                revision: envelope.metadata().revision().clone(),
-                canonical_json: resource.canonical_json,
-                payload_digest: resource.payload_digest,
-            };
-            let status = serde_json::json!({ "phase": phase });
-            d2bd_runtime::resource_runtime_support::persist_resource_status_with_projection(
-                &client,
-                &stored,
-                &status,
-                Some(&projection),
-            )
-            .await
-            .map_err(|_| WorkerEffectError::WorkerUnavailable)
-        })
-        .map_err(DisplayRuntimeError::Effect)
     }
 
     fn reconcile_display_request(
@@ -2786,7 +2719,7 @@ impl ProcessLaunchEffectPort for UnavailableProcessEffectPort {
 /// adapter in the production composition.
 pub struct DisplaySupervisorEffects<S> {
     _supervisor: S,
-    resource_client: Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
+    resource_client: Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
     resource_zone: Option<ZoneId>,
     wayland_session_ref: Option<ResourceRef>,
     wayland_session_uid: Option<ResourceUid>,
@@ -2872,7 +2805,7 @@ where
     /// generic durable Process runtime.
     pub fn new_with_resource_client(
         supervisor: S,
-        resource_client: Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
+        resource_client: Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
         zone: ZoneId,
         wayland_session_ref: ResourceRef,
         wayland_session_uid: ResourceUid,
@@ -4939,7 +4872,7 @@ pub(crate) struct ProductionInteractionResourceState<'a> {
     resource_ready: bool,
     configuration: Option<&'a CommittedInteractionProviderConfiguration>,
     identity: Option<&'a CommittedInteractionIdentity>,
-    system_core_client: Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
+    system_core_client: Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
 }
 
 impl<'a> ProductionInteractionResourceState<'a> {
@@ -4952,7 +4885,7 @@ impl<'a> ProductionInteractionResourceState<'a> {
         configuration: Option<&'a CommittedInteractionProviderConfiguration>,
         identity: Option<&'a CommittedInteractionIdentity>,
         system_core_client: Option<
-            Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
+            Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
         >,
     ) -> Self {
         Self {
@@ -6385,7 +6318,7 @@ mod tests {
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
     };
-    use d2b_resource_store::PolicySnapshot;
+    use d2b_contracts_resource::v3::PolicySnapshot;
     use d2b_session::ComponentSessionDriver;
     use d2b_session_unix::DescriptorPolicyResolver;
     use std::sync::atomic::{AtomicUsize, Ordering};

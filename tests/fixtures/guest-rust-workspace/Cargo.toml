@@ -46,8 +46,6 @@ members = [
   "d2b-provider-volume-local",
   "d2b-provider-volume-virtiofs",
   "d2b-resource-api",
-  "d2b-resource-store",
-  "d2b-resource-store-redb",
   "d2b-resource-runtime",
   "d2b-session",
   "d2b-session-unix",

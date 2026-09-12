@@ -10,23 +10,13 @@
 //! - [`resolve_launch_identity`], the one canonical launch-identity resolver
 //!   every ticket consumer shares (the Process driver, the provider runtime,
 //!   and the durable-row helpers), including the guest-runtime target rule
-//!   [`guest_runtime_process_matches`];
-//! - [`list_process_resources`], the generic Process list the controller
-//!   sessions fence against; and
-//! - [`PROCESS_RESTART_ANNOTATION`], the persisted restart annotation the
-//!   interaction composition's durable Process specs still carry.
+//!   [`guest_runtime_process_matches`]; and
+//! - [`PROCESS_RESTART_ANNOTATION`], the restart annotation the interaction
+//!   composition's Process specs still carry.
 
-use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, ResourceUid, ZoneId};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_process_conformance::{LaunchIdentity, LaunchIdentityError};
-use d2b_resource_api::ResourceStoreBackend;
-use d2b_resource_store::{
-    StoreListRequest, StoreOperationContext, StoreProjection, StoredResource,
-};
-use d2b_resource_store_redb::RedbResourceStore;
-use d2bd_runtime::resource_runtime_support::retry_transient_store_list;
 
-const PROCESS_TYPE: &str = "Process";
-const EPHEMERAL_PROCESS_TYPE: &str = "EphemeralProcess";
 pub(crate) const PROCESS_RESTART_ANNOTATION: &str = "d2b.d2bus.org/restart-generation";
 const GUEST_RUNTIME_PROCESS_TEMPLATES: &[(&str, &str)] = &[
     ("cloud-hypervisor-runner", "-vmm"),
@@ -37,9 +27,8 @@ const GUEST_RUNTIME_PROCESS_TEMPLATES: &[(&str, &str)] = &[
 ///
 /// The classification surface stays intact for the controller-session
 /// mapping (`resource_runtime::map_process_runtime_error` matches every
-/// variant) after the U12 conversion retired the runtime that constructed
-/// most of them; only [`Self::Store`] is constructed by the list readers that
-/// remain.
+/// variant); U14 retired the durable list readers that constructed it, so the
+/// variants are mapped to the daemon's runtime errors only.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessResourceRuntimeError {
@@ -177,87 +166,9 @@ pub(crate) fn guest_runtime_process_matches(
         })
 }
 
-/// Build the generic Process resource list request.
-pub(crate) fn process_resource_list_request(zone: &ZoneId) -> StoreListRequest {
-    StoreListRequest {
-        operation: StoreOperationContext {
-            operation_id: "process-resource-reconcile".to_owned(),
-            idempotency_key: None,
-            correlation_id: "process-resource-reconcile".to_owned(),
-            trace_id: None,
-            deadline_ms: 10_000,
-        },
-        zone: zone.clone(),
-        resource_types: vec![
-            ResourceTypeName::parse(PROCESS_TYPE).expect("static Process type"),
-            ResourceTypeName::parse(EPHEMERAL_PROCESS_TYPE).expect("static EphemeralProcess type"),
-        ],
-        resource_names: Vec::new(),
-        filters: Vec::new(),
-        page_size: 256,
-        cursor: None,
-        projection: StoreProjection::Full,
-    }
-}
-
-/// Relist generic Process resources from the authoritative Zone store.
-pub(crate) async fn list_process_resources(
-    store: &RedbResourceStore,
-    zone: &ZoneId,
-) -> Result<Vec<StoredResource>, ProcessResourceRuntimeError> {
-    let mut request = process_resource_list_request(zone);
-    let mut resources = Vec::new();
-    loop {
-        let result = retry_transient_store_list(zone, &request.operation.operation_id, || {
-            store.list(request.clone())
-        })
-        .await
-            .map_err(|_| ProcessResourceRuntimeError::Store)?;
-        resources.extend(result.resources);
-        let Some(cursor) = result.next_cursor else {
-            break;
-        };
-        request.cursor = Some(cursor);
-    }
-    Ok(resources)
-}
-
-/// Relist generic Process resources through a session-bound Resource API
-/// backend while preserving the backend's reconnect fence.
-#[allow(dead_code)]
-pub(crate) async fn list_process_resources_backend<S: ResourceStoreBackend>(
-    store: &S,
-    zone: &ZoneId,
-) -> Result<Vec<StoredResource>, ProcessResourceRuntimeError> {
-    let mut request = process_resource_list_request(zone);
-    let mut resources = Vec::new();
-    loop {
-        let result = retry_transient_store_list(zone, &request.operation.operation_id, || {
-            store.list(request.clone())
-        })
-        .await
-            .map_err(|_| ProcessResourceRuntimeError::Store)?;
-        resources.extend(result.resources);
-        let Some(cursor) = result.next_cursor else {
-            break;
-        };
-        request.cursor = Some(cursor);
-    }
-    Ok(resources)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn process_requests_use_both_generic_resource_types() {
-        let zone = ZoneId::parse("test").expect("valid zone");
-        let request = process_resource_list_request(&zone);
-        assert_eq!(request.resource_types.len(), 2);
-        assert_eq!(request.resource_types[0].as_str(), PROCESS_TYPE);
-        assert_eq!(request.resource_types[1].as_str(), EPHEMERAL_PROCESS_TYPE);
-    }
 
     /// The declared target is authoritative only for its own owner, and the
     /// Guest-owned guest-runtime rows (nested VMM, qemu media runner) target

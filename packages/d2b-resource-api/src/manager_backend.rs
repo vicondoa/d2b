@@ -54,8 +54,8 @@ use d2b_resource_runtime::{
     error::ResourceError,
     identity::ResourceKey as RuntimeResourceKey,
 };
-use d2b_resource_store::mutation_seal::MutationSealAcceptor;
-use d2b_resource_store::{
+use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
+use d2b_contracts_resource::v3::{
     AdmittedAuthorization, ExpectedRevision, MutationSealBody, ResourceMutationKind,
     SealedMutation, StoreCommitResult, StoreError, StoreErrorKind, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation, StoreProjection,

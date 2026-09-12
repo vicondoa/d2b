@@ -22,7 +22,7 @@ use d2b_provider_audio_pipewire::{
     MicDecision, resource_type::PROVIDER_REF, shared_microphone_arbiter,
     validate_audio_binding_in_zone, validate_audio_service,
 };
-use d2b_resource_store::StoredResource;
+use d2b_contracts_resource::v3::StoredResource;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 

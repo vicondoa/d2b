@@ -59,10 +59,6 @@ use crate::{
     },
 };
 
-#[cfg(feature = "production-rss-fixture")]
-#[path = "production_rss.rs"]
-pub mod production_rss;
-
 /// Default maximum bytes in one method payload.
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
@@ -2290,7 +2286,7 @@ impl ZoneRegistrar {
         self.unix_subjects.install(subject, &self.core.zone)
     }
 
-    #[cfg(any(test, feature = "production-rss-fixture"))]
+    #[cfg(test)]
     pub(crate) fn register(
         &mut self,
         registration: SessionRegistration,
@@ -2886,7 +2882,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             let filters = query
                 .filters
                 .iter()
-                .map(|filter| d2b_resource_store::StoreFilter {
+                .map(|filter| d2b_contracts_resource::v3::StoreFilter {
                     field: filter.field.clone(),
                     values: filter.values.clone(),
                 })
@@ -3508,7 +3504,7 @@ impl ComponentRequestReceiver {
     }
 }
 
-#[cfg(any(test, feature = "production-rss-fixture"))]
+#[cfg(test)]
 fn empty_component_requests() -> Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>> {
     let (_sender, receiver) = mpsc::channel(1);
     Arc::new(AsyncMutex::new(receiver))
@@ -4331,7 +4327,6 @@ impl From<StreamError> for BusError {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -4345,26 +4340,13 @@ mod tests {
         ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
     };
     use d2b_contracts_resource::v3::{
-        CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
-        RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceGeneration, ResourceRef, ResourceTypeName,
-        ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, canonical_digest,
-    };
-    use d2b_controller_toolkit::{
-        OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason,
-        TriggerSet,
+        ConfigurationGeneration, ControllerGeneration, PolicySnapshot, ResourceGeneration,
+        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
     };
     use d2b_resource_api::authz::{
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, RelayGrantAuthority, SessionVerb,
     };
-    use d2b_resource_api::watch::WatchService;
-    use d2b_resource_store::mutation_seal::{MutationSealBody, mutation_seal_pair};
-    use d2b_resource_store::{
-        AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
-        PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreMutation,
-        StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
-    };
-    use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
     use tokio::sync::Notify;
 
     use super::*;
@@ -5183,129 +5165,6 @@ mod tests {
 
     fn operation(id: &str) -> OperationSpec {
         OperationSpec::new(OperationId::parse(id).unwrap(), 100).unwrap()
-    }
-
-    fn watch_store_identity() -> StoreIdentity {
-        StoreIdentity::new(
-            StoreSlot::new(0).unwrap(),
-            ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
-            ZoneId::parse("dev").unwrap(),
-            ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap(),
-            Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
-            d2b_resource_store::PolicySnapshot {
-                policy_revision: 1,
-                api_catalog_revision: 1,
-                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-                controller_generation: Some(ControllerGeneration::new(3).unwrap()),
-            },
-        )
-    }
-
-    async fn provision_watch_store() -> (
-        tempfile::TempDir,
-        Arc<RedbResourceStore>,
-        d2b_resource_store::mutation_seal::MutationSealIssuer,
-    ) {
-        let directory = tempfile::tempdir().unwrap();
-        let file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(directory.path().join("store.redb"))
-            .unwrap();
-        let mut marker = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(directory.path().join("store.marker"))
-            .unwrap();
-        let identity = watch_store_identity();
-        write_provisioning_marker(&mut marker, &identity).unwrap();
-        let (issuer, acceptor) = mutation_seal_pair(identity.seal_identity());
-        let audit = Arc::new(
-            d2b_audit::AuditSink::open(directory.path().join("audit"))
-                .expect("open watch audit sink"),
-        );
-        let store =
-            RedbResourceStore::provision_owned_with_audit(file, marker, identity, acceptor, audit)
-                .await
-                .unwrap();
-        (directory, Arc::new(store), issuer)
-    }
-
-    fn watch_body(name: &str) -> Vec<u8> {
-        let raw = format!(
-            r#"{{"apiVersion":"resources.d2bus.org/v3","metadata":{{"configurationGeneration":1,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"{name}","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"}},"spec":{{"providerRef":"Provider/system-core","updatePolicy":{{"disruptive":"manual","nonDisruptive":"automatic"}}}},"status":{{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{{}},"startedAt":null,"update":{{"dependencies":{{"count":0,"refs":[]}},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{{"count":0,"refs":[]}},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}}}},"type":"Host"}}"#
-        );
-        let mut value = CanonicalJsonValue::parse(raw.as_bytes()).unwrap();
-        let CanonicalJsonValue::Object(root) = &mut value else {
-            unreachable!()
-        };
-        let CanonicalJsonValue::Object(metadata) = root.get_mut("metadata").unwrap() else {
-            unreachable!()
-        };
-        metadata.remove("uid");
-        value.to_canonical_bytes()
-    }
-
-    async fn commit_watch_resource(
-        store: &RedbResourceStore,
-        issuer: &d2b_resource_store::mutation_seal::MutationSealIssuer,
-    ) -> ZoneRevision {
-        let target = ResourceRef::parse("Host/bus-watch").unwrap();
-        let canonical = watch_body("bus-watch");
-        let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-        let body = MutationSealBody {
-            mutations: vec![PreparedStoreMutation::new(
-                StoreMutation {
-                    kind: ResourceMutationKind::Create,
-                    zone: ZoneId::parse("dev").unwrap(),
-                    target: target.clone(),
-                    expected: ExpectedRevision::CreateAbsent,
-                    expected_uid: None,
-                    owner: None,
-                    canonical_resource: Some(canonical),
-                    add_finalizers: Vec::new(),
-                    remove_finalizers: Vec::new(),
-                    wait_for_reconcile: false,
-                    reconcile_deadline_ms: None,
-                    configuration_generation: None,
-                    assignment: None,
-                },
-                None,
-                Some(digest),
-            )],
-            authorization: AdmittedAuthorization {
-                zone: ZoneId::parse("dev").unwrap(),
-                subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
-                subject_uid: ResourceUid::parse("55555555-5555-4555-8555-555555555555").unwrap(),
-                targets: vec![AdmittedAuthorizationTarget {
-                    resource_type: ResourceTypeName::parse("Host").unwrap(),
-                    resource_name: Some(target.name().clone()),
-                    verb: AdmittedVerb::Create,
-                    subresource: None,
-                    execution_ref: None,
-                }],
-            },
-            policy_snapshot: d2b_resource_store::PolicySnapshot {
-                policy_revision: 1,
-                api_catalog_revision: 1,
-                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-                controller_generation: Some(ControllerGeneration::new(3).unwrap()),
-            },
-            operation: StoreOperationContext {
-                operation_id: "bus-watch".to_owned(),
-                idempotency_key: Some("bus-watch-key".to_owned()),
-                correlation_id: "bus-watch-correlation".to_owned(),
-                trace_id: None,
-                deadline_ms: 1_000,
-            },
-        };
-        store
-            .commit_verified(issuer.seal(body))
-            .await
-            .unwrap()
-            .revision
     }
 
     fn resource_harness(
@@ -7184,122 +7043,6 @@ mod tests {
         assert!(telemetry.credits.load(Ordering::Relaxed) >= 1);
         assert!(telemetry.backpressure.load(Ordering::Relaxed) >= 1);
         assert!(telemetry.disconnects.load(Ordering::Relaxed) >= 2);
-    }
-
-    #[tokio::test]
-    async fn production_resource_watch_reaches_controller_over_bounded_named_stream() {
-        let harness = resource_harness(
-            RouteMember::stream("ResourceService/Watch").unwrap(),
-            vec![SessionVerb::Connect, SessionVerb::OpenStream],
-            vec![ResourceVerb::Watch],
-            "User/alice",
-            Locality::Local,
-            EvidenceClass::UnixPeer,
-        );
-        let (_directory, store, issuer) = provision_watch_store().await;
-        let watch_service = WatchService::new(Arc::clone(&store));
-        let watch = watch_service
-            .open(StoreWatchRequest {
-                operation: d2b_resource_store::StoreOperationContext {
-                    operation_id: "bus-watch-open".to_owned(),
-                    idempotency_key: Some("bus-watch-open-key".to_owned()),
-                    correlation_id: "bus-watch-open-correlation".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 1_000,
-                },
-                zone: ZoneId::parse("dev").unwrap(),
-                resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
-                resource_names: Vec::new(),
-                filters: Vec::new(),
-                after_revision: ZoneRevision::new(0),
-                initial_credits: 4,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let query = ResourceQuery::new(
-            vec![ResourceTypeName::parse("Host").unwrap()],
-            Vec::new(),
-            Vec::new(),
-        )
-        .unwrap();
-        let stream = harness
-            .caller
-            .open_resource_stream(
-                harness.route.clone(),
-                operation("watch-bus"),
-                ResourceCall::Watch(query),
-                StreamName::parse("watch:production").unwrap(),
-                4 * 1024,
-            )
-            .await
-            .unwrap();
-        let incoming = harness.endpoint.incoming.lock().unwrap().pop().unwrap();
-        let pump = tokio::spawn(async move {
-            let mut watch = watch;
-            watch.pump_to(&stream).await
-        });
-
-        let revision = commit_watch_resource(&store, &issuer).await;
-        let frame = tokio::time::timeout(Duration::from_secs(1), incoming.receive_next())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(frame.stream().as_str(), "watch:production");
-        let payload: serde_json::Value = serde_json::from_slice(frame.payload()).unwrap();
-        assert_eq!(payload["revision"].as_u64(), Some(revision.get()));
-        assert_eq!(
-            payload["entries"].as_array().map(Vec::len),
-            Some(1),
-            "the controller receives one committed change entry"
-        );
-        let entry = &payload["entries"][0];
-        let key = ResourceKey::new(
-            ZoneId::parse("dev").unwrap(),
-            ResourceRef::parse(&format!(
-                "{}/{}",
-                entry["resource_type"].as_str().unwrap(),
-                entry["resource_name"].as_str().unwrap()
-            ))
-            .unwrap(),
-            ResourceUid::parse(entry["resource_uid"].as_str().unwrap()).unwrap(),
-        );
-        let queue = PendingQueue::new(4, 1);
-        queue
-            .push(
-                QueueHint::new(
-                    key,
-                    revision,
-                    TriggerSet::new([TriggerReason::SpecGenerationChanged]),
-                    PriorityLane::Ordinary,
-                    OperationContext::new(
-                        "bus-controller-watch",
-                        "bus-controller-watch-key",
-                        "bus-controller-watch-correlation",
-                        None,
-                    )
-                    .unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        let work = queue
-            .pop_ready()
-            .expect("controller consumer receives watch");
-        assert_eq!(work.high_water_revision(), revision);
-        assert!(
-            work.reasons()
-                .contains(TriggerReason::SpecGenerationChanged)
-        );
-        queue.finish(work.key()).unwrap();
-        incoming
-            .grant_frame(&frame, frame.payload().len())
-            .await
-            .unwrap();
-        pump.abort();
-        let _ = pump.await;
-        tokio::task::yield_now().await;
-        assert_eq!(store.watch_signals().unwrap().budget_used, 0);
     }
 
     #[test]

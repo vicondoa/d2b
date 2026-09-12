@@ -1817,6 +1817,183 @@ until the target-local effect map above is populated.
   - `make check` green with the reduced tree.
 - **Verification:** `make check`; grep gates for deleted symbols.
 
+**U14 status (2026-09-12): landed and gated; one execution model remains (R29).**
+
+**Deletion inventory.** `packages/d2b-resource-store` and
+`packages/d2b-resource-store-redb` are gone (about 27.4k lines: actor,
+transaction, revision log, backup, ownership, value/key codecs, schema, audit,
+metrics, tracing), together with `d2b-resource-api`'s `src/registered.rs`
+(`RedbRegisteredControllerApi`), the legacy watch half of `src/watch.rs`, and
+the GitHub #507 wrong-plane fence with the plane it fenced (`LegacyPlaneFence`
+and every refusal helper in `src/store.rs`). `d2b-controller-toolkit` loses
+`Runner`, `ControllerSource`, `PendingQueue` and its queue machinery, the
+`ReconcileResult`/`MutationIntent` protocol, the reconcile-pass context half,
+and its benches and tests (KD3: deleted, not ported); the surviving surface is
+the `ResourceSnapshot`/`DependencySnapshot` DTOs, `contract.rs`,
+`owner_hints.rs`, `state_migration.rs` and the trimmed context type still
+consumed by `packages/d2bd/src/core_driver.rs`. `d2b-core-controller` loses the
+store-routing module class and everything that existed only for the
+persistent-database control model (`runtime.rs`, `configuration/*`,
+`cleanup.rs`, `audit.rs`, `authz*.rs`, `watches.rs`, `store.rs`,
+`resource_store.rs`, `export_import*.rs`, `metrics.rs`, `tracing.rs`,
+`provider_effects.rs`, `dependencies.rs`, `hints.rs`, `optional_state_admission.rs`,
+`ownership.rs`, `budgets.rs`, `quota.rs`, `emergency_policy.rs`,
+`user_session_authority.rs`, plus their tests) and keeps the domain modules the
+converted drivers and the daemon import. `d2b-provider-test-controller` is
+**kept** per §39/KD4-1: it needs only
+`CONTROLLER_ASSIGNMENT_STREAM_ID`/`CONTROLLER_ASSIGNMENT_STREAM_CREDIT`, which
+live in the surviving `packages/d2b-core-controller/src/controller_assignment.rs`,
+and it is the fixture the activation lane drives. The store DTOs that outlived
+the crates moved to `packages/d2b-contracts-resource/src/v3/operations/{mod,error,seal}.rs`
+and stay re-exported at `d2b_contracts_resource::v3::*`, so their consumers
+needed no change. `d2b-bus` loses the store-era RSS fixture
+(`src/production_rss.rs`, its feature, `[[test]]` and BUILD targets) and
+`tests/production_watch_rss.rs`; `d2bd`/`d2bd-runtime` lose the durable store
+provisioning, the durable status/authority/controller-checkpoint helpers, and
+the `Durable` arm of the guest store backend.
+
+**Manifests, Bazel and generated inputs.** Root `Cargo.toml`, `Cargo.lock`,
+`Cargo.guest.lock`, `flake.nix`'s guest source copy list, the root
+`BUILD.bazel`, `bazel/checks/BUILD.bazel` and the affected package
+`BUILD.bazel` files drop the deleted crates and their edges; the deleted
+toolkit targets (`d2b_controller_toolkit_test_support`, `production_watch`,
+`reaction`, `reaction_test`), the bus targets (`production_watch_rss`,
+`d2b_bus_production_rss_fixture`, the `integration` suite) and the nine
+core-controller test targets left their packages, and a static sweep of all 84
+`BUILD.bazel` files finds zero references to any deleted crate or target (the
+one unresolved label it reports, `//bazel/checks/nix:nix_unit`, is
+macro-generated at `bazel/checks/nix/defs.bzl:323`). `packages/policy-inputs/**`
+is regenerated with the repo's own tool - `cargo xtask
+gen-package-policy-inputs --write` then `--check` exits 0 - and the register
+drops from 357 to 354 packages (the two store crates and `redb`).
+`docs/reference/daemon-api.md` is unaffected and its drift gate green: the
+generator reads only `d2b-contracts`, `d2b-contracts-broker` and
+`d2b-contracts-control`, none of which this unit touched.
+
+**Gate evidence.** `cargo check --workspace --all-targets` is clean, and so is
+that command with the nine `test-support` features enabled - the feature set
+the Bazel `*_test_support` libraries compile with, and the reason the first
+gate run was red. The cut left one `#[cfg(feature = "test-support")]`
+`bind_operator_resource_client_for_test` in
+`packages/d2bd/src/resource_runtime.rs` whose callee it had deleted: Cargo does
+not enable optional features under `--all-targets`, so the split-brain was
+invisible until `//packages/d2bd:d2bd_lib_test_support`
+(`packages/d2bd/BUILD.bazel:168`) compiled it and
+`//packages/d2bd:daemon_state_persistence` failed to build. The orphan is
+deleted (nothing called it) and both feature sets now compile. `make check` is
+green: `Executed 55 out of 453 tests: 453 tests pass.` (`INFO: Found 453 test
+targets`, `Build completed successfully`).
+
+**Restart recovery is re-derivation, not replay (R16).** The
+generation-publication barrier and the controller-session evidence were the two
+pieces of state the durable store owned, and both are process-local now (see
+the reductions below). What re-establishes them after a `d2bd` restart is
+recomputation and driver recovery, not a replayed checkpoint: the composition
+path re-reads each Zone's bundle and authority identity, recomputes
+`set_generation = complete_generation_set_digest(...)`, and re-prepares and
+re-commits the publication marker in the fresh ledger before any plane activates
+(`packages/d2bd/src/composition.rs` generation-preparation and
+`prepare_generation_publication`/`commit_generation_publication`,
+`packages/d2bd/src/resource_runtime.rs`), and each converted driver re-adopts its
+live child through probe/adopt. The activation lane is the proof for the
+controller half: its `process-adopted-after-restart` stage asserts that the
+external provider controller keeps its PID across `systemctl restart
+d2bd.service` and that its Process row comes back with the *same* uid and
+generation, `phase: Ready` and `observedGeneration == generation`, and
+`process-resynced-after-restart` re-asserts the same row at least 20s later
+(`tests/host-integration/resource-operator-activation.nix`), i.e. the daemon
+re-established the controller session from the live process rather than from a
+stored checkpoint. What the lane does *not* cover is stated as an open item
+below: the ledger's in-flight operations and claims are not replayed, and the
+"one complete generation set across restart" property now rests on the
+recomputation plus the unit test
+`generation_publication_marker_binds_one_complete_set_across_restart` rather
+than on durable replay.
+
+**Host-integration lane (2026-09-12, one run).**
+`D2B_VM_CHECK="resource-operator-activation runtime-cloud-hypervisor-guest-preflight"
+make test-host-integration`: `resource-operator-activation` **PASS** 97s,
+`runtime-cloud-hypervisor-guest-preflight` **FAIL** 421s. The activation fixture
+passed every stage, including `boot`, `daemon-up`, `provider-session-live`,
+`network-controller-process`, `controller-pid`, `restart`,
+`process-adopted-after-restart` (t=35.2s), `process-resynced-after-restart`
+(t=35.6s, after the >=20s resync window) and its teardown stages, so the store
+removal did not break startup, adoption across a restart, or teardown. The
+preflight failed at `nested-vmm-api-socket`: `Cloud Hypervisor API socket did
+not become ready within 180s`, first explained by `WARN
+d2bd::process_driver: process launch failed resource=Process/vol-vfd-<id>
+provider=Provider/system-minijail
+error=provider-ticket:serving-view-root-unsupported` - the Guest system
+Volume's `virtiofsd-worker` cannot compose a launch ticket because the
+serving-worker mapping in `packages/d2bd/src/process_driver.rs` produces a
+storage path id only for a `LocalPath` source and that Volume's source is
+`nix-closure`, which leaves the layout effect at
+`volume-layout-effect-failed ... note=source-unresolved` on
+`Volume/acceptance-guest-system`. This is **not** attributable to this unit's
+cut: the mapping and the anchor registry that failure passes through are
+byte-identical to `cc259b8e3` (the mapping dates from the 2026-09-10 baseline
+commit `04293d7f5`; `reload_registry`/`refresh_registry` keep their call
+sites), no U14 hunk touches the volume-source or provider-ticket paths, and the
+fixture assertions that reach the system Volume landed with `9a23ae635`
+(2026-09-11 22:36), after the green `runtime-cloud-hypervisor-guest-preflight`
+run recorded in the U13 status above. It is left red and reported rather than
+worked around: it belongs to the store-view / Guest system Volume subsystem
+(U11/U13), not to the store cutover, and U14's own acceptance evidence is the
+activation fixture that exercises the removed store's runtime paths.
+
+**Deliberate semantic reductions (recorded, not accidental).** (1) Zone
+authority operations - including the generation-publication barrier - are owned
+by the process-local `ZoneAuthorityLedger`
+(`packages/d2bd-runtime/src/authority_persistence.rs`): the admission barrier
+still serializes concurrent operations and fences a conflicting generation
+inside one daemon lifetime, but a restart starts from an empty ledger, so the
+barrier can no longer prove what a *previous* process committed; the
+consequence is bounded by the re-derivation described above and by the drivers'
+refusal to assume an unproven claim. (2) Host-global GPU and external-NIC
+claims lose crash recovery of in-flight claims: a daemon crash releases a claim
+the durable adapter kept reserved until its owner released it, and the next boot
+re-derives owners through probe/adopt and refuses a claim it cannot re-prove.
+(3) `interaction_effects`'s `fresh_audio_dependency`
+(`packages/d2bd/src/resource_runtime/interaction_effects.rs`) validates the
+authoritative row itself - identity, ownership, Zone - and no longer re-checks a
+persisted assignment fence, because no persisted status exists to compare
+against; a stale persisted status can therefore neither veto nor authorize an
+assignment any more. (4) Guest-local authority and watch answers are
+memory-backed and target-local only (`GuestResourceStore`,
+`packages/d2bd-runtime/src/guest_resource_runtime.rs`): the constructors no
+longer take a state directory, Zone-authority types are refused at the boundary
+rather than served, and a target-local restart rebuilds its rows from the host,
+the only binding domain of record. Each of these is stated in
+`changelog.d/2026-09-12-u14-store-removal.md` so it is reviewed as a choice.
+
+**Open items (not closed by U14).** The host-integration lane is not green:
+`runtime-cloud-hypervisor-guest-preflight` fails at `nested-vmm-api-socket`
+(see the lane note above) on the Guest system Volume's `nix-closure` source,
+which the serving-worker ticket mapping does not cover
+(`packages/d2bd/src/process_driver.rs`, the `storage_path_id` match) - a
+store-view / volume-source gap to close in the U11/U13 subsystem, tracked here
+because the U14 acceptance asked for both vmChecks and only the activation one
+proves the store removal. The broker's zone-store handover still
+exists: `BrokerRequest::OpenZoneStore` and its handler
+(`packages/d2b-broker/src/runtime.rs`, `src/ops/zone_store.rs`,
+`packages/d2b-contracts-broker/src/broker_wire.rs`) plus the now-consumerless
+`packages/d2bd-runtime/src/resource_store_runtime.rs` (`OpenedZoneStore`,
+`MAX_ZONE_RUNTIMES`); the daemon no longer sends the op, so retiring it is a
+broker-wire decision (it is named in the broker profile fixtures
+`packages/d2b-broker/tests/{host,guest}_profile.rs`) rather than a store
+cutover. The Phase A type partition is down to its vocabulary:
+`d2b-contracts/src/identity.rs`'s `ResourcePlane`/`WrongPlane` are still live
+through `d2bd`'s `child_plane_refusal`
+(`packages/d2bd/src/resource_runtime/plane_controller_bridge.rs`), while
+`refuse_wrong_plane`/`refuse_legacy_subject` now have no caller outside that
+file's own tests and `V3_CONVERTED_RESOURCE_TYPES` survives mainly as the
+test-enumerated registry of converted types; collapsing or renaming them is the
+follow-up decision unit the toolkit notes recommended, not a U14 deletion.
+Finally, the toolkit's `owner_hints.rs`, `state_migration.rs` and the
+`ControllerDescriptor`/`TriggerSet` surface in `contract.rs` have zero
+production consumers now that the runner is gone - kept because §26 does not
+list them, flagged for the same follow-up.
+
 ### U15. Invariant test completion
 
 - **Goal:** The spec §36 test matrix lives against the new runtime; obsolete suites are gone.
@@ -1948,7 +2125,11 @@ this session's verification runs.
   store-view Volume; see U11). R29 does not hold yet - two execution
   models coexist (U14 not landed; `d2b-resource-store`, `-redb` and the
   controller-toolkit runner machinery are still in the Bazel graph). No
-  claim of R1-R38 completeness.
+  claim of R1-R38 completeness. **Update (2026-09-12): U14 has since landed
+  - the two crates and the runner machinery are deleted, one execution model
+  remains and `make check` is green (453/453); see the U14 status above for
+  the deletions, the deliberate semantic reductions and the one lane
+  failure that is still open.**
 - **Phase A exit: satisfied.** AE7's two fixtures pass on a real host: the
   Process slice (`resource-operator-activation`, green on every run this
   session) and the Volume-with-owned-children slice

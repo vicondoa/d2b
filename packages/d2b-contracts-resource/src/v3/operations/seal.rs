@@ -1,12 +1,16 @@
 //! Store-owned capability for one verified mutation commit.
+//!
+//! The seal pairs one admission-time issuer with the acceptor the resource
+//! plane holds, so a mutation reaches storage only after external
+//! authorization produced the evidence for exactly this store identity.
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{ResourceUid, RetryClass, ZoneId};
+use crate::v3::{ResourceUid, RetryClass, ZoneId};
 
-use crate::{
-    AdmittedAuthorization, PolicySnapshot, PreparedStoreMutation, SealIdentityMismatch, StoreError,
-    StoreErrorKind, StoreOperationContext, StoreSlot,
+use super::{
+    AdmittedAuthorization, PolicySnapshot, PreparedStoreMutation, StoreOperationContext, StoreSlot,
+    error::{SealIdentityMismatch, StoreError, StoreErrorKind},
 };
 
 mod authority {
@@ -18,7 +22,7 @@ mod authority {
 /// Store identities are intentionally opaque to downstream code:
 ///
 /// ```compile_fail
-/// use d2b_resource_store::StoreSealIdentity;
+/// use StoreSealIdentity;
 ///
 /// fn display(identity: StoreSealIdentity) {
 ///     let _ = format!("{identity}");
@@ -26,7 +30,7 @@ mod authority {
 /// ```
 ///
 /// ```compile_fail
-/// use d2b_resource_store::StoreSealIdentity;
+/// use StoreSealIdentity;
 ///
 /// fn compare(left: StoreSealIdentity, right: StoreSealIdentity) {
 ///     let _ = left == right;
@@ -78,7 +82,7 @@ pub struct MutationSealBody {
 /// Only the paired acceptor can consume this evidence:
 ///
 /// ```compile_fail
-/// use d2b_resource_store::SealedMutation;
+/// use SealedMutation;
 ///
 /// fn inspect(sealed: SealedMutation) {
 ///     let _ = sealed.body;
@@ -88,7 +92,7 @@ pub struct MutationSealBody {
 /// The evidence cannot be cloned or formatted by downstream code:
 ///
 /// ```compile_fail
-/// use d2b_resource_store::SealedMutation;
+/// use SealedMutation;
 ///
 /// fn clone(sealed: SealedMutation) {
 ///     let _ = sealed.clone();
@@ -96,7 +100,7 @@ pub struct MutationSealBody {
 /// ```
 ///
 /// ```compile_fail
-/// use d2b_resource_store::SealedMutation;
+/// use SealedMutation;
 ///
 /// fn debug(sealed: SealedMutation) {
 ///     let _ = format!("{sealed:?}");
@@ -134,7 +138,7 @@ pub struct MutationSealIssuer {
 /// The acceptor is an instance-bound capability and cannot be cloned:
 ///
 /// ```compile_fail
-/// use d2b_resource_store::mutation_seal::MutationSealAcceptor;
+/// use operations::seal::MutationSealAcceptor;
 ///
 /// fn clone(acceptor: MutationSealAcceptor) {
 ///     let _ = acceptor.clone();
@@ -240,34 +244,36 @@ fn diagnose_identity(
 
 #[test]
 fn open_rejects_same_authority_with_mismatched_declared_identity() {
-    let slot = crate::StoreSlot::new(7).unwrap();
-    let zone = d2b_contracts_resource::v3::ZoneId::parse("work").unwrap();
+    use crate::v3::{ConfigurationGeneration, ResourceRef};
+
+    let slot = StoreSlot::new(7).unwrap();
+    let zone = ZoneId::parse("work").unwrap();
     let (issuer, acceptor) = mutation_seal_pair(StoreSealIdentity::new(
         slot,
         zone.clone(),
-        d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+        ResourceUid::parse("11111111-1111-4111-8111-111111111111")
             .unwrap(),
     ));
     let mut sealed = issuer.seal(MutationSealBody {
         mutations: Vec::new(),
-        authorization: crate::AdmittedAuthorization {
+        authorization: AdmittedAuthorization {
             zone: zone.clone(),
-            subject_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-core")
+            subject_ref: ResourceRef::parse("Provider/system-core")
                 .unwrap(),
-            subject_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+            subject_uid: ResourceUid::parse(
                 "33333333-3333-4333-8333-333333333333",
             )
             .unwrap(),
             targets: Vec::new(),
         },
-        policy_snapshot: crate::PolicySnapshot {
+        policy_snapshot: PolicySnapshot {
             policy_revision: 7,
             api_catalog_revision: 8,
             active_configuration_revision:
-                d2b_contracts_resource::v3::ConfigurationGeneration::new(9).unwrap(),
+                ConfigurationGeneration::new(9).unwrap(),
             controller_generation: None,
         },
-        operation: crate::StoreOperationContext {
+        operation: StoreOperationContext {
             operation_id: "open".to_owned(),
             idempotency_key: None,
             correlation_id: "open".to_owned(),
@@ -278,7 +284,7 @@ fn open_rejects_same_authority_with_mismatched_declared_identity() {
     sealed.store = StoreSealIdentity::new(
         slot,
         zone,
-        d2b_contracts_resource::v3::ResourceUid::parse("44444444-4444-4444-8444-444444444444")
+        ResourceUid::parse("44444444-4444-4444-8444-444444444444")
             .unwrap(),
     );
 

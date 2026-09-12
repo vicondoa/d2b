@@ -393,6 +393,23 @@ fn identity_changed_error(mismatches: Vec<String>) -> String {
     format!("provider-process-identity-changed:{}", mismatches.join(","))
 }
 
+/// Where one serving worker's served view root comes from.
+///
+/// A local-path Volume's root is derived from the trusted storage path row
+/// its source policy names; a `nix-closure` Volume's bytes live in the
+/// broker-managed per-Guest store-view hardlink farm instead, which the
+/// bundle names through the Guest's store-view intent (`store-view/live`,
+/// the `ro-store` share's preserved redirect). A source kind neither of
+/// those names keeps no root at all: the ticket refuses rather than serving
+/// an unnamed subtree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ServingWorkerRoot {
+    /// Trusted storage path row id (`path:<policy>`) for a local-path source.
+    StoragePath(String),
+    /// The broker-managed store-view farm of the ticket's target Guest.
+    StoreViewFarm,
+}
+
 /// Binding-declared launch inputs for one binding-owned serving worker.
 ///
 /// The Process controller composes the worker's arguments from the owning
@@ -407,8 +424,9 @@ pub(crate) struct ServingWorkerLaunch {
     pub(crate) view: BoundedToken,
     /// Attachment execution target (the ticket's guest target ref).
     pub(crate) guest_ref: ResourceRef,
-    /// Trusted storage path row id (`path:<policy>`) for a local-path source.
-    pub(crate) storage_path_id: Option<String>,
+    /// Trusted root the served view is anchored at, when the source kind has
+    /// one this daemon may derive.
+    pub(crate) root: Option<ServingWorkerRoot>,
     /// View-relative path within the Volume root.
     pub(crate) view_path: String,
     /// Attachment access declared by the binding.
@@ -2158,44 +2176,6 @@ impl ProductionProcessProviders {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
-    pub(crate) fn attach_controller_provider_context_for_test(
-        &self,
-        zone: ZoneId,
-        process_ref: ResourceRef,
-        process_uid: ResourceUid,
-        process_generation: ResourceGeneration,
-        process_provider_ref: ResourceRef,
-        provider_owner_ref: ResourceRef,
-        provider_uid: ResourceUid,
-        provider_generation: ResourceGeneration,
-        execution_ref: ResourceRef,
-        controller_generation: ControllerGeneration,
-    ) -> Result<(), String> {
-        let context = ControllerBootstrapContext {
-            zone: zone.clone(),
-            zone_uid: None,
-            process_ref: process_ref.clone(),
-            process_uid,
-            generation: process_generation,
-            process_identity: ProcessIdentityDigest::from_bytes([7; 32]),
-            process_provider_ref,
-            provider_owner_ref,
-            provider_uid,
-            provider_generation,
-            execution_ref,
-            user_ref: None,
-            controller_generation,
-        };
-        self.controller_bootstrap
-            .lock()
-            .map_err(|_| "provider-managed-state-poisoned".to_owned())?
-            .insert(
-                (zone, process_ref),
-                ControllerBootstrapMarker::Active(context),
-            );
-        Ok(())
-    }
 
     pub(crate) fn controller_bootstrap_establishing_contexts(
         &self,
@@ -3533,17 +3513,42 @@ fn serving_worker_launch_args(
         &launch.guest_ref,
     )
     .ok_or_else(|| "provider-ticket:serving-socket-path-unresolved".to_owned())?;
-    let storage_path_id = launch
-        .storage_path_id
-        .as_deref()
+    let root = launch
+        .root
+        .as_ref()
         .ok_or_else(|| "provider-ticket:serving-view-root-unsupported".to_owned())?;
-    let shared_dir = bundle
-        .resolve_volume_view_root(
-            storage_path_id,
-            launch.volume_ref.name().as_str(),
-            &launch.view_path,
-        )
-        .ok_or_else(|| "provider-ticket:serving-view-root-unresolved".to_owned())?;
+    let shared_dir = match root {
+        ServingWorkerRoot::StoragePath(storage_path_id) => bundle
+            .resolve_volume_view_root(
+                storage_path_id,
+                launch.volume_ref.name().as_str(),
+                &launch.view_path,
+            )
+            .ok_or_else(|| "provider-ticket:serving-view-root-unresolved".to_owned())?,
+        // A closure-sourced Volume is served out of the broker-managed
+        // per-Guest store-view farm (`store-view/live`; the preserved
+        // `ro-store` redirect), never out of a bundle-declared storage path.
+        ServingWorkerRoot::StoreViewFarm => {
+            let intent = bundle
+                .find_store_view_intent_for_zone(zone, launch.guest_ref.name().as_str())
+                .ok_or_else(|| "provider-ticket:serving-store-view-intent-unresolved".to_owned())?;
+            if launch.view_path.starts_with('/') {
+                return Err("provider-ticket:serving-view-path-invalid".to_owned());
+            }
+            let mut farm = intent.hardlink_farm_path.clone();
+            if !launch.view_path.is_empty() {
+                farm.push(&launch.view_path);
+            }
+            farm
+        }
+    };
+    if !shared_dir.is_absolute()
+        || shared_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("provider-ticket:serving-view-root-unresolved".to_owned());
+    }
     // The worker binds its private socket as the in-namespace principal; the
     // directory is realized before the launch (old-plane runtime-dir prep).
     if let Some(parent) = socket_path.parent() {

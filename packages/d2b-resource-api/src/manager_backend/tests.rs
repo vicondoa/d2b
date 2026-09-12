@@ -29,7 +29,7 @@ use crate::authz::{
     NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
     ResourceVerb, BindingScope, BoundSubject, derive_bootstrap_phase,
 };
-use d2b_resource_store::StoreSealIdentity;
+use d2b_contracts_resource::v3::StoreSealIdentity;
 use d2b_resource_runtime::watch::WatchHub;
 
 const TEST_ZONE: &str = "dev";
@@ -76,7 +76,7 @@ fn subject() -> Arc<AuthenticatedSubjectContext> {
 
 fn authorization_state() -> AuthorizationState {
     AuthorizationState {
-        snapshot: d2b_resource_store::PolicySnapshot {
+        snapshot: d2b_contracts_resource::v3::PolicySnapshot {
             policy_revision: 4,
             api_catalog_revision: 5,
             active_configuration_revision: ConfigurationGeneration::new(6).unwrap(),
@@ -264,7 +264,7 @@ async fn manager_fixture() -> ManagerFixture {
 
 fn seal_identity() -> StoreSealIdentity {
     StoreSealIdentity::new(
-        d2b_resource_store::StoreSlot::new(0).unwrap(),
+        d2b_contracts_resource::v3::StoreSlot::new(0).unwrap(),
         ZoneId::parse(TEST_ZONE).unwrap(),
         ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
     )
@@ -954,7 +954,7 @@ fn every_converted_type_projects_a_strict_wire_view() {
 async fn every_converted_type_is_served_by_the_manager_path() {
     use crate::ResourceStoreBackend;
     use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
-    use d2b_resource_store::{StoreGetRequest, StoreOperationContext, StoreProjection};
+    use d2b_contracts_resource::v3::{StoreGetRequest, StoreOperationContext, StoreProjection};
 
     let fixture = manager_fixture().await;
     let authorizer = authorizer(&[ResourceVerb::Get]);
@@ -1396,7 +1396,7 @@ async fn admission_subjects_are_constructed_for_all_three_surfaces() {
     let fixture = manager_fixture().await;
     // The API subject derives from the authorization evidence the evaluator
     // captured, so admission at the manager boundary carries the real caller.
-    let authorization = d2b_resource_store::AdmittedAuthorization {
+    let authorization = d2b_contracts_resource::v3::AdmittedAuthorization {
         zone: ZoneId::parse(TEST_ZONE).unwrap(),
         subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
         subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
@@ -1666,7 +1666,7 @@ fn allow_and_deny_still_enforced_from_the_compiled_fixture_matrix() {
     let authorizer = Arc::new(NativeAuthorizer::new(catalog.clone(), Some(policy)).unwrap());
     let context = subject();
     let state = AuthorizationState {
-        snapshot: d2b_resource_store::PolicySnapshot {
+        snapshot: d2b_contracts_resource::v3::PolicySnapshot {
             policy_revision: 1,
             api_catalog_revision: 5,
             active_configuration_revision: ConfigurationGeneration::new(6).unwrap(),

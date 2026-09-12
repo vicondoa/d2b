@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneRevision};
 
-use crate::{controller_assignment::OwnerChildScope, hints::HintTarget};
+use crate::{ResourceKey, controller_assignment::OwnerChildScope};
 
 /// Maximum dependency references on one owned child.
 pub const MAX_OWNER_CHILD_DEPENDENCIES: usize = 64;
@@ -220,7 +220,7 @@ pub type OwnedChildIntent = DesiredChild;
 /// One complete observed child-index row.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ObservedChild {
-    target: HintTarget,
+    target: ResourceKey,
     revision: ZoneRevision,
     payload_digest: String,
     deletion_requested: bool,
@@ -236,7 +236,7 @@ pub struct ObservedChild {
 impl ObservedChild {
     /// Construct an observed index row.
     pub fn new(
-        target: HintTarget,
+        target: ResourceKey,
         revision: ZoneRevision,
         payload_digest: impl Into<String>,
         deletion_requested: bool,
@@ -246,7 +246,7 @@ impl ObservedChild {
 
     /// Construct an observed index row with the complete deletion state.
     pub fn with_deletion_state(
-        target: HintTarget,
+        target: ResourceKey,
         revision: ZoneRevision,
         payload_digest: impl Into<String>,
         deletion_requested: bool,
@@ -278,8 +278,8 @@ impl ObservedChild {
 
     /// Construct an observed child with the exact admitted owner identity.
     pub fn with_owner(
-        target: HintTarget,
-        owner: &HintTarget,
+        target: ResourceKey,
+        owner: &ResourceKey,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         revision: ZoneRevision,
         payload_digest: impl Into<String>,
@@ -300,8 +300,8 @@ impl ObservedChild {
     /// Construct an observed child with owner identity and dependency edges.
     #[allow(clippy::too_many_arguments)]
     pub fn with_owner_and_dependencies(
-        target: HintTarget,
-        owner: &HintTarget,
+        target: ResourceKey,
+        owner: &ResourceKey,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         revision: ZoneRevision,
         payload_digest: impl Into<String>,
@@ -325,7 +325,7 @@ impl ObservedChild {
     /// Construct an observed child from explicit owner identity values.
     #[allow(clippy::too_many_arguments)]
     pub fn with_owner_identity(
-        target: HintTarget,
+        target: ResourceKey,
         owner_ref: ResourceRef,
         owner_uid: ResourceUid,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
@@ -408,7 +408,7 @@ impl ObservedChild {
     }
 
     /// Borrow the indexed target.
-    pub const fn target(&self) -> &HintTarget {
+    pub const fn target(&self) -> &ResourceKey {
         &self.target
     }
 
@@ -551,7 +551,7 @@ impl core::fmt::Debug for OwnerMutation {
 /// Complete desired-vs-observed owner plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerReconcilePlan {
-    owner: HintTarget,
+    owner: ResourceKey,
     mutations: Vec<OwnerMutation>,
     pending: bool,
     creation_order: Vec<ResourceRef>,
@@ -561,7 +561,7 @@ pub struct OwnerReconcilePlan {
 
 impl OwnerReconcilePlan {
     /// Borrow the owner incarnation this plan addresses.
-    pub const fn owner(&self) -> &HintTarget {
+    pub const fn owner(&self) -> &ResourceKey {
         &self.owner
     }
 
@@ -631,7 +631,7 @@ impl OwnerReconcilePlan {
 /// A bounded, UID-free related-child create batch.
 #[derive(Clone, PartialEq, Eq)]
 pub struct OwnerChildBatch {
-    owner: HintTarget,
+    owner: ResourceKey,
     owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
     children: Vec<DesiredChild>,
     refs: Vec<ResourceRef>,
@@ -640,7 +640,7 @@ pub struct OwnerChildBatch {
 impl OwnerChildBatch {
     /// Construct a deterministic batch from UID-free desired children.
     pub fn new(
-        owner: HintTarget,
+        owner: ResourceKey,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         children: impl IntoIterator<Item = DesiredChild>,
     ) -> Result<Self, OwnerReconcileError> {
@@ -674,7 +674,7 @@ impl OwnerChildBatch {
     }
 
     /// Borrow the exact owner incarnation for this batch.
-    pub const fn owner(&self) -> &HintTarget {
+    pub const fn owner(&self) -> &ResourceKey {
         &self.owner
     }
 
@@ -958,9 +958,9 @@ impl TeardownPlan {
 /// Complete owner index, replaced only by an authoritative relist.
 pub struct OwnerIndex {
     limits: OwnerLimits,
-    children: BTreeMap<HintTarget, BTreeMap<ResourceRef, ObservedChild>>,
-    owner_generations: BTreeMap<HintTarget, d2b_contracts_resource::v3::ResourceGeneration>,
-    owner_revisions: BTreeMap<HintTarget, ZoneRevision>,
+    children: BTreeMap<ResourceKey, BTreeMap<ResourceRef, ObservedChild>>,
+    owner_generations: BTreeMap<ResourceKey, d2b_contracts_resource::v3::ResourceGeneration>,
+    owner_revisions: BTreeMap<ResourceKey, ZoneRevision>,
 }
 
 impl OwnerIndex {
@@ -977,7 +977,7 @@ impl OwnerIndex {
     /// Replace one owner's complete child set.
     pub fn relist(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
         self.relist_inner(owner, None, None, observed, false)
@@ -986,7 +986,7 @@ impl OwnerIndex {
     /// Replace an owner's complete relist while requiring its generation.
     pub fn relist_with_owner_generation(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
@@ -996,7 +996,7 @@ impl OwnerIndex {
     /// Replace a relist after validating the exact U10 owner-child admission.
     pub fn relist_for_admission(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         scope: &OwnerChildScope,
         observed: Vec<ObservedChild>,
     ) -> Result<(), OwnerReconcileError> {
@@ -1014,7 +1014,7 @@ impl OwnerIndex {
 
     fn relist_inner(
         &mut self,
-        owner: HintTarget,
+        owner: ResourceKey,
         owner_generation: Option<d2b_contracts_resource::v3::ResourceGeneration>,
         owner_revision: Option<ZoneRevision>,
         observed: Vec<ObservedChild>,
@@ -1053,7 +1053,7 @@ impl OwnerIndex {
     /// Compare complete desired children with the latest relist.
     pub fn plan(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         desired: Vec<DesiredChild>,
     ) -> Result<OwnerReconcilePlan, OwnerReconcileError> {
         if desired.len() > self.limits.max_work_items {
@@ -1195,7 +1195,7 @@ impl OwnerIndex {
     /// Plan a complete UID-free child intent set.
     pub fn plan_intents(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         desired: impl IntoIterator<Item = OwnedChildIntent>,
     ) -> Result<OwnerReconcilePlan, OwnerReconcileError> {
         self.plan(owner, desired.into_iter().collect())
@@ -1204,7 +1204,7 @@ impl OwnerIndex {
     /// Return the pending atomic UID-free create batch for an owner.
     pub fn plan_batch(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         desired: impl IntoIterator<Item = OwnedChildIntent>,
     ) -> Result<Option<OwnerChildBatch>, OwnerReconcileError> {
         Ok(self.plan_intents(owner, desired)?.create_batch().cloned())
@@ -1213,7 +1213,7 @@ impl OwnerIndex {
     /// Validate a plan against an admitted owner-child identity.
     pub fn plan_for_admission(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
         scope: &OwnerChildScope,
         desired: Vec<DesiredChild>,
     ) -> Result<OwnerReconcilePlan, OwnerReconcileError> {
@@ -1252,31 +1252,31 @@ impl OwnerIndex {
     }
 
     /// Return the bounded child-first teardown projection.
-    pub fn teardown_plan(&self, owner: &HintTarget) -> Result<TeardownPlan, OwnerReconcileError> {
+    pub fn teardown_plan(&self, owner: &ResourceKey) -> Result<TeardownPlan, OwnerReconcileError> {
         Ok(self.plan(owner, Vec::new())?.teardown_plan())
     }
 
     /// Number of children in the latest complete relist.
-    pub fn child_count(&self, owner: &HintTarget) -> usize {
+    pub fn child_count(&self, owner: &ResourceKey) -> usize {
         self.children.get(owner).map_or(0, BTreeMap::len)
     }
 
     /// Return the owner generation captured by the latest strict relist.
     pub fn owner_generation(
         &self,
-        owner: &HintTarget,
+        owner: &ResourceKey,
     ) -> Option<d2b_contracts_resource::v3::ResourceGeneration> {
         self.owner_generations.get(owner).copied()
     }
 
     /// Return the owner revision captured by the latest admitted relist.
-    pub fn owner_revision(&self, owner: &HintTarget) -> Option<ZoneRevision> {
+    pub fn owner_revision(&self, owner: &ResourceKey) -> Option<ZoneRevision> {
         self.owner_revisions.get(owner).copied()
     }
 }
 
 fn validate_desired_child(
-    owner: &HintTarget,
+    owner: &ResourceKey,
     child: &DesiredChild,
 ) -> Result<(), OwnerReconcileError> {
     let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(child.canonical_resource())
@@ -1331,7 +1331,7 @@ fn validate_desired_child(
 }
 
 fn validate_observed_owner(
-    owner: &HintTarget,
+    owner: &ResourceKey,
     child: &ObservedChild,
     require_owner_identity: bool,
     owner_generation: Option<d2b_contracts_resource::v3::ResourceGeneration>,
@@ -1622,20 +1622,20 @@ fn mutation_sort_parts<'a>(
 /// One owner-change trigger.
 #[derive(Clone, PartialEq, Eq)]
 pub struct OwnerTrigger {
-    owner: HintTarget,
-    child: HintTarget,
+    owner: ResourceKey,
+    child: ResourceKey,
     revision: ZoneRevision,
     depth: usize,
 }
 
 impl OwnerTrigger {
     /// Borrow the owner target.
-    pub const fn owner(&self) -> &HintTarget {
+    pub const fn owner(&self) -> &ResourceKey {
         &self.owner
     }
 
     /// Borrow the changed child at this hop.
-    pub const fn child(&self) -> &HintTarget {
+    pub const fn child(&self) -> &ResourceKey {
         &self.child
     }
 
@@ -1673,7 +1673,7 @@ impl core::fmt::Debug for OwnerTrigger {
 /// Acyclic singular-owner graph.
 pub struct OwnerGraph {
     limits: OwnerLimits,
-    parents: BTreeMap<HintTarget, HintTarget>,
+    parents: BTreeMap<ResourceKey, ResourceKey>,
 }
 
 impl OwnerGraph {
@@ -1686,7 +1686,7 @@ impl OwnerGraph {
     }
 
     /// Bind one child to one same-Zone owner.
-    pub fn bind(&mut self, child: HintTarget, owner: HintTarget) -> Result<(), OwnerGraphError> {
+    pub fn bind(&mut self, child: ResourceKey, owner: ResourceKey) -> Result<(), OwnerGraphError> {
         if child == owner || child.zone() != owner.zone() {
             return Err(OwnerGraphError::InvalidBinding);
         }
@@ -1707,14 +1707,14 @@ impl OwnerGraph {
     }
 
     /// Remove a child binding.
-    pub fn unbind(&mut self, child: &HintTarget) -> bool {
+    pub fn unbind(&mut self, child: &ResourceKey) -> bool {
         self.parents.remove(child).is_some()
     }
 
     /// Propagate one durable mutation to every bounded ancestor.
     pub fn propagate(
         &self,
-        changed_child: &HintTarget,
+        changed_child: &ResourceKey,
         revision: ZoneRevision,
     ) -> Result<Vec<OwnerTrigger>, OwnerGraphError> {
         if revision.get() == 0 {
@@ -1743,14 +1743,14 @@ impl OwnerGraph {
     }
 
     /// Remove every binding whose child or owner belongs to a withdrawn set.
-    pub fn withdraw(&mut self, resources: &BTreeSet<HintTarget>) -> usize {
+    pub fn withdraw(&mut self, resources: &BTreeSet<ResourceKey>) -> usize {
         let before = self.parents.len();
         self.parents
             .retain(|child, owner| !resources.contains(child) && !resources.contains(owner));
         before - self.parents.len()
     }
 
-    fn validate_from(&self, child: &HintTarget) -> Result<(), OwnerGraphError> {
+    fn validate_from(&self, child: &ResourceKey) -> Result<(), OwnerGraphError> {
         let mut current = child;
         let mut visited = BTreeSet::from([child.clone()]);
         let mut depth = 0;
@@ -1853,8 +1853,8 @@ mod tests {
 
     use super::*;
 
-    fn target(zone: &str, resource_type: &str, name: &str, suffix: u8) -> HintTarget {
-        HintTarget::new(
+    fn target(zone: &str, resource_type: &str, name: &str, suffix: u8) -> ResourceKey {
+        ResourceKey::new(
             ZoneId::parse(zone).unwrap(),
             ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
             ResourceUid::parse(format!("123e4567-e89b-42d3-a456-4266141740{suffix:02}")).unwrap(),
@@ -2244,7 +2244,7 @@ mod tests {
         )
         .unwrap();
         let observed = ObservedChild::new(
-            HintTarget::new(
+            ResourceKey::new(
                 ZoneId::parse("work").unwrap(),
                 ResourceRef::parse(&format!("Process/{NAME}")).unwrap(),
                 ResourceUid::parse(UID).unwrap(),

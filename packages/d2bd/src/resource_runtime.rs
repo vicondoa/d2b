@@ -1,16 +1,14 @@
 //! Production Zone resource-plane ownership for `d2bd`.
 //!
-//! A Zone runtime is opened only from the broker's opaque
-//! [`d2b_contracts_broker::broker_wire::OpenZoneStoreRequest`]. The broker owns path
-//! resolution and returns one
-//! close-on-exec database descriptor; this module consumes that descriptor
-//! into the production redb backend and never opens a caller-supplied path.
-//! The runtime owns the API, core-process readiness, and restart lifecycle as
-//! one Zone-scoped value.
+//! U14: the durable store is gone. A Zone runtime opens from its verified
+//! bundle authority alone and is completed when the composition publishes
+//! the Zone's manager plane ([`ZoneResourceRuntime::attach_v3_planes`], then
+//! [`ZoneResourceRuntime::activate_published_bundle`]). The runtime owns the
+//! API, core-process readiness, and restart lifecycle as one Zone-scoped
+//! value.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::File,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -19,8 +17,6 @@ use std::{
 
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::audio_resource_runtime::{AudioBindingRuntimeStatus, AudioResourceRuntime};
 use crate::credential_driver::{
@@ -31,29 +27,22 @@ use crate::credential_resource_runtime::{
     CredentialSession, CredentialSessionRegistry, ComponentCredentialSession,
     is_credential_provider_ref,
 };
-use crate::process_resource_runtime::{ProcessResourceRuntimeError, list_process_resources};
 use async_trait::async_trait;
-use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusIngress, CommittedControllerProcessSubjectInput,
     CommittedInteractionSubjectInstall, CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
 };
 #[cfg(test)]
-use d2b_contracts_broker::broker_wire::OpenZoneStoreResponse;
-use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
-#[cfg(test)]
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
-#[cfg(test)]
-use d2b_contracts_resource::v3::ConfigurationGeneration;
 use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext, BindingDigest, EvidenceClass, ReconnectGeneration,
 };
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, DesiredLifecycle,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
-    ResourceErrorKind, ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
     ZoneId, ZoneRevision,
     process::ProcessSpec,
     volume::VolumeSpec,
@@ -61,10 +50,12 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_resource::v3::guest::GuestSpec;
 use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
-    AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
-    ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
+    AuthorityOperationState, AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest,
+    ExternalNicReservation, HostGlobalAuthorityIndex,
 };
-use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
+use d2b_core_controller::authority_persistence::{
+    AuthorityPersistence, AuthorityRecoveryCoordinator,
+};
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest, AssignmentTarget,
     CONTROLLER_ASSIGNMENT_STREAM_CREDIT, CONTROLLER_ASSIGNMENT_STREAM_ID,
@@ -72,7 +63,6 @@ use d2b_core_controller::controller_assignment::{
     ResourceClientLease,
 };
 use d2b_core_controller::controllers::HandlerPhase;
-use d2b_core_controller::SourceError;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
@@ -107,20 +97,11 @@ use d2b_provider_runtime_cloud_hypervisor::{
     VerifiedGuestSetupDescriptor, deterministic_child_ref,
 };
 use d2b_resource_api::{
-    RedbBackend, ResourceApiClient, ResourceBusAdapter, ResourceService, ResourceStoreBackend,
+    ResourceApiClient, ResourceBusAdapter, ResourceService,
     authz::{AuthorizationState, BoundSubject, NativeAuthorizer, PolicySet},
-    registered::{AssignmentFenceResolver, RedbRegisteredControllerApi},
     service::UnavailableUpgradeDispatcher,
 };
-use d2b_resource_store::{
-    PolicySnapshot, ResourceAssignmentFence, ResourceAssignmentScope,
-    StoreError, StoreErrorKind, StoreGetRequest, StoreListRequest,
-    StoreListResult, StoreOperationContext, StoreProjection, StoredResource,
-};
-use d2b_resource_store_redb::{
-    AuthorityOperationState, BrokerEvidenceIndex, LogicalBackup, RedbResourceStore,
-    StoreRuntimeMetadata, write_provisioning_marker,
-};
+use d2b_contracts_resource::v3::{PolicySnapshot, StoredResource, Timestamp};
 use d2b_session::{
     ComponentSessionDriver, HandshakeCredentials, OwnedTransport, SessionDriverHandle,
     SessionEngine, SessionServerError, StreamEvent, StreamId, TransportEvidence,
@@ -130,43 +111,32 @@ use d2b_session_unix::{
     VerifiedUnixPeer, controller_bootstrap_attachment_policy, controller_credit_scopes,
     controller_resource_endpoint_policy, credential_provider_endpoint_policy,
 };
-use d2bd_runtime::authority_persistence::RedbAuthorityPersistence;
+use d2bd_runtime::authority_persistence::ZoneAuthorityLedger;
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
 use d2bd_runtime::resource_operator_activation::{
     Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
     select_wave6_resources,
 };
-#[cfg(test)]
-use d2bd_runtime::resource_runtime_support::compatibility_error_envelope;
 use d2bd_runtime::resource_runtime_support::{
-    AssignmentRegistry, PolicySubjectFingerprint, SystemCoreReconcileResult, ZoneStoreBackend,
+    AssignmentRegistry, PolicySubjectFingerprint, SystemCoreReconcileResult, ZoneApiBackend,
     configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
-    encode_public_list_response, encode_public_resource, ensure_bootstrap_host_resource,
-    ensure_bootstrap_zone_resource, handler_phase_to_zone_phase,
-    initial_policy_snapshot, map_startup_error, materialize_zone_resource_bundle,
-    new_assignment_registry, public_list_request, public_operation_id, public_request_meta,
-    persist_resource_controller_session_evidence, refreshed_policy_subject_fingerprints,
-    register_system_core_session, retry_transient_store_list, retry_transient_store_read,
-    runtime_authorizer, runtime_policy, store_identity,
-    store_identity_for_authority, unix_transport, validate_zone_resource_bundle,
-    validate_zone_self_resource, zone_runtime_metadata,
+    encode_public_list_response, encode_public_resource, handler_phase_to_zone_phase,
+    initial_policy_snapshot, map_startup_error, new_assignment_registry, public_list_request,
+    public_operation_id, public_request_meta, refreshed_policy_subject_fingerprints,
+    register_system_core_session, runtime_authorizer, runtime_policy, unix_transport,
 };
 use d2bd_runtime::guest_component_session::COMPONENT_SESSION_RETRY_BACKOFF;
-pub use d2bd_runtime::resource_runtime_support::{
-    ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status_with_projection,
-};
-use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
+pub use d2bd_runtime::resource_runtime_support::{ZoneRuntimeReadiness, bounded_operation_id};
 use d2bd_runtime::target_runtime::{DaemonMode, ProviderDeployment};
 use d2bd_runtime::zone_authority::{
     ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX, ZoneAuthorityIdentity,
     complete_generation_set_digest,
 };
-#[cfg(test)]
-use nix::unistd::{Uid, User};
 use protobuf::{EnumOrUnknown, MessageField};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 mod volume_effect_adapter;
 pub(crate) mod plane_controller_bridge;
@@ -181,14 +151,8 @@ pub use volume_effect_adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
 pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
-use crate::interaction_driver::INTERACTION_PROVIDER_REFS;
+use crate::interaction_driver::{INTERACTION_PROVIDER_REFS, INTERACTION_TYPES};
 
-/// Bounded attempts to recompile the manager-plane authorization projection
-/// after the Zone's plane is published. Each attempt costs a policy recompile
-/// and a system-core session rebind, so the budget stays small; a public
-/// request that arrives before the manager's subject rows settle retries on a
-const CORE_CONTROLLER_PROCESS_REF: &str = "Process/d2b-core-controller";
-const CORE_CONTROLLER_PROVIDER_REF: &str = "Provider/system-core";
 /// Bounded attempts when a policy-input change races the authorization
 /// policy projection refresh. The projection compiles the committed policy
 /// rows against the policy snapshot; a policy change landing under the
@@ -241,50 +205,14 @@ fn trusted_catalog_resource_types(
 /// schema and stored-record validation (a nonzero epoch) intact.
 pub(super) const ASSIGNMENT_EPOCH: u64 = 1;
 
-#[derive(Clone)]
-pub(super) struct CoreAssignmentAuthority {
-    provider_generation: ResourceGeneration,
-    controller_generation: ControllerGeneration,
-    session_generation: ReconnectGeneration,
-    controller_role: ResourceRef,
-}
-
-/// Whether a converted type's durable mirror may still answer one read
-/// (issue #507).
+/// The manager rows of one type, rendered through the same projection the
+/// manager-backed API serves (U12 reader bridge, mirroring G5).
 ///
-/// Once the zone has published its manager authority, the mirror is never an
-/// authority for a converted type: the manager's answer - the row, or the
-/// honest not-committed absence - is final, so a stale or deleted mirror row
-/// can no longer be served by a reader that forgot the manager-first bridge.
-/// Before publication (legacy boot and unit fixtures) the durable plane still
-/// answers converted rows, which keeps the pre-plane startup path on its
-/// existing behavior. An unconverted type always keeps the durable plane.
-fn durable_fallback_allowed(resource_type: &str, manager_published: bool) -> bool {
-    d2b_contracts::identity::resource_plane(resource_type) == d2b_contracts::identity::ResourcePlane::Legacy
-        || !manager_published
-}
-
-/// The manager rows of one type through a plane-view seam, rendered through
-/// the same projection the manager-backed API serves (U12 reader bridge,
-/// mirroring G5).
-///
-/// Converted types live in the manager, not in the pre-v3 store, so the
-/// readers that still take a store handle merge these in. `None` (no
-/// published plane), an unconverted type, or a manager without the rows
-/// leaves the caller on the durable store path; a manager RPC failure is an
-/// error - never reported as absence.
+/// A manager RPC failure is an error - never reported as absence.
 async fn bridge_manager_rows(
-    plane: Option<&dyn ControllerPlaneView>,
+    plane: &dyn ControllerPlaneView,
     resource_type: &str,
 ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
-    let Some(plane) = plane else {
-        return Ok(Vec::new());
-    };
-    if d2b_contracts::identity::resource_plane(resource_type)
-        != d2b_contracts::identity::ResourcePlane::Manager
-    {
-        return Ok(Vec::new());
-    }
     let views = plane.rows_of_type(resource_type).await.map_err(|error| {
         tracing::warn!(
             resource_type,
@@ -302,111 +230,49 @@ async fn bridge_manager_rows(
         .collect()
 }
 
-/// One converted row read from its authority (the manager), never from the
-/// pre-v3 store.
-///
-/// [`bridge_manager_rows`] keeps the store fallback because it serves readers
-/// whose rows may still live only in the durable plane. A caller reading a
-/// *converted* row's authority wants the opposite contract:
+/// One row read from its authority (the manager).
 ///
 /// - the manager holds the row: it is returned;
 /// - the manager does not hold it: `Ok(None)` - the honest not-committed
 ///   answer, never a store `ResourceNotFound` for a row the store does not
 ///   own;
-/// - the plane is unpublished or the manager RPC fails: an error the caller
-///   retries - never absence.
+/// - the manager RPC fails: an error the caller retries - never absence.
 async fn bridge_manager_row(
-    plane: Option<&dyn ControllerPlaneView>,
+    plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
 ) -> Result<Option<StoredResource>, ResourceRuntimeError> {
-    if d2b_contracts::identity::resource_plane(target.resource_type().as_str())
-        != d2b_contracts::identity::ResourcePlane::Manager
-    {
-        return Err(ResourceRuntimeError::StoreReadFailed);
-    }
-    let plane = plane.ok_or(ResourceRuntimeError::StoreReadFailed)?;
-    Ok(
-        bridge_manager_rows(Some(plane), target.resource_type().as_str())
-            .await?
-            .into_iter()
-            .find(|row| row.resource_ref == *target),
-    )
+    Ok(bridge_manager_rows(plane, target.resource_type().as_str())
+        .await?
+        .into_iter()
+        .find(|row| row.resource_ref == *target))
 }
 
-/// Merge the manager-served rows of one type into a store-shaped reader
-/// result, keyed by resource reference: the manager row wins where both
-/// planes hold the same reference (the manager is the execution authority;
-/// the store copy is the pre-v3 mirror U14 deletes).
-async fn bridge_merge_rows(
-    plane: Option<&dyn ControllerPlaneView>,
-    resource_type: &str,
-    rows: &mut Vec<StoredResource>,
-) -> Result<(), ResourceRuntimeError> {
-    for row in bridge_manager_rows(plane, resource_type).await? {
-        match rows
-            .iter_mut()
-            .find(|existing| existing.resource_ref == row.resource_ref)
-        {
-            Some(existing) => *existing = row,
-            None => rows.push(row),
-        }
-    }
-    Ok(())
-}
-
-/// The multi-type form of [`bridge_merge_rows`].
-async fn bridge_merge_rows_for_types(
-    plane: Option<&dyn ControllerPlaneView>,
-    resource_types: &[&str],
-    rows: &mut Vec<StoredResource>,
-) -> Result<(), ResourceRuntimeError> {
-    for resource_type in resource_types {
-        bridge_merge_rows(plane, resource_type, rows).await?;
-    }
-    Ok(())
-}
-
-/// The committed policy inputs for one Zone, durable rows merged with the
-/// manager-served ones (U12 bridge; the policy loader itself is redb-only).
+/// The committed policy inputs for one Zone: the manager-served rows of the
+/// closed policy type set (U12 bridge).
 ///
-/// Role/RoleBinding/Zone/Provider and the subject rows are converted types,
-/// so the manager is their execution authority; without the merge a
-/// RoleBinding whose Role row has moved to the manager returns
+/// Role/RoleBinding/Zone/Provider and the subject rows are manager rows, so
+/// without them a RoleBinding whose Role row moved returns
 /// `AuthorizationUnavailable` and its subjects are dropped - i.e. the Zone's
-/// committed policy would empty out. A miss on both planes stays the loud,
-/// fail-closed compile failure it is today.
-async fn committed_policy_resources_bridged(
-    zone: &ZoneId,
-    store: &RedbResourceStore,
-    plane: Option<&dyn ControllerPlaneView>,
-    operation_id: &str,
+/// committed policy would empty out. A miss stays the loud, fail-closed
+/// compile failure it is today.
+async fn committed_policy_resources(
+    plane: &dyn ControllerPlaneView,
 ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
-    let mut resources = d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
-        store, zone, operation_id,
-    )
-    .await?;
-    bridge_merge_rows_for_types(
-        plane,
-        &d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES,
-        &mut resources,
-    )
-    .await?;
+    let mut resources = Vec::new();
+    for resource_type in d2bd_runtime::resource_runtime_support::COMMITTED_POLICY_RESOURCE_TYPES {
+        resources.extend(bridge_manager_rows(plane, resource_type).await?);
+    }
     Ok(resources)
 }
 
-/// The committed identities of the requested `Provider` refs, manager rows
-/// first and the durable store only for what the manager does not serve (U12
-/// bridge).
+/// The committed identities of the requested `Provider` refs, read from the
+/// manager.
 ///
 /// The controller session/policy paths compare a bootstrap context against
-/// the committed Provider identity, and `Provider` is a manager row now: the
-/// per-ref durable read would fail closed on every ref whose row moved, so
-/// the manager is consulted first and the store keeps the pre-v3 rows U14
-/// deletes.
-async fn committed_controller_provider_identities_bridged(
+/// the committed Provider identity, and `Provider` is a manager row now.
+async fn committed_controller_provider_identities(
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    plane: Option<&dyn ControllerPlaneView>,
+    plane: &dyn ControllerPlaneView,
     provider_refs: BTreeSet<ResourceRef>,
 ) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
     if provider_refs.is_empty() {
@@ -417,34 +283,20 @@ async fn committed_controller_provider_identities_bridged(
         if !provider_refs.contains(&row.resource_ref) {
             continue;
         }
-        let revision = row.revision;
         let expected_ref = row.resource_ref.clone();
-        let (_, uid, generation, _, _) =
-            committed_provider_spec(zone, revision, &row, &expected_ref)?;
+        let (_, uid, generation, _, _) = committed_provider_spec(zone, &row, &expected_ref)?;
         identities.insert(expected_ref, (uid, generation));
-    }
-    let remaining = provider_refs
-        .iter()
-        .filter(|provider_ref| !identities.contains_key(*provider_ref))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if !remaining.is_empty() {
-        identities.extend(
-            load_committed_controller_provider_identities(zone, store, remaining).await?,
-        );
     }
     Ok(identities)
 }
 
 async fn credential_dependency_facts(
-    store: &RedbResourceStore,
-    zone: &ZoneId,
+    plane: &dyn ControllerPlaneView,
     provider_ref: &ResourceRef,
     execution_ref: &ResourceRef,
 ) -> Option<CredentialDependencyFacts> {
-    let provider = credential_dependency_row(store, zone, provider_ref, "credential-provider").await?;
-    let execution =
-        credential_dependency_row(store, zone, execution_ref, "credential-execution").await?;
+    let provider = credential_dependency_row(plane, provider_ref).await?;
+    let execution = credential_dependency_row(plane, execution_ref).await?;
     Some(CredentialDependencyFacts {
         provider_uid: provider.uid.as_str().to_owned(),
         provider_generation: provider.generation.get(),
@@ -454,28 +306,136 @@ async fn credential_dependency_facts(
 }
 
 async fn credential_dependency_row(
-    store: &RedbResourceStore,
-    zone: &ZoneId,
+    plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
-    operation: &str,
 ) -> Option<StoredResource> {
-    let operation_id = format!("{operation}-{}", target.name().as_str());
-    let request = StoreGetRequest {
-        operation: StoreOperationContext {
-            operation_id: operation_id.clone(),
-            idempotency_key: None,
-            correlation_id: operation_id.clone(),
-            trace_id: None,
-            deadline_ms: 10_000,
-        },
-        zone: zone.clone(),
-        target: target.clone(),
-        expected_uid: None,
-        projection: StoreProjection::Full,
-    };
-    retry_transient_store_read(zone, &operation_id, || store.get(request.clone()))
-        .await
-        .ok()
+    bridge_manager_row(plane, target).await.ok().flatten()
+}
+
+
+/// The policy snapshot the committed manager rows imply (U14).
+///
+/// The durable store metadata that used to carry a Zone's policy snapshot is
+/// gone, so the snapshot a compile is fenced at is derived from the very rows
+/// being compiled: the bootstrap snapshot supplies the fixed catalog and
+/// configuration revisions, and the highest committed row generation becomes
+/// the policy revision. The derivation is not monotone on its own - removing
+/// the row that carried the highest generation lowers the maximum - so a
+/// compile that installs must hold the revision through
+/// [`PolicyProjection::next_policy_revision`].
+fn policy_snapshot_for_rows(
+    resources: &[StoredResource],
+) -> Result<PolicySnapshot, ResourceRuntimeError> {
+    let mut snapshot = initial_policy_snapshot()?;
+    if let Some(generation) = resources
+        .iter()
+        .map(|resource| resource.generation.get())
+        .max()
+    {
+        snapshot.policy_revision = generation.max(snapshot.policy_revision);
+    }
+    Ok(snapshot)
+}
+
+/// The digest of the committed policy-input rows (U14).
+///
+/// The derived revision alone cannot tell a changed row set from an unchanged
+/// one: removing the row that carried the highest generation - the Guest row
+/// when its teardown completes - lowers it, and a row that is only tombstoned
+/// keeps its generation and uid. The digest is the projection's change
+/// signal, over exactly the row facts the compile reads: identity, desired
+/// spec, generation, and the tombstone phase that decides subject evidence.
+/// Status churn the policy does not consume stays out of it, so a refresh
+/// that finds nothing to compile keeps the installed projection.
+fn policy_inputs_digest(resources: &[StoredResource]) -> [u8; 32] {
+    let mut rows = resources.iter().collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.resource_ref.cmp(&right.resource_ref));
+    let mut digest = Sha256::new();
+    for resource in rows {
+        let (spec_digest, tombstone) = policy_input_content(resource);
+        digest.update(resource.generation.get().to_le_bytes());
+        digest.update(tombstone);
+        for field in [
+            resource.zone.as_str(),
+            resource.resource_ref.resource_type().as_str(),
+            resource.resource_ref.name().as_str(),
+            resource.uid.as_str(),
+        ] {
+            digest.update((field.len() as u64).to_le_bytes());
+            digest.update(field.as_bytes());
+        }
+        digest.update(spec_digest);
+    }
+    digest.finalize().into()
+}
+
+/// The desired-spec digest and tombstone class of one policy-input row: the
+/// payload facts a committed-policy compile consumes.
+fn policy_input_content(resource: &StoredResource) -> ([u8; 32], &'static [u8]) {
+    match ResourceEnvelope::from_json(&resource.canonical_json) {
+        Ok(envelope) => (
+            Sha256::digest(envelope.spec().base().to_canonical_bytes()).into(),
+            match envelope.status().phase() {
+                ResourcePhase::Deleted => b"deleted",
+                ResourcePhase::Failed => b"failed",
+                _ => b"bindable",
+            },
+        ),
+        // An undecodable row is not stable input for the compile either; hash
+        // its bytes so any change to it still moves the digest.
+        Err(_) => (Sha256::digest(&resource.canonical_json).into(), b"invalid"),
+    }
+}
+
+/// The manager view over an already published plane table, when the
+/// composition has published one (U14: the table is the only authority a
+/// reader built before publication can resolve lazily).
+fn published_plane_view(
+    planes: &Arc<
+        Mutex<
+            Option<
+                Arc<
+                    parking_lot::Mutex<
+                        std::collections::HashMap<
+                            String,
+                            Arc<crate::resource_plane_v3::ResourcePlaneV3>,
+                        >,
+                    >,
+                >,
+            >,
+        >,
+    >,
+    zone: &ZoneId,
+) -> Option<Arc<dyn ControllerPlaneView>> {
+    let table = planes.lock().ok().and_then(|slot| slot.clone())?;
+    Some(Arc::new(PublishedPlaneControllerView::new(
+        table,
+        zone.clone(),
+    )))
+}
+
+/// The Zone status projection's runtime metadata for one committed policy
+/// snapshot. U14: the snapshot is the manager-served policy projection; the
+/// durable store metadata that used to feed this is gone.
+fn zone_runtime_metadata(
+    policy: &PolicySnapshot,
+    total_resource_count: u32,
+    generation_cleanup_pending: bool,
+    cleanup_pending_count: u32,
+    last_reconciled_at: Option<Timestamp>,
+) -> ZoneRuntimeMetadata {
+    ZoneRuntimeMetadata {
+        api_catalog_revision: policy.api_catalog_revision,
+        policy_revision: policy.policy_revision,
+        configuration_revision: policy.active_configuration_revision.get(),
+        installed_provider_count: 0,
+        ready_provider_count: 0,
+        total_resource_count,
+        active_configuration_generation: policy.active_configuration_revision.get(),
+        generation_cleanup_pending,
+        cleanup_pending_count,
+        last_reconciled_at,
+    }
 }
 
 fn credential_row_ready(resource: &StoredResource) -> bool {
@@ -681,10 +641,6 @@ impl CommittedClipboardProviderConfiguration {
         self.guest_sources.iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn allows_guest_source(&self, source: &ResourceRef) -> bool {
-        self.guest_sources.contains(source)
-    }
 
     pub(crate) fn matches_display(
         &self,
@@ -988,7 +944,7 @@ struct ControllerSession {
     ingress: BusIngress,
     driver: SessionDriverHandle,
     _backend_lease: Option<Arc<dyn crate::process_provider_runtime::GuestCredentialBackendLease>>,
-    resource_client: Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
+    resource_client: Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
     service_task: tokio::task::JoinHandle<Result<(), SessionServerError>>,
     assignments: BTreeMap<ResourceUid, ResourceClientLease>,
     assignment_stream_open: bool,
@@ -1026,14 +982,16 @@ enum ControllerAssignmentRefreshAction<'a> {
 struct ControllerSessionCoordinator {
     zone: ZoneId,
     bundle_resource_types: Vec<ResourceTypeName>,
-    store: Arc<RedbResourceStore>,
-    /// G5 bridge: the zone plane's manager view for converted rows. Set by
+    /// The zone plane's manager view. Set by
     /// [`ZoneResourceRuntime::attach_v3_planes`] once the composition
-    /// publishes the plane; absent keeps every controller-session read on
-    /// the durable store path.
+    /// publishes the plane; a read with no published plane is an error, never
+    /// an absent row (U14: there is no durable store to fall back to).
     plane_view: Arc<Mutex<Option<Arc<dyn ControllerPlaneView>>>>,
-    assigned_process_api: Arc<Mutex<Option<Arc<RedbRegisteredControllerApi>>>>,
-    api: Arc<ResourceService<ZoneStoreBackend>>,
+    /// The manager-backed Resource API service a live controller session
+    /// serves: the runtime's slot, filled when the Zone's plane activates.
+    api: Arc<
+        Mutex<Option<Arc<ResourceService<ZoneApiBackend>>>>,
+    >,
     authorizer: Arc<NativeAuthorizer>,
     authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
     policy_projection: Arc<PolicyProjection>,
@@ -1044,43 +1002,12 @@ struct ControllerSessionCoordinator {
         Arc<Mutex<BTreeMap<ResourceRef, crate::process_provider_runtime::ControllerBootstrapContext>>>,
     credential_sessions: CredentialSessionRegistry,
     controller_session_lock: Arc<tokio::sync::Mutex<()>>,
-    #[cfg(test)]
-    reconcile_attempts: Arc<AtomicUsize>,
-    #[cfg(test)]
-    admission_test_seam: Arc<Mutex<Option<ControllerSessionAdmissionTestSeam>>>,
-    #[cfg(test)]
-    controller_session_evidence_test_errors: Arc<Mutex<Vec<ResourceRuntimeError>>>,
 }
 
-type CloudHypervisorResourceClient = ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>;
+type CloudHypervisorResourceClient = ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>;
 
-#[cfg(test)]
-#[derive(Clone)]
-struct ControllerSessionAdmissionTestSeam {
-    after_snapshot:
-        Arc<dyn Fn(&crate::process_provider_runtime::ProductionProcessProviders) + Send + Sync>,
-    after_policy_install: Arc<dyn Fn(&BTreeSet<BoundSubject>) + Send + Sync>,
-    admit_without_transport: bool,
-}
 
-#[cfg(test)]
-struct ControllerSessionAdmissionTestUnwindGuard {
-    first_policy_release: Arc<AtomicBool>,
-    second_snapshot_release: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
-    wake: Arc<tokio::sync::Notify>,
-}
 
-#[cfg(test)]
-impl Drop for ControllerSessionAdmissionTestUnwindGuard {
-    fn drop(&mut self) {
-        self.first_policy_release.store(true, Ordering::Release);
-        self.second_snapshot_release
-            .store(true, Ordering::Release);
-        self.shutdown.store(true, Ordering::Release);
-        self.wake.notify_waiters();
-    }
-}
 
 #[derive(Clone)]
 struct PolicyProjection {
@@ -1089,11 +1016,19 @@ struct PolicyProjection {
     /// primary, its own mutation seal for the manager-backed API service
     /// (U8/U9 F1 wiring). `None` for runtimes that never serve the v3 plane.
     manager_authorizer: Option<Arc<NativeAuthorizer>>,
-    bus: Option<Arc<ZoneBus>>,
+    /// The Zone bus, enrolled when the Zone activates over its published
+    /// manager plane (U14: the bus is built with the system-core session,
+    /// which needs the manager-backed Resource API service).
+    bus: Arc<Mutex<Option<Arc<ZoneBus>>>>,
     authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
     policy_refresh: Arc<Mutex<()>>,
     policy_loaded: Arc<Mutex<bool>>,
     installed_controller_subjects: Arc<Mutex<BTreeSet<BoundSubject>>>,
+    /// The digest of the committed policy rows the installed projection was
+    /// compiled from (U14). The derived revision is not a change signal on
+    /// its own, so the refresh compares this digest to decide whether the
+    /// installed projection may be kept as is.
+    installed_policy_inputs: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
 impl PolicyProjection {
@@ -1120,6 +1055,38 @@ impl PolicyProjection {
             .ok_or(ResourceRuntimeError::PolicyUnavailable)
     }
 
+    /// The digest of the policy rows the installed projection was compiled
+    /// from; `None` while no projection is installed.
+    fn installed_policy_inputs(&self) -> Option<[u8; 32]> {
+        self.installed_policy_inputs
+            .lock()
+            .ok()
+            .and_then(|inputs| *inputs)
+    }
+
+    /// The revision a compile of the given policy-input rows may be installed
+    /// at (U14).
+    ///
+    /// The Zone bus fences every install at the installed revision, so the
+    /// revision a compile is handed must never regress - and the retired
+    /// durable store's commit counter never handed out one. The rows'
+    /// highest generation is not monotone by itself (removing the row that
+    /// carried it lowers it, and a tombstone keeps it), so a changed input
+    /// set advances past the installed revision while an unchanged one holds
+    /// it; either way a policy change still supersedes the previous
+    /// projection, exactly as the store's commit counter did.
+    fn next_policy_revision(&self, derived: u64, inputs_changed: bool) -> u64 {
+        let installed = match self.installed_state() {
+            Ok(state) => state.zone_policy_revision.get(),
+            Err(_) => return derived,
+        };
+        if inputs_changed {
+            derived.max(installed.saturating_add(1))
+        } else {
+            derived.max(installed)
+        }
+    }
+
     fn installed_controller_subjects(
         &self,
     ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
@@ -1138,6 +1105,7 @@ impl PolicyProjection {
         policy: PolicySet,
         state: AuthorizationState,
         controller_subjects: BTreeSet<BoundSubject>,
+        policy_inputs: [u8; 32],
     ) -> Result<(), ResourceRuntimeError> {
         let _install = self
             .policy_refresh
@@ -1148,7 +1116,12 @@ impl PolicyProjection {
         // under one guard. Validation failures happen before mutation and
         // therefore leave the last-known-good projection installed.
         let manager_policy = policy.clone();
-        let install_result = if let Some(bus) = &self.bus {
+        let bus = self
+            .bus
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?
+            .clone();
+        let install_result = if let Some(bus) = &bus {
             bus.replace_policy(policy, state.clone())
                 .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
         } else {
@@ -1157,6 +1130,18 @@ impl PolicyProjection {
                 .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
         };
         if let Err(error) = install_result {
+            // The bus fence refuses a regressed revision; name the error so a
+            // refused install is diagnosable instead of a bare code.
+            tracing::warn!(
+                incoming_revision = state.zone_policy_revision.get(),
+                installed_revision = ?self
+                    .authorization_state
+                    .lock()
+                    .ok()
+                    .and_then(|slot| slot.as_ref().map(|state| state.zone_policy_revision.get())),
+                error = ?error,
+                "policy projection install failed",
+            );
             return Err(error);
         }
         // Mirror the installed policy into the manager plane's authorizer so
@@ -1178,6 +1163,12 @@ impl PolicyProjection {
             self.mark_unavailable();
             return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
+        if let Ok(mut installed) = self.installed_policy_inputs.lock() {
+            *installed = Some(policy_inputs);
+        } else {
+            self.mark_unavailable();
+            return Err(ResourceRuntimeError::AuthorizationUnavailable);
+        }
         if let Ok(mut installed) = self.installed_controller_subjects.lock() {
             *installed = controller_subjects;
         } else {
@@ -1194,7 +1185,8 @@ impl PolicyProjection {
     }
 
     fn mark_unavailable(&self) {
-        if let Some(bus) = &self.bus {
+        let bus = self.bus.lock().ok().and_then(|bus| bus.clone());
+        if let Some(bus) = &bus {
             bus.mark_policy_unavailable();
         } else {
             self.authorizer.mark_policy_unavailable();
@@ -1204,6 +1196,9 @@ impl PolicyProjection {
         }
         if let Ok(mut installed) = self.authorization_state.lock() {
             *installed = None;
+        }
+        if let Ok(mut inputs) = self.installed_policy_inputs.lock() {
+            *inputs = None;
         }
         if let Ok(mut subjects) = self.installed_controller_subjects.lock() {
             subjects.clear();
@@ -2849,35 +2844,34 @@ fn merge_cloud_hypervisor_child_spec(
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
     authority_identity: Option<ZoneAuthorityIdentity>,
-    bootstrap_provisioned_store: bool,
-    store_id: String,
-    store: Arc<RedbResourceStore>,
-    store_metadata: StoreRuntimeMetadata,
-    backend: Arc<ZoneStoreBackend>,
-    api: Arc<ResourceService<ZoneStoreBackend>>,
     authorizer: Arc<NativeAuthorizer>,
     authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
     policy_projection: Arc<PolicyProjection>,
     bundle_resource_types: Vec<ResourceTypeName>,
     /// The published per-zone v3 planes (F1 wiring): the manager-backed API
     /// service resolves its manager client and watch hub from here. The
-    /// inner lock is the composition's published plane table.
-    v3_planes: Mutex<
-        Option<
-            Arc<
-                parking_lot::Mutex<
-                    std::collections::HashMap<
-                        String,
-                        Arc<crate::resource_plane_v3::ResourcePlaneV3>,
+    /// inner lock is the composition's published plane table. The slot is
+    /// shared with the reader closures built before publication.
+    v3_planes: Arc<
+        Mutex<
+            Option<
+                Arc<
+                    parking_lot::Mutex<
+                        std::collections::HashMap<
+                            String,
+                            Arc<crate::resource_plane_v3::ResourcePlaneV3>,
+                        >,
                     >,
                 >,
             >,
         >,
     >,
-    /// The manager-backed Resource API service for this Zone's converted
-    /// types: built once, after the Zone's v3 plane has been published.
-    v3_api:
+    /// The manager-backed Resource API service for this Zone: built once,
+    /// after the Zone's v3 plane has been published. Shared with the
+    /// controller-session coordinator, whose live sessions serve it.
+    v3_api: Arc<
         Mutex<Option<Arc<ResourceService<d2b_resource_api::manager_backend::ManagerBackend>>>>,
+    >,
     manager_authorizer: Arc<NativeAuthorizer>,
     policy_subject_fingerprints:
         Mutex<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>>,
@@ -2886,18 +2880,26 @@ pub struct ZoneResourceRuntime {
     ingress: Mutex<Option<BusIngress>>,
     service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
     process_status_client:
-        Arc<Mutex<Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>>>,
+        Arc<Mutex<Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>>>,
     core_controller_subject: Mutex<Option<AuthenticatedSubjectContext>>,
     system_core_rebind_pending: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
+    /// The fixed bootstrap policy snapshot (U14). The Zone opens on it and the
+    /// manager-served committed policy replaces it at activation; it remains
+    /// the reported snapshot while no manager-served projection is installed.
+    bootstrap_policy_snapshot: PolicySnapshot,
     policy_installed: bool,
     controller_endpoint_registered: bool,
     watch_admitted: bool,
     assignments: AssignmentRegistry,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
-    authority_persistence: Arc<RedbAuthorityPersistence>,
+    /// The process-local Zone authority operation ledger (U14): generation
+    /// publication and every other admission-barrier operation live here now
+    /// that the durable store is gone. Restart recovery is the drivers'
+    /// probe/adopt path, not a replayed checkpoint.
+    authority_ledger: Arc<ZoneAuthorityLedger>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
@@ -2919,10 +2921,6 @@ pub struct ZoneResourceRuntime {
     interaction_provider_configuration: Option<CommittedInteractionProviderConfiguration>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     interaction_state: InteractionState,
-    /// Latched true when the composition publishes this Zone's manager plane
-    /// (issue #507): from that moment the legacy API binding refuses every
-    /// converted type, so the pre-v3 store can neither serve nor miss one.
-    manager_plane_published: Arc<AtomicBool>,
 }
 
 /// Store-derived admission evidence for one security-key Device effect.
@@ -2958,8 +2956,6 @@ impl core::fmt::Debug for ZoneResourceRuntime {
             .debug_struct("ZoneResourceRuntime")
             .field("zone", &self.zone)
             .field("has_authority_identity", &self.authority_identity.is_some())
-            .field("store_id", &"<opaque>")
-            .field("current_revision", &self.store_metadata.current_revision)
             .field("readiness", &self.readiness)
             .finish()
     }
@@ -2990,777 +2986,132 @@ enum CloudHypervisorSetupVolumeOutcome {
 }
 
 impl ZoneResourceRuntime {
-    /// Open one Zone from a broker-owned descriptor.
-    pub async fn open(zone: ZoneId, opened: OpenedZoneStore) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(
-            zone,
-            opened,
-            None,
-            Arc::new(BrokerEvidenceIndex::default()),
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-    }
-
-    /// Open one Zone with the production-owned durable audit sink.
-    pub async fn open_with_audit(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        audit_sink: Arc<AuditSink>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(
-            zone,
-            opened,
-            Some(audit_sink),
-            Arc::new(BrokerEvidenceIndex::default()),
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-    }
-
-    /// Open one Zone with durable audit and broker reconciliation evidence.
-    pub async fn open_with_audit_and_evidence(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        audit_sink: Arc<AuditSink>,
-        broker_evidence: Arc<BrokerEvidenceIndex>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(
-            zone,
-            opened,
-            Some(audit_sink),
-            broker_evidence,
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-    }
-
-    /// Open one Zone with explicit audit, broker-evidence, and telemetry
-    /// ownership.
-    pub async fn open_with_audit_and_evidence_and_telemetry(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        audit_sink: Arc<AuditSink>,
-        broker_evidence: Arc<BrokerEvidenceIndex>,
-        telemetry_path: impl Into<std::path::PathBuf>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(
-            zone,
-            opened,
-            Some(audit_sink),
-            broker_evidence,
-            Some(telemetry_path.into()),
-            false,
-            None,
-            None,
-        )
-        .await
-    }
-
-    /// Open a production Zone with a bundle-bound immutable identity.
+    /// Open one Zone runtime bound to its verified bundle authority.
+    ///
+    /// U14: the Zone has exactly one plane and no durable store. The runtime
+    /// opens with its bundle-bound authorizer and the bootstrap policy
+    /// installed; everything the manager plane owns - the Resource API
+    /// service, the system-core session, the committed policy projection and
+    /// readiness - is built when the composition publishes the Zone's plane
+    /// ([`Self::attach_v3_planes`], then
+    /// [`Self::activate_published_bundle`]).
     pub(crate) async fn open_production_with_identity(
         zone: ZoneId,
-        opened: OpenedZoneStore,
-        audit_sink: Arc<AuditSink>,
-        broker_evidence: Arc<BrokerEvidenceIndex>,
-        telemetry_path: impl Into<std::path::PathBuf>,
         desired_bundle: ResourceBundle,
         authority_identity: ZoneAuthorityIdentity,
     ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_internal(
-            zone,
-            opened,
-            Some(audit_sink),
-            broker_evidence,
-            Some(telemetry_path.into()),
-            true,
-            Some(desired_bundle),
-            Some(authority_identity),
-        )
-        .await
-    }
-
-    async fn open_internal(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        audit_sink: Option<Arc<AuditSink>>,
-        broker_evidence: Arc<BrokerEvidenceIndex>,
-        telemetry_path: Option<std::path::PathBuf>,
-        bootstrap_provisioned_store: bool,
-        desired_bundle: Option<ResourceBundle>,
-        authority_identity: Option<ZoneAuthorityIdentity>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        #[cfg(test)]
-        let audit_sink = audit_sink.or_else(|| {
-            let base = std::env::var_os("TEST_TMPDIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    std::env::var_os("CARGO_MANIFEST_DIR")
-                        .map(std::path::PathBuf::from)
-                        .or_else(|| std::env::current_dir().ok())
-                        .expect("resolve resource runtime scratch root")
-                        .join("target")
-                        .join("tmp")
-                });
-            let path = base.join(format!(
-                "d2bd-resource-audit-{}-{}-{}",
-                zone.as_str(),
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|duration| duration.as_nanos())
-                    .unwrap_or_default()
-            ));
-            AuditSink::open(path).ok().map(Arc::new)
-        });
-        #[cfg(not(test))]
-        let audit_sink = audit_sink;
-        let external_inventory = opened.external_inventory.clone().unwrap_or_else(|| {
-            Arc::new(TrustedExternalNicInventory::default())
-                as Arc<dyn ExternalNicRecoveryInventory>
-        });
-        Self::open_with_external_inventory_and_audit(
-            zone,
-            opened,
-            external_inventory,
-            audit_sink,
-            broker_evidence,
-            telemetry_path,
-            bootstrap_provisioned_store,
-            desired_bundle,
-            authority_identity,
-        )
-        .await
-    }
-
-    /// Open one Zone with the host/bundle-owned physical-NIC inventory port.
-    pub async fn open_with_external_inventory(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        Self::open_with_external_inventory_and_audit(
-            zone,
-            opened,
-            external_inventory,
-            None,
-            Arc::new(BrokerEvidenceIndex::default()),
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn open_with_external_inventory_and_audit(
-        zone: ZoneId,
-        opened: OpenedZoneStore,
-        external_inventory: Arc<dyn ExternalNicRecoveryInventory>,
-        audit_sink: Option<Arc<AuditSink>>,
-        broker_evidence: Arc<BrokerEvidenceIndex>,
-        telemetry_path: Option<std::path::PathBuf>,
-        bootstrap_provisioned_store: bool,
-        desired_bundle: Option<ResourceBundle>,
-        authority_identity: Option<ZoneAuthorityIdentity>,
-    ) -> Result<Self, ResourceRuntimeError> {
-        let expected_store_id = format!("zone-store-{}", zone.as_str());
-        if opened.response.zone_store_id.as_str() != expected_store_id {
-            return Err(ResourceRuntimeError::BrokerResponseMismatch);
+        if desired_bundle.zone != zone {
+            return Err(ResourceRuntimeError::HandlerNotReady);
         }
-        if opened.response.fd_index != 0 {
-            return Err(ResourceRuntimeError::BrokerFdCountMismatch);
+        if desired_bundle.zone_uid() != Some(authority_identity.zone_uid())
+            || desired_bundle.integrity().content_hash
+                != authority_identity.bundle_generation().as_str()
+        {
+            return Err(ResourceRuntimeError::HandlerNotReady);
         }
-        if !matches!(
-            opened.response.disposition,
-            ZoneStoreDisposition::Provisioned | ZoneStoreDisposition::Opened
-        ) {
-            return Err(ResourceRuntimeError::BrokerDispositionInvalid);
-        }
-
-        let disposition = opened.response.disposition;
-        let store_identity = if let Some(authority) = authority_identity.as_ref() {
-            let bundle = desired_bundle
-                .as_ref()
-                .ok_or(ResourceRuntimeError::IdentityUnbound)?;
-            if bundle.zone_uid() != Some(authority.zone_uid())
-                || bundle.integrity().content_hash != authority.bundle_generation().as_str()
-            {
-                return Err(ResourceRuntimeError::HandlerNotReady);
-            }
-            if !d2b_contracts_resource::v3::is_canonical_digest(&opened.response.store_identity) {
-                return Err(ResourceRuntimeError::BrokerResponseMismatch);
-            }
-            store_identity_for_authority(&zone, authority)?
-        } else {
-            store_identity(&zone, &opened.response.store_identity)?
-        };
-        let store_identity =
-            if bootstrap_provisioned_store && disposition == ZoneStoreDisposition::Provisioned {
-                store_identity.with_revisions(initial_policy_snapshot()?)
-            } else {
-                store_identity
-            };
-        let bundle_resource_types = desired_bundle
-            .as_ref()
-            .map(|bundle| {
-                bundle
-                    .resources
-                    .iter()
-                    .map(|resource| resource.resource_type().clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let bundle_resource_types = trusted_catalog_resource_types(bundle_resource_types)?;
+        let bundle_resource_types = trusted_catalog_resource_types(
+            desired_bundle
+                .resources
+                .iter()
+                .map(|resource| resource.resource_type().clone())
+                .collect::<Vec<_>>(),
+        )?;
         let authorizer = Arc::new(runtime_authorizer(&bundle_resource_types)?);
         // The manager plane's own authorizer: same catalog, its own mutation
         // seal (an authorizer hands out exactly one), so the manager-backed
-        // API service can serve the Zone's converted types alongside the
-        // redb service (U8/U9 F1 wiring).
+        // Resource API service serves this Zone beside the bus admission
+        // path.
         let manager_authorizer = Arc::new(runtime_authorizer(&bundle_resource_types)?);
         let assignments = new_assignment_registry();
-        let acceptor = authorizer
-            .take_store_seal(store_identity.seal_identity())
-            .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
-        let file = File::from(opened.database_fd);
-        let store = match disposition {
-            ZoneStoreDisposition::Provisioned => {
-                let mut marker =
-                    tempfile::tempfile().map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-                write_provisioning_marker(&mut marker, &store_identity)
-                    .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-                match audit_sink {
-                    Some(sink) => {
-                        match telemetry_path.as_ref() {
-                            Some(path) => {
-                                RedbResourceStore::provision_owned_with_audit_and_evidence_and_telemetry(
-                                    file,
-                                    marker,
-                                    store_identity,
-                                    acceptor,
-                                    sink,
-                                    broker_evidence,
-                                    path,
-                                )
-                                .await
-                            }
-                            None => {
-                                RedbResourceStore::provision_owned_with_audit_and_evidence(
-                                    file,
-                                    marker,
-                                    store_identity,
-                                    acceptor,
-                                    sink,
-                                    broker_evidence,
-                                )
-                                .await
-                            }
-                        }
-                    }
-                    None => {
-                        RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
-                            .await
-                    }
-                }
-            }
-            ZoneStoreDisposition::Opened => match audit_sink {
-                Some(sink) => {
-                    match telemetry_path.as_ref() {
-                        Some(path) => {
-                            RedbResourceStore::open_owned_with_audit_and_evidence_and_telemetry(
-                                file,
-                                store_identity,
-                                acceptor,
-                                sink,
-                                broker_evidence,
-                                path,
-                            )
-                            .await
-                        }
-                        None => {
-                            RedbResourceStore::open_owned_with_audit_and_evidence(
-                                file,
-                                store_identity,
-                                acceptor,
-                                sink,
-                                broker_evidence,
-                            )
-                            .await
-                        }
-                    }
-                }
-                None => RedbResourceStore::open_owned(file, store_identity, acceptor).await,
-            },
-        }
-        .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
-        let store = Arc::new(store);
-        let authority_persistence = Arc::new(
-            RedbAuthorityPersistence::new(Arc::clone(&store))
-                .with_external_inventory(external_inventory),
-        );
+        let authority_ledger = Arc::new(ZoneAuthorityLedger::new(&zone));
         let authority_recovery = Arc::new(
             AuthorityRecoveryCoordinator::recover_with_provenance(
-                authority_persistence.clone(),
-                authority_persistence.as_ref(),
+                Arc::clone(&authority_ledger) as Arc<dyn AuthorityPersistence>,
+                authority_ledger.as_ref(),
             )
             .await
             .map_err(|_| ResourceRuntimeError::AuthorityUnavailable)?,
         );
         let authority_index = authority_recovery.index();
-        let store_metadata = retry_transient_store_read(
+        // The bundle authority owns the Zone identity; the committed policy
+        // is compiled from the manager rows when the Zone activates, and the
+        // bootstrap snapshot keeps the fixed policy installed until then.
+        let bootstrap_snapshot = initial_policy_snapshot()?;
+        let (policy, state) = runtime_policy(
             &zone,
-            "runtime-open-metadata",
-            || store.runtime_metadata(),
+            &bootstrap_snapshot,
+            ZoneRevision::new(u64::from(bootstrap_snapshot.policy_revision)),
+            &bundle_resource_types,
         )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        if let Some(authority) = authority_identity.as_ref() {
-            if store_metadata.zone_uid != *authority.zone_uid()
-                || store_metadata.store_uid != *authority.store_uid()
-                || store_metadata.store_epoch != authority.store_epoch()
-            {
-                return Err(ResourceRuntimeError::HandlerNotReady);
-            }
-            if disposition == ZoneStoreDisposition::Opened
-                && store_metadata.policy_snapshot.policy_revision != 0
-            {
-                validate_zone_self_resource(
-                    &store,
-                    &zone,
-                    authority.zone_uid(),
-                    authority.store_uid(),
-                )
-                .await?;
-            }
-        }
-        tracing::error!(
-            zone = %zone.as_str(),
-            disposition = ?disposition,
-            policy_revision = store_metadata.policy_snapshot.policy_revision,
-            api_catalog_revision = store_metadata.policy_snapshot.api_catalog_revision,
-            active_configuration_revision = %store_metadata
-                .policy_snapshot
-                .active_configuration_revision
-                .get(),
-            desired_resource_count = desired_bundle
-                .as_ref()
-                .map(|bundle| bundle.resources.len())
-                .unwrap_or_default(),
-            "resource runtime opened Zone store"
-        );
-        if desired_bundle
-            .as_ref()
-            .is_some_and(|bundle| bundle.zone != zone)
-        {
-            return Err(ResourceRuntimeError::HandlerNotReady);
-        }
-        // The per-type partition (KTD4) is enforced by routing, not refusal:
-        // the public surface dispatches converted types to the manager-backed
-        // service (see `dispatch_public_cli_request`), so the redb service
-        // only ever sees unconverted types from outside. Legacy in-daemon
-        // writers (the framework runners and controller sessions that Phase B
-        // deletes) keep their redb path until their providers convert.
-        // Issue #507: the legacy binding carries a publication latch, so from
-        // the moment this Zone's manager plane is published the legacy service
-        // refuses every converted type - a fixture runtime that never
-        // publishes a plane keeps the durable plane it drives directly.
-        let manager_plane_published = Arc::new(AtomicBool::new(false));
-        let backend = Arc::new(RedbBackend::production_when_published(
-            Arc::clone(&store),
-            Arc::clone(&manager_plane_published),
-        ));
-        let api = Arc::new(
-            ResourceService::new_with_zone_uid(
-                Arc::clone(&backend),
-                Arc::clone(&authorizer),
-                authority_identity
-                    .as_ref()
-                    .map(|authority| authority.zone_uid().clone()),
-            )
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
-        );
-        let mut interaction_provider_configuration = None;
-        let mut interaction_provider_configuration_refused;
-        let mut interaction_identity = None;
-
-        let mut core = CoreProcess::new();
-        let mut bus = None;
-        let mut registrar = None;
-        let mut ingress = None;
-        let mut service_task = None;
-        let mut process_status_client = None;
-        let mut core_controller_subject = None;
-        let defer_activation = authority_identity.is_some();
-        let mut final_store_metadata = store_metadata.clone();
-        let mut interaction_state = InteractionState::Absent;
-        let (
-            resource_api_ready,
-            local_session_ready,
-            policy_installed,
-            controller_endpoint_registered,
-            watch_admitted,
-            stage,
-            zone_status,
-            authorization_state,
-        ) = if store_metadata.policy_snapshot.policy_revision == 0 {
-            if let Err(error) = core.connect_runtime(CoreRuntimeReadiness {
-                store_ready: true,
-                resource_api_ready: false,
-                local_bus_ready: false,
-                controller_endpoint_registered: false,
-                authenticated_system_core_session: false,
-            }) {
-                tracing::warn!(
-                    error = ?error,
-                    "core runtime readiness connect failed during zone bootstrap",
-                );
-            }
-            (
-                false,
-                false,
-                false,
-                false,
-                false,
-                core.stage(),
-                SystemCoreStatusEmitter::new()
-                    .emit(
-                        ZoneStatusInput::new(ResourcePhase::Pending, Vec::new())
-                            .with_runtime_metadata(zone_runtime_metadata(
-                                &store_metadata,
-                                0,
-                                false,
-                                0,
-                                Some(current_status_timestamp()),
-                            )),
-                    )
-                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                None,
-            )
-        } else {
-            let (policy, state) = runtime_policy(
-                &zone,
-                &store_metadata.policy_snapshot,
-                store_metadata.current_revision,
-                &bundle_resource_types,
-            )
-            .inspect_err(|error| {
-                tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy setup failed");
+        .inspect_err(|error| {
+            tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy setup failed");
+        })?;
+        authorizer
+            .replace_policy(policy, &state)
+            .map_err(|error| {
+                tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy installation failed");
+                ResourceRuntimeError::AuthorizationUnavailable
             })?;
-            authorizer
-                .replace_policy(policy.clone(), &state)
-                .map_err(|error| {
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy installation failed");
-                    ResourceRuntimeError::AuthorizationUnavailable
-                })?;
-            let bus_authorizer = BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
-                .map(|authorizer| authorizer.with_assignment_registry(Arc::clone(&assignments)))
-                .map_err(|error| {
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime bus authorizer setup failed");
-                    ResourceRuntimeError::AuthorizationUnavailable
-                })?;
-            let (zone_bus, mut zone_registrar) =
-                ZoneBus::new(zone.clone(), bus_authorizer, BusConfig::default())
-                    .map_err(|error| {
-                        tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bus setup failed");
-                        ResourceRuntimeError::AuthenticationUnavailable
-                    })?;
-            let (zone_ingress, zone_service_task, status_client, subject_context) =
-                register_system_core_session(
-                    &mut zone_registrar,
-                    Arc::clone(&api),
-                    Arc::clone(&authorizer),
-                    state.clone(),
-                )
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime system-core session registration failed");
-                })?;
-            process_status_client = Some(Arc::clone(&status_client));
-            core_controller_subject = Some(subject_context);
-            if defer_activation {
-                bus = Some(zone_bus);
-                registrar = Some(zone_registrar);
-                ingress = Some(zone_ingress);
-                service_task = Some(zone_service_task);
-                (
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
-                    core.stage(),
-                    SystemCoreStatusEmitter::new()
-                        .emit(
-                            ZoneStatusInput::new(ResourcePhase::Pending, Vec::new())
-                                .with_runtime_metadata(zone_runtime_metadata(
-                                    &store_metadata,
-                                    0,
-                                    false,
-                                    0,
-                                    Some(current_status_timestamp()),
-                                )),
-                        )
-                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                    Some(state),
-                )
-            } else {
-                if bootstrap_provisioned_store
-                    && disposition == ZoneStoreDisposition::Provisioned
-                    && desired_bundle.is_none()
-                {
-                    ensure_bootstrap_host_resource(&zone, &store, &status_client).await?;
-                }
-                if let Some(bundle) = desired_bundle.as_ref() {
-                    // Phase A partition (U10): converted types (Process,
-                    // Volume, VolumeBinding, Endpoint) are served only by the
-                    // v3 resource plane and never materialize into redb; the
-                    // old path sees only unconverted rows.
-                    let old_bundle = crate::resource_plane_v3::old_plane_bundle(bundle)
-                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-                    materialize_zone_resource_bundle(&zone, &old_bundle, &store, &status_client)
-                        .await
-                        .inspect_err(|error| {
-                            tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bundle materialization failed");
-                        })?;
-                }
-                let current_store_metadata = retry_transient_store_read(
-                    &zone,
-                    "runtime-open-metadata-after-materialization",
-                    || store.runtime_metadata(),
-                )
-                .await
-                    .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-                final_store_metadata = current_store_metadata.clone();
-                (
-                    interaction_provider_configuration,
-                    interaction_provider_configuration_refused,
-                ) = match load_interaction_provider_configuration(
-                    &zone,
-                    &store,
-                    current_store_metadata.current_revision,
-                )
-                .await
-                {
-                    Ok(None) => (None, false),
-                    Ok(Some(configuration)) if configuration.is_complete() => {
-                        (Some(configuration), false)
-                    }
-                    Ok(Some(_)) => {
-                        tracing::error!(
-                            zone = %zone.as_str(),
-                            "resource runtime committed interaction Provider configuration is incomplete",
-                        );
-                        (None, true)
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            zone = %zone.as_str(),
-                            error = %error,
-                            "resource runtime committed interaction Provider configuration load failed",
-                        );
-                        (None, true)
-                    }
-                };
-                interaction_identity = match load_committed_interaction_identity(
-                    &zone,
-                    &store,
-                    current_store_metadata.current_revision,
-                    interaction_provider_configuration.as_ref(),
-                )
-                .await
-                {
-                    Ok(identity) => identity,
-                    Err(error) => {
-                        tracing::error!(
-                            zone = %zone.as_str(),
-                            error = %error,
-                            "resource runtime committed interaction identity load failed",
-                        );
-                        interaction_provider_configuration_refused = true;
-                        None
-                    }
-                };
-                let interaction_present =
-                    interaction_resources_present(&zone, &store).await?;
-                interaction_state = derive_interaction_state(
-                    interaction_present,
-                    interaction_provider_configuration.as_ref(),
-                    interaction_identity.as_ref(),
-                    interaction_provider_configuration_refused,
-                );
-                let system_core = system_core_startup_result(&zone, &store)
-                    .await
-                    .inspect_err(|error| {
-                        tracing::error!(
-                            zone = %zone.as_str(),
-                            error = ?error,
-                            "resource runtime system-core startup summary failed"
-                        );
-                    })?;
-                tracing::warn!(
-                    zone = %zone.as_str(),
-                    host_phase = ?system_core.host_phase,
-                    user_phase = ?system_core.user_phase,
-                    total_resources = system_core.total_resource_count,
-                    "system-core shared runner startup summary completed",
-                );
-                let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
-                    && system_core.user_phase == HandlerPhase::Ready
-                {
-                    HandlerPhase::Ready
-                } else {
-                    HandlerPhase::Degraded
-                };
-                tracing::error!(
-                    zone = %zone.as_str(),
-                    host_phase = ?system_core.host_phase,
-                    user_phase = ?system_core.user_phase,
-                    core_phase = ?system_core.core_phase,
-                    total_resource_count = system_core.total_resource_count,
-                    "resource runtime system-core reconciliation result"
-                );
-                let stage = {
-                    let recovered_authority = authority_index.lock().await;
-                    core.start_production(
-                    CoreRuntimeReadiness {
-                        store_ready: true,
-                        resource_api_ready: true,
-                        local_bus_ready: true,
-                        controller_endpoint_registered: true,
-                        authenticated_system_core_session: true,
-                    },
-                    RecoverySnapshot {
-                        startup_epoch: 0,
-                        checkpoint_revision: current_store_metadata.current_revision.get(),
-                        active_configuration_revision: current_store_metadata
-                            .policy_snapshot
-                            .active_configuration_revision
-                            .get(),
-                        provider_lease_count: 0,
-                        controller_lease_count: 0,
-                        ambiguous_operation_count: 0,
-                        watch_admitted: true,
-                    },
-                    &recovered_authority,
-                )
-                .map_err(|error| {
-                    let error = map_startup_error(error);
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime core startup failed");
-                    error
-                })?;
-                    d2bd_runtime::resource_runtime_support::mark_core_handlers(
-                    &mut core,
-                    aggregate_handler_phase,
-                    current_store_metadata.current_revision.get(),
-                )
-                .inspect_err(|error| {
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime handler marking failed");
-                })?;
-                    core.publish_readiness().map_err(|error| {
-                    let error = map_startup_error(error);
-                    tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime readiness publication failed");
-                    error
-                })?
-                };
-                bus = Some(zone_bus);
-                registrar = Some(zone_registrar);
-                ingress = Some(zone_ingress);
-                service_task = Some(zone_service_task);
-                (
-                    true,
-                    true,
-                    true,
-                    true,
-                    true,
-                    stage,
-                    SystemCoreStatusEmitter::new()
-                        .emit(
-                            ZoneStatusInput::new(system_core.core_phase, Vec::new())
-                                .with_system_core_phases(
-                                    handler_phase_to_zone_phase(system_core.host_phase),
-                                    handler_phase_to_zone_phase(system_core.user_phase),
-                                )
-                                .with_runtime_metadata(zone_runtime_metadata(
-                                    &current_store_metadata,
-                                    system_core.total_resource_count,
-                                    system_core.generation_cleanup_pending,
-                                    system_core.cleanup_pending_count,
-                                    Some(current_status_timestamp()),
-                                )),
-                        )
-                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-                    Some(state),
-                )
-            }
-        };
-        let store_metadata = final_store_metadata;
-        let defer_core_start = authority_identity.is_some();
-        let bus = bus.map(Arc::new);
-        let authorization_state = Arc::new(Mutex::new(authorization_state));
-        let policy_loaded = authorization_state
-            .lock()
-            .ok()
-            .is_some_and(|state| state.is_some());
+        let authorization_state = Arc::new(Mutex::new(Some(state)));
         let policy_projection = Arc::new(PolicyProjection {
             authorizer: Arc::clone(&authorizer),
             manager_authorizer: Some(Arc::clone(&manager_authorizer)),
-            bus: bus.clone(),
+            bus: Arc::new(Mutex::new(None)),
             authorization_state: Arc::clone(&authorization_state),
             policy_refresh: Arc::new(Mutex::new(())),
-            policy_loaded: Arc::new(Mutex::new(policy_loaded)),
+            policy_loaded: Arc::new(Mutex::new(true)),
             installed_controller_subjects: Arc::new(Mutex::new(BTreeSet::new())),
+            installed_policy_inputs: Arc::new(Mutex::new(None)),
         });
+        let core = CoreProcess::new();
+        let core_stage = core.stage();
+        let zone_status = SystemCoreStatusEmitter::new()
+            .emit(
+                ZoneStatusInput::new(ResourcePhase::Pending, Vec::new()).with_runtime_metadata(
+                    zone_runtime_metadata(
+                        &bootstrap_snapshot,
+                        0,
+                        false,
+                        0,
+                        Some(current_status_timestamp()),
+                    ),
+                ),
+            )
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let runtime = Self {
             zone,
-            authority_identity,
-            bootstrap_provisioned_store: bootstrap_provisioned_store
-                && disposition == ZoneStoreDisposition::Provisioned,
-            store_id: expected_store_id,
-            store,
-            store_metadata,
-            backend,
-            api,
+            authority_identity: Some(authority_identity),
             authorizer,
             authorization_state,
             policy_projection,
             bundle_resource_types,
-            v3_planes: Mutex::new(None),
-            v3_api: Mutex::new(None),
+            v3_planes: Arc::new(Mutex::new(None)),
+            v3_api: Arc::new(Mutex::new(None)),
             manager_authorizer,
             policy_subject_fingerprints: Mutex::new(BTreeMap::new()),
-            bus,
-            registrar: Arc::new(Mutex::new(registrar)),
-            ingress: Mutex::new(ingress),
-            service_task: Mutex::new(service_task),
-            process_status_client: Arc::new(Mutex::new(process_status_client)),
-            core_controller_subject: Mutex::new(core_controller_subject),
+            bus: None,
+            registrar: Arc::new(Mutex::new(None)),
+            ingress: Mutex::new(None),
+            service_task: Mutex::new(None),
+            process_status_client: Arc::new(Mutex::new(None)),
+            core_controller_subject: Mutex::new(None),
             system_core_rebind_pending: AtomicBool::new(false),
             credential_sessions: CredentialSessionRegistry::default(),
             core: Mutex::new(core),
+            bootstrap_policy_snapshot: bootstrap_snapshot,
             readiness: ZoneRuntimeReadiness {
-                store_ready: true,
-                resource_api_ready,
-                local_session_ready,
+                resource_api_ready: false,
+                local_session_ready: false,
                 provider_path_ready: false,
                 authority_ready: true,
-                core_stage: stage,
+                core_stage,
             },
-            policy_installed,
-            controller_endpoint_registered,
-            watch_admitted,
+            policy_installed: true,
+            controller_endpoint_registered: false,
+            watch_admitted: false,
             assignments,
             authority_index,
-            authority_persistence,
+            authority_ledger,
             authority_recovery,
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
@@ -3781,41 +3132,21 @@ impl ZoneResourceRuntime {
             controller_session_lock: Arc::new(tokio::sync::Mutex::new(())),
             controller_reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
             cloud_hypervisor_reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
-            interaction_provider_configuration,
-            interaction_identity,
-            interaction_state,
-            manager_plane_published: Arc::clone(&manager_plane_published),
+            interaction_provider_configuration: None,
+            interaction_identity: None,
+            interaction_state: InteractionState::Absent,
         };
         let coordinator = Arc::new(runtime.build_controller_session_coordinator()?);
         *runtime
             .controller_session_coordinator
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(coordinator);
-        // U12: the Core runner family is deleted. The nine Core-family
-        // ResourceTypes are driven by the v3 plane's Core resource driver,
-        // and the system-core session registered above is the surviving
-        // Core-owned startup surface. `defer_core_start` (authority-identity
-        // zones defer to activate_published_bundle) still gates it.
-        let _ = defer_core_start;
+        tracing::info!(
+            zone = %runtime.zone.as_str(),
+            desired_resource_count = desired_bundle.resources.len(),
+            "resource runtime opened; awaiting the manager plane publication",
+        );
         Ok(runtime)
-    }
-
-    /// Materialize the verified bundle after the complete local generation
-    /// has passed its read-only validation barrier.
-    pub(crate) async fn materialize_desired_bundle(
-        &self,
-        bundle: &ResourceBundle,
-    ) -> Result<(), ResourceRuntimeError> {
-        let client = self.status_client()?;
-        materialize_zone_resource_bundle(&self.zone, bundle, &self.store, &client).await
-    }
-
-    /// Validate the desired bundle without advancing this Zone store.
-    pub(crate) async fn validate_desired_bundle(
-        &self,
-        bundle: &ResourceBundle,
-    ) -> Result<(), ResourceRuntimeError> {
-        validate_zone_resource_bundle(&self.zone, bundle, &self.store).await
     }
 
     /// Durably stage the complete local generation set in the coordinator
@@ -3840,13 +3171,11 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
         let operation_id = generation_publication_operation_id(set_generation);
-        let binding_digest = self.store.authority_binding_digest(set_generation.as_str());
+        let binding_digest = self
+            .authority_ledger
+            .authority_binding_digest(set_generation.as_str());
         let payload = generation_publication_payload(set_generation, &binding_digest, generations)?;
-        let operations = self
-            .store
-            .authority_operations()
-            .await
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        let operations = self.authority_ledger.authority_operations();
         if operations.iter().any(|operation| {
             operation
                 .operation_id
@@ -3873,9 +3202,8 @@ impl ZoneResourceRuntime {
             }
             return Ok(());
         }
-        self.store
+        self.authority_ledger
             .prepare_authority_operation(operation_id, payload, set_generation.as_str())
-            .await
             .map(|_| ())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)
     }
@@ -3901,12 +3229,12 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::HandlerNotReady);
         }
         let operation_id = generation_publication_operation_id(set_generation);
-        let binding_digest = self.store.authority_binding_digest(set_generation.as_str());
+        let binding_digest = self
+            .authority_ledger
+            .authority_binding_digest(set_generation.as_str());
         let operation = self
-            .store
+            .authority_ledger
             .authority_operations()
-            .await
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
             .into_iter()
             .find(|operation| operation.operation_id == operation_id)
             .ok_or(ResourceRuntimeError::HandlerNotReady)?;
@@ -3926,9 +3254,8 @@ impl ZoneResourceRuntime {
             return Ok(());
         }
         let capability = self
-            .store
+            .authority_ledger
             .resume_authority_operation(operation_id, &binding_digest)
-            .await
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         match state {
             AuthorityOperationState::Pending | AuthorityOperationState::EffectRetryable => {
@@ -3961,87 +3288,96 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)
     }
 
-    /// Materialize a validated bundle and provision bootstrap rows only after
-    /// the complete local generation set has been durably prepared.
-    pub(crate) async fn prepare_published_bundle(
-        &self,
-        bundle: &ResourceBundle,
-    ) -> Result<(), ResourceRuntimeError> {
-        self.materialize_desired_bundle(bundle)
-            .await
-            .inspect_err(|error| {
-                tracing::error!(
-                    zone = %self.zone.as_str(),
-                    error = ?error,
-                    "resource runtime desired bundle materialization failed"
-                );
-            })?;
-        if self.bootstrap_provisioned_store {
-            let client = self.status_client()?;
-            if let Some(authority) = self.authority_identity.as_ref() {
-                ensure_bootstrap_zone_resource(
-                    &self.zone,
-                    authority.zone_uid(),
-                    &self.store,
-                    &client,
-                )
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %self.zone.as_str(),
-                        error = ?error,
-                        "resource runtime Zone self bootstrap failed"
-                    );
-                })?;
-            }
-            if !bundle
-                .resources
-                .iter()
-                .any(|resource| resource.resource_type().as_str() == "Host")
-            {
-                ensure_bootstrap_host_resource(&self.zone, &self.store, &client)
-                    .await
-                    .inspect_err(|error| {
-                        tracing::error!(
-                            zone = %self.zone.as_str(),
-                            error = ?error,
-                            "resource runtime Host bootstrap failed"
-                        );
-                    })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Finish deferred startup after the complete bundle is visible in the
-    /// store. The shared Core runners own all Host/User observation and status
-    /// writes after this point.
+    /// Finish deferred startup once the composition has published this
+    /// Zone's manager plane: the Resource API service, the system-core
+    /// session, the committed policy projection and the readiness checklist
+    /// are all built here (U14: there is no durable store to activate).
     pub(crate) async fn activate_published_bundle(&mut self) -> Result<(), ResourceRuntimeError> {
+        let api = self.manager_api_service()?;
         self.refresh_authorization_policy().await?;
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "runtime-activate-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-
-        let (interaction_provider_configuration, mut interaction_provider_configuration_refused) =
-            match load_interaction_provider_configuration(
-                &self.zone,
-                &self.store,
-                store_metadata.current_revision,
+        let state = self.policy_projection.installed_state()?;
+        let bus_authorizer = BusAuthorizer::from_shared(Arc::clone(&self.authorizer), state.clone())
+            .map(|authorizer| authorizer.with_assignment_registry(Arc::clone(&self.assignments)))
+            .map_err(|error| {
+                tracing::error!(zone = %self.zone.as_str(), error = ?error, "resource runtime bus authorizer setup failed");
+                ResourceRuntimeError::AuthorizationUnavailable
+            })?;
+        let (zone_bus, mut zone_registrar) =
+            ZoneBus::new(self.zone.clone(), bus_authorizer, BusConfig::default()).map_err(
+                |error| {
+                    tracing::error!(zone = %self.zone.as_str(), error = ?error, "resource runtime Zone bus setup failed");
+                    ResourceRuntimeError::AuthenticationUnavailable
+                },
+            )?;
+        let (zone_ingress, zone_service_task, status_client, subject_context) =
+            register_system_core_session(
+                &mut zone_registrar,
+                api,
+                Arc::clone(&self.authorizer),
+                state.clone(),
             )
             .await
-            {
-            Ok(None) => (None, false),
-            Ok(Some(configuration)) if configuration.is_complete() => (Some(configuration), false),
+            .inspect_err(|error| {
+                tracing::error!(zone = %self.zone.as_str(), error = ?error, "resource runtime system-core session registration failed");
+            })?;
+        let zone_bus = Arc::new(zone_bus);
+        *self
+            .process_status_client
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+            Some(Arc::clone(&status_client));
+        *self
+            .core_controller_subject
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+            Some(subject_context);
+        *self
+            .policy_projection
+            .bus
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? =
+            Some(Arc::clone(&zone_bus));
+        self.bus = Some(zone_bus);
+        *self
+            .registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(zone_registrar);
+        *self
+            .ingress
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(zone_ingress);
+        *self
+            .service_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+            Some(zone_service_task);
+        self.policy_installed = true;
+        self.controller_endpoint_registered = true;
+        self.watch_admitted = true;
+        self.activate_committed_plane_state().await
+    }
+
+    /// Load the committed interaction configuration and the Core startup
+    /// summary from the manager plane and publish readiness.
+    async fn activate_committed_plane_state(&mut self) -> Result<(), ResourceRuntimeError> {
+        let plane = self.manager_plane_view()?;
+        let policy = self.committed_policy_snapshot();
+        let mut interaction_provider_configuration_refused = false;
+        self.interaction_provider_configuration = match load_interaction_provider_configuration(
+            plane.as_ref(),
+            &self.zone,
+        )
+        .await
+        {
+            Ok(None) => None,
+            Ok(Some(configuration)) if configuration.is_complete() => Some(configuration),
             Ok(Some(_)) => {
                 tracing::error!(
                     zone = %self.zone.as_str(),
                     "resource runtime committed interaction Provider configuration is incomplete",
                 );
-                (None, true)
+                interaction_provider_configuration_refused = true;
+                None
             }
             Err(error) => {
                 tracing::error!(
@@ -4049,14 +3385,13 @@ impl ZoneResourceRuntime {
                     error = %error,
                     "resource runtime committed interaction Provider configuration load failed",
                 );
-                (None, true)
+                interaction_provider_configuration_refused = true;
+                None
             }
         };
-        self.interaction_provider_configuration = interaction_provider_configuration;
         self.interaction_identity = match load_committed_interaction_identity(
+            plane.as_ref(),
             &self.zone,
-            &self.store,
-            store_metadata.current_revision,
             self.interaction_provider_configuration.as_ref(),
         )
         .await
@@ -4072,24 +3407,22 @@ impl ZoneResourceRuntime {
                 None
             }
         };
-        let interaction_present =
-            interaction_resources_present(&self.zone, &self.store).await?;
+        let interaction_present = interaction_resources_present(plane.as_ref()).await?;
         self.interaction_state = derive_interaction_state(
             interaction_present,
             self.interaction_provider_configuration.as_ref(),
             self.interaction_identity.as_ref(),
             interaction_provider_configuration_refused,
         );
-        let system_core =
-            system_core_startup_result(&self.zone, &self.store)
-                .await
-                .inspect_err(|error| {
-                    tracing::error!(
-                        zone = %self.zone.as_str(),
-                        error = ?error,
-                        "resource runtime system-core startup summary failed",
-                    );
-                })?;
+        let system_core = system_core_startup_result(plane.as_ref(), &policy)
+            .await
+            .inspect_err(|error| {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    error = ?error,
+                    "resource runtime system-core startup summary failed",
+                );
+            })?;
         let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
             && system_core.user_phase == HandlerPhase::Ready
         {
@@ -4097,13 +3430,6 @@ impl ZoneResourceRuntime {
         } else {
             HandlerPhase::Degraded
         };
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "runtime-activate-metadata-after-core-runners",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         {
             let recovered_authority = self.authority_index.lock().await;
             let mut core = self
@@ -4120,9 +3446,8 @@ impl ZoneResourceRuntime {
                 },
                 RecoverySnapshot {
                     startup_epoch: 0,
-                    checkpoint_revision: store_metadata.current_revision.get(),
-                    active_configuration_revision: store_metadata
-                        .policy_snapshot
+                    checkpoint_revision: u64::from(policy.policy_revision),
+                    active_configuration_revision: policy
                         .active_configuration_revision
                         .get(),
                     provider_lease_count: 0,
@@ -4136,10 +3461,9 @@ impl ZoneResourceRuntime {
             d2bd_runtime::resource_runtime_support::mark_core_handlers(
                 &mut core,
                 aggregate_handler_phase,
-                store_metadata.current_revision.get(),
+                u64::from(policy.policy_revision),
             )?;
         };
-        self.store_metadata = store_metadata;
         self.zone_status = Mutex::new(
             SystemCoreStatusEmitter::new()
                 .emit(
@@ -4149,7 +3473,7 @@ impl ZoneResourceRuntime {
                             handler_phase_to_zone_phase(system_core.user_phase),
                         )
                         .with_runtime_metadata(zone_runtime_metadata(
-                            &self.store_metadata,
+                            &policy,
                             system_core.total_resource_count,
                             system_core.generation_cleanup_pending,
                             system_core.cleanup_pending_count,
@@ -4166,7 +3490,6 @@ impl ZoneResourceRuntime {
             core.publish_readiness().map_err(map_startup_error)?
         };
         self.readiness = ZoneRuntimeReadiness {
-            store_ready: true,
             resource_api_ready: true,
             local_session_ready: true,
             provider_path_ready: self.readiness.provider_path_ready,
@@ -4188,17 +3511,22 @@ impl ZoneResourceRuntime {
             .map(ZoneAuthorityIdentity::zone_uid)
     }
 
+    /// The Zone UID bound at production startup, resolved eagerly.
+    ///
+    /// U14: the durable store metadata that also carried the bound Zone UID is
+    /// gone, and the bundle authority is the one Zone identity binding.
+    fn bound_zone_uid(&self) -> Result<ResourceUid, ResourceRuntimeError> {
+        self.authority_zone_uid()
+            .cloned()
+            .ok_or(ResourceRuntimeError::IdentityUnbound)
+    }
+
     /// Borrow the content-addressed bundle generation bound at production
     /// startup.
     pub(crate) fn authority_bundle_generation(&self) -> Option<&ResourceBundleGenerationId> {
         self.authority_identity
             .as_ref()
             .map(ZoneAuthorityIdentity::bundle_generation)
-    }
-
-    /// Borrow the opaque store id used for the broker request.
-    pub fn store_id(&self) -> &str {
-        &self.store_id
     }
 
     /// Return the startup readiness projection.
@@ -4371,46 +3699,30 @@ impl ZoneResourceRuntime {
         });
     }
 
-    /// Return the policy revision committed in the opened resource store.
+    /// The policy snapshot of the installed authorization projection; the
+    /// fixed bootstrap snapshot until the manager-served policy rows are
+    /// compiled in (U14: there is no durable store metadata to read).
     ///
     /// Interaction Providers bind this snapshot instead of carrying a
     /// route-derived policy placeholder.
-    pub const fn committed_policy_snapshot(&self) -> PolicySnapshot {
-        self.store_metadata.policy_snapshot
+    pub fn committed_policy_snapshot(&self) -> PolicySnapshot {
+        self.policy_projection
+            .installed_state()
+            .map(|state| state.snapshot)
+            .unwrap_or(self.bootstrap_policy_snapshot)
     }
 
-    /// Return the durable resource revision used to fence interaction
-    /// evidence against a later store commit.
+    /// Return the committed policy revision interaction evidence is fenced
+    /// against: the installed projection's, or the bootstrap snapshot's while
+    /// no manager-served projection is installed.
     pub fn current_revision(&self) -> ZoneRevision {
         self.authorization_state
             .lock()
             .ok()
             .and_then(|state| state.as_ref().map(|state| state.zone_policy_revision))
-            .unwrap_or(self.store_metadata.current_revision)
-    }
-
-    /// Verify the committed policy inputs the refresh compiled against.
-    ///
-    /// A mutation is admitted against the policy snapshot (the store enforces
-    /// the same fence at commit, `transaction.rs`); the Zone's resource
-    /// revision advancing under the load - derived children, process churn -
-    /// never changes the authorization inputs and must not gate the mutation.
-    /// Only a policy-input change supersedes the loaded rows.
-    fn verify_policy_snapshot(
-        zone: &ZoneId,
-        loaded: &StoreRuntimeMetadata,
-        verify: &StoreRuntimeMetadata,
-    ) -> Result<(), ResourceRuntimeError> {
-        if verify.policy_snapshot == loaded.policy_snapshot {
-            return Ok(());
-        }
-        tracing::warn!(
-            zone = zone.as_str(),
-            before_policy_revision = loaded.policy_snapshot.policy_revision,
-            after_policy_revision = verify.policy_snapshot.policy_revision,
-            "authorization policy refresh: policy snapshot changed under the refresh",
-        );
-        Err(ResourceRuntimeError::PolicyUnavailable)
+            .unwrap_or(ZoneRevision::new(
+                self.bootstrap_policy_snapshot.policy_revision,
+            ))
     }
 
     /// Refresh the native authorization projection from the current committed
@@ -4439,32 +3751,17 @@ impl ZoneResourceRuntime {
     }
 
     async fn refresh_authorization_policy_locked(&self) -> Result<(), ResourceRuntimeError> {
-        let metadata = retry_transient_store_read(
-            &self.zone,
-            "authorization-policy-refresh-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|error| {
-                tracing::warn!(
-                    zone = self.zone.as_str(),
-                    error = ?error,
-                    "authorization policy refresh: Store metadata read failed",
-                );
-                ResourceRuntimeError::PolicyUnavailable
-            })?;
-        let current = self
-            .policy_projection
-            .installed_state()
-            .ok();
-        let policy_loaded = current.is_some();
-        if metadata.policy_snapshot.policy_revision == 0 {
-            tracing::warn!(
-                zone = self.zone.as_str(),
-                "authorization policy refresh: committed policy revision is unset",
-            );
-            return Err(ResourceRuntimeError::PolicyUnavailable);
-        }
+        // U14: the manager-served policy rows are the whole authority, so the
+        // snapshot the compile is fenced at is derived from those rows (there
+        // is no durable store metadata left to read). The derived revision is
+        // not a change signal on its own (see `policy_inputs_digest`), so the
+        // refresh compares the row digest and keeps the installed projection
+        // when the inputs did not move.
+        let resources = self.committed_policy_resources().await?;
+        let policy_inputs = policy_inputs_digest(&resources);
+        let inputs_changed =
+            self.policy_projection.installed_policy_inputs() != Some(policy_inputs);
+        let policy_loaded = self.policy_projection.installed_state().is_ok();
         let controller_subjects = match self.current_controller_policy_subjects().await {
             Ok(subjects) => subjects,
             Err(error) => {
@@ -4480,42 +3777,17 @@ impl ZoneResourceRuntime {
             .policy_projection
             .installed_controller_subjects()?;
         if policy_loaded
+            && !inputs_changed
             && !self.system_core_rebind_pending.load(Ordering::Acquire)
-            && current.as_ref().is_some_and(|state| {
-                state.snapshot == metadata.policy_snapshot
-                    && state.zone_policy_revision == metadata.current_revision
-            })
             && installed_controller_subjects == controller_subjects
         {
             return Ok(());
         }
-        let resources = self
-            .committed_policy_resources(&format!(
-                "authorization-policy-refresh:{}",
-                metadata.current_revision.get()
-            ))
-            .await?;
-        let current_metadata = retry_transient_store_read(
-            &self.zone,
-            "authorization-policy-refresh-verify",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|error| {
-                tracing::warn!(
-                    zone = self.zone.as_str(),
-                    error = ?error,
-                    "authorization policy refresh: Store metadata verify read failed",
-                );
-                ResourceRuntimeError::PolicyUnavailable
-            })?;
-        // A mutation is admitted against the policy snapshot (the store
-        // enforces the same fence at commit, `transaction.rs`); the Zone's
-        // resource revision advancing under the load - derived children,
-        // process churn - does not change the authorization inputs and must
-        // never gate the mutation. Only a policy-input change supersedes the
-        // loaded rows.
-        Self::verify_policy_snapshot(&self.zone, &metadata, &current_metadata)?;
+        let mut snapshot = policy_snapshot_for_rows(&resources)?;
+        snapshot.policy_revision = self
+            .policy_projection
+            .next_policy_revision(snapshot.policy_revision, inputs_changed);
+        let current_revision = ZoneRevision::new(snapshot.policy_revision);
         let previous = self
             .policy_subject_fingerprints
             .lock()
@@ -4525,8 +3797,8 @@ impl ZoneResourceRuntime {
         let (policy, state) =
             d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
                 &self.zone,
-                metadata.policy_snapshot,
-                metadata.current_revision,
+                snapshot,
+                current_revision,
                 &self.bundle_resource_types,
                 &resources,
                 controller_subjects.iter().cloned(),
@@ -4542,7 +3814,7 @@ impl ZoneResourceRuntime {
         if rebind_core {
             self.system_core_rebind_pending.store(true, Ordering::Release);
         }
-        self.install_policy_projection(policy, state.clone(), controller_subjects)?;
+        self.install_policy_projection(policy, state.clone(), controller_subjects, policy_inputs)?;
         if let Err(error) = self.refresh_system_core_session_locked(state.clone()).await {
             // The policy projection was installed atomically before the
             // session rebind. Keep that complete projection available while
@@ -4555,14 +3827,6 @@ impl ZoneResourceRuntime {
             .lock()
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = fingerprints;
         if rebind_core {
-            if let Some(providers) = self
-                .controller_session_providers
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .clone()
-            {
-                self.rebuild_assigned_process_api_locked(&providers).await?;
-            }
             self.system_core_rebind_pending
                 .store(false, Ordering::Release);
         }
@@ -4593,11 +3857,10 @@ impl ZoneResourceRuntime {
             &crate::process_provider_runtime::ProductionProcessProviders,
         >,
     ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
-        let plane = self.manager_plane_view();
+        let plane = self.manager_plane_view()?;
         load_controller_policy_subjects(
             &self.zone,
-            &self.store,
-            plane.as_deref(),
+            plane.as_ref(),
             providers,
             &self.controller_sessions,
         )
@@ -4609,9 +3872,10 @@ impl ZoneResourceRuntime {
         policy: PolicySet,
         state: AuthorizationState,
         controller_subjects: BTreeSet<BoundSubject>,
+        policy_inputs: [u8; 32],
     ) -> Result<(), ResourceRuntimeError> {
         self.policy_projection
-            .install(policy, state, controller_subjects)
+            .install(policy, state, controller_subjects, policy_inputs)
     }
 
     /// Re-enroll the fixed internal system-core session after a policy
@@ -4657,14 +3921,6 @@ impl ZoneResourceRuntime {
         if !existing_session && session_state != (false, false, false) {
             return Err(ResourceRuntimeError::AuthenticationUnavailable);
         }
-        if let Some(coordinator) = self
-            .controller_session_coordinator
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-        {
-            coordinator.clear_assigned_process_api()?;
-        }
         *self
             .process_status_client
             .lock()
@@ -4706,7 +3962,7 @@ impl ZoneResourceRuntime {
         let (new_ingress, new_task, status_client, subject_context) =
             match register_system_core_session(
                 &mut registrar,
-                Arc::clone(&self.api),
+                self.manager_api_service()?,
                 Arc::clone(&self.authorizer),
                 state,
             )
@@ -4747,48 +4003,15 @@ impl ZoneResourceRuntime {
 
     /// Resolve one public peer uid to its Zone `User`.
     ///
-    /// `User` is a converted type: the manager is its status authority and a
-    /// converted row's status is in-memory only (R11), so a durable-store read
-    /// can never observe it `Ready`. Read the manager-rendered rows when this
-    /// Zone's plane serves them and fall back to the store otherwise (an
-    /// unconverted or legacy Zone).
+    /// `User` is a converted type: the manager is its identity and status
+    /// authority (R11), so resolution reads the manager's `User` rows.
     async fn resolve_public_user(
         &self,
         peer_uid: u32,
-        operation_id: &str,
+        _operation_id: &str,
     ) -> Result<d2bd_runtime::resource_runtime_support::ResolvedZoneUser, ResourceRuntimeError>
     {
-        let mut rows = d2bd_runtime::resource_runtime_support::load_zone_user_rows(
-            &self.store,
-            &self.zone,
-            &format!("{operation_id}:user"),
-        )
-        .await?;
-        if let Ok(plane) = self.v3_plane() {
-            let client = plane.client().clone();
-            for row in rows.iter_mut() {
-                let key = d2b_resource_runtime::identity::ResourceKey::new(
-                    self.zone.as_str(),
-                    "User",
-                    row.resource_ref.name().as_str(),
-                );
-                let Ok(Some(view)) = client.get(key).await else {
-                    continue;
-                };
-                // `User` is served by the v3 plane (U12): the manager row is
-                // the authority for identity AND status. The compiled policy's
-                // subject bindings resolve the same manager-rendered row, so
-                // resolution must adopt its uid/generation with the live
-                // status - overlaying only the status onto the pre-v3 mirror
-                // bound a subject uid no binding could ever match and every
-                // public read was refused.
-                if let Ok(rendered) =
-                    d2b_resource_api::manager_backend::manager_row_stored(&view)
-                {
-                    *row = rendered;
-                }
-            }
-        }
+        let rows = self.manager_stored_rows("User").await?;
         d2bd_runtime::resource_runtime_support::resolve_zone_user_from_rows(
             &self.zone,
             peer_uid,
@@ -4816,7 +4039,7 @@ impl ZoneResourceRuntime {
             .authorizer
             .issue_authenticated_subject(context, state)
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        self.api
+        self.manager_api_service()?
             .admit_guest_lifecycle(&subject, target, operation_id.to_owned())
             .await
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
@@ -4912,7 +4135,7 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
         Ok((
-            self.store_metadata.zone_uid.clone(),
+            self.bound_zone_uid()?,
             guest.uid,
             guest.generation,
             provider.generation,
@@ -4925,7 +4148,7 @@ impl ZoneResourceRuntime {
     /// The pre-v3 store linked every owned row to its owner by uid: it
     /// resolved the row's `metadata.ownerRef` to the owner row's uid and
     /// carried that value in `record.owner_uid`
-    /// (`d2b-resource-store-redb::transaction::resolve_uid_in_read`), and the
+    /// (`@@REDB-D@@::transaction::resolve_uid_in_read`), and the
     /// old Process descriptor composer read it as the launch ticket's owner
     /// identity. `Guest` stays on this plane, so a converted Process row
     /// whose authored owner is a Guest can only reproduce the same durable
@@ -4962,22 +4185,8 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
         let guest = self
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "guest-provider-route".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "guest-provider-route".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: target.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            .committed_resource_stored(target, "guest-provider-route")
+            .await?;
         let envelope = ResourceEnvelope::from_json(&guest.canonical_json)
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
         let provider_ref = envelope
@@ -4989,23 +4198,6 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
         Ok(provider_ref)
-    }
-
-    /// Bind a Resource API client to a sealed Resource API session subject.
-    ///
-    /// The wrapper is issued only after ComponentSession or root-listener
-    /// authentication and native policy evaluation. Callers cannot construct
-    /// it from a request payload.
-    pub(crate) fn bind_operator_resource_client(
-        &self,
-        subject: d2b_resource_api::AuthenticatedSubjectContext,
-    ) -> Result<
-        Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
-        ResourceRuntimeError,
-    > {
-        let adapter = ResourceBusAdapter::bind_component_session(Arc::clone(&self.api), subject)
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
-        Ok(Arc::new(adapter.client()))
     }
 
     /// Attach the published per-zone v3 planes (F1 wiring from the
@@ -5022,32 +4214,17 @@ impl ZoneResourceRuntime {
         if let Ok(mut slot) = self.v3_planes.lock() {
             *slot = Some(Arc::clone(&planes));
         }
-        // Issue #507: from this moment the zone has a manager authority, so
-        // the legacy API binding refuses every converted type (the mirror may
-        // no longer serve one), and the manager-first reader helpers treat the
-        // manager's answer as final.
-        self.manager_plane_published.store(true, Ordering::Release);
-        // G5: the controller-session path (and the Provider's dependency
-        // observation) read manager-served controller rows through the same
-        // published table, so the session coordinator gets the zone plane's
-        // manager view seam here, before activation. This runs before the
-        // composition fills the table (it is published after the per-zone
-        // loop), so the seam resolves the zone's plane per read.
+        // The manager is the only authority: the controller-session path (and
+        // the Provider's dependency observation) read manager-served rows
+        // through the same published table, so the session coordinator gets
+        // the zone plane's manager view seam here, before activation. This
+        // runs before the composition fills the table (it is published after
+        // the per-zone loop), so the seam resolves the zone's plane per read.
         self.controller_session_coordinator()
             .attach_plane_view(Arc::new(PublishedPlaneControllerView::new(
                 Arc::clone(&planes),
                 self.zone.clone(),
             )));
-    }
-
-    /// The manager-backed Resource API service for this Zone's converted
-    /// types (U8/U9 F1 wiring): the manager client and watch hub come from
-    /// the published v3 plane, the policy from the Zone's manager-plane
-    /// authorizer. Built once, on first use.
-    /// The Zone's durable store handle (read-only seam for the converted
-    /// shared-provider effects).
-    pub(crate) fn store(&self) -> &Arc<RedbResourceStore> {
-        &self.store
     }
 
     /// The live controller-session reconnect generation, when one is
@@ -5106,43 +4283,37 @@ impl ZoneResourceRuntime {
         &self,
         resource_type: &str,
     ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
-        let plane = self.manager_plane_view();
-        bridge_manager_rows(plane.as_deref(), resource_type).await
+        let plane = self.manager_plane_view()?;
+        bridge_manager_rows(plane.as_ref(), resource_type).await
     }
 
-    /// The plane-view seam over the published per-zone plane, `None` until
-    /// the composition publishes it (U12 bridge: the same `Ok(empty)`-keeps-
-    /// the-old-path contract G5 uses).
-    fn manager_plane_view(&self) -> Option<Arc<dyn ControllerPlaneView>> {
-        let plane = self.v3_plane().ok()?;
-        Some(Arc::new(ManagerControllerPlaneView::new(
+    /// Every committed `Process`/`EphemeralProcess` row, read from the
+    /// manager (the controller-session fence's generic Process list).
+    pub(crate) async fn committed_process_rows(
+        &self,
+    ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+        let mut rows = self.manager_stored_rows("Process").await?;
+        rows.extend(self.manager_stored_rows("EphemeralProcess").await?);
+        Ok(rows)
+    }
+
+    /// The plane-view seam over the published per-zone plane. A missing
+    /// plane is a read failure the callers retry: with one plane there is no
+    /// second authority to fall back to.
+    fn manager_plane_view(&self) -> Result<Arc<dyn ControllerPlaneView>, ResourceRuntimeError> {
+        let plane = self.v3_plane()?;
+        Ok(Arc::new(ManagerControllerPlaneView::new(
             plane.client().clone(),
             self.zone.clone(),
         )))
     }
 
-    /// Merge the manager-served rows of every requested type into a
-    /// store-shaped reader result (the multi-type form of
-    /// [`Self::manager_stored_rows`]).
-    pub(crate) async fn merge_manager_rows_for_types(
-        &self,
-        resource_types: &[&str],
-        rows: &mut Vec<StoredResource>,
-    ) -> Result<(), ResourceRuntimeError> {
-        let plane = self.manager_plane_view();
-        bridge_merge_rows_for_types(plane.as_deref(), resource_types, rows).await
-    }
-
-    /// The committed policy inputs for this Zone, durable rows merged with
-    /// the manager-served ones (U12 bridge; the policy loader itself is
-    /// redb-only).
+    /// The committed policy inputs for this Zone, read from the manager.
     pub(crate) async fn committed_policy_resources(
         &self,
-        operation_id: &str,
     ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
-        let plane = self.manager_plane_view();
-        committed_policy_resources_bridged(&self.zone, &self.store, plane.as_deref(), operation_id)
-            .await
+        let plane = self.manager_plane_view()?;
+        committed_policy_resources(plane.as_ref()).await
     }
 
     /// The production Core-driver effects port (U12): this zone's live
@@ -5214,33 +4385,12 @@ impl ZoneResourceRuntime {
             .ok_or(ResourceRuntimeError::AuthorizationUnavailable)
     }
 
-    #[cfg(feature = "test-support")]
-    pub fn bind_operator_resource_client_for_test(
-        &self,
-        context: d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext,
-    ) -> Result<
-        Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
-        ResourceRuntimeError,
-    > {
-        let state = self
-            .authorization_state
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let subject = self
-            .authorizer
-            .issue_authenticated_subject(context, state)
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        self.bind_operator_resource_client(subject)
-    }
-
     /// Borrow the daemon-owned Resource API client used by the target-local
     /// process reconciler. The client is present only after the Zone's
     /// authenticated system-core session has been enrolled.
     pub(crate) fn process_resource_client(
         &self,
-    ) -> Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>> {
+    ) -> Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>> {
         if self.system_core_rebind_pending.load(Ordering::Acquire) {
             return None;
         }
@@ -5276,7 +4426,7 @@ impl ZoneResourceRuntime {
     fn status_client(
         &self,
     ) -> Result<
-        Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>,
+        Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
         ResourceRuntimeError,
     > {
         self.process_status_client
@@ -5284,176 +4434,6 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .clone()
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)
-    }
-
-    fn process_controller_api(
-        &self,
-        mode: DaemonMode,
-        authority: Arc<CoreAssignmentAuthority>,
-        authorization_state: AuthorizationState,
-    ) -> Result<RedbRegisteredControllerApi, ResourceRuntimeError> {
-        let subject_context = self
-            .core_controller_subject
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let subject = self
-            .authorizer
-            .issue_authenticated_subject(subject_context, authorization_state.clone())
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        Ok(self
-            .api
-            .registered_controller_api(subject, authorization_state, Vec::new())
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
-            .with_assignment_fence_resolver(process_assignment_fence_resolver(
-                Arc::clone(&self.store),
-                mode,
-                authority,
-            )))
-    }
-
-    // Callers hold controller_session_lock so the authority and API publish
-    // cannot race controller-session evidence writes.
-    async fn rebuild_assigned_process_api_locked(
-        &self,
-        providers: &crate::process_provider_runtime::ProductionProcessProviders,
-    ) -> Result<(Arc<CoreAssignmentAuthority>, AuthorizationState), ResourceRuntimeError> {
-        let core_authority = self.core_assignment_fences().await?.4;
-        let authorization_state = self
-            .authorization_state
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let process_api = Arc::new(self.process_controller_api(
-            providers.mode(),
-            Arc::clone(&core_authority),
-            authorization_state.clone(),
-        )?);
-        self.controller_session_coordinator()
-            .set_assigned_process_api(process_api)?;
-        Ok((core_authority, authorization_state))
-    }
-
-    async fn core_assignment_fences(
-        &self,
-    ) -> Result<
-        (
-            Vec<(ResourceRef, ResourceAssignmentFence)>,
-            ResourceGeneration,
-            ControllerGeneration,
-            ReconnectGeneration,
-            Arc<CoreAssignmentAuthority>,
-        ),
-        ResourceRuntimeError,
-    > {
-        let subject = self
-            .core_controller_subject
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let metadata = retry_transient_store_read(
-            &self.zone,
-            "core-controller-assignment-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let controller_generation = metadata
-            .policy_snapshot
-            .controller_generation
-            .ok_or(ResourceRuntimeError::HandlerNotReady)?;
-        let resource_types = crate::core_driver::CORE_RESOURCE_TYPES
-            .iter()
-            .map(|resource_type| {
-                ResourceTypeName::parse((*resource_type).to_owned())
-                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut resources = Vec::new();
-        let mut cursor = None;
-        loop {
-            let request = StoreListRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "core-controller-assignment-relist".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "core-controller-assignment-relist".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    resource_types: resource_types.clone(),
-                    resource_names: Vec::new(),
-                    filters: Vec::new(),
-                    page_size: 256,
-                    cursor: cursor.clone(),
-                    projection: StoreProjection::MetadataOnly,
-                };
-            let page = retry_transient_store_list(
-                &self.zone,
-                "core-controller-assignment-relist",
-                || self.store.list(request.clone()),
-            )
-            .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-            resources.extend(page.resources);
-            if resources.len() > d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS {
-                return Err(ResourceRuntimeError::AuthorizationUnavailable);
-            }
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        // U12 bridge: the nine Core-family types are manager rows now; a
-        // converted row the pre-v3 store no longer holds must still fence
-        // (the manager row wins where both hold the reference).
-        self.merge_manager_rows_for_types(&crate::core_driver::CORE_RESOURCE_TYPES, &mut resources)
-            .await?;
-        let provider_ref = ResourceRef::parse(CORE_CONTROLLER_PROVIDER_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let provider_generation = resources
-            .iter()
-            .find(|resource| resource.resource_ref == provider_ref)
-            .map(|resource| resource.generation)
-            .ok_or(ResourceRuntimeError::HandlerNotReady)?;
-        let controller_ref = ResourceRef::parse(CORE_CONTROLLER_PROCESS_REF)
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let target = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
-            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-        let session_generation = subject.reconnect_generation();
-        let authority = Arc::new(CoreAssignmentAuthority {
-            provider_generation,
-            controller_generation,
-            session_generation,
-            controller_role: controller_ref.clone(),
-        });
-        let assignments = resources
-            .into_iter()
-            .map(|resource| {
-                let fence = ResourceAssignmentFence {
-                    resource_uid: resource.uid.clone(),
-                    resource_revision: resource.revision,
-                    provider_generation,
-                    controller_generation,
-                    controller_role: controller_ref.clone(),
-                    target: target.clone(),
-                    session_generation,
-                    epoch: ASSIGNMENT_EPOCH,
-                    scope: ResourceAssignmentScope::Primary,
-                };
-                (resource.resource_ref, fence)
-            })
-            .collect();
-        Ok((
-            assignments,
-            provider_generation,
-            controller_generation,
-            session_generation,
-            authority,
-        ))
     }
 
     /// The production effect port for the v3 `Credential` driver (U12 KTD3).
@@ -5471,85 +4451,23 @@ impl ZoneResourceRuntime {
         &self,
         agent_ready: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
     ) -> Arc<dyn CredentialDriverEffects> {
-        let facts_store = Arc::clone(&self.store);
+        let facts_planes = Arc::clone(&self.v3_planes);
         let facts_zone = self.zone.clone();
         Arc::new(ProductionCredentialDriverEffects::new(
             Arc::new(move |provider_ref: &ResourceRef, execution_ref: &ResourceRef| {
-                let store = Arc::clone(&facts_store);
+                let planes = Arc::clone(&facts_planes);
                 let zone = facts_zone.clone();
                 let provider_ref = provider_ref.clone();
                 let execution_ref = execution_ref.clone();
                 Box::pin(async move {
-                    credential_dependency_facts(&store, &zone, &provider_ref, &execution_ref).await
+                    let plane = published_plane_view(&planes, &zone)?;
+                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref).await
                 })
             }),
             Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
             agent_ready,
             self.credential_sessions.clone(),
         ))
-    }
-
-    /// Persist a provider phase together with its typed durable projection.
-    ///
-    /// Provider readiness must be observed from this committed projection on
-    /// the next reconcile pass; an in-memory effect port is not an authority
-    /// for restart or dependent-resource admission.
-    ///
-    /// U17: converted types have no durable status write on the new plane
-    /// (their actors own status, R11/AE6), so the only remaining caller is
-    /// the test-only Wave 6 network acceptance path.
-    #[cfg(test)]
-    pub(crate) async fn persist_public_reconcile_status(
-        &self,
-        resource_ref: &ResourceRef,
-        resource_uid: &ResourceUid,
-        operation_id: &str,
-        phase: &str,
-        resource_projection: Option<&Value>,
-    ) -> Result<(), ResourceRuntimeError> {
-        let resource = self
-            .backend
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 30_000,
-                },
-                zone: self.zone.clone(),
-                target: resource_ref.clone(),
-                expected_uid: Some(resource_uid.clone()),
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let current = serde_json::from_slice::<Value>(&resource.canonical_json)
-            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
-        let current_phase = current
-            .get("status")
-            .and_then(|status| status.get("phase"))
-            .and_then(Value::as_str);
-        let current_observed_generation = current
-            .get("status")
-            .and_then(|status| status.get("observedGeneration"))
-            .and_then(Value::as_u64);
-        if current_phase == Some(phase)
-            && current_observed_generation == Some(resource.generation.get())
-            && resource_projection.is_none()
-        {
-            return Ok(());
-        }
-        let status = json!({ "phase": phase });
-        let client = self
-            .status_client()
-            .map_err(|_| ResourceRuntimeError::ControllerEndpointUnavailable)?;
-        let projection = resource_projection.or_else(|| {
-            current
-                .get("status")
-                .and_then(|status| status.get("resource"))
-        });
-        persist_resource_status_with_projection(&client, &resource, &status, projection).await
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the
@@ -5562,7 +4480,7 @@ impl ZoneResourceRuntime {
     /// Volume, Network, Device TPM, and Cloud Hypervisor controllers.
     pub async fn reconcile_wave6_operator_acceptance<B>(
         &self,
-        client: &ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>,
+        client: &ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>,
         boundary: &B,
     ) -> Result<Wave6AcceptanceReport, ResourceRuntimeError>
     where
@@ -5716,18 +4634,15 @@ impl ZoneResourceRuntime {
         if identity.subject_ref() != &expected_guest {
             return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
         }
-        let (resource, snapshot_revision) = current_committed_resource(
+        let plane = self.manager_plane_view()?;
+        let resource = current_committed_resource(
+            plane.as_ref(),
             &self.zone,
-            &self.store,
             identity.wayland_session_ref(),
             "interaction-wayland-session-current",
         )
         .await?;
-        let spec = committed_wayland_session_spec(
-            &self.zone,
-            snapshot_revision,
-            &resource,
-        )?;
+        let spec = committed_wayland_session_spec(&self.zone, &resource)?;
         if spec.guest_ref() != &expected_guest || !spec.cross_domain_trusted() {
             return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
         }
@@ -5786,160 +4701,55 @@ impl ZoneResourceRuntime {
         &self,
         resource_type: &str,
     ) -> Result<Vec<Value>, ResourceRuntimeError> {
-        let resource_type = ResourceTypeName::parse(resource_type.to_owned())
+        ResourceTypeName::parse(resource_type.to_owned())
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
-        // U12/G5 reader bridge: a converted type's rows live in the manager
-        // (the store keeps the pre-v3 mirror U14 deletes), so the manager row
-        // is authoritative where both hold the same reference. Once the
-        // manager plane is published it is the only source for a converted
-        // type (issue #507): the durable mirror can neither add a row the
-        // manager does not hold nor resurrect a deleted one. Before
-        // publication (legacy boot / fixtures) the durable list still serves.
-        let plane = self.manager_plane_view();
-        let manager_authority =
-            !durable_fallback_allowed(resource_type.as_str(), plane.is_some());
-        let mut cursor = None;
-        let mut out: Vec<Value> = Vec::new();
-        while !manager_authority {
-            let request = StoreListRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "network-admission-scan".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "network-admission-scan".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    resource_types: vec![resource_type.clone()],
-                    resource_names: Vec::new(),
-                    filters: Vec::new(),
-                    page_size: 512,
-                    cursor: cursor.clone(),
-                    projection: StoreProjection::Full,
-                };
-            let page = retry_transient_store_list(
-                &self.zone,
-                "network-admission-scan",
-                || self.store.list(request.clone()),
-            )
-            .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-            for resource in page.resources {
-                out.push(
-                    serde_json::from_slice(&resource.canonical_json)
-                        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?,
-                );
-            }
-            cursor = page.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        // The manager rows of the type, merged over whatever the durable list
-        // contributed above (nothing, once the manager is the authority for a
-        // converted type). The merge is a no-op for unconverted types.
-        let manager_rows = bridge_manager_rows(plane.as_deref(), resource_type.as_str()).await?;
-        for row in manager_rows {
-            let Ok(value) = serde_json::from_slice::<Value>(&row.canonical_json) else {
-                continue;
-            };
-            match out.iter_mut().find(|existing| {
-                existing.get("type").and_then(Value::as_str)
-                    == Some(row.resource_ref.resource_type().as_str())
-                    && existing
-                        .get("metadata")
-                        .and_then(|metadata| metadata.get("name"))
-                        .and_then(Value::as_str)
-                        == Some(row.resource_ref.name().as_str())
-            }) {
-                Some(existing) => *existing = value,
-                None => out.push(value),
-            }
-        }
-        Ok(out)
+        self.manager_stored_rows(resource_type)
+            .await?
+            .into_iter()
+            .map(|row| {
+                serde_json::from_slice::<Value>(&row.canonical_json)
+                    .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+            })
+            .collect()
     }
 
     pub(crate) async fn committed_resource_value(
         &self,
         target: &ResourceRef,
-        operation_id: &str,
+        _operation_id: &str,
     ) -> Result<Value, ResourceRuntimeError> {
-        self.committed_resource_optional(target, operation_id)
+        self.committed_resource_optional(target)
             .await?
             .ok_or(ResourceRuntimeError::StoreReadFailed)
     }
 
     /// [`Self::committed_resource_value`] with an explicit absence answer for
     /// callers whose "not ready" case is exactly "the row is not there"
-    /// (converted rows the provider controller has not committed yet). A
-    /// manager/store failure is still an error, never absence.
+    /// (a provider controller has not committed it yet). A manager failure is
+    /// still an error, never absence.
     pub(crate) async fn committed_resource_optional(
         &self,
         target: &ResourceRef,
-        operation_id: &str,
     ) -> Result<Option<Value>, ResourceRuntimeError> {
-        // U12/G5 reader bridge: the manager is the authority for a converted
-        // type. A manager without the row once its plane is published is the
-        // honest not-committed absence - the durable mirror never answers for
-        // a converted type after publication (issue #507); before publication
-        // (legacy boot / fixtures) the durable plane still answers.
-        let plane = self.manager_plane_view();
-        let manager_published = plane.is_some();
-        if let Some(row) = bridge_manager_rows(plane.as_deref(), target.resource_type().as_str())
-            .await?
-            .into_iter()
-            .find(|row| row.resource_ref == *target)
-        {
-            return serde_json::from_slice::<Value>(&row.canonical_json)
+        let plane = self.manager_plane_view()?;
+        match bridge_manager_row(plane.as_ref(), target).await? {
+            Some(row) => serde_json::from_slice::<Value>(&row.canonical_json)
                 .map(Some)
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed);
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed),
+            None => Ok(None),
         }
-        if !durable_fallback_allowed(target.resource_type().as_str(), manager_published) {
-            return Ok(None);
-        }
-        let request = StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: target.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            };
-        let resource = match retry_transient_store_read(&self.zone, operation_id, || {
-            self.store.get(request.clone())
-        })
-        .await
-        {
-            Ok(resource) => resource,
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => return Ok(None),
-            Err(_) => return Err(ResourceRuntimeError::StoreReadFailed),
-        };
-        if resource.zone != self.zone || resource.resource_ref != *target {
-            return Err(ResourceRuntimeError::StoreReadFailed);
-        }
-        serde_json::from_slice(&resource.canonical_json)
-            .map(Some)
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)
     }
 
-    /// [`Self::committed_resource_optional`] for a converted row read from
-    /// its authority: the manager is the only writer for a converted type
-    /// (KTD3), so the pre-v3 store is not a fallback. A row the manager does
-    /// not hold is `Ok(None)` - the honest not-committed answer, never a
-    /// store `ResourceNotFound` for a row the store does not own; an
-    /// unpublished plane or a manager RPC failure is an error the callers
-    /// retry, never absence (G5).
+    /// [`Self::committed_resource_optional`] for a row whose authority is the
+    /// manager: a row the manager does not hold is `Ok(None)` - the honest
+    /// not-committed answer; an unpublished plane or a manager RPC failure is
+    /// an error the callers retry, never absence.
     pub(crate) async fn committed_manager_row_optional(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<Value>, ResourceRuntimeError> {
-        let Some(row) = bridge_manager_row(self.manager_plane_view().as_deref(), target).await?
-        else {
+        let plane = self.manager_plane_view()?;
+        let Some(row) = bridge_manager_row(plane.as_ref(), target).await? else {
             return Ok(None);
         };
         serde_json::from_slice::<Value>(&row.canonical_json)
@@ -5947,49 +4757,17 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)
     }
 
-    /// The committed row as the store-shaped record, manager-first for
-    /// converted types (the same merge order as
-    /// [`Self::committed_resource_value`]). Callers that need the row's
-    /// identity fields (uid, generation, revision) read them from here.
+    /// The committed row as the store-shaped record. Callers that need the
+    /// row's identity fields (uid, generation, revision) read them here.
     pub(crate) async fn committed_resource_stored(
         &self,
         target: &ResourceRef,
-        operation_id: &str,
+        _operation_id: &str,
     ) -> Result<StoredResource, ResourceRuntimeError> {
-        let plane = self.manager_plane_view();
-        let manager_published = plane.is_some();
-        if let Some(row) = bridge_manager_rows(plane.as_deref(), target.resource_type().as_str())
+        let plane = self.manager_plane_view()?;
+        bridge_manager_row(plane.as_ref(), target)
             .await?
-            .into_iter()
-            .find(|row| row.resource_ref == *target)
-        {
-            return Ok(row);
-        }
-        if !durable_fallback_allowed(target.resource_type().as_str(), manager_published) {
-            // The manager is the published authority and does not hold the
-            // row: the caller asked for a row, so the answer is the read
-            // failure the callers retry - never the durable mirror (issue
-            // #507) and never a durable `ResourceNotFound` the store does not
-            // own.
-            return Err(ResourceRuntimeError::StoreReadFailed);
-        }
-        retry_transient_store_read(&self.zone, operation_id, || {
-            self.store.get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: target.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-        })
-        .await
-        .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+            .ok_or(ResourceRuntimeError::StoreReadFailed)
     }
 
     /// Publish a validated status projection from the real system-core
@@ -6028,7 +4806,7 @@ impl ZoneResourceRuntime {
     ) -> Result<(), ResourceRuntimeError> {
         let current = self.zone_status()?;
         let mut runtime = zone_runtime_metadata(
-            &self.store_metadata,
+            &self.committed_policy_snapshot(),
             current.total_resource_count(),
             current.generation_cleanup_pending(),
             current.cleanup_pending_count(),
@@ -6164,12 +4942,12 @@ impl ZoneResourceRuntime {
                 })?;
             let lifecycle_intent = match state.provider_runtime.latest_v3_lifecycle_operation(
                 &provider_ref,
-                &self.store_metadata.zone_uid,
+                &self.bound_zone_uid()?,
                 &guest_ref,
                 &guest_uid,
                 guest_generation,
                 provider_assignment_generation,
-                self.store_metadata.policy_snapshot.policy_revision,
+                self.committed_policy_snapshot().policy_revision,
             ) {
                 Ok(intent) => intent,
                 Err(
@@ -6277,14 +5055,13 @@ impl ZoneResourceRuntime {
                 guest_sessions: Arc::clone(&state.guest_component_sessions),
                 closed_guest_sessions: Arc::clone(&self.closed_guest_sessions),
                 zone: self.zone.clone(),
-                zone_uid: self.store_metadata.zone_uid.clone(),
-                policy_revision: self.store_metadata.policy_snapshot.policy_revision,
+                zone_uid: self.bound_zone_uid()?,
+                policy_revision: self.committed_policy_snapshot().policy_revision,
                 provider_ref,
                 execution_ref,
                 descriptor: descriptor.clone(),
                 controller_generation: self
-                    .store_metadata
-                    .policy_snapshot
+                    .committed_policy_snapshot()
                     .controller_generation
                     .unwrap_or_else(|| ControllerGeneration::new(1).expect("generation one")),
                 session_target: guest_session_target,
@@ -6587,7 +5364,7 @@ impl ZoneResourceRuntime {
         // not-committed-yet answer, and a manager/store read failure stays an
         // error (never reported as absence).
         let Some(volume) = self
-            .committed_resource_optional(&volume_ref, "cloud-hypervisor-setup-volume")
+            .committed_resource_optional(&volume_ref)
             .await
             .map_err(|_| {
                 tracing::warn!("Cloud Hypervisor setup Volume read failed");
@@ -6680,27 +5457,12 @@ impl ZoneResourceRuntime {
             return Ok(());
         }
         let provider = self
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "cloud-hypervisor-controller-deployment".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "cloud-hypervisor-controller-deployment".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: provider_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            .committed_resource_stored(provider_ref, "cloud-hypervisor-controller-deployment")
+            .await?;
         let manifest = d2b_provider_runtime_cloud_hypervisor::provider_manifest()
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         let controller_generation = self
-            .store_metadata
-            .policy_snapshot
+            .committed_policy_snapshot()
             .controller_generation
             .unwrap_or_else(|| ControllerGeneration::new(1).expect("generation one"));
         let process_provider_ref = ResourceRef::parse("Provider/system-minijail")
@@ -6825,11 +5587,7 @@ impl ZoneResourceRuntime {
             // manager; the pre-v3 store keeps only the mirror. Absence is the
             // honest "not ready" answer here (the provider controller may not
             // have committed the row yet); a read failure is not.
-            let value = match self
-                .committed_resource_optional(
-                    resource_ref,
-                    "cloud-hypervisor-lifecycle-dependencies",
-                )
+            let value = match self.committed_resource_optional(resource_ref)
                 .await
             {
                 Ok(Some(value)) => value,
@@ -6921,22 +5679,8 @@ impl ZoneResourceRuntime {
         guest_ref: &ResourceRef,
     ) -> Result<bool, ResourceRuntimeError> {
         let guest = self
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "cloud-hypervisor-guest-ready".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "cloud-hypervisor-guest-ready".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: guest_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            .committed_resource_stored(guest_ref, "cloud-hypervisor-guest-ready")
+            .await?;
         let envelope = ResourceEnvelope::from_json(&guest.canonical_json)
             .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
         Ok(envelope.status().phase() == ResourcePhase::Ready)
@@ -7057,15 +5801,14 @@ impl ZoneResourceRuntime {
             process.generation,
             process.revision,
             &provider_ref,
-            self.store_metadata
-                .policy_snapshot
+            self.committed_policy_snapshot()
                 .controller_generation
                 .unwrap_or_else(|| ControllerGeneration::new(1).expect("generation one")),
             Some(guest_ref.clone()),
         )
         .with_lifecycle_identity(
-            Some(self.store_metadata.zone_uid.clone()),
-            Some(self.store_metadata.policy_snapshot.policy_revision),
+            Some(self.bound_zone_uid()?),
+            Some(self.committed_policy_snapshot().policy_revision),
             None,
         )
         .with_owner_ref(Some(guest_ref.clone()))
@@ -7098,28 +5841,9 @@ impl ZoneResourceRuntime {
     pub(crate) async fn list_cloud_hypervisor_guests(
         &self,
     ) -> Result<Vec<ResourceRef>, ResourceRuntimeError> {
-        let resource_type =
-            ResourceTypeName::parse("Guest").map_err(|_| ResourceRuntimeError::RequestInvalid)?;
-        let mut request = StoreListRequest {
-            operation: StoreOperationContext {
-                operation_id: "cloud-hypervisor-guest-relist".to_owned(),
-                idempotency_key: None,
-                correlation_id: "cloud-hypervisor-guest-relist".to_owned(),
-                trace_id: None,
-                deadline_ms: 10_000,
-            },
-            zone: self.zone.clone(),
-            resource_types: vec![resource_type],
-            resource_names: Vec::new(),
-            filters: Vec::new(),
-            page_size: 256,
-            cursor: None,
-            projection: StoreProjection::Full,
-        };
         let mut guests = Vec::new();
         // `Guest` is a converted type (U12): the manager rows are the
-        // authority, merged ahead of the durable mirror exactly as
-        // `committed_resource_value` merges one row.
+        // authority and the only source (U14: the durable mirror is gone).
         for resource in self.manager_stored_rows("Guest").await? {
             let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
                 .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
@@ -7129,31 +5853,6 @@ impl ZoneResourceRuntime {
                 .is_some_and(d2b_provider_runtime_cloud_hypervisor::is_provider_ref)
             {
                 guests.push(resource.resource_ref);
-            }
-        }
-        loop {
-            let page = self
-                .store
-                .list(request.clone())
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-            for resource in page.resources {
-                if guests.contains(&resource.resource_ref) {
-                    continue;
-                }
-                let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-                    .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
-                if envelope
-                    .spec()
-                    .provider_ref()
-                    .is_some_and(d2b_provider_runtime_cloud_hypervisor::is_provider_ref)
-                {
-                    guests.push(resource.resource_ref);
-                }
-            }
-            request.cursor = page.next_cursor;
-            if request.cursor.is_none() {
-                break;
             }
         }
         Ok(guests)
@@ -7215,22 +5914,8 @@ impl ZoneResourceRuntime {
         binding_name: &ResourceRef,
     ) -> Result<bool, ResourceRuntimeError> {
         let volume = self
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "cloud-hypervisor-binding-admission".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "cloud-hypervisor-binding-admission".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: spec.volume_ref().clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            .committed_resource_stored(spec.volume_ref(), "cloud-hypervisor-binding-admission")
+            .await?;
         let volume_value = serde_json::from_slice::<serde_json::Value>(&volume.canonical_json)
             .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
         let volume_spec = volume_value
@@ -7300,16 +5985,11 @@ impl ZoneResourceRuntime {
         let provider = self
             .committed_resource_stored(&provider_ref, "cloud-hypervisor-guest-inputs")
             .await?;
-        let snapshot_revision = provider.revision;
         let guest_spec =
             serde_json::from_slice::<GuestSpec>(&envelope.spec().base().to_canonical_bytes())
                 .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
-        let (provider_spec, _, _, _, _) = committed_provider_spec(
-            &self.zone,
-            snapshot_revision,
-            &provider,
-            &provider_ref,
-        )?;
+        let (provider_spec, _, _, _, _) =
+            committed_provider_spec(&self.zone, &provider, &provider_ref)?;
         let config = serde_json::from_slice::<CloudHypervisorConfig>(
             &provider_spec.config().to_canonical_bytes(),
         )
@@ -7324,41 +6004,13 @@ impl ZoneResourceRuntime {
             }
         }
         let mut binding_refs = Vec::new();
-        let mut cursor = None;
-        loop {
-            let request = StoreListRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "cloud-hypervisor-binding-inputs".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "cloud-hypervisor-binding-inputs".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    resource_types: vec![ResourceTypeName::parse(
-                        d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE,
-                    )
-                    .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?],
-                    resource_names: Vec::new(),
-                    filters: Vec::new(),
-                    page_size: 256,
-                    cursor: cursor.clone(),
-                    projection: StoreProjection::Full,
-                };
-            let page = self
-                .store
-                .list(request)
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-            binding_refs.extend(
-                self.admitted_guest_binding_refs(&page.resources, guest_ref)
-                    .await,
-            );
-            if page.next_cursor.is_none() {
-                break;
-            }
-            cursor = page.next_cursor;
-        }
+        // `VolumeBinding` is a converted type (U14): the manager rows are the
+        // only source, and the gate's admission check reads the manager's
+        // Volume row for each of them.
+        let bindings = self
+            .manager_stored_rows(d2b_contracts_resource::v3::VOLUME_BINDING_RESOURCE_TYPE)
+            .await?;
+        binding_refs.extend(self.admitted_guest_binding_refs(&bindings, guest_ref).await);
         let graph = BootstrapGraph::new(
             guest_spec
                 .policy()
@@ -7391,10 +6043,8 @@ impl ZoneResourceRuntime {
         Ok(ControllerSessionCoordinator {
             zone: self.zone.clone(),
             bundle_resource_types: self.bundle_resource_types.clone(),
-            store: Arc::clone(&self.store),
             plane_view: Arc::new(Mutex::new(None)),
-            assigned_process_api: Arc::new(Mutex::new(None)),
-            api: Arc::clone(&self.api),
+            api: Arc::clone(&self.v3_api),
             authorizer: Arc::clone(&self.authorizer),
             authorization_state: self.authorization_state.clone(),
             policy_projection: Arc::clone(&self.policy_projection),
@@ -7404,12 +6054,6 @@ impl ZoneResourceRuntime {
             pending_controller_session_clears: Arc::new(Mutex::new(BTreeMap::new())),
             credential_sessions: self.credential_sessions.clone(),
             controller_session_lock: Arc::clone(&self.controller_session_lock),
-            #[cfg(test)]
-            reconcile_attempts: Arc::new(AtomicUsize::new(0)),
-            #[cfg(test)]
-            admission_test_seam: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            controller_session_evidence_test_errors: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -7516,46 +6160,27 @@ fn schedule_controller_session_reconcile(
 }
 
 impl ControllerSessionCoordinator {
-    fn set_assigned_process_api(
-        &self,
-        api: Arc<RedbRegisteredControllerApi>,
-    ) -> Result<(), ResourceRuntimeError> {
-        *self
-            .assigned_process_api
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(api);
-        Ok(())
+    /// The zone plane's manager view.
+    ///
+    /// U14: the manager is the only authority, so a read before the
+    /// composition publishes the plane is a retryable failure - never an
+    /// absent row and never a fallback to a second plane.
+    fn plane_view(&self) -> Result<Arc<dyn ControllerPlaneView>, ResourceRuntimeError> {
+        self.plane_handle()
+            .ok_or(ResourceRuntimeError::CapabilityUnavailable)
     }
 
-    fn clear_assigned_process_api(&self) -> Result<(), ResourceRuntimeError> {
-        *self
-            .assigned_process_api
+    /// The manager-backed Resource API service a live controller session
+    /// serves (the runtime's slot, filled when the Zone's plane activates).
+    fn api(&self) -> Result<Arc<ResourceService<ZoneApiBackend>>, ResourceRuntimeError> {
+        self.api
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = None;
-        Ok(())
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
+            .clone()
+            .ok_or(ResourceRuntimeError::ResourceApiBindFailed)
     }
 
-    #[cfg(test)]
-    fn set_controller_session_admission_test_seam(
-        &self,
-        seam: ControllerSessionAdmissionTestSeam,
-    ) {
-        *self
-            .admission_test_seam
-            .lock()
-            .expect("controller-session test seam lock") = Some(seam);
-    }
 
-    #[cfg(test)]
-    fn set_controller_session_evidence_test_errors(
-        &self,
-        errors: Vec<ResourceRuntimeError>,
-    ) {
-        *self
-            .controller_session_evidence_test_errors
-            .lock()
-            .expect("controller-session evidence test seam lock") = errors;
-    }
 
     fn controller_provider_identity_error_is_global(error: &ResourceRuntimeError) -> bool {
         matches!(
@@ -7586,30 +6211,6 @@ impl ControllerSessionCoordinator {
         )
     }
 
-    fn controller_session_evidence_read_error(kind: StoreErrorKind) -> ResourceRuntimeError {
-        match kind {
-            StoreErrorKind::ResourceConflict => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::ResourceConflict)
-            }
-            StoreErrorKind::RevisionExpired => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::RevisionExpired)
-            }
-            StoreErrorKind::Backpressure | StoreErrorKind::StoreBackpressure => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::Backpressure)
-            }
-            StoreErrorKind::Timeout => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::Timeout)
-            }
-            StoreErrorKind::Cancelled => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::Cancelled)
-            }
-            StoreErrorKind::ResourcePlaneUnavailable => {
-                ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::ResourcePlaneUnavailable)
-            }
-            _ => ResourceRuntimeError::StoreReadFailed,
-        }
-    }
-
     /// Adopt the zone plane's manager view seam (G5).
     fn attach_plane_view(&self, plane: Arc<dyn ControllerPlaneView>) {
         if let Ok(mut slot) = self.plane_view.lock() {
@@ -7622,43 +6223,39 @@ impl ControllerSessionCoordinator {
         self.plane_view.lock().ok().and_then(|slot| slot.clone())
     }
 
-    /// The committed policy inputs for this Zone with the manager rows merged
-    /// (U12 bridge; see `committed_policy_resources_bridged`).
+    /// The committed policy inputs for this Zone, read from the manager (U14:
+    /// the manager is the only authority).
     pub(crate) async fn committed_policy_resources(
         &self,
-        operation_id: &str,
     ) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
-        let plane = self.plane_handle();
-        committed_policy_resources_bridged(&self.zone, &self.store, plane.as_deref(), operation_id)
-            .await
+        let plane = self.plane_view()?;
+        committed_policy_resources(plane.as_ref()).await
     }
 
-    /// The committed `Provider` identities for the requested refs, manager
-    /// rows first (U12 bridge).
+    /// The committed `Provider` identities for the requested refs, read from
+    /// the manager.
     pub(crate) async fn committed_controller_provider_identities(
         &self,
         provider_refs: BTreeSet<ResourceRef>,
     ) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
-        let plane = self.plane_handle();
-        committed_controller_provider_identities_bridged(
-            &self.zone,
-            &self.store,
-            plane.as_deref(),
-            provider_refs,
-        )
-        .await
+        let plane = self.plane_view()?;
+        committed_controller_provider_identities(&self.zone, plane.as_ref(), provider_refs).await
     }
-    /// The manager's row for one controller Process key, when the new plane
-    /// serves it. `Ok(None)` keeps the caller on the durable store path (an
-    /// unconverted or legacy row); a manager failure is reported, never
+    /// The policy snapshot the Zone's committed manager rows imply (U14: the
+    /// durable store metadata that carried it is gone).
+    async fn committed_policy_snapshot(&self) -> Result<PolicySnapshot, ResourceRuntimeError> {
+        let resources = self.committed_policy_resources().await?;
+        policy_snapshot_for_rows(&resources)
+    }
+
+    /// The manager's row for one controller Process key. `Ok(None)` means the
+    /// manager does not hold the row; a manager failure is reported, never
     /// folded into absence.
     async fn controller_plane_row(
         &self,
         process_ref: &ResourceRef,
     ) -> Result<Option<ResourceView>, ResourceRuntimeError> {
-        let Some(plane) = self.plane_view.lock().ok().and_then(|slot| slot.clone()) else {
-            return Ok(None);
-        };
+        let plane = self.plane_view()?;
         plane.process_view(process_ref).await.map_err(|error| {
             tracing::debug!(
                 process = %process_ref.to_canonical_string(),
@@ -7699,95 +6296,29 @@ impl ControllerSessionCoordinator {
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
         session_generation: Option<ReconnectGeneration>,
     ) -> Result<(), ResourceRuntimeError> {
-        #[cfg(test)]
-        if session_generation.is_none()
-            && let Some(error) = self
-                .controller_session_evidence_test_errors
-                .lock()
-                .ok()
-                .and_then(|mut errors| errors.pop())
-        {
-            return Err(error);
-        }
-        if let Some(view) = self.controller_plane_row(context.process_ref()).await? {
-            // Manager-served row (KTD4): its status is never durable
-            // (R11/AE6), so there is nothing to write or clear here - the
-            // evidence is the live admitted session, which the Provider's
-            // dependency observation reads on every pass. The identity check
-            // keeps the old semantics: evidence for a row this context does
-            // not describe still refuses.
-            controller_session_evidence_identity_check(
-                controller_plane_resource_matches(context, &view),
-                session_generation.is_none(),
-            )?;
-            tracing::debug!(
-                process = %context.process_ref(),
-                "controller-session evidence for a manager-served row is the live session",
-            );
-            return Ok(());
-        }
-        let process = match self
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "controller-session-evidence-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "controller-session-evidence-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: self.zone.clone(),
-                target: context.process_ref().clone(),
-                expected_uid: Some(context.process_uid().clone()),
-                projection: StoreProjection::Full,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
-                if session_generation.is_none() {
-                    return Ok(());
-                }
-                return Err(ResourceRuntimeError::IdentityUnbound);
+        let Some(view) = self.controller_plane_row(context.process_ref()).await? else {
+            // The manager does not hold the row: there is no status copy to
+            // write or clear. Clearing evidence for an absent row is a no-op;
+            // asserting a session for one is an unbound identity.
+            if session_generation.is_none() {
+                return Ok(());
             }
-            Err(error) => {
-                return Err(Self::controller_session_evidence_read_error(error.kind()));
-            }
+            return Err(ResourceRuntimeError::IdentityUnbound);
         };
-        if let Err(error) = controller_session_evidence_identity_check(
-            controller_resource_matches(context, &process),
+        // A manager-served row's status is never durable (R11/AE6), so there is
+        // nothing to write or clear here - the evidence is the live admitted
+        // session, which the Provider's dependency observation reads on every
+        // pass. The identity check keeps the old semantics: evidence for a row
+        // this context does not describe still refuses.
+        controller_session_evidence_identity_check(
+            controller_plane_resource_matches(context, &view),
             session_generation.is_none(),
-        ) {
-            return Err(error);
-        }
-        let controller_session = session_generation.map(|session_generation| {
-            json!({
-                "ready": true,
-                "providerRef": context.provider_owner_ref().to_canonical_string(),
-                "providerUid": context.provider_uid().as_str(),
-                "providerGeneration": context.provider_generation().get(),
-                "processRef": context.process_ref().to_canonical_string(),
-                "processUid": context.process_uid().as_str(),
-                "processGeneration": context.generation().get(),
-                "controllerGeneration": context.controller_generation().get(),
-                "sessionGeneration": session_generation.get(),
-                "artifactReady": true,
-                "descriptorReady": true,
-                "registrationReady": true,
-            })
-        });
-        let api = self
-            .assigned_process_api
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .clone()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        persist_resource_controller_session_evidence(
-            &api,
-            &process,
-            controller_session.as_ref(),
-        )
-        .await
+        )?;
+        tracing::debug!(
+            process = %context.process_ref(),
+            "controller-session evidence for a manager-served row is the live session",
+        );
+        Ok(())
     }
 
     fn queue_controller_session_clear(
@@ -7963,14 +6494,10 @@ impl ControllerSessionCoordinator {
         if contexts.is_empty() {
             return Ok(());
         }
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "controller-session-fence-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let current_controller_generation = store_metadata.policy_snapshot.controller_generation;
+        let current_controller_generation = self
+            .committed_policy_snapshot()
+            .await?
+            .controller_generation;
         let provider_refs = contexts
             .iter()
             .map(|context| context.provider_owner_ref().clone())
@@ -8077,8 +6604,6 @@ impl ControllerSessionCoordinator {
         providers: Arc<crate::process_provider_runtime::ProductionProcessProviders>,
         establish: bool,
     ) -> Result<(), ResourceRuntimeError> {
-        #[cfg(test)]
-        self.reconcile_attempts.fetch_add(1, Ordering::SeqCst);
         let _session_guard = self.controller_session_lock.lock().await;
         self.reconcile_controller_sessions_locked(providers, establish)
             .await
@@ -8095,13 +6620,6 @@ impl ControllerSessionCoordinator {
             self.reconcile_controller_assignments(&providers).await?;
             return Ok(());
         }
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "controller-session-reconcile-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         let bootstrap_contexts = providers.controller_bootstrap_contexts(&self.zone);
         let active_processes = self
             .controller_sessions
@@ -8139,15 +6657,6 @@ impl ControllerSessionCoordinator {
                     Err(error) => return Err(error),
                 }
             }
-        }
-        #[cfg(test)]
-        if let Some(seam) = self
-            .admission_test_seam
-            .lock()
-            .ok()
-            .and_then(|seam| seam.clone())
-        {
-            (seam.after_snapshot)(providers.as_ref());
         }
         let provider_refs = bootstrap_contexts
             .iter()
@@ -8221,14 +6730,13 @@ impl ControllerSessionCoordinator {
                     })
             })
             .collect::<BTreeSet<_>>();
-        let policy_resources = self
-            .committed_policy_resources("controller-session-policy")
-            .await?;
+        let policy_resources = self.committed_policy_resources().await?;
+        let (snapshot, policy_inputs) = self.policy_snapshot_for_install(&policy_resources)?;
         let (policy, state) =
             match d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
                 &self.zone,
-                store_metadata.policy_snapshot,
-                store_metadata.current_revision,
+                snapshot,
+                ZoneRevision::new(snapshot.policy_revision),
                 &self.bundle_resource_types,
                 &policy_resources,
                 provider_subjects.iter().cloned(),
@@ -8250,11 +6758,9 @@ impl ControllerSessionCoordinator {
                     return Err(error);
                 }
             };
-        #[cfg(test)]
-        let installed_subjects = provider_subjects.clone();
         if let Err(error) = self
             .policy_projection
-            .install(policy, state, provider_subjects)
+            .install(policy, state, provider_subjects, policy_inputs)
         {
             for context in surviving_contexts {
                 providers.fail_controller_bootstrap(&context);
@@ -8265,15 +6771,6 @@ impl ControllerSessionCoordinator {
                 .await?;
             }
             return Err(error);
-        }
-        #[cfg(test)]
-        if let Some(seam) = self
-            .admission_test_seam
-            .lock()
-            .ok()
-            .and_then(|seam| seam.clone())
-        {
-            (seam.after_policy_install)(&installed_subjects);
         }
 
         for context in surviving_contexts {
@@ -8381,49 +6878,6 @@ impl ControllerSessionCoordinator {
                 continue;
             };
             let context = endpoint.context().clone();
-            #[cfg(test)]
-            if let Some(_seam) = self
-                .admission_test_seam
-                .lock()
-                .ok()
-                .and_then(|seam| seam.clone())
-                .filter(|seam| seam.admit_without_transport)
-            {
-                let current = match self
-                    .controller_context_is_current(&providers, &context)
-                    .await
-                {
-                    Ok(current) => current,
-                    Err(ResourceRuntimeError::IdentityUnbound) => false,
-                    Err(error) => return Err(error),
-                };
-                let expected_subject = BoundSubject {
-                    subject_ref: context.provider_owner_ref().clone(),
-                    subject_uid: context.provider_uid().clone(),
-                };
-                let policy_has_subject = self
-                    .policy_projection
-                    .installed_controller_subjects()
-                    .is_ok_and(|subjects| subjects.contains(&expected_subject));
-                *self
-                    .registrar
-                    .lock()
-                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                    Some(registrar);
-                assert!(
-                    policy_has_subject,
-                    "controller admission must use a policy compiled with its Provider subject"
-                );
-                if current {
-                    assert!(
-                        providers.activate_controller_bootstrap(&context),
-                        "matching controller bootstrap must activate exactly once"
-                    );
-                } else {
-                    providers.fail_controller_bootstrap(&context);
-                }
-                continue;
-            }
             // A transient bootstrap failure re-arms the endpoint (the
             // establish attempt dups the pre-armed socket) instead of
             // orphaning the retrying controller.
@@ -8712,15 +7166,9 @@ impl ControllerSessionCoordinator {
         if !providers.has_controller_bootstrap(context.process_ref(), context) {
             return Ok(false);
         }
-        let metadata = retry_transient_store_read(
-            &self.zone,
-            "controller-session-context-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let metadata = self.committed_policy_snapshot().await?;
         if controller_generation_is_stale(
-            metadata.policy_snapshot.controller_generation,
+            metadata.controller_generation,
             context.controller_generation(),
         ) {
             return Ok(false);
@@ -8752,19 +7200,12 @@ impl ControllerSessionCoordinator {
         {
             return Ok(false);
         }
-        // G5: a controller Process row minted in the new plane (KTD4) is not
-        // in the durable store; the zone manager is its authority.
-        if let Some(view) = self.controller_plane_row(context.process_ref()).await? {
-            return Ok(controller_plane_resource_matches(context, &view));
-        }
-        let resources =
-            crate::process_resource_runtime::list_process_resources(&self.store, &self.zone)
-                .await
-                .map_err(map_process_runtime_error)?;
-        Ok(resources
-            .iter()
-            .find(|resource| resource.resource_ref == *context.process_ref())
-            .is_some_and(|resource| controller_resource_matches(context, resource)))
+        // The manager is the only authority (U14): the controller Process row
+        // lives in the manager, and a row it does not hold is not current.
+        let Some(view) = self.controller_plane_row(context.process_ref()).await? else {
+            return Ok(false);
+        };
+        Ok(controller_plane_resource_matches(context, &view))
     }
 
     async fn handle_controller_assignment_refresh_error(
@@ -9177,71 +7618,33 @@ impl ControllerSessionCoordinator {
         role: &ControllerRoleContract,
         provider_ref: &ResourceRef,
     ) -> Result<Vec<ResourceEnvelope>, ControllerAssignmentRefreshError> {
-        let mut cursor = None;
-        let mut snapshot_revision = None;
+        let plane = self.plane_view().map_err(|_| {
+            ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::StoreReadFailed)
+        })?;
         let mut resources = Vec::new();
         let mut resource_uids = BTreeSet::new();
-        loop {
-            let request = StoreListRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "controller-assignment-list".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "controller-assignment-list".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: self.zone.clone(),
-                    resource_types: role.resource_types().iter().cloned().collect(),
-                    resource_names: Vec::new(),
-                    filters: Vec::new(),
-                    page_size: 128,
-                    cursor: cursor.clone(),
-                    projection: StoreProjection::Full,
-                };
-            let page = retry_transient_store_list(
-                &self.zone,
-                "controller-assignment-list",
-                || self.store.list(request.clone()),
-            )
-            .await
-                .map_err(|error| {
-                    if matches!(
-                        error.kind(),
-                        StoreErrorKind::RevisionExpired
-                            | StoreErrorKind::Backpressure
-                            | StoreErrorKind::Timeout
-                            | StoreErrorKind::Cancelled
-                            | StoreErrorKind::ResourcePlaneUnavailable
-                            | StoreErrorKind::StoreBackpressure
-                    ) {
-                        ControllerAssignmentRefreshError::Retryable
-                    } else {
+        for resource_type in role.resource_types() {
+            let rows =
+                bridge_manager_rows(plane.as_ref(), resource_type.as_str())
+                    .await
+                    .map_err(|_| {
                         ControllerAssignmentRefreshError::Failed(
                             ResourceRuntimeError::StoreReadFailed,
                         )
-                    }
-                })?;
-            let page_resources =
-                validate_assignment_list_page(&page, &self.zone, provider_ref, snapshot_revision)?;
-            snapshot_revision.get_or_insert(page.snapshot_revision);
-            if resources.len().saturating_add(page_resources.len())
-                > d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS
-            {
-                return Err(ControllerAssignmentRefreshError::Failed(
-                    ResourceRuntimeError::AuthorizationUnavailable,
-                ));
-            }
-            for envelope in page_resources {
-                if !resource_uids.insert(envelope.metadata().uid().clone()) {
+                    })?;
+            for stored in rows {
+                let Some(envelope) = validate_assignment_row(&stored, &self.zone, provider_ref)?
+                else {
+                    continue;
+                };
+                if resources.len() >= d2b_core_controller::controller_assignment::MAX_ASSIGNMENTS
+                    || !resource_uids.insert(envelope.metadata().uid().clone())
+                {
                     return Err(ControllerAssignmentRefreshError::Failed(
                         ResourceRuntimeError::AuthorizationUnavailable,
                     ));
                 }
                 resources.push(envelope);
-            }
-            cursor = page.next_cursor.clone();
-            if cursor.is_none() {
-                break;
             }
         }
         Ok(resources)
@@ -9381,7 +7784,7 @@ impl ControllerSessionCoordinator {
         (
             BusIngress,
             SessionDriverHandle,
-            Option<Arc<ResourceApiClient<ZoneStoreBackend, UnavailableUpgradeDispatcher>>>,
+            Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
             tokio::task::JoinHandle<Result<(), SessionServerError>>,
             ReconnectGeneration,
             d2b_session::AuthenticatedSessionRouteBinding,
@@ -9608,7 +8011,7 @@ impl ControllerSessionCoordinator {
                 .issue_authenticated_subject(route.context().clone(), authorization_state)
                 .map_err(|_| authentication_error("authenticated-subject"))?;
             let service = Arc::new(
-                ResourceBusAdapter::bind_component_session(Arc::clone(&self.api), subject)
+                ResourceBusAdapter::bind_component_session(self.api()?, subject)
                     .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
             );
             let resource_client = Some(Arc::new(service.client()));
@@ -9637,22 +8040,34 @@ impl ControllerSessionCoordinator {
         ))
     }
 
+    /// The snapshot and input digest one controller-policy compile/install
+    /// runs under.
+    ///
+    /// `Provider` controller grants are compiled from the same committed
+    /// policy rows as the Zone projection, so the install must obey the same
+    /// monotone-revision rule (`PolicyProjection::next_policy_revision`) the
+    /// Zone bus fences every install at.
+    fn policy_snapshot_for_install(
+        &self,
+        resources: &[StoredResource],
+    ) -> Result<(PolicySnapshot, [u8; 32]), ResourceRuntimeError> {
+        let policy_inputs = policy_inputs_digest(resources);
+        let mut snapshot = policy_snapshot_for_rows(resources)?;
+        snapshot.policy_revision = self.policy_projection.next_policy_revision(
+            snapshot.policy_revision,
+            self.policy_projection.installed_policy_inputs() != Some(policy_inputs),
+        );
+        Ok((snapshot, policy_inputs))
+    }
+
     async fn refresh_controller_policy(
         &self,
         providers: &crate::process_provider_runtime::ProductionProcessProviders,
     ) -> Result<(), ResourceRuntimeError> {
-        let store_metadata = retry_transient_store_read(
-            &self.zone,
-            "controller-policy-refresh-metadata",
-            || self.store.runtime_metadata(),
-        )
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let plane = self.plane_handle();
+        let plane = self.plane_view()?;
         let provider_subjects = match load_controller_policy_subjects(
             &self.zone,
-            &self.store,
-            plane.as_deref(),
+            plane.as_ref(),
             Some(providers),
             &self.controller_sessions,
         )
@@ -9663,21 +8078,20 @@ impl ControllerSessionCoordinator {
                 return Err(error);
             }
         };
-        let policy_resources = self
-            .committed_policy_resources("controller-policy-refresh")
-            .await?;
+        let policy_resources = self.committed_policy_resources().await?;
+        let (snapshot, policy_inputs) = self.policy_snapshot_for_install(&policy_resources)?;
         let (policy, state) =
             d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
                 &self.zone,
-                store_metadata.policy_snapshot,
-                store_metadata.current_revision,
+                snapshot,
+                ZoneRevision::new(snapshot.policy_revision),
                 &self.bundle_resource_types,
                 &policy_resources,
                 provider_subjects.iter().cloned(),
             )
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
         self.policy_projection
-            .install(policy, state, provider_subjects)?;
+            .install(policy, state, provider_subjects, policy_inputs)?;
         Ok(())
     }
 }
@@ -9720,7 +8134,6 @@ impl ZoneResourceRuntime {
                 .lock()
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
                 Some(Arc::clone(&providers));
-            self.rebuild_assigned_process_api_locked(&providers).await?;
             providers
                 .set_controller_session_waker(
                     self.zone.clone(),
@@ -9747,9 +8160,7 @@ impl ZoneResourceRuntime {
                 .await?;
         }
         let _guard = self.controller_reconcile_lock.lock().await;
-        let resources = list_process_resources(&self.store, &self.zone)
-            .await
-            .map_err(map_process_runtime_error)?;
+        let resources = self.committed_process_rows().await?;
         coordinator
             .fence_process_resources(&providers, &resources)
             .await?;
@@ -9775,7 +8186,10 @@ impl ZoneResourceRuntime {
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)
     }
 
-    /// Reserve a Host-global claim through the Zone's durable redb owner.
+    /// Reserve a Host-global claim in the Zone's authority ledger. The ledger
+    /// is process-local since U14: the reservation is fenced for this
+    /// daemon's lifetime, and a restart re-derives owners through the
+    /// drivers' probe/adopt path rather than replaying a durable checkpoint.
     pub async fn reserve_authority(
         &self,
         operation_id: impl Into<String>,
@@ -9795,7 +8209,7 @@ impl ZoneResourceRuntime {
         }
         AuthorityReservation::reserve_durable(
             Arc::clone(&self.authority_index),
-            self.authority_persistence.clone(),
+            Arc::clone(&self.authority_ledger) as Arc<dyn AuthorityPersistence>,
             operation_id,
             request,
         )
@@ -9823,7 +8237,7 @@ impl ZoneResourceRuntime {
         }
         ExternalNicReservation::reserve_durable(
             Arc::clone(&self.authority_index),
-            self.authority_persistence.clone(),
+            Arc::clone(&self.authority_ledger) as Arc<dyn AuthorityPersistence>,
             operation_id,
             request,
         )
@@ -9865,9 +8279,6 @@ impl ZoneResourceRuntime {
     pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
         if !self.policy_installed {
             return Some(ResourceRuntimeError::PolicyUnavailable);
-        }
-        if !self.readiness.store_ready {
-            return Some(ResourceRuntimeError::StoreOpenFailed);
         }
         if !self.readiness.resource_api_ready {
             return Some(ResourceRuntimeError::PolicyUnavailable);
@@ -9943,22 +8354,6 @@ impl ZoneResourceRuntime {
         Err(ResourceRuntimeError::IdentityUnbound)
     }
 
-    /// Serve the existing CLI request envelope.
-    ///
-    /// This in-process compatibility entry point represents a trusted local
-    /// caller with uid zero. The public socket uses
-    /// [`Self::dispatch_public_cli_request`] with the authenticated
-    /// `SO_PEERCRED` uid instead.
-    #[cfg(test)]
-    pub(crate) async fn dispatch_cli_request(
-        &self,
-        request: &Value,
-    ) -> Result<Value, ResourceRuntimeError> {
-        match self.dispatch_public_cli_request(request, 0).await {
-            Ok(value) => Ok(value),
-            Err(error) => Ok(compatibility_error_envelope(error)),
-        }
-    }
 
     /// Serve a public Resource request through a local authenticated session.
     ///
@@ -9987,6 +8382,7 @@ impl ZoneResourceRuntime {
         if !route_service_matches(request.get("service"), method)? {
             return Err(ResourceRuntimeError::RouteMismatch);
         }
+        validate_public_request_target(request, method)?;
         if [
             "subject",
             "subjectRef",
@@ -10015,59 +8411,42 @@ impl ZoneResourceRuntime {
             &operation_id,
         )?;
         let state = self.policy_projection.installed_state()?;
-        match public_request_route(request, method)? {
-            crate::resource_plane_v3::PlaneRoute::NewPlane => {
-                let service = self.manager_api_service().inspect_err(|error| {
-                    tracing::warn!(
-                        zone = %self.zone.as_str(),
-                        error = ?error,
-                        "public request refused: manager-backed API service is unavailable",
-                    );
-                })?;
-                if self.policy_projection.installed_state().is_err() {
-                    tracing::warn!(
-                        zone = %self.zone.as_str(),
-                        "public request refused: no authorization policy is installed",
-                    );
-                }
-                let authorizer = self.manager_plane_authorizer().inspect_err(|error| {
-                    tracing::warn!(
-                        zone = %self.zone.as_str(),
-                        error = ?error,
-                        "public request refused: manager plane authorizer is unavailable",
-                    );
-                })?;
-                let subject = match authorizer.issue_authenticated_subject(context.clone(), state.clone()) {
-                    Ok(subject) => subject,
-                    Err(error) => {
-                        tracing::warn!(
-                            zone = %self.zone.as_str(),
-                            error = ?error,
-                            "public request refused: manager plane subject issuance failed",
-                        );
-                        return Err(ResourceRuntimeError::AuthorizationUnavailable);
-                    }
-                };
-                let adapter = ResourceBusAdapter::bind_component_session(service, subject)
-                    .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
-                let client = adapter.client();
-                self.dispatch_public_resource_call(&client, method, request, &operation_id)
-                    .await
+        // U14: the Zone has exactly one plane. Every public request is served
+        // by the manager-backed Resource API service, and the manager plane's
+        // authorizer issues the request subject.
+        let service = self.manager_api_service().inspect_err(|error| {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                error = ?error,
+                "public request refused: manager-backed API service is unavailable",
+            );
+        })?;
+        let authorizer = self.manager_plane_authorizer().inspect_err(|error| {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                error = ?error,
+                "public request refused: manager plane authorizer is unavailable",
+            );
+        })?;
+        let subject = match authorizer.issue_authenticated_subject(context, state) {
+            Ok(subject) => subject,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    error = ?error,
+                    "public request refused: manager plane subject issuance failed",
+                );
+                return Err(ResourceRuntimeError::AuthorizationUnavailable);
             }
-            crate::resource_plane_v3::PlaneRoute::OldPlane => {
-                let subject = self
-                    .authorizer
-                    .issue_authenticated_subject(context, state)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-                let client = self.bind_operator_resource_client(subject)?;
-                self.dispatch_public_resource_call(&client, method, request, &operation_id)
-                    .await
-            }
-        }
+        };
+        let adapter = ResourceBusAdapter::bind_component_session(service, subject)
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
+        let client = adapter.client();
+        self.dispatch_public_resource_call(&client, method, request, &operation_id)
+            .await
     }
 
-    /// One public resource call against the plane's sealed client: converted
-    /// types ride the manager-backed service, everything else the redb one.
+    /// One public resource call against the zone's manager-backed service.
     async fn dispatch_public_resource_call<S>(
         &self,
         client: &ResourceApiClient<S, UnavailableUpgradeDispatcher>,
@@ -10314,20 +8693,7 @@ impl ZoneResourceRuntime {
         legacy_intent_anchor: Option<&str>,
     ) -> Result<LegacyTpmMigrationDecision, ResourceRuntimeError> {
         let resource = self
-            .backend
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 30_000,
-                },
-                zone: self.zone.clone(),
-                target: device_ref.clone(),
-                expected_uid: Some(device_uid.clone()),
-                projection: StoreProjection::Full,
-            })
+            .committed_resource_stored(device_ref, operation_id)
             .await
             .inspect_err(|error| {
                 tracing::warn!(
@@ -10359,12 +8725,6 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::AuthenticationUnavailable);
         }
         let intent = format!("legacy-swtpm:vm:{vm_id}");
-        if legacy_intent_anchor.is_some() {
-            // A live legacy TPM adoption is the first irreversible provider
-            // effect. Refuse the admission if the owning store cannot produce
-            // its logical recovery image first.
-            self.backup_before_live_adoption().await?;
-        }
         Ok(Self::tpm_migration_decision(
             vm_id,
             &intent,
@@ -10372,40 +8732,15 @@ impl ZoneResourceRuntime {
         ))
     }
 
-    /// Capture the owning Zone store before a live Provider adoption or
-    /// durable schema advance. The caller must retain or publish the image
-    /// through the storage owner's recovery path before applying the effect.
-    pub async fn backup_before_live_adoption(&self) -> Result<LogicalBackup, ResourceRuntimeError> {
-        self.store
-            .logical_backup()
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)
-    }
-
-    /// Load and validate the persisted Device record before a security-key
+    /// Load and validate the committed Device record before a security-key
     /// provider constructs its one-use admission. Request fields select a
-    /// candidate only; the returned values all originate from the store.
-    #[allow(dead_code)]
-    #[allow(dead_code)]
+    /// candidate only; the returned values all originate from the manager row.
     pub(crate) async fn security_key_device_is_admitted(
         &self,
         request: SecurityKeyDeviceAdmissionRequest<'_>,
     ) -> Result<SecurityKeyDeviceAdmission, ResourceRuntimeError> {
         let resource = self
-            .backend
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: request.operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: request.operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 30_000,
-                },
-                zone: self.zone.clone(),
-                target: request.device_ref.clone(),
-                expected_uid: Some(request.device_uid.clone()),
-                projection: StoreProjection::Full,
-            })
+            .committed_resource_stored(request.device_ref, request.operation_id)
             .await
             .inspect_err(|error| {
                 tracing::warn!(
@@ -10445,61 +8780,6 @@ impl ZoneResourceRuntime {
         })
     }
 
-    /// Record broker evidence for synchronous non-resource broker dispatches.
-    pub fn record_broker_evidence(
-        &self,
-        evidence: DurabilityEvidence,
-    ) -> Result<(), ResourceRuntimeError> {
-        self.store
-            .broker_evidence_index()
-            .insert(evidence)
-            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
-    }
-
-    /// Publish terminal broker evidence and drain the live store outbox.
-    pub async fn ingest_broker_evidence(
-        &self,
-        operation_id: &str,
-        evidence: DurabilityEvidence,
-    ) -> Result<(), ResourceRuntimeError> {
-        self.store
-            .ingest_broker_evidence(operation_id, evidence)
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
-    }
-
-    /// Return every pending trusted-deferred activation outbox for this Zone.
-    pub(crate) async fn pending_trusted_activation_operation_ids(
-        &self,
-    ) -> Result<Vec<String>, ResourceRuntimeError> {
-        self.store
-            .pending_deferred_activation_operation_ids()
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
-    }
-
-    /// Refuse publication while any trusted-deferred activation outbox remains.
-    pub(crate) async fn require_trusted_activation_outboxes_drained(
-        &self,
-    ) -> Result<(), ResourceRuntimeError> {
-        match self
-            .store
-            .require_no_pending_deferred_activation_outboxes()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) if error.reason_code() == "audit-deferred-evidence-pending" => {
-                Err(ResourceRuntimeError::HandlerNotReady)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "trusted-deferred activation outbox drain check failed",
-                );
-                Err(ResourceRuntimeError::StoreOpenFailed)
-            }
-        }
-    }
 
     #[allow(dead_code)]
     #[allow(dead_code)]
@@ -10570,17 +8850,14 @@ impl ZoneResourceRuntime {
         }
     }
 
-    /// Close the production redb workers before the runtime is discarded.
+    /// Close the production Zone runtime's background tasks before it is
+    /// discarded.
     pub async fn shutdown(self) -> Result<(), ResourceRuntimeError> {
         let ZoneResourceRuntime {
-            store,
-            backend,
-            api,
             bus,
             registrar,
             ingress,
             service_task,
-            authority_persistence,
             authority_recovery,
             process_status_client,
             audio_runtime,
@@ -10657,15 +8934,8 @@ impl ZoneResourceRuntime {
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
         );
         drop(bus);
-        drop(api);
-        drop(backend);
-        drop(authority_persistence);
         drop(authority_recovery);
-        let store = Arc::try_unwrap(store).map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
-        store
-            .shutdown()
-            .await
-            .map_err(|_| ResourceRuntimeError::StoreOpenFailed)
+        Ok(())
     }
 }
 
@@ -10689,78 +8959,29 @@ fn is_u9_resource_type(resource_type: &ResourceTypeName) -> bool {
         || resource_type.starts_with("shell-terminal.d2bus.org.")
 }
 
+/// Whether the manager holds any row of the interaction family (U9): a
+/// committed interaction `Provider` row, a row of a type the interaction
+/// factory serves, or a row referring to one of those Providers.
+///
+/// U14: the durable store is gone, so the presence scan reads the manager's
+/// rows of the closed interaction type set (plus `Provider`, whose rows
+/// select the family by reference) instead of paging every type.
 async fn interaction_resources_present(
-    zone: &ZoneId,
-    store: &RedbResourceStore,
+    plane: &dyn ControllerPlaneView,
 ) -> Result<bool, ResourceRuntimeError> {
-    let provider_type =
-        ResourceTypeName::parse("Provider").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let provider_names = INTERACTION_PROVIDER_REFS
+    let provider_refs = INTERACTION_PROVIDER_REFS
         .iter()
         .map(|provider| {
-            provider
-                .strip_prefix("Provider/")
-                .and_then(|name| ResourceName::parse(name).ok())
-                .ok_or(ResourceRuntimeError::HandlerNotReady)
+            ResourceRef::parse(provider).map_err(|_| ResourceRuntimeError::HandlerNotReady)
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut cursor = None;
-    loop {
-        let request = StoreListRequest {
-                operation: StoreOperationContext {
-                    operation_id: "interaction-presence-providers".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "interaction-presence-providers".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                resource_types: vec![provider_type.clone()],
-                resource_names: provider_names.clone(),
-                filters: Vec::new(),
-                page_size: 16,
-                cursor: cursor.clone(),
-                projection: StoreProjection::Full,
-            };
-        let page = retry_transient_store_list(zone, "interaction-presence-providers", || {
-            store.list(request.clone())
-        })
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        if !page.resources.is_empty() {
-            return Ok(true);
-        }
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
-    }
-
-    let mut cursor = None;
-    loop {
-        let request = StoreListRequest {
-                operation: StoreOperationContext {
-                    operation_id: "interaction-presence-resources".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "interaction-presence-resources".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                resource_types: Vec::new(),
-                resource_names: Vec::new(),
-                filters: Vec::new(),
-                page_size: 512,
-                cursor: cursor.clone(),
-                projection: StoreProjection::Full,
-            };
-        let page = retry_transient_store_list(zone, "interaction-presence-resources", || {
-            store.list(request.clone())
-        })
-        .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        for resource in page.resources {
-            if is_u9_resource_type(&resource.resource_ref.resource_type()) {
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut resource_types = vec!["Provider".to_owned()];
+    resource_types.extend(INTERACTION_TYPES.iter().map(|resource_type| (*resource_type).to_owned()));
+    for resource_type in resource_types {
+        for resource in bridge_manager_rows(plane, &resource_type).await? {
+            if provider_refs.contains(&resource.resource_ref)
+                || is_u9_resource_type(resource.resource_ref.resource_type())
+            {
                 return Ok(true);
             }
             let value: Value = serde_json::from_slice(&resource.canonical_json)
@@ -10768,10 +8989,6 @@ async fn interaction_resources_present(
             if contains_u9_provider_ref(&value) {
                 return Ok(true);
             }
-        }
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
         }
     }
     Ok(false)
@@ -10793,76 +9010,26 @@ fn derive_interaction_state(
 }
 
 async fn load_interaction_provider_configuration(
+    plane: &dyn ControllerPlaneView,
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    current_revision: ZoneRevision,
 ) -> Result<Option<CommittedInteractionProviderConfiguration>, ResourceRuntimeError> {
-    let provider_type =
-        ResourceTypeName::parse("Provider").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
-    let operation = StoreOperationContext {
-        operation_id: "interaction-provider-config".to_owned(),
-        idempotency_key: None,
-        correlation_id: "interaction-provider-config".to_owned(),
-        trace_id: None,
-        deadline_ms: 10_000,
-    };
     let clipboard_ref = ResourceRef::parse("Provider/clipboard-wayland")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let notification_ref = ResourceRef::parse("Provider/notification-desktop")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let request = StoreListRequest {
-            operation,
-            zone: zone.clone(),
-            resource_types: vec![provider_type],
-            resource_names: vec![
-                ResourceName::parse("clipboard-wayland")
-                    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?,
-                ResourceName::parse("notification-desktop")
-                    .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?,
-            ],
-            filters: Vec::new(),
-            page_size: 2,
-            cursor: None,
-            projection: StoreProjection::Full,
-        };
-    let page = retry_transient_store_list(zone, "interaction-provider-config", || {
-        store.list(request.clone())
-    })
-    .await
-        .map_err(|error| {
-            tracing::error!(
-                zone = %zone.as_str(),
-                operation = "interaction-provider-config",
-                store_error_kind = ?error.kind(),
-                reason_code = error.reason_code(),
-                "interaction Provider configuration list failed",
-            );
-            ResourceRuntimeError::StoreReadFailed
-        })?;
-    if page.next_cursor.is_some() {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
     let mut clipboard = None;
     let mut notification = None;
-    for resource in page.resources {
+    for resource in bridge_manager_rows(plane, "Provider").await? {
         if resource.resource_ref == clipboard_ref {
             if clipboard.is_some() {
                 return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
             }
-            clipboard = Some(parse_committed_clipboard_configuration(
-                zone,
-                current_revision,
-                &resource,
-            )?);
+            clipboard = Some(parse_committed_clipboard_configuration(zone, &resource)?);
         } else if resource.resource_ref == notification_ref {
             if notification.is_some() {
                 return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
             }
-            notification = Some(parse_committed_notification_configuration(
-                zone,
-                current_revision,
-                &resource,
-            )?);
+            notification = Some(parse_committed_notification_configuration(zone, &resource)?);
         }
     }
     if clipboard.is_none() && notification.is_none() {
@@ -10876,54 +9043,26 @@ async fn load_interaction_provider_configuration(
 }
 
 async fn load_committed_interaction_identity(
+    plane: &dyn ControllerPlaneView,
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    current_revision: ZoneRevision,
     configuration: Option<&CommittedInteractionProviderConfiguration>,
 ) -> Result<Option<CommittedInteractionIdentity>, ResourceRuntimeError> {
-    let session_resource_type = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession")
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let operation = StoreOperationContext {
-        operation_id: "interaction-wayland-session".to_owned(),
-        idempotency_key: None,
-        correlation_id: "interaction-wayland-session".to_owned(),
-        trace_id: None,
-        deadline_ms: 10_000,
-    };
-    let request = StoreListRequest {
-            operation,
-            zone: zone.clone(),
-            resource_types: vec![session_resource_type],
-            resource_names: Vec::new(),
-            filters: Vec::new(),
-            page_size: 2,
-            cursor: None,
-            projection: StoreProjection::Full,
-        };
-    let page = retry_transient_store_list(zone, "interaction-wayland-session", || {
-        store.list(request.clone())
-    })
-    .await
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    if page.next_cursor.is_some() {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-    if page.resources.is_empty() {
+    let session_resource_type = "display-wayland.d2bus.org.WaylandSession";
+    let mut sessions = bridge_manager_rows(plane, session_resource_type).await?;
+    if sessions.is_empty() {
         return if configuration.is_none() {
             Ok(None)
         } else {
             Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
         };
     }
-    if page.resources.len() != 1 {
+    if sessions.len() != 1 {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
-    let session_resource = page
-        .resources
-        .into_iter()
-        .next()
+    let session_resource = sessions
+        .pop()
         .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let session_spec = committed_wayland_session_spec(zone, current_revision, &session_resource)
+    let session_spec = committed_wayland_session_spec(zone, &session_resource)
         .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
@@ -10940,18 +9079,17 @@ async fn load_committed_interaction_identity(
     if session_spec.policy_ref().resource_type() != &expected_policy_type {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
-    let _policy_resource =
-        committed_resource(zone, store, current_revision, session_spec.policy_ref())
-            .await
-            .inspect_err(|error| {
-                tracing::error!(
-                    zone = %zone.as_str(),
-                    operation = "interaction-policy-lookup",
-                    error = %error,
-                    "resource runtime committed Wayland policy lookup failed",
-                );
-            })?;
-    let subject_uid = committed_resource_uid(zone, store, current_revision, &subject_ref)
+    let _policy_resource = committed_resource(plane, zone, session_spec.policy_ref())
+        .await
+        .inspect_err(|error| {
+            tracing::error!(
+                zone = %zone.as_str(),
+                operation = "interaction-policy-lookup",
+                error = %error,
+                "resource runtime committed Wayland policy lookup failed",
+            );
+        })?;
+    let subject_uid = committed_resource_uid(plane, zone, &subject_ref)
         .await
         .inspect_err(|error| {
             tracing::error!(
@@ -10961,7 +9099,7 @@ async fn load_committed_interaction_identity(
                 "resource runtime committed interaction subject lookup failed",
             );
         })?;
-    let _host_uid = committed_resource_uid(zone, store, current_revision, &host_execution_ref)
+    let _host_uid = committed_resource_uid(plane, zone, &host_execution_ref)
         .await
         .inspect_err(|error| {
             tracing::error!(
@@ -10971,7 +9109,7 @@ async fn load_committed_interaction_identity(
                 "resource runtime committed interaction Host lookup failed",
             );
         })?;
-    let _user_uid = committed_resource_uid(zone, store, current_revision, &user_ref)
+    let _user_uid = committed_resource_uid(plane, zone, &user_ref)
         .await
         .inspect_err(|error| {
             tracing::error!(
@@ -10984,7 +9122,7 @@ async fn load_committed_interaction_identity(
 
     let display_ref = ResourceRef::parse("Provider/display-wayland")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let display_resource = committed_resource(zone, store, current_revision, &display_ref)
+    let display_resource = committed_resource(plane, zone, &display_ref)
         .await
         .inspect_err(|error| {
             tracing::error!(
@@ -10995,7 +9133,7 @@ async fn load_committed_interaction_identity(
             );
         })?;
     let (_, _, display_provider_generation, _, _) =
-        committed_provider_spec(zone, current_revision, &display_resource, &display_ref)
+        committed_provider_spec(zone, &display_resource, &display_ref)
             .inspect_err(|error| {
                 tracing::error!(
                     zone = %zone.as_str(),
@@ -11022,7 +9160,7 @@ async fn load_committed_interaction_identity(
                 return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
             }
             for guest_ref in &clipboard.guest_sources {
-                let uid = committed_resource_uid(zone, store, current_revision, guest_ref).await?;
+                let uid = committed_resource_uid(plane, zone, guest_ref).await?;
                 allowed_guest_sources.insert(guest_ref.clone(), uid);
             }
             clipboard_provider_generation = Some(clipboard.resource_generation);
@@ -11036,7 +9174,7 @@ async fn load_committed_interaction_identity(
                 return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
             }
             for guest_ref in notification.guest_sources() {
-                let uid = committed_resource_uid(zone, store, current_revision, guest_ref).await?;
+                let uid = committed_resource_uid(plane, zone, guest_ref).await?;
                 allowed_guest_sources.insert(guest_ref.clone(), uid);
             }
             notification_provider_generation = Some(notification.resource_generation);
@@ -11063,7 +9201,6 @@ async fn load_committed_interaction_identity(
 
 fn committed_wayland_session_spec(
     zone: &ZoneId,
-    current_revision: ZoneRevision,
     resource: &StoredResource,
 ) -> Result<WaylandSessionSpec, ResourceRuntimeError> {
     let expected_type = ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession")
@@ -11072,7 +9209,6 @@ fn committed_wayland_session_spec(
         || resource.resource_ref.resource_type() != &expected_type
         || resource.generation.get() == 0
         || resource.revision.get() == 0
-        || resource.revision > current_revision
     {
         tracing::error!(
             zone = %zone.as_str(),
@@ -11080,7 +9216,6 @@ fn committed_wayland_session_spec(
             resource_ref = %resource.resource_ref.to_canonical_string(),
             generation = resource.generation.get(),
             revision = resource.revision.get(),
-            current_revision = current_revision.get(),
             "committed Wayland session row failed stored-resource identity checks",
         );
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
@@ -11131,12 +9266,11 @@ fn committed_wayland_session_spec(
 }
 
 async fn committed_resource_uid(
+    plane: &dyn ControllerPlaneView,
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    current_revision: ZoneRevision,
     resource_ref: &ResourceRef,
 ) -> Result<ResourceUid, ResourceRuntimeError> {
-    let resource = committed_resource(zone, store, current_revision, resource_ref).await?;
+    let resource = committed_resource(plane, zone, resource_ref).await?;
     Ok(resource.uid)
 }
 
@@ -11260,80 +9394,34 @@ async fn receive_provider_ready(
 }
 
 async fn committed_resource(
+    plane: &dyn ControllerPlaneView,
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    current_revision: ZoneRevision,
     resource_ref: &ResourceRef,
 ) -> Result<StoredResource, ResourceRuntimeError> {
     if !is_supported_committed_resource_ref(resource_ref) {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
-    let operation_id = format!(
-        "interaction-identity:{}",
-        resource_ref.to_canonical_string()
-    );
-    let request = StoreGetRequest {
-            operation: StoreOperationContext {
-                operation_id: operation_id.clone(),
-                idempotency_key: None,
-                correlation_id: operation_id.clone(),
-                trace_id: None,
-                deadline_ms: 10_000,
-            },
-            zone: zone.clone(),
-            target: resource_ref.clone(),
-            expected_uid: None,
-            projection: StoreProjection::Full,
-        };
-    let resource = retry_transient_store_read(zone, &operation_id, || {
-        store.get(request.clone())
-    })
-    .await
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    validate_committed_resource(zone, current_revision, resource_ref, resource)
+    let resource = bridge_manager_row(plane, resource_ref)
+        .await
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
+        .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+    validate_committed_resource(zone, resource_ref, resource)
 }
 
 async fn current_committed_resource(
+    plane: &dyn ControllerPlaneView,
     zone: &ZoneId,
-    store: &RedbResourceStore,
     resource_ref: &ResourceRef,
-    operation_id: &str,
-) -> Result<(StoredResource, ZoneRevision), ResourceRuntimeError> {
+    _operation_id: &str,
+) -> Result<StoredResource, ResourceRuntimeError> {
     if !is_supported_committed_resource_ref(resource_ref) {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
-    let request = StoreListRequest {
-            operation: StoreOperationContext {
-                operation_id: operation_id.to_owned(),
-                idempotency_key: None,
-                correlation_id: operation_id.to_owned(),
-                trace_id: None,
-                deadline_ms: 10_000,
-            },
-            zone: zone.clone(),
-            resource_types: vec![resource_ref.resource_type().clone()],
-            resource_names: vec![resource_ref.name().clone()],
-            filters: Vec::new(),
-            page_size: 1,
-            cursor: None,
-            projection: StoreProjection::Full,
-        };
-    let snapshot = retry_transient_store_list(zone, operation_id, || {
-        store.list(request.clone())
-    })
-    .await
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    if snapshot.truncated || snapshot.next_cursor.is_some() || snapshot.resources.len() != 1 {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-    let snapshot_revision = snapshot.snapshot_revision;
-    let resource = snapshot
-        .resources
-        .into_iter()
-        .next()
+    let resource = bridge_manager_row(plane, resource_ref)
+        .await
+        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
         .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let resource = validate_committed_resource(zone, snapshot_revision, resource_ref, resource)?;
-    Ok((resource, snapshot_revision))
+    validate_committed_resource(zone, resource_ref, resource)
 }
 
 fn is_supported_committed_resource_ref(resource_ref: &ResourceRef) -> bool {
@@ -11350,7 +9438,6 @@ fn is_supported_committed_resource_ref(resource_ref: &ResourceRef) -> bool {
 
 fn validate_committed_resource(
     zone: &ZoneId,
-    current_revision: ZoneRevision,
     resource_ref: &ResourceRef,
     resource: StoredResource,
 ) -> Result<StoredResource, ResourceRuntimeError> {
@@ -11358,7 +9445,6 @@ fn validate_committed_resource(
         || resource.resource_ref != *resource_ref
         || resource.generation.get() == 0
         || resource.revision.get() == 0
-        || resource.revision > current_revision
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -11380,74 +9466,9 @@ fn validate_committed_resource(
     Ok(resource)
 }
 
-async fn load_committed_controller_provider_identities(
-    zone: &ZoneId,
-    store: &RedbResourceStore,
-    provider_refs: BTreeSet<ResourceRef>,
-) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
-    if provider_refs.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let provider_type = ResourceTypeName::parse("Provider")
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let resource_names = provider_refs
-        .iter()
-        .map(|provider_ref| {
-            if provider_ref.resource_type() != &provider_type {
-                return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-            }
-            Ok(provider_ref.name().clone())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let page_size = u32::try_from(provider_refs.len())
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    let request = StoreListRequest {
-            operation: StoreOperationContext {
-                operation_id: "controller-provider-identity-snapshot".to_owned(),
-                idempotency_key: None,
-                correlation_id: "controller-provider-identity-snapshot".to_owned(),
-                trace_id: None,
-                deadline_ms: 10_000,
-            },
-            zone: zone.clone(),
-            resource_types: vec![provider_type],
-            resource_names,
-            filters: Vec::new(),
-            page_size,
-            cursor: None,
-            projection: StoreProjection::Full,
-        };
-    let snapshot = retry_transient_store_list(
-        zone,
-        "controller-provider-identity-snapshot",
-        || store.list(request.clone()),
-    )
-    .await
-        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-    if snapshot.truncated || snapshot.next_cursor.is_some() {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-
-    let mut identities = BTreeMap::new();
-    for resource in snapshot.resources {
-        let provider_ref = resource.resource_ref.clone();
-        if !provider_refs.contains(&provider_ref) || identities.contains_key(&provider_ref) {
-            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-        }
-        let (_, uid, generation, _, _) =
-            committed_provider_spec(zone, snapshot.snapshot_revision, &resource, &provider_ref)?;
-        identities.insert(provider_ref, (uid, generation));
-    }
-    if identities.len() != provider_refs.len() {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-    Ok(identities)
-}
-
 async fn load_controller_policy_subjects(
     zone: &ZoneId,
-    store: &RedbResourceStore,
-    plane: Option<&dyn ControllerPlaneView>,
+    plane: &dyn ControllerPlaneView,
     providers: Option<&crate::process_provider_runtime::ProductionProcessProviders>,
     controller_sessions: &Mutex<BTreeMap<ResourceRef, ControllerSession>>,
 ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
@@ -11474,21 +9495,17 @@ async fn load_controller_policy_subjects(
         .values()
         .map(|context| context.provider_owner_ref().clone())
         .collect::<BTreeSet<_>>();
-    // `Provider` is served by the v3 plane (U12): the committed identity is
-    // the manager-first bridged one, the same authority the session fence
-    // and the establishment path compare against. The durable pre-v3 mirror
-    // carries an unrelated uid and must never answer here.
-    let identities =
-        committed_controller_provider_identities_bridged(zone, store, plane, provider_refs)
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    zone = zone.as_str(),
-                    error = ?error,
-                    "controller policy subjects: committed Provider identities unavailable",
-                );
-                ResourceRuntimeError::PolicyUnavailable
-            })?;
+    // `Provider` is a manager row: the committed identity is the manager's.
+    let identities = committed_controller_provider_identities(zone, plane, provider_refs)
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                zone = zone.as_str(),
+                error = ?error,
+                "controller policy subjects: committed Provider identities unavailable",
+            );
+            ResourceRuntimeError::PolicyUnavailable
+        })?;
     let mut subjects = BTreeSet::new();
     for context in contexts.values() {
         let Some((provider_uid, provider_generation)) =
@@ -11521,19 +9538,6 @@ async fn load_controller_policy_subjects(
         });
     }
     Ok(subjects)
-}
-
-impl ZoneResourceRuntime {
-    /// The committed `Provider` identities the v3 plane publishes into its
-    /// registry (KTD7). Unconverted `Provider` rows live only in this plane's
-    /// redb store, so the new plane resolves them here - the same durable
-    /// rows the controller policy and session fences compare against.
-    pub(crate) async fn committed_provider_identities(
-        &self,
-        provider_refs: BTreeSet<ResourceRef>,
-    ) -> Result<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
-        load_committed_controller_provider_identities(&self.zone, &self.store, provider_refs).await
-    }
 }
 
 fn controller_assignment_refresh_action<'a>(
@@ -11615,49 +9619,40 @@ fn assignment_resource_matches(
         && resource_revision == resource.metadata().revision()
 }
 
-fn validate_assignment_list_page(
-    page: &StoreListResult,
+/// Validate one manager-served assignment candidate.
+///
+/// The manager row carries its own revision and identity, so the checks are
+/// the row's own integrity (zone, non-zero identity, envelope matching the
+/// row) plus the assignment's own filter: only rows declaring this Provider
+/// are assigned. `Ok(None)` is a row that is not this role's assignment.
+fn validate_assignment_row(
+    stored: &StoredResource,
     zone: &ZoneId,
     provider_ref: &ResourceRef,
-    expected_snapshot: Option<ZoneRevision>,
-) -> Result<Vec<ResourceEnvelope>, ControllerAssignmentRefreshError> {
-    if expected_snapshot.is_some_and(|snapshot| snapshot != page.snapshot_revision) {
-        return Err(ControllerAssignmentRefreshError::Retryable);
+) -> Result<Option<ResourceEnvelope>, ControllerAssignmentRefreshError> {
+    if &stored.zone != zone || stored.revision.get() == 0 || stored.generation.get() == 0 {
+        return Err(ControllerAssignmentRefreshError::Failed(
+            ResourceRuntimeError::AuthorizationUnavailable,
+        ));
     }
-    let mut resources = Vec::new();
-    for stored in &page.resources {
-        if &stored.zone != zone
-            || stored.revision.get() == 0
-            || stored.revision > page.snapshot_revision
-        {
-            return Err(ControllerAssignmentRefreshError::Failed(
-                ResourceRuntimeError::AuthorizationUnavailable,
-            ));
-        }
-        let envelope = ResourceEnvelope::from_json(&stored.canonical_json).map_err(|_| {
+    let envelope = ResourceEnvelope::from_json(&stored.canonical_json).map_err(|_| {
+        ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
+    })?;
+    if envelope.resource_type() != stored.resource_ref.resource_type()
+        || envelope.metadata().name() != stored.resource_ref.name()
+        || envelope.metadata().zone() != zone
+        || envelope.metadata().uid() != &stored.uid
+        || envelope.metadata().generation() != stored.generation
+        || envelope.metadata().revision() != stored.revision
+        || envelope.digest().map_err(|_| {
             ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
-        })?;
-        if envelope.resource_type() != stored.resource_ref.resource_type()
-            || envelope.metadata().name() != stored.resource_ref.name()
-            || envelope.metadata().zone() != zone
-            || envelope.metadata().uid() != &stored.uid
-            || envelope.metadata().generation() != stored.generation
-            || envelope.metadata().revision() != stored.revision
-            || envelope.digest().map_err(|_| {
-                ControllerAssignmentRefreshError::Failed(
-                    ResourceRuntimeError::AuthorizationUnavailable,
-                )
-            })? != stored.payload_digest
-        {
-            return Err(ControllerAssignmentRefreshError::Failed(
-                ResourceRuntimeError::AuthorizationUnavailable,
-            ));
-        }
-        if envelope.spec().provider_ref() == Some(provider_ref) {
-            resources.push(envelope);
-        }
+        })? != stored.payload_digest
+    {
+        return Err(ControllerAssignmentRefreshError::Failed(
+            ResourceRuntimeError::AuthorizationUnavailable,
+        ));
     }
-    Ok(resources)
+    Ok((envelope.spec().provider_ref() == Some(provider_ref)).then_some(envelope))
 }
 
 fn admit_assignment_or_skip(
@@ -11906,7 +9901,6 @@ impl LiveControllerSessionEvidence for ControllerSessionCoordinator {
 
 fn committed_provider_spec(
     zone: &ZoneId,
-    current_revision: ZoneRevision,
     resource: &StoredResource,
     expected_ref: &ResourceRef,
 ) -> Result<
@@ -11923,7 +9917,6 @@ fn committed_provider_spec(
         || &resource.resource_ref != expected_ref
         || resource.generation.get() == 0
         || resource.revision.get() == 0
-        || resource.revision > current_revision
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -11961,13 +9954,12 @@ fn committed_provider_spec(
 
 fn parse_committed_clipboard_configuration(
     zone: &ZoneId,
-    current_revision: ZoneRevision,
     resource: &StoredResource,
 ) -> Result<CommittedClipboardProviderConfiguration, ResourceRuntimeError> {
     let expected_ref = ResourceRef::parse("Provider/clipboard-wayland")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let (spec, resource_uid, resource_generation, resource_revision, provenance_digest) =
-        committed_provider_spec(zone, current_revision, resource, &expected_ref)?;
+        committed_provider_spec(zone, resource, &expected_ref)?;
     let wire =
         serde_json::from_slice::<ClipboardProviderConfigWire>(&spec.config().to_canonical_bytes())
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
@@ -12019,13 +10011,12 @@ fn parse_committed_clipboard_configuration(
 
 fn parse_committed_notification_configuration(
     zone: &ZoneId,
-    current_revision: ZoneRevision,
     resource: &StoredResource,
 ) -> Result<CommittedNotificationProviderConfiguration, ResourceRuntimeError> {
     let expected_ref = ResourceRef::parse("Provider/notification-desktop")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let (spec, resource_uid, resource_generation, resource_revision, provenance_digest) =
-        committed_provider_spec(zone, current_revision, resource, &expected_ref)?;
+        committed_provider_spec(zone, resource, &expected_ref)?;
     let wire = serde_json::from_slice::<NotificationProviderConfigWire>(
         &spec.config().to_canonical_bytes(),
     )
@@ -12072,50 +10063,22 @@ fn parse_committed_notification_configuration(
 }
 
 async fn system_core_startup_result(
-    zone: &ZoneId,
-    store: &RedbResourceStore,
+    plane: &dyn ControllerPlaneView,
+    policy: &PolicySnapshot,
 ) -> Result<SystemCoreReconcileResult, ResourceRuntimeError> {
-    let mut resources = Vec::new();
-    let mut cursor = None;
-    loop {
-        let request = StoreListRequest {
-                operation: StoreOperationContext {
-                    operation_id: "system-core-startup-summary".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "system-core-startup-summary".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                resource_types: Vec::new(),
-                resource_names: Vec::new(),
-                filters: Vec::new(),
-                page_size: 128,
-                cursor: cursor.clone(),
-                projection: StoreProjection::Full,
-            };
-        let page = retry_transient_store_list(zone, "system-core-startup-summary", || {
-            store.list(request.clone())
-        })
+    let views = plane
+        .all_rows()
         .await
-            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        resources.extend(page.resources);
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
-    }
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    let resources = views
+        .iter()
+        .map(|view| {
+            d2b_resource_api::manager_backend::manager_row_stored(view)
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let total_resource_count = resources.len().min(u32::MAX as usize) as u32;
-    let active_configuration_generation = retry_transient_store_read(
-        zone,
-        "system-core-startup-metadata",
-        || store.runtime_metadata(),
-    )
-    .await
-        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?
-        .policy_snapshot
-        .active_configuration_revision
-        .get();
+    let active_configuration_generation = policy.active_configuration_revision.get();
     let cleanup_pending_count = resources
         .iter()
         .filter(|resource| configuration_cleanup_pending(resource, active_configuration_generation))
@@ -12134,187 +10097,21 @@ async fn system_core_startup_result(
     })
 }
 
-fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRuntimeError {
-    match error {
-        ProcessResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
-        ProcessResourceRuntimeError::UnsupportedProvider
-        | ProcessResourceRuntimeError::TemplateUnavailable
-        | ProcessResourceRuntimeError::IdentityAmbiguous
-        | ProcessResourceRuntimeError::ProviderEffect
-        | ProcessResourceRuntimeError::ControllerBootstrapUnavailable
-        | ProcessResourceRuntimeError::ProviderIdentityUnavailable
-        | ProcessResourceRuntimeError::OwnerIdentityUnavailable
-        | ProcessResourceRuntimeError::InvalidResource => {
-            ResourceRuntimeError::CapabilityUnavailable
-        }
-    }
-}
 
-fn assignment_fence_store_error(error: &StoreError, fallback_revision: ZoneRevision) -> SourceError {
-    match error.kind() {
-        StoreErrorKind::Backpressure | StoreErrorKind::StoreBackpressure => {
-            SourceError::Backpressure
-        }
-        StoreErrorKind::Timeout => SourceError::Timeout,
-        StoreErrorKind::ResourceConflict => {
-            SourceError::Conflict(error.current_revision().unwrap_or(fallback_revision))
-        }
-        _ => SourceError::Unavailable,
-    }
-}
 
-fn process_assignment_fence_resolver(
-    store: Arc<RedbResourceStore>,
-    mode: DaemonMode,
-    authority: Arc<CoreAssignmentAuthority>,
-) -> AssignmentFenceResolver {
-    fn integrity(target: &ResourceRef, reason: &'static str) -> SourceError {
-        tracing::warn!(
-            resource = %target.to_canonical_string(),
-            reason,
-            "Process assignment source rejected resource identity",
-        );
-        SourceError::Integrity
-    }
-
-    Arc::new(move |target, uid, revision| {
-        let store = Arc::clone(&store);
-        let authority = Arc::clone(&authority);
-        Box::pin(async move {
-            let resource = store
-                .get(StoreGetRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "process-assignment-fence".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "process-assignment-fence".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: store.identity().zone().clone(),
-                    target: target.clone(),
-                    expected_uid: Some(uid.clone()),
-                    projection: StoreProjection::Full,
-                })
-                .await
-                .map_err(|error| assignment_fence_store_error(&error, revision))?;
-            if resource.revision != revision {
-                return Err(SourceError::Conflict(resource.revision));
-            }
-            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-                .map_err(|_| integrity(&target, "resource-envelope-invalid"))?;
-            let provider_ref = envelope
-                .spec()
-                .provider_ref()
-                .cloned()
-                .ok_or_else(|| integrity(&target, "process-provider-ref-missing"))?;
-            if !matches!(
-                provider_ref.name().as_str(),
-                "system-minijail" | "system-systemd"
-            ) {
-                return Err(integrity(&target, "process-provider-ref-unsupported"));
-            }
-            let execution_ref = envelope
-                .spec()
-                .base()
-                .get("executionRef")
-                .and_then(|value| match value {
-                    CanonicalJsonValue::String(value) => ResourceRef::parse(value).ok(),
-                    _ => None,
-                })
-                .ok_or_else(|| integrity(&target, "process-execution-ref-missing"))?;
-            let expected_target = match mode {
-                DaemonMode::Host => "Host",
-                DaemonMode::Guest => "Guest",
-            };
-            if execution_ref.resource_type().as_str() != expected_target {
-                return Err(integrity(&target, "process-execution-ref-wrong-domain"));
-            }
-            let _target_provider = match store
-                .get(StoreGetRequest {
-                    operation: StoreOperationContext {
-                        operation_id: "process-assignment-provider".to_owned(),
-                        idempotency_key: None,
-                        correlation_id: "process-assignment-provider".to_owned(),
-                        trace_id: None,
-                        deadline_ms: 10_000,
-                    },
-                    zone: store.identity().zone().clone(),
-                    target: provider_ref.clone(),
-                    expected_uid: None,
-                    projection: StoreProjection::MetadataOnly,
-                })
-                .await
-            {
-                Ok(provider) if provider.generation.get() > 0 => provider,
-                Ok(_) => {
-                    return Err(integrity(&target, "target-provider-generation-invalid"));
-                }
-                Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => {
-                    let current_revision = store
-                        .runtime_metadata()
-                        .await
-                        .map_err(|error| assignment_fence_store_error(&error, revision))?
-                        .current_revision;
-                    return Err(SourceError::Conflict(current_revision));
-                }
-                Err(error) if error.kind() == StoreErrorKind::ResourceConflict => {
-                    return Err(SourceError::Conflict(
-                        error.current_revision().unwrap_or(revision),
-                    ));
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        StoreErrorKind::Backpressure | StoreErrorKind::StoreBackpressure
-                    ) =>
-                {
-                    return Err(SourceError::Backpressure);
-                }
-                Err(error) if error.kind() == StoreErrorKind::Timeout => {
-                    return Err(SourceError::Timeout);
-                }
-                Err(_) => return Err(SourceError::Integrity),
-            };
-            Ok(ResourceAssignmentFence {
-                resource_uid: uid,
-                resource_revision: revision,
-                provider_generation: authority.provider_generation,
-                controller_generation: authority.controller_generation,
-                controller_role: authority.controller_role.clone(),
-                target: execution_ref,
-                session_generation: authority.session_generation,
-                epoch: ASSIGNMENT_EPOCH,
-                scope: ResourceAssignmentScope::Primary,
-            })
-        })
-    })
-}
-
-/// Which plane serves one public resource request.
+/// Validate the target shape of one public resource request.
 ///
-/// Converted types (the Phase A set) are served by the manager-backed
-/// service, everything else by the redb service, and a request that spans
-/// both planes is refused rather than split across two sealed stores. The
-/// plane is chosen from the reference the handler will actually act on -
-/// `resourceRef` for every targeted method, `resourceType` for Create, the
-/// parsed type set for List - never from a declared type field the handler
-/// ignores. A declared type that disagrees with the target is refused
-/// outright: routing on one reference and mutating another would move a
-/// converted type onto the legacy plane.
-fn public_request_route(
+/// U14: with one plane a request no longer routes, but the declared type must
+/// still agree with the reference the handler will actually act on - mutating
+/// one reference under another's declared type is refused outright.
+fn validate_public_request_target(
     request: &Value,
     method: &str,
-) -> Result<crate::resource_plane_v3::PlaneRoute, ResourceRuntimeError> {
-    let types: Vec<String> = if method == "List" {
-        parse_list_request(request)?
-            .resource_types
-            .iter()
-            .map(|resource_type| resource_type.as_str().to_owned())
-            .collect()
+) -> Result<(), ResourceRuntimeError> {
+    if method == "List" {
+        parse_list_request(request)?;
     } else if method == "Create" {
-        vec![declared_resource_type(request)
-            .ok_or(ResourceRuntimeError::RequestInvalid)?
-            .to_owned()]
+        declared_resource_type(request).ok_or(ResourceRuntimeError::RequestInvalid)?;
     } else {
         let target = public_target_ref(request)?;
         if let Some(declared) = declared_resource_type(request)
@@ -12322,24 +10119,11 @@ fn public_request_route(
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
-        vec![target.resource_type().as_str().to_owned()]
-    };
-    let mut new_plane = false;
-    let mut old_plane = false;
-    for resource_type in &types {
-        match crate::resource_plane_v3::route_resource_type(resource_type) {
-            crate::resource_plane_v3::PlaneRoute::NewPlane => new_plane = true,
-            crate::resource_plane_v3::PlaneRoute::OldPlane => old_plane = true,
-        }
     }
-    match (new_plane, old_plane) {
-        (true, false) => Ok(crate::resource_plane_v3::PlaneRoute::NewPlane),
-        (false, _) => Ok(crate::resource_plane_v3::PlaneRoute::OldPlane),
-        (true, true) => Err(ResourceRuntimeError::CapabilityUnavailable),
-    }
+    Ok(())
 }
 
-/// The resource type a request declares, if any. Only Create routes on this
+/// The resource type a request declares, if any. Only Create declares on this
 /// field; every other method derives its target from `resourceRef`.
 fn declared_resource_type(request: &Value) -> Option<&str> {
     request
@@ -12348,25 +10132,26 @@ fn declared_resource_type(request: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// The manager plane's store-seal identity: a deliberately distinct slot from
-/// the redb Zone store's, so one authorizer never pairs with both planes. The
-/// uid is inert - it only pairs this Zone's manager-plane issuer with the
-/// manager backend's acceptor - and the Zone authority's uid is reused when
-/// the runtime has one.
+/// The manager plane's store-seal identity: a distinct slot from the
+/// guest-target store's, so the manager-plane issuer can never pair with
+/// another backend's acceptor that reuses slot 0 (the redb Zone store this
+/// slot was originally kept apart from is retired in U14). The uid is inert -
+/// it only pairs this Zone's manager-plane issuer with the manager backend's
+/// acceptor - and the Zone authority's uid is reused when the runtime has one.
 fn manager_plane_seal_identity(
     zone: &ZoneId,
     zone_uid: Option<ResourceUid>,
-) -> Result<d2b_resource_store::StoreSealIdentity, ResourceRuntimeError> {
+) -> Result<d2b_contracts_resource::v3::StoreSealIdentity, ResourceRuntimeError> {
     const MANAGER_PLANE_SEAL_SLOT: u32 = 1;
     const MANAGER_PLANE_SEAL_UID: &str = "00000000-0000-4000-8000-000000000001";
-    let slot = d2b_resource_store::StoreSlot::new(MANAGER_PLANE_SEAL_SLOT)
+    let slot = d2b_contracts_resource::v3::StoreSlot::new(MANAGER_PLANE_SEAL_SLOT)
         .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
     let uid = match zone_uid {
         Some(uid) => uid,
         None => ResourceUid::parse(MANAGER_PLANE_SEAL_UID.to_owned())
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?,
     };
-    Ok(d2b_resource_store::StoreSealIdentity::new(
+    Ok(d2b_contracts_resource::v3::StoreSealIdentity::new(
         slot,
         zone.clone(),
         uid,
@@ -12878,17 +10663,13 @@ async fn public_create_payload(
     spec: &Value,
     owner_ref: Option<&str>,
 ) -> Result<Vec<u8>, ResourceRuntimeError> {
-    let metadata = runtime
-        .store
-        .runtime_metadata()
-        .await
-        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    let metadata = runtime.committed_policy_snapshot();
     let timestamp = current_status_timestamp();
     let value = json!({
         "apiVersion": "resources.d2bus.org/v3",
         "type": resource_type.to_canonical_string(),
         "metadata": {
-            "configurationGeneration": metadata.policy_snapshot.active_configuration_revision.get(),
+            "configurationGeneration": metadata.active_configuration_revision.get(),
             "createdAt": timestamp,
             "deletionRequestedAt": null,
             "finalizers": [],
@@ -13563,6 +11344,10 @@ impl core::fmt::Debug for ResourcePlane {
     }
 }
 
+/// Maximum number of Zone runtimes owned by one daemon (U14: the value the
+/// retired store-runtime module carried).
+const MAX_ZONE_RUNTIMES: usize = 64;
+
 impl ResourcePlane {
     /// Create an empty daemon-owned plane.
     pub fn new() -> Self {
@@ -13615,17 +11400,6 @@ impl ResourcePlane {
             .get(zone)
             .cloned()
             .ok_or(ResourceRuntimeError::PlaneUnavailable)
-    }
-
-    /// Record one terminal broker result in every Zone's shared live index.
-    pub fn record_broker_evidence(
-        &self,
-        evidence: DurabilityEvidence,
-    ) -> Result<(), ResourceRuntimeError> {
-        for runtime in self.zones.values() {
-            runtime.record_broker_evidence(evidence.clone())?;
-        }
-        Ok(())
     }
 
     /// Return the number of ready Zone runtimes.
@@ -13711,29 +11485,20 @@ impl ResourcePlane {
 
 #[cfg(test)]
 mod tests {
+    //! U14 retired the durable-store runtime, so the store-backed scenarios
+    //! this module carried are gone with it; U15 rebuilds the manager-only
+    //! invariant matrix for the ZoneResourceRuntime.
     use super::*;
-    use std::{
-        collections::VecDeque,
-        fs::OpenOptions,
-        os::fd::{AsRawFd, OwnedFd},
-        sync::Arc,
-    };
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::collections::VecDeque;
 
-    use d2b_contracts_resource::v3::{
-        CanonicalJsonObject, Timestamp,
-        storage::{ZoneStoreIdentity, ZoneStoreStorageRow},
-    };
+    use std::os::fd::AsRawFd;
     use d2b_contracts_zone_session::v3::component_session::LimitProfile;
-    use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, BundleResourceMetadata};
     use d2b_core::{
         bundle::{Bundle, BundleGeneration},
         bundle_resolver::BundleResolver,
         manifest_v04::ManifestV04,
         processes::ProcessesJson,
     };
-    use d2b_resource_store::mutation_seal::mutation_seal_pair;
-    use d2b_resource_store_redb::write_provisioning_marker;
     use d2b_session_unix::{CreditPool, CreditScopeSet, OutboundPacket, prearmed_seqpacket_pair};
 
     /// Regression (host integration 2026-09-11): a reconnect advances the
@@ -13855,199 +11620,6 @@ mod tests {
     }
 
     #[test]
-    fn production_provider_composition_closes_exactly_27_typed_rows() {
-        const EXPECTED_PROVIDER_IDS: [&str; 27] = [
-            "system-core",
-            "system-systemd",
-            "system-minijail",
-            "runtime-cloud-hypervisor",
-            "runtime-qemu-media",
-            "runtime-azure-container-apps",
-            "runtime-azure-virtual-machine",
-            "volume-local",
-            "volume-virtiofs",
-            "network-local",
-            "device-tpm",
-            "device-usbip",
-            "device-security-key",
-            "device-gpu",
-            "display-wayland",
-            "audio-pipewire",
-            "clipboard-wayland",
-            "notification-desktop",
-            "shell-terminal",
-            "credential-secret-service",
-            "credential-entra",
-            "credential-managed-identity",
-            "transport-unix",
-            "transport-vsock",
-            "transport-azure-relay",
-            "observability-otel",
-            "activation-nixos",
-        ];
-        let expected = EXPECTED_PROVIDER_IDS.into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(expected.len(), 27);
-
-        let mut resource_owners = BTreeSet::from(["system-systemd", "system-minijail"]);
-        // U12 wave 2: the four Guest runtime Providers are composed by the
-        // v3 plane's registered GuestDriverFactory rather than shared Runner
-        // rows; each row keeps its Provider/controller identity, the Guest
-        // type routes to the new plane, and the family owns its Provider
-        // rows.
-        let mut guest_keys = BTreeSet::<(String, String)>::new();
-        for registration in crate::guest_driver::GUEST_REGISTRATIONS {
-            let provider_id = registration
-                .provider_ref
-                .strip_prefix("Provider/")
-                .expect("Provider registration reference");
-            assert!(
-                expected.contains(provider_id),
-                "unknown Guest runtime Provider {}",
-                registration.provider_ref,
-            );
-            assert!(
-                guest_keys.insert((
-                    registration.provider_ref.to_owned(),
-                    registration.controller_ref.to_owned(),
-                )),
-                "duplicate Guest Provider/controller registration"
-            );
-            assert!(
-                ResourceRef::parse(registration.controller_ref).is_ok(),
-                "Guest controller reference must parse: {}",
-                registration.controller_ref,
-            );
-            assert_eq!(registration.kind.provider_ref(), registration.provider_ref);
-            assert_eq!(registration.kind.controller_ref(), registration.controller_ref);
-            assert_eq!(registration.kind.registration(), registration);
-            assert!((30_000..=300_000).contains(&registration.resync.as_millis()));
-            resource_owners.insert(provider_id);
-        }
-        assert_eq!(guest_keys.len(), 4, "the Guest family has four runtime Providers");
-        assert_eq!(
-            crate::resource_plane_v3::route_resource_type(crate::guest_driver::GUEST_TYPE_NAME,),
-            crate::resource_plane_v3::PlaneRoute::NewPlane,
-            "the converted Guest type must route to the new plane",
-        );
-
-        // U12: the interaction/shell family is composed by the v3 plane's
-        // registered InteractionDriverFactory rather than shared Runner rows;
-        // every family ResourceType must route to the new plane.
-        for resource_type in crate::interaction_driver::INTERACTION_TYPES {
-            assert_eq!(
-                crate::resource_plane_v3::route_resource_type(resource_type),
-                crate::resource_plane_v3::PlaneRoute::NewPlane,
-                "the converted interaction type {resource_type} must route to the new plane",
-            );
-        }
-
-        // U12: the U8 shared host-provider family (Network; Device: tpm,
-        // usbip, security-key, gpu) is composed by the v3 plane's
-        // SharedProviderDriverFactory rather than shared Runner rows; every
-        // family ResourceType must route to the new plane.
-        for resource_type in crate::shared_provider_driver::SHARED_PROVIDER_TYPES {
-            assert_eq!(
-                crate::resource_plane_v3::route_resource_type(resource_type),
-                crate::resource_plane_v3::PlaneRoute::NewPlane,
-                "the converted shared-provider type {resource_type} must route to the new plane",
-            );
-        }
-
-        // U12: the storage Providers are composed by the v3 resource plane's
-        // registered Volume/VolumeBinding driver factories rather than a
-        // shared Runner row; both converted types must route to the new
-        // plane and keep owning an old-plane Runner row's identity.
-        for (resource_type, provider) in [
-            (crate::volume_driver::VOLUME_TYPE_NAME, "volume-local"),
-            (crate::binding_driver::BINDING_TYPE_NAME, "volume-virtiofs"),
-        ] {
-            assert_eq!(
-                crate::resource_plane_v3::route_resource_type(resource_type),
-                crate::resource_plane_v3::PlaneRoute::NewPlane,
-                "the converted volume type {resource_type} must route to the new plane",
-            );
-            resource_owners.insert(provider);
-        }
-
-        // U12: the activation Provider converted to the v3 plane, so it is
-        // composed by the plane's registered driver factory rather than a
-        // shared Runner row; its type must route to the new plane.
-        assert_eq!(
-            crate::resource_plane_v3::route_resource_type(
-                crate::activation_driver::ACTIVATION_TYPE_NAME,
-            ),
-            crate::resource_plane_v3::PlaneRoute::NewPlane,
-            "the converted activation type must route to the new plane",
-        );
-        resource_owners.insert("activation-nixos");
-
-        // U12: the system-core Host/User family is composed by the v3 plane's
-        // registered SystemCoreDriverFactory rather than the shared Core
-        // Runner; both converted types must route to the new plane.
-        for resource_type in ["Host", "User"] {
-            assert_eq!(
-                crate::resource_plane_v3::route_resource_type(resource_type),
-                crate::resource_plane_v3::PlaneRoute::NewPlane,
-                "the converted system-core type {resource_type} must route to the new plane",
-            );
-        }
-
-        assert_eq!(
-            resource_owners,
-            BTreeSet::from([
-                "system-systemd",
-                "system-minijail",
-                "runtime-cloud-hypervisor",
-                "runtime-qemu-media",
-                "runtime-azure-container-apps",
-                "runtime-azure-virtual-machine",
-                "volume-local",
-                "volume-virtiofs",
-                "activation-nixos",
-            ])
-        );
-
-        // The Credential Providers are typed rows but no longer own an
-        // old-plane controller runner: their Credential resources are served
-        // by the v3 `Credential` driver.
-        let driver_owned = [
-            "credential-secret-service",
-            "credential-entra",
-            "credential-managed-identity",
-        ];
-        // U12: the telemetry Provider's types are served by the v3 resource
-        // plane, so it no longer carries an old-plane controller runner; the
-        // U8 shared host-provider family and the system-core Host/User family
-        // joined it on the same plane.
-        let new_plane_only = [
-            "observability-otel",
-            "network-local",
-            "device-tpm",
-            "device-usbip",
-            "device-security-key",
-            "device-gpu",
-            "system-core",
-            "display-wayland",
-            "audio-pipewire",
-            "shell-terminal",
-        ];
-        let session_only = ["clipboard-wayland", "notification-desktop"];
-        let transport_only = ["transport-unix", "transport-vsock", "transport-azure-relay"];
-        assert!(driver_owned
-            .into_iter()
-            .chain(session_only)
-            .chain(transport_only)
-            .chain(new_plane_only)
-            .all(|provider| expected.contains(provider) && !resource_owners.contains(provider)));
-        let mut composed = resource_owners;
-        composed.extend(driver_owned);
-        composed.extend(session_only);
-        composed.extend(transport_only);
-        composed.extend(new_plane_only);
-        assert_eq!(composed, expected);
-    }
-
-    #[test]
     fn cloud_hypervisor_process_update_applies_requested_lifecycle() {
         let current = json!({
             "apiVersion": "resources.d2bus.org/v3",
@@ -14072,107 +11644,6 @@ mod tests {
 
         assert_eq!(updated["desiredLifecycle"], "running");
         assert_eq!(updated["providerRef"], "Provider/system-minijail");
-    }
-
-    fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
-        Arc::new(AuditSink::open(directory.join(name)).unwrap())
-    }
-
-    struct PublicationStoreFixture {
-        _directory: tempfile::TempDir,
-        database_path: std::path::PathBuf,
-        response_identity: String,
-        zone: ZoneId,
-        identity: d2b_resource_store_redb::StoreIdentity,
-    }
-
-    impl PublicationStoreFixture {
-        async fn new() -> Self {
-            let directory = tempfile::tempdir().unwrap();
-            let database_path = directory.path().join("store.redb");
-            let zone = ZoneId::parse("work").unwrap();
-            let response_identity = "sha256:".to_owned() + &"1".repeat(64);
-            let identity = store_identity(&zone, &response_identity).unwrap();
-            let database = OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(&database_path)
-                .unwrap();
-            let mut marker = OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(directory.path().join(".d2b-store-marker"))
-                .unwrap();
-            write_provisioning_marker(&mut marker, &identity).unwrap();
-            RedbResourceStore::provision_owned(
-                database,
-                marker,
-                identity.clone(),
-                mutation_seal_pair(identity.seal_identity()).1,
-            )
-            .await
-            .unwrap()
-            .shutdown()
-            .await
-            .unwrap();
-            Self {
-                _directory: directory,
-                database_path,
-                response_identity,
-                zone,
-                identity,
-            }
-        }
-
-        async fn open(&self, bundle: &ResourceBundle) -> ZoneResourceRuntime {
-            let database = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&self.database_path)
-                .unwrap();
-            let mut runtime = ZoneResourceRuntime::open(
-                self.zone.clone(),
-                OpenedZoneStore {
-                    response: OpenZoneStoreResponse {
-                        zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                            "zone-store-work",
-                        )
-                        .unwrap(),
-                        store_identity: self.response_identity.clone(),
-                        disposition: ZoneStoreDisposition::Opened,
-                        fd_index: 0,
-                    },
-                    database_fd: database.into(),
-                    external_inventory: None,
-                },
-            )
-            .await
-            .unwrap();
-            let storage = publication_storage_row(&self.zone, &self.identity);
-            runtime.authority_identity = Some(
-                ZoneAuthorityIdentity::from_bundle_and_storage(&self.zone, bundle, &storage)
-                    .unwrap(),
-            );
-            runtime
-        }
-
-        fn generation_set(
-            &self,
-            bundle: &ResourceBundle,
-        ) -> (
-            ResourceBundleGenerationId,
-            BTreeMap<ZoneId, ResourceBundleGenerationId>,
-        ) {
-            let generation =
-                ResourceBundleGenerationId::parse(bundle.integrity().content_hash.clone()).unwrap();
-            let generations = BTreeMap::from([(self.zone.clone(), generation)]);
-            let set_generation =
-                complete_generation_set_digest(&BTreeSet::from([self.zone.clone()]), &generations)
-                    .unwrap();
-            (set_generation, generations)
-        }
     }
 
     fn test_controller_session_providers(
@@ -14227,967 +11698,6 @@ mod tests {
                 DaemonMode::Host,
             ),
         )
-    }
-
-    fn attach_ready_controller(
-        providers: &Arc<crate::process_provider_runtime::ProductionProcessProviders>,
-        zone: &ZoneId,
-        process_ref: &str,
-        process_uid: &str,
-        process_generation: u64,
-        provider_ref: &str,
-        provider_uid: &str,
-        provider_generation: u64,
-        controller_generation: ControllerGeneration,
-    ) -> OwnedFd {
-        let (daemon_endpoint, peer_endpoint) = prearmed_seqpacket_pair().unwrap();
-        nix::sys::socket::send(
-            peer_endpoint.as_raw_fd(),
-            b"controller-ready",
-            nix::sys::socket::MsgFlags::empty(),
-        )
-        .unwrap();
-        providers
-            .attach_pending_controller_provider_context_for_test(
-                daemon_endpoint,
-                zone.clone(),
-                ResourceRef::parse(process_ref).unwrap(),
-                ResourceUid::parse(process_uid).unwrap(),
-                ResourceGeneration::new(process_generation).unwrap(),
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                ResourceRef::parse(provider_ref).unwrap(),
-                ResourceUid::parse(provider_uid).unwrap(),
-                ResourceGeneration::new(provider_generation).unwrap(),
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        peer_endpoint
-    }
-
-    async fn insert_test_controller_session(
-        coordinator: &mut ControllerSessionCoordinator,
-        context: &crate::process_provider_runtime::ControllerBootstrapContext,
-    ) {
-        let policy = controller_resource_endpoint_policy();
-        let catalog = d2b_resource_api::authz::ApiCatalog::standard();
-        let role_ref = ResourceRef::parse("Role/test-controller").unwrap();
-        let role = d2b_resource_api::authz::CompiledRole::new(
-            role_ref.clone(),
-            vec![
-                d2b_resource_api::authz::PolicyRule::new(
-                    &catalog,
-                    [],
-                    [],
-                    [d2b_resource_api::authz::SessionVerb::Connect],
-                    [],
-                    [],
-                    [context.zone().clone()],
-                    [],
-                )
-                .unwrap(),
-            ],
-        )
-        .unwrap();
-        let metadata = coordinator.store.runtime_metadata().await.unwrap();
-        let state = AuthorizationState {
-            snapshot: metadata.policy_snapshot,
-            zone_policy_revision: metadata.current_revision,
-            bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
-            now_tick: 1,
-        };
-        let binding = d2b_resource_api::authz::CompiledRoleBinding::new(
-            role_ref,
-            [BoundSubject {
-                subject_ref: context.provider_owner_ref().clone(),
-                subject_uid: context.provider_uid().clone(),
-            }],
-            d2b_resource_api::authz::BindingScope {
-                zones: [context.zone().clone()].into_iter().collect(),
-                ..d2b_resource_api::authz::BindingScope::default()
-            },
-            d2b_resource_api::authz::RelayGrantAuthority::None,
-        )
-        .unwrap();
-        let policy_set =
-            PolicySet::new(&catalog, state.snapshot.policy_revision, vec![role], vec![binding])
-                .unwrap();
-        let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
-        let bus_authorizer = BusAuthorizer::new(native, state).unwrap();
-        let (_bus, registrar) =
-            ZoneBus::new(context.zone().clone(), bus_authorizer, BusConfig::default()).unwrap();
-        coordinator.registrar = Arc::new(Mutex::new(Some(registrar)));
-
-        let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
-        let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
-        let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).unwrap();
-        let verified_peer =
-            VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).unwrap();
-        let mut registrar = coordinator.registrar.lock().unwrap().take().unwrap();
-        registrar
-            .install_committed_controller_process_subject(
-                &verified_peer,
-                CommittedControllerProcessSubjectInput {
-                    provider_ref: context.provider_owner_ref().clone(),
-                    provider_uid: context.provider_uid().clone(),
-                    process_ref: context.process_ref().clone(),
-                    zone_ref: ResourceRef::parse("Zone/work").unwrap(),
-                    execution_ref: context.execution_ref().clone(),
-                    provider_generation: context.provider_generation(),
-                    controller_generation: context.controller_generation(),
-                },
-            )
-            .unwrap();
-        let initiator = unix_transport(initiator_socket, &policy).unwrap();
-        let responder = unix_transport(responder_socket, &policy).unwrap();
-        let (initiator, responder) = tokio::join!(
-            SessionEngine::establish_initiator(
-                initiator,
-                policy.clone(),
-                HandshakeCredentials::Nn,
-                std::time::Instant::now(),
-            ),
-            SessionEngine::establish_responder(
-                responder,
-                policy.clone(),
-                HandshakeCredentials::Nn,
-                std::time::Instant::now(),
-            ),
-        );
-        let acceptor = registrar
-            .component_session_acceptor(policy, verified_peer)
-            .unwrap();
-        let candidate = acceptor
-            .admit(
-                initiator.unwrap(),
-                TransportEvidence::new(
-                    EvidenceClass::UnixPeer,
-                    BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                ),
-                1,
-            )
-            .await
-            .unwrap();
-        let (ingress, driver) = registrar
-            .register_component_service_session(candidate)
-            .await
-            .unwrap();
-        *coordinator.registrar.lock().unwrap() = Some(registrar);
-
-        let session_generation = ReconnectGeneration::new(1).unwrap();
-        let binding = controller_session_binding(context, session_generation).unwrap();
-        let service_task = tokio::spawn(async { Ok::<(), SessionServerError>(()) });
-        coordinator
-            .controller_sessions
-            .lock()
-            .unwrap()
-            .insert(
-                context.process_ref().clone(),
-                ControllerSession {
-                    context: context.clone(),
-                    binding,
-                    ingress,
-                    driver,
-                    _backend_lease: None,
-                    resource_client: None,
-                    service_task,
-                    assignments: BTreeMap::new(),
-                    assignment_stream_open: false,
-                    assignments_revoked: false,
-                    transport_closed: false,
-                    ingress_revoked: false,
-                },
-            );
-        drop(responder);
-    }
-
-    async fn read_test_resource(
-        runtime: &ZoneResourceRuntime,
-        target: ResourceRef,
-        operation_id: &str,
-    ) -> StoredResource {
-        runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: operation_id.to_owned(),
-                    idempotency_key: None,
-                    correlation_id: operation_id.to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: runtime.zone.clone(),
-                target,
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap()
-    }
-
-    fn publication_storage_row(
-        zone: &ZoneId,
-        identity: &d2b_resource_store_redb::StoreIdentity,
-    ) -> ZoneStoreStorageRow {
-        let storage_identity = ZoneStoreIdentity::new(
-            identity.zone_uid().clone(),
-            identity.store_uid().clone(),
-            identity.store_epoch(),
-        )
-        .unwrap();
-        serde_json::from_value(json!({
-            "identity": storage_identity,
-            "zoneStoreId": format!("zone-store-{}", zone.as_str()),
-            "storageOwnerPrincipal": "d2b-zonert",
-            "parentDirectoryId": format!("zone-store-parent-{}", zone.as_str()),
-            "ownership": {
-                "owner": "d2b-zonert", "group": "d2b-zonert",
-                "mode": "0640", "linkCount": 1
-            },
-            "auxiliaryDirectories": {
-                "audit": {
-                    "directoryId": format!("zone-store-audit-{}", zone.as_str()),
-                    "owner": "d2bd", "group": "d2bd",
-                    "mode": "0700", "repairOwner": "privileged-broker"
-                },
-                "telemetry": {
-                    "directoryId": format!("zone-store-telemetry-{}", zone.as_str()),
-                    "owner": "d2bd", "group": "d2bd",
-                    "mode": "0700", "repairOwner": "privileged-broker"
-                }
-            },
-            "filesystem": "regular-file-anchored-fd-relative-no-follow",
-            "locking": "ofd-close-on-exec",
-            "marker": {
-                "identityMarkerId": format!("zone-store-marker-{}", zone.as_str())
-            },
-            "replacementDetection": "fail-closed-on-missing-replaced-or-identity-mismatch",
-            "fsync": "database-and-parent-directory",
-            "publication": {
-                "descriptor": "owned-descriptor-close-on-exec-verified-before-concurrency",
-                "replacement": "atomic-rename-retain-prior-quarantine-ambiguity"
-            }
-        }))
-        .unwrap()
-    }
-
-    fn publication_bundle(zone: &ZoneId, zone_uid: &ResourceUid, value: &str) -> ResourceBundle {
-        let resource = BundleResource::new(
-            ResourceTypeName::parse("Host").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse(format!("generation-{value}")).unwrap(),
-                zone.clone(),
-                None,
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(format!(r#"{{"value":"{value}"}}"#).as_bytes()).unwrap(),
-        )
-        .unwrap();
-        ResourceBundle::new(
-            zone.clone(),
-            vec![resource],
-            "sha256:".to_owned() + &"f".repeat(64),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
-        )
-        .unwrap()
-        .with_zone_uid(zone_uid.clone())
-    }
-
-    async fn publish_generation(
-        runtime: &ZoneResourceRuntime,
-        set_generation: &ResourceBundleGenerationId,
-        generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
-    ) {
-        runtime
-            .prepare_generation_publication(set_generation, generations)
-            .await
-            .unwrap();
-        runtime
-            .commit_generation_publication(set_generation, generations)
-            .await
-            .unwrap();
-    }
-
-    async fn publication_state(
-        runtime: &ZoneResourceRuntime,
-        set_generation: &ResourceBundleGenerationId,
-    ) -> AuthorityOperationState {
-        runtime
-            .store
-            .authority_operations()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|operation| {
-                operation.operation_id == generation_publication_operation_id(set_generation)
-            })
-            .unwrap()
-            .state
-    }
-
-    #[tokio::test]
-    async fn system_core_refresh_waits_for_controller_session_guard() {
-        let fixture = PublicationStoreFixture::new().await;
-        let bundle =
-            publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "session-guard");
-        let runtime = fixture.open(&bundle).await;
-        let state = AuthorizationState {
-            snapshot: runtime.store_metadata.policy_snapshot,
-            zone_policy_revision: runtime.store_metadata.current_revision,
-            bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
-            now_tick: 0,
-        };
-
-        let guard = runtime.controller_session_lock.lock().await;
-        {
-            let refresh = runtime.refresh_system_core_session(state);
-            tokio::pin!(refresh);
-            assert!(
-                tokio::time::timeout(std::time::Duration::from_millis(20), &mut refresh)
-                    .await
-                    .is_err(),
-                "system-core refresh must not bypass controller-session establishment"
-            );
-            drop(guard);
-            assert_eq!(refresh.await, Ok(()));
-        }
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn public_policy_refresh_preserves_installed_controller_subjects() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/system-minijail").unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Provider",
-                "system-minijail",
-                &zone,
-                r#"{"artifactId":"system-minijail","config":{}}"#,
-            )],
-        )
-        .await;
-        let providers = test_controller_session_providers();
-        *runtime.controller_session_providers.lock().unwrap() = Some(Arc::clone(&providers));
-        let provider = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "controller-policy-provider-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "controller-policy-provider-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: provider_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::MetadataOnly,
-            })
-            .await
-            .unwrap();
-        let metadata = runtime.store.runtime_metadata().await.unwrap();
-        let controller_generation = metadata
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                ResourceRef::parse("Process/system-minijail-controller").unwrap(),
-                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
-                ResourceGeneration::new(1).unwrap(),
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                provider_ref.clone(),
-                provider.uid.clone(),
-                provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        assert!(
-            runtime
-                .policy_projection
-                .installed_controller_subjects()
-                .unwrap()
-                .is_empty()
-        );
-
-        // The Provider materialization advanced the store revision, so this
-        // refresh must recompile instead of returning from its installed-state
-        // fast path.
-        runtime.refresh_authorization_policy().await.unwrap();
-
-        let controller_subject = BoundSubject {
-            subject_ref: provider_ref,
-            subject_uid: provider.uid,
-        };
-        let state = runtime.policy_projection.installed_state().unwrap();
-        let authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        assert_eq!(state.snapshot, authorization_state.snapshot);
-        assert_eq!(
-            state.zone_policy_revision,
-            authorization_state.zone_policy_revision
-        );
-        assert_eq!(
-            runtime
-                .policy_projection
-                .installed_controller_subjects()
-                .unwrap(),
-            BTreeSet::from([controller_subject.clone()])
-        );
-        let context = || {
-            AuthenticatedSubjectContext::new(
-                controller_subject.subject_ref.clone(),
-                controller_subject.subject_uid.clone(),
-                ResourceRef::parse("Zone/work").unwrap(),
-                EvidenceClass::UnixPeer,
-                d2b_contracts_resource::v3::identity::SessionPurpose::parse("resource-api")
-                    .unwrap(),
-                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3")
-                    .unwrap(),
-                d2b_contracts_resource::v3::identity::SessionBinding::new(
-                    d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
-                        "sha256:{}",
-                        "1".repeat(64)
-                    ))
-                    .unwrap(),
-                    d2b_contracts_resource::v3::identity::TransportBinding::new(
-                        d2b_contracts_resource::v3::identity::Locality::Local,
-                        BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
-                    ),
-                    ReconnectGeneration::new(1).unwrap(),
-                    d2b_contracts_resource::v3::identity::TranscriptHash::from_bytes([3; 32]),
-                ),
-            )
-        };
-        assert!(
-            runtime
-                .authorizer
-                .issue_authenticated_subject(context(), state.clone())
-                .is_ok(),
-            "policy refresh must retain the installed Provider controller grant"
-        );
-        let bus_authorizer = runtime
-            .bus
-            .as_ref()
-            .expect("production runtime has a ZoneBus")
-            .native_authorizer();
-        assert!(
-            bus_authorizer
-                .issue_authenticated_subject(context(), state)
-                .is_ok(),
-            "ZoneBus must retain the installed Provider controller grant"
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn policy_projection_preflight_failure_preserves_last_good_projection() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let before = runtime.policy_projection.installed_state().unwrap();
-        let resources = d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
-            &runtime.store,
-            &runtime.zone,
-            "policy-preflight-regression",
-        )
-        .await
-        .unwrap();
-        let metadata = runtime.store.runtime_metadata().await.unwrap();
-        let (policy, mut rejected_state) =
-            d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
-                &runtime.zone,
-                metadata.policy_snapshot,
-                metadata.current_revision,
-                &runtime.bundle_resource_types,
-                &resources,
-                std::iter::empty(),
-            )
-            .unwrap();
-        rejected_state.snapshot.policy_revision =
-            rejected_state.snapshot.policy_revision.saturating_add(1);
-
-        assert_eq!(
-            runtime
-                .policy_projection
-                .install(policy, rejected_state, BTreeSet::new()),
-            Err(ResourceRuntimeError::AuthorizationUnavailable)
-        );
-        assert_eq!(runtime.policy_projection.installed_state().unwrap(), before);
-        assert!(*runtime.policy_projection.policy_loaded.lock().unwrap());
-        assert_eq!(
-            runtime
-                .authorization_state
-                .lock()
-                .unwrap()
-                .as_ref(),
-            Some(&before)
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn public_get_and_list_use_installed_policy_after_rebind_failure() {
-        let (_directory, runtime, broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let process_provider_ref = ResourceRef::parse("Provider/system-minijail").unwrap();
-        let process_ref = ResourceRef::parse("Process/system-minijail-controller").unwrap();
-        let uid = Uid::current();
-        let username = User::from_uid(uid)
-            .unwrap()
-            .expect("test peer uid has an NSS user")
-            .name;
-        let user_ref = ResourceRef::parse(&format!("User/{username}")).unwrap();
-        let role_ref = ResourceRef::parse("Role/public-read").unwrap();
-        let role = d2b_contracts_zone_session::v3::role::RoleSpec::new(vec![
-            d2b_contracts_zone_session::v3::role::RoleRule::new(
-                vec![
-                    ResourceTypeName::parse("Guest").unwrap(),
-                    ResourceTypeName::parse("EphemeralProcess").unwrap(),
-                ],
-                vec![
-                    d2b_contracts_zone_session::v3::role::RoleResourceVerb::Get,
-                    d2b_contracts_zone_session::v3::role::RoleResourceVerb::List,
-                ],
-                Vec::new(),
-                Vec::new(),
-                vec![zone.clone()],
-                Vec::new(),
-                vec![d2b_contracts_zone_session::v3::role::RoleSessionVerb::Connect],
-            )
-            .unwrap(),
-        ])
-        .unwrap();
-        let binding =
-            d2b_contracts_zone_session::v3::role_binding::RoleBindingSpec::new(
-                role_ref,
-                vec![user_ref.clone()],
-                None,
-                None,
-            )
-            .unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![
-                bundle_resource(
-                    "Provider",
-                    "system-minijail",
-                    &zone,
-                    r#"{"artifactId":"system-minijail","config":{}}"#,
-                ),
-                BundleResource::new(
-                    ResourceTypeName::parse("Process").unwrap(),
-                    BundleResourceMetadata::new(
-                        process_ref.name().clone(),
-                        zone.clone(),
-                        Some(process_provider_ref.clone()),
-                        BTreeMap::new(),
-                        BTreeMap::new(),
-                    ),
-                    CanonicalJsonObject::parse(
-                        br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"test-controller"}"#,
-                    )
-                    .unwrap(),
-                )
-                .unwrap(),
-                bundle_resource(
-                    "User",
-                    &username,
-                    &zone,
-                    &serde_json::to_string(&json!({
-                        "displayName": username,
-                        "groups": [],
-                        "osUsername": username,
-                    }))
-                    .unwrap(),
-                ),
-                bundle_resource(
-                    "Role",
-                    "public-read",
-                    &zone,
-                    &serde_json::to_string(&role).unwrap(),
-                ),
-                bundle_resource(
-                    "RoleBinding",
-                    "public-read",
-                    &zone,
-                    &serde_json::to_string(&binding).unwrap(),
-                ),
-            ],
-        )
-        .await;
-        mark_test_resource_ready(&runtime, &user_ref, &broker_evidence).await;
-        let process_provider = read_test_resource(
-            &runtime,
-            process_provider_ref.clone(),
-            "rebind-process-provider",
-        )
-        .await;
-        let process = read_test_resource(&runtime, process_ref.clone(), "rebind-process")
-            .await;
-        let providers = test_controller_session_providers();
-        *runtime.controller_session_providers.lock().unwrap() = Some(Arc::clone(&providers));
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                process_ref.clone(),
-                process.uid.clone(),
-                process.generation,
-                process_provider_ref.clone(),
-                process_provider_ref.clone(),
-                process_provider.uid.clone(),
-                process_provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        let coordinator = runtime.controller_session_coordinator();
-        let authority = runtime.core_assignment_fences().await.unwrap().4;
-        let authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        coordinator
-            .set_assigned_process_api(Arc::new(
-                runtime
-                    .process_controller_api(
-                        DaemonMode::Host,
-                        authority,
-                        authorization_state.clone(),
-                    )
-                    .unwrap(),
-            ))
-            .unwrap();
-        runtime.refresh_authorization_policy().await.unwrap();
-        let before_rebind_authority = runtime.core_assignment_fences().await.unwrap().4;
-        let before_rebind_authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        let before_rebind_process =
-            read_test_resource(&runtime, process_ref.clone(), "rebind-process-before-fence").await;
-        let before_rebind_api = Arc::new(
-            runtime
-                .process_controller_api(
-                    DaemonMode::Host,
-                    Arc::clone(&before_rebind_authority),
-                    before_rebind_authorization_state,
-                )
-                .unwrap(),
-        );
-        let before_rebind_fence = process_assignment_fence_resolver(
-            Arc::clone(&runtime.store),
-            DaemonMode::Host,
-            Arc::clone(&before_rebind_authority),
-        )(
-            process_ref.clone(),
-            before_rebind_process.uid.clone(),
-            before_rebind_process.revision,
-        )
-        .await
-        .expect("pre-rebind Process assignment fence");
-        assert_eq!(
-            before_rebind_fence,
-            ResourceAssignmentFence {
-                resource_uid: before_rebind_process.uid.clone(),
-                resource_revision: before_rebind_process.revision,
-                provider_generation: before_rebind_authority.provider_generation,
-                controller_generation: before_rebind_authority.controller_generation,
-                controller_role: before_rebind_authority.controller_role.clone(),
-                target: ResourceRef::parse("Host/host-system").unwrap(),
-                session_generation: before_rebind_authority.session_generation,
-                epoch: ASSIGNMENT_EPOCH,
-                scope: ResourceAssignmentScope::Primary,
-            }
-        );
-        let before_rebind_revision = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .current_revision;
-        let registrar = runtime
-            .registrar
-            .lock()
-            .unwrap()
-            .take()
-            .expect("system-core registrar");
-        let service_task = runtime
-            .service_task
-            .lock()
-            .unwrap()
-            .take()
-            .expect("system-core session task");
-        service_task.abort();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Role",
-                "rebind-trigger",
-                &zone,
-                &serde_json::to_string(&role).unwrap(),
-            )],
-        )
-        .await;
-        assert!(
-            runtime.store.runtime_metadata().await.unwrap().current_revision
-                > before_rebind_revision,
-            "rebind trigger must advance the committed revision"
-        );
-        assert_eq!(
-            runtime.refresh_authorization_policy().await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        assert!(
-            runtime.policy_projection.installed_state().is_ok(),
-            "a failed session rebind must preserve the complete installed policy"
-        );
-        let installed_after_failure = runtime.policy_projection.installed_state().unwrap();
-        let metadata_after_failure = runtime.store.runtime_metadata().await.unwrap();
-        assert_eq!(
-            installed_after_failure.zone_policy_revision,
-            metadata_after_failure.current_revision,
-            "the retryable failure must occur after the complete projection is installed"
-        );
-        assert!(
-            coordinator.assigned_process_api.lock().unwrap().is_none(),
-            "failed system-core rebind must invalidate the assigned Process API"
-        );
-        let context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &process_ref)
-            .expect("rebind Process controller context");
-        assert_eq!(
-            coordinator
-                .persist_controller_session_evidence(
-                    &context,
-                    Some(ReconnectGeneration::new(1).unwrap()),
-                )
-                .await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable),
-            "pending evidence must not write through an invalidated Process API"
-        );
-
-        let guard = runtime.controller_session_lock.lock().await;
-        for request in [
-            json!({
-                "method": "Get",
-                "zoneRef": "Zone/work",
-                "resourceRef": "EphemeralProcess/rebind-runner",
-            }),
-            json!({
-                "method": "List",
-                "zoneRef": "Zone/work",
-                "resourceType": "EphemeralProcess",
-            }),
-        ] {
-            let result = tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                runtime.dispatch_public_cli_request(&request, uid.as_raw()),
-            )
-            .await
-            .expect("public read must not wait for controller-session policy refresh");
-            // `EphemeralProcess` is manager-served since U12 and this fixture
-            // publishes no manager plane, so the read must fail on exactly
-            // that absence - never on the authorization projection (the
-            // fenced refresh would otherwise rebuild it) and never by
-            // waiting.
-            assert_eq!(
-                result.expect_err("no manager plane is published in this fixture"),
-                ResourceRuntimeError::CapabilityUnavailable,
-                "public read must use the installed authorization projection",
-            );
-        }
-        drop(guard);
-        let _ = service_task.await;
-        *runtime.registrar.lock().unwrap() = Some(registrar);
-        runtime
-            .refresh_authorization_policy()
-            .await
-            .expect("the next refresh must retry system-core rebind recovery");
-        assert!(
-            runtime.service_task.lock().unwrap().is_some(),
-            "recovery must re-enroll the fenced system-core session"
-        );
-        assert!(
-            coordinator.assigned_process_api.lock().unwrap().is_some(),
-            "successful system-core rebind must restore the assigned Process API"
-        );
-        let after_rebind_authority = runtime.core_assignment_fences().await.unwrap().4;
-        let after_rebind_process =
-            read_test_resource(&runtime, process_ref.clone(), "rebind-process-after-fence").await;
-        let rebuilt_process_fence = process_assignment_fence_resolver(
-            Arc::clone(&runtime.store),
-            DaemonMode::Host,
-            Arc::clone(&after_rebind_authority),
-        )(
-            process_ref.clone(),
-            after_rebind_process.uid.clone(),
-            after_rebind_process.revision,
-        )
-        .await
-        .expect("rebuilt Process assignment fence");
-        assert_eq!(
-            rebuilt_process_fence,
-            before_rebind_fence.clone(),
-            "rebind must preserve Process identity and fence material",
-        );
-        assert_eq!(
-            after_rebind_authority.provider_generation,
-            before_rebind_authority.provider_generation
-        );
-        assert_eq!(
-            after_rebind_authority.controller_generation,
-            before_rebind_authority.controller_generation
-        );
-        assert_eq!(
-            after_rebind_authority.controller_role,
-            before_rebind_authority.controller_role
-        );
-        assert_eq!(
-            after_rebind_authority.session_generation,
-            before_rebind_authority.session_generation
-        );
-        coordinator
-            .persist_controller_session_evidence(
-                &context,
-                Some(ReconnectGeneration::new(1).unwrap()),
-            )
-            .await
-            .expect("rebind must rebuild the assigned Process API before evidence writes");
-        let current_process =
-            read_test_resource(&runtime, process_ref.clone(), "rebind-process-current-fence")
-                .await;
-        let current_process_fence = process_assignment_fence_resolver(
-            Arc::clone(&runtime.store),
-            DaemonMode::Host,
-            Arc::clone(&after_rebind_authority),
-        )(
-            process_ref.clone(),
-            current_process.uid.clone(),
-            current_process.revision,
-        )
-        .await
-        .expect("current Process assignment fence");
-        let durable_current_fence = runtime
-            .store
-            .assignment_fence(zone.clone(), process_ref.clone())
-            .await
-            .unwrap()
-            .expect("rebuilt Process assignment fence must persist");
-        assert_eq!(durable_current_fence, current_process_fence);
-        assert!(
-            persist_resource_controller_session_evidence(
-                &before_rebind_api,
-                &current_process,
-                Some(&json!({"ready": false, "stale": true})),
-            )
-            .await
-            .is_ok(),
-            "same-identity pre-rebind evidence re-fences idempotently without an epoch"
-        );
-        drop(before_rebind_api);
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn controller_session_reconcile_wake_survives_guard_contention() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let coordinator = runtime.controller_session_coordinator();
-        let providers = test_controller_session_providers();
-        let task_slot = Arc::clone(&runtime.controller_session_reconcile_task);
-        let wake = Arc::clone(&runtime.controller_session_reconcile_wake);
-        let shutdown = Arc::clone(&runtime.controller_session_reconcile_shutdown);
-        *runtime.authorization_state.lock().unwrap() = None;
-
-        let guard = runtime.controller_session_lock.lock().await;
-        schedule_controller_session_reconcile(
-            task_slot,
-            wake,
-            Arc::clone(&shutdown),
-            Arc::clone(&coordinator),
-            providers,
-        )
-        .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if coordinator.reconcile_attempts.load(Ordering::SeqCst) == 1 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("controller-session worker should attempt reconciliation");
-        assert!(runtime.authorization_state.lock().unwrap().is_none());
-        schedule_controller_session_reconcile(
-            Arc::clone(&runtime.controller_session_reconcile_task),
-            Arc::clone(&runtime.controller_session_reconcile_wake),
-            Arc::clone(&shutdown),
-            Arc::clone(&coordinator),
-            test_controller_session_providers(),
-        )
-        .unwrap();
-
-        drop(guard);
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if runtime.authorization_state.lock().unwrap().is_some() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("guarded controller-session wake should reconcile after release");
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if coordinator.reconcile_attempts.load(Ordering::SeqCst) == 2 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("wake arriving during reconciliation should trigger one later pass");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(
-            coordinator.reconcile_attempts.load(Ordering::SeqCst),
-            2,
-            "one wake arriving during reconciliation must not create a hot loop"
-        );
-
-        shutdown.store(true, Ordering::Release);
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
     }
 
     #[test]
@@ -15262,813 +11772,9 @@ mod tests {
         assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn controller_session_admission_freezes_pending_snapshot_across_passes() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = ZoneId::parse("work").unwrap();
-        materialize_test_bundle(&runtime, Vec::new()).await;
-        let first_provider_ref =
-            ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("first provider");
-        let second_provider_ref =
-            ResourceRef::parse("Provider/runtime-qemu-media").expect("second provider");
-        let first_process_ref =
-            ResourceRef::parse("Process/provider-controller-first").expect("first process");
-        let second_process_ref =
-            ResourceRef::parse("Process/provider-controller-second").expect("second process");
-        let controller_process = |name: &str, owner_ref: &ResourceRef, template: &str| {
-            BundleResource::new(
-                ResourceTypeName::parse("Process").unwrap(),
-                BundleResourceMetadata::new(
-                    ResourceName::parse(name).unwrap(),
-                    zone.clone(),
-                    Some(owner_ref.clone()),
-                    BTreeMap::new(),
-                    BTreeMap::new(),
-                ),
-                CanonicalJsonObject::parse(
-                    format!(
-                        r#"{{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"{template}"}}"#
-                    )
-                    .as_bytes(),
-                )
-                .unwrap(),
-            )
-            .unwrap()
-        };
-        materialize_test_bundle(
-            &runtime,
-            vec![
-                bundle_resource(
-                    "Provider",
-                    "runtime-cloud-hypervisor",
-                    &zone,
-                    r#"{"artifactId":"runtime-cloud-hypervisor","config":{}}"#,
-                ),
-                bundle_resource(
-                    "Provider",
-                    "runtime-qemu-media",
-                    &zone,
-                    r#"{"artifactId":"runtime-qemu-media","config":{}}"#,
-                ),
-                controller_process(
-                    first_process_ref.name().as_str(),
-                    &first_provider_ref,
-                    "acceptance-controller",
-                ),
-                controller_process(
-                    second_process_ref.name().as_str(),
-                    &second_provider_ref,
-                    "acceptance-controller",
-                ),
-            ],
-        )
-        .await;
-        materialize_test_bundle(
-            &runtime,
-            vec![
-                bundle_resource(
-                    "Provider",
-                    "runtime-qemu-media",
-                    &zone,
-                    r#"{"artifactId":"runtime-qemu-media","config":{"replacement":true}}"#,
-                ),
-                controller_process(
-                    second_process_ref.name().as_str(),
-                    &second_provider_ref,
-                    "acceptance-controller-replacement",
-                ),
-            ],
-        )
-        .await;
-        let first_provider =
-            read_test_resource(&runtime, first_provider_ref.clone(), "admission-first-provider")
-                .await;
-        let second_provider = read_test_resource(
-            &runtime,
-            second_provider_ref.clone(),
-            "admission-second-provider",
-        )
-        .await;
-        let first_process =
-            read_test_resource(&runtime, first_process_ref.clone(), "admission-first-process")
-                .await;
-        let second_process = read_test_resource(
-            &runtime,
-            second_process_ref.clone(),
-            "admission-second-process",
-        )
-        .await;
-        assert_eq!(second_provider.generation.get(), 2);
-        assert_eq!(second_process.generation.get(), 2);
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        let providers = test_controller_session_providers();
-        let coordinator = runtime.controller_session_coordinator();
-        let authority = runtime.core_assignment_fences().await.unwrap().4;
-        let authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        coordinator
-            .set_assigned_process_api(Arc::new(
-                runtime
-                    .process_controller_api(DaemonMode::Host, authority, authorization_state)
-                    .unwrap(),
-            ))
-            .unwrap();
-        let wake = Arc::clone(&runtime.controller_session_reconcile_wake);
-        let wake_for_waker = Arc::clone(&wake);
-        let shutdown = Arc::clone(&runtime.controller_session_reconcile_shutdown);
-        let task_slot_for_waker = Arc::clone(&runtime.controller_session_reconcile_task);
-        let shutdown_for_waker = Arc::clone(&shutdown);
-        let coordinator_for_waker = Arc::downgrade(&coordinator);
-        let providers_for_waker = Arc::downgrade(&providers);
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let callback_wake_count = Arc::clone(&wake_count);
-        providers
-            .set_controller_session_waker(
-                zone.clone(),
-                Arc::new(move || {
-                    callback_wake_count.fetch_add(1, Ordering::SeqCst);
-                    let coordinator = coordinator_for_waker
-                        .upgrade()
-                        .ok_or_else(|| "controller-session-coordinator-dropped".to_owned())?;
-                    let providers = providers_for_waker
-                        .upgrade()
-                        .ok_or_else(|| "process-providers-dropped".to_owned())?;
-                    schedule_controller_session_reconcile(
-                        Arc::clone(&task_slot_for_waker),
-                        Arc::clone(&wake_for_waker),
-                        Arc::clone(&shutdown_for_waker),
-                        coordinator,
-                        providers,
-                    )
-                    .map_err(|error| format!("{error:?}"))
-                }),
-            )
-            .unwrap();
-        let peers = Arc::new(Mutex::new(Vec::<OwnedFd>::new()));
-        let hook_ran = Arc::new(AtomicBool::new(false));
-        let stale_context = Arc::new(Mutex::new(None));
-        let peers_for_hook = Arc::clone(&peers);
-        let hook_ran_for_hook = Arc::clone(&hook_ran);
-        let stale_context_for_hook = Arc::clone(&stale_context);
-        let providers_for_hook = Arc::clone(&providers);
-        let second_snapshot_seen = Arc::new(AtomicBool::new(false));
-        let second_snapshot_seen_for_hook = Arc::clone(&second_snapshot_seen);
-        let second_snapshot_release = Arc::new(AtomicBool::new(false));
-        let second_snapshot_release_for_hook = Arc::clone(&second_snapshot_release);
-        let zone_for_hook = zone.clone();
-        let replacement_process_uid = second_process.uid.clone();
-        let replacement_process_generation = second_process.generation.get();
-        let replacement_provider_uid = second_provider.uid.clone();
-        let replacement_provider_generation = second_provider.generation.get();
-        let controller_generation_for_hook = controller_generation;
-        let second_process_ref_for_hook = second_process_ref.clone();
-        let second_provider_ref_for_hook = second_provider_ref.clone();
-        let after_snapshot = Arc::new(
-            move |_providers: &crate::process_provider_runtime::ProductionProcessProviders| {
-                if hook_ran_for_hook.swap(true, Ordering::AcqRel) {
-                    second_snapshot_seen_for_hook.store(true, Ordering::Release);
-                    while !second_snapshot_release_for_hook.load(Ordering::Acquire) {
-                        std::thread::yield_now();
-                    }
-                    return;
-                }
-                let late_peer = attach_ready_controller(
-                    &providers_for_hook,
-                    &zone_for_hook,
-                    second_process_ref_for_hook.to_canonical_string().as_str(),
-                    "323e4567-e89b-42d3-a456-426614174002",
-                    1,
-                    second_provider_ref_for_hook.to_canonical_string().as_str(),
-                    "423e4567-e89b-42d3-a456-426614174003",
-                    1,
-                    controller_generation_for_hook,
-                );
-                let late_context = providers_for_hook
-                    .controller_bootstrap_contexts(&zone_for_hook)
-                    .into_iter()
-                    .find(|context| context.process_ref() == &second_process_ref_for_hook)
-                    .expect("late Pending controller context");
-                *stale_context_for_hook.lock().unwrap() = Some(late_context);
-                let replacement_peer = attach_ready_controller(
-                    &providers_for_hook,
-                    &zone_for_hook,
-                    second_process_ref_for_hook.to_canonical_string().as_str(),
-                    replacement_process_uid.as_str(),
-                    replacement_process_generation,
-                    second_provider_ref_for_hook.to_canonical_string().as_str(),
-                    replacement_provider_uid.as_str(),
-                    replacement_provider_generation,
-                    controller_generation_for_hook,
-                );
-                peers_for_hook
-                    .lock()
-                    .unwrap()
-                    .extend([late_peer, replacement_peer]);
-            },
-        );
-        let policy_snapshots = Arc::new(Mutex::new(Vec::<BTreeSet<BoundSubject>>::new()));
-        let policy_snapshots_for_hook = Arc::clone(&policy_snapshots);
-        let first_policy_seen = Arc::new(AtomicBool::new(false));
-        let first_policy_seen_for_hook = Arc::clone(&first_policy_seen);
-        let first_policy_release = Arc::new(AtomicBool::new(false));
-        let first_policy_release_for_hook = Arc::clone(&first_policy_release);
-        let _admission_unwind_guard = ControllerSessionAdmissionTestUnwindGuard {
-            first_policy_release: Arc::clone(&first_policy_release),
-            second_snapshot_release: Arc::clone(&second_snapshot_release),
-            shutdown: Arc::clone(&shutdown),
-            wake: Arc::clone(&wake),
-        };
-        coordinator.set_controller_session_admission_test_seam(
-            ControllerSessionAdmissionTestSeam {
-                after_snapshot,
-                after_policy_install: Arc::new(move |subjects| {
-                    policy_snapshots_for_hook
-                        .lock()
-                        .unwrap()
-                        .push(subjects.clone());
-                    if !first_policy_seen_for_hook.swap(true, Ordering::AcqRel) {
-                        while !first_policy_release_for_hook.load(Ordering::Acquire) {
-                            std::thread::yield_now();
-                        }
-                    }
-                }),
-                admit_without_transport: true,
-            },
-        );
-        peers.lock().unwrap().push(attach_ready_controller(
-            &providers,
-            &zone,
-            first_process_ref.to_canonical_string().as_str(),
-            first_process.uid.as_str(),
-            first_process.generation.get(),
-            first_provider_ref.to_canonical_string().as_str(),
-            first_provider.uid.as_str(),
-            first_provider.generation.get(),
-            controller_generation,
-        ));
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if policy_snapshots.lock().unwrap().len() == 1 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the first scheduled pass must install its frozen policy");
-        let stale_context = stale_context
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("test seam captured the replaced context");
-        let replacement_context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &second_process_ref)
-            .expect("replacement Pending controller context");
-        let first_subject = BoundSubject {
-            subject_ref: first_provider_ref.clone(),
-            subject_uid: first_provider.uid.clone(),
-        };
-        let second_subject = BoundSubject {
-            subject_ref: second_provider_ref.clone(),
-            subject_uid: second_provider.uid.clone(),
-        };
-        assert_eq!(
-            policy_snapshots.lock().unwrap().as_slice(),
-            [BTreeSet::from([first_subject.clone()])]
-        );
-        first_policy_release.store(true, Ordering::Release);
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if second_snapshot_seen.load(Ordering::Acquire)
-                    && !providers.controller_bootstrap_ready(&zone, &first_process_ref)
-                    && providers.controller_bootstrap_ready(&zone, replacement_context.process_ref())
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the queued wake must reach a second frozen admission pass");
-        assert_ne!(
-            stale_context.process_uid(),
-            replacement_context.process_uid(),
-            "replacement must fence the stale Process UID"
-        );
-        assert_ne!(
-            stale_context.generation(),
-            replacement_context.generation(),
-            "replacement must fence the stale Process generation"
-        );
-        assert_ne!(
-            stale_context.provider_uid(),
-            replacement_context.provider_uid(),
-            "replacement must fence the stale Provider UID"
-        );
-        assert_ne!(
-            stale_context.provider_generation(),
-            replacement_context.provider_generation(),
-            "replacement must fence the stale Provider generation"
-        );
-        assert!(
-            providers
-                .begin_controller_bootstrap_if_matches(&zone, &stale_context)
-                .is_none(),
-            "a replaced Pending marker must not be claimed by a stale snapshot"
-        );
-        assert!(
-            providers.controller_bootstrap_ready(&zone, replacement_context.process_ref()),
-            "the replacement must remain Pending after pass one"
-        );
-        assert!(
-            !providers.controller_bootstrap_ready(&zone, &first_process_ref),
-            "the original context must be Active after pass one"
-        );
-        second_snapshot_release.store(true, Ordering::Release);
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if policy_snapshots.lock().unwrap().len() == 2 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the second pass must install the replacement Provider subject");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(
-            coordinator.reconcile_attempts.load(Ordering::SeqCst),
-            2,
-            "the non-lossy wake must not create a duplicate pass"
-        );
-        assert_eq!(
-            policy_snapshots.lock().unwrap().as_slice(),
-            [
-                BTreeSet::from([first_subject.clone()]),
-                BTreeSet::from([first_subject.clone(), second_subject.clone()]),
-            ]
-        );
-        for context in providers.controller_bootstrap_contexts(&zone) {
-            assert!(!providers.controller_bootstrap_ready(&zone, context.process_ref()));
-            assert!(
-                providers
-                    .begin_controller_bootstrap_if_matches(&zone, &context)
-                    .is_none(),
-                "an active controller must not be admitted twice"
-            );
-        }
-        assert_eq!(wake_count.load(Ordering::SeqCst), 3);
 
-        shutdown.store(true, Ordering::Release);
-        wake.notify_one();
-        drop(peers);
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn controller_session_reconcile_failures_use_bounded_backoff() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let coordinator = runtime.controller_session_coordinator();
-        let providers = test_controller_session_providers();
-        let task_slot = Arc::clone(&runtime.controller_session_reconcile_task);
-        let wake = Arc::clone(&runtime.controller_session_reconcile_wake);
-        let shutdown = Arc::clone(&runtime.controller_session_reconcile_shutdown);
-        let sessions = Arc::clone(&runtime.controller_sessions);
-        std::thread::spawn(move || {
-            let _guard = sessions.lock().unwrap();
-            panic!("poison controller-session test lock");
-        })
-        .join()
-        .expect_err("test thread must poison the controller-session lock");
-
-        schedule_controller_session_reconcile(
-            task_slot,
-            wake,
-            Arc::clone(&shutdown),
-            Arc::clone(&coordinator),
-            providers,
-        )
-        .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if coordinator.reconcile_attempts.load(Ordering::SeqCst) == 1 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("failed reconciliation should be attempted");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(
-            coordinator.reconcile_attempts.load(Ordering::SeqCst),
-            1,
-            "a failed reconciliation must not self-notify into a hot loop"
-        );
-        tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            async {
-                loop {
-                    if coordinator.reconcile_attempts.load(Ordering::SeqCst) >= 2 {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            },
-        )
-        .await
-        .expect("failed reconciliation should retry after bounded backoff");
-
-        runtime.controller_sessions.clear_poison();
-        shutdown.store(true, Ordering::Release);
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn system_core_refresh_rejects_partial_session_state() {
-        let fixture = PublicationStoreFixture::new().await;
-        let bundle =
-            publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "session-partial");
-        let runtime = fixture.open(&bundle).await;
-        let state = AuthorizationState {
-            snapshot: runtime.store_metadata.policy_snapshot,
-            zone_policy_revision: runtime.store_metadata.current_revision,
-            bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
-            now_tick: 0,
-        };
-        *runtime.service_task.lock().unwrap() = Some(tokio::spawn(async {
-            std::future::pending::<()>().await;
-            Ok(())
-        }));
-
-        assert_eq!(
-            runtime.refresh_system_core_session(state).await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        assert!(runtime.service_task.lock().unwrap().is_some());
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn system_core_refresh_rejects_empty_existing_session_state() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let state = runtime.policy_projection.installed_state().unwrap();
-        let registrar = runtime
-            .registrar
-            .lock()
-            .unwrap()
-            .take()
-            .expect("system-core registrar");
-        *runtime.ingress.lock().unwrap() = None;
-        let service_task = runtime
-            .service_task
-            .lock()
-            .unwrap()
-            .take()
-            .expect("system-core session task");
-        service_task.abort();
-
-        assert_eq!(
-            runtime.refresh_system_core_session(state).await,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        *runtime.registrar.lock().unwrap() = Some(registrar);
-        let _ = service_task.await;
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn generation_publication_retires_a_before_admitting_b() {
-        let fixture = PublicationStoreFixture::new().await;
-        let bundle_a = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "a");
-        let bundle_b = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "b");
-
-        let runtime_a = fixture.open(&bundle_a).await;
-        let (set_a, generations_a) = fixture.generation_set(&bundle_a);
-        publish_generation(&runtime_a, &set_a, &generations_a).await;
-        assert_eq!(
-            publication_state(&runtime_a, &set_a).await,
-            AuthorityOperationState::Released
-        );
-        runtime_a.shutdown().await.unwrap();
-
-        let runtime_b = fixture.open(&bundle_b).await;
-        let (set_b, generations_b) = fixture.generation_set(&bundle_b);
-        publish_generation(&runtime_b, &set_b, &generations_b).await;
-        assert_eq!(
-            publication_state(&runtime_b, &set_b).await,
-            AuthorityOperationState::Released
-        );
-        runtime_b.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn generation_publication_restart_recovers_confirmed_a_idempotently() {
-        let fixture = PublicationStoreFixture::new().await;
-        let bundle_a = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "a");
-        let runtime_a = fixture.open(&bundle_a).await;
-        let (set_a, generations_a) = fixture.generation_set(&bundle_a);
-        runtime_a
-            .prepare_generation_publication(&set_a, &generations_a)
-            .await
-            .unwrap();
-        let operation_id = generation_publication_operation_id(&set_a);
-        let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
-        let capability = runtime_a
-            .store
-            .resume_authority_operation(operation_id, &binding_digest)
-            .await
-            .unwrap();
-        capability
-            .record_effect(AuthorityOperationState::EffectConfirmed)
-            .await
-            .unwrap();
-        drop(capability);
-        runtime_a.shutdown().await.unwrap();
-
-        let runtime_restart = fixture.open(&bundle_a).await;
-        publish_generation(&runtime_restart, &set_a, &generations_a).await;
-        assert_eq!(
-            publication_state(&runtime_restart, &set_a).await,
-            AuthorityOperationState::Released
-        );
-        runtime_restart.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn generation_publication_pending_and_retryable_a_fence_b() {
-        for retryable in [false, true] {
-            let fixture = PublicationStoreFixture::new().await;
-            let bundle_a = publication_bundle(
-                &fixture.zone,
-                fixture.identity.zone_uid(),
-                if retryable { "retryable" } else { "pending" },
-            );
-            let bundle_b = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "b");
-            let runtime_a = fixture.open(&bundle_a).await;
-            let (set_a, generations_a) = fixture.generation_set(&bundle_a);
-            runtime_a
-                .prepare_generation_publication(&set_a, &generations_a)
-                .await
-                .unwrap();
-            if retryable {
-                let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
-                let capability = runtime_a
-                    .store
-                    .resume_authority_operation(
-                        generation_publication_operation_id(&set_a),
-                        &binding_digest,
-                    )
-                    .await
-                    .unwrap();
-                capability
-                    .record_effect(AuthorityOperationState::EffectRetryable)
-                    .await
-                    .unwrap();
-            }
-            runtime_a.shutdown().await.unwrap();
-
-            let runtime_b = fixture.open(&bundle_b).await;
-            let (set_b, generations_b) = fixture.generation_set(&bundle_b);
-            assert!(
-                runtime_b
-                    .prepare_generation_publication(&set_b, &generations_b)
-                    .await
-                    .is_err()
-            );
-            runtime_b.shutdown().await.unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn generation_publication_unclosed_or_unreleased_a_does_not_admit_b() {
-        // A failed close leaves EffectConfirmed; a failed release leaves Closing.
-        for (close_recorded, expected_state) in [
-            (false, AuthorityOperationState::EffectConfirmed),
-            (true, AuthorityOperationState::Closing),
-        ] {
-            let fixture = PublicationStoreFixture::new().await;
-            let bundle_a = publication_bundle(
-                &fixture.zone,
-                fixture.identity.zone_uid(),
-                if close_recorded {
-                    "closing"
-                } else {
-                    "confirmed"
-                },
-            );
-            let bundle_b = publication_bundle(&fixture.zone, fixture.identity.zone_uid(), "b");
-            let runtime_a = fixture.open(&bundle_a).await;
-            let (set_a, generations_a) = fixture.generation_set(&bundle_a);
-            runtime_a
-                .prepare_generation_publication(&set_a, &generations_a)
-                .await
-                .unwrap();
-            let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
-            let capability = runtime_a
-                .store
-                .resume_authority_operation(
-                    generation_publication_operation_id(&set_a),
-                    &binding_digest,
-                )
-                .await
-                .unwrap();
-            capability
-                .record_effect(AuthorityOperationState::EffectConfirmed)
-                .await
-                .unwrap();
-            if close_recorded {
-                capability.record_close().await.unwrap();
-            }
-            drop(capability);
-            assert_eq!(publication_state(&runtime_a, &set_a).await, expected_state);
-            runtime_a.shutdown().await.unwrap();
-
-            let runtime_b = fixture.open(&bundle_b).await;
-            let (set_b, generations_b) = fixture.generation_set(&bundle_b);
-            assert!(
-                runtime_b
-                    .prepare_generation_publication(&set_b, &generations_b)
-                    .await
-                    .is_err()
-            );
-            runtime_b.shutdown().await.unwrap();
-        }
-    }
-
-    fn committed_provider_resource(name: &str, artifact_id: &str, config: Value) -> StoredResource {
-        let zone = ZoneId::parse("work").unwrap();
-        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let envelope = json!({
-            "apiVersion": "resources.d2bus.org/v3",
-            "type": "Provider",
-            "metadata": {
-                "name": name,
-                "zone": zone.as_str(),
-                "uid": uid.as_str(),
-                "generation": 1,
-                "revision": 1,
-                "ownerRef": null,
-                "finalizers": [],
-                "deletionRequestedAt": null,
-                "createdAt": "2026-07-22T00:00:00.000Z",
-                "updatedAt": "2026-07-22T00:00:00.000Z",
-                "managedBy": "configuration",
-                "configurationGeneration": 1,
-            },
-            "spec": {
-                "artifactId": artifact_id,
-                "config": config,
-            },
-            "status": {
-                "completedAt": null,
-                "conditions": [],
-                "lastReconciledAt": null,
-                "observedGeneration": 0,
-                "outcome": null,
-                "phase": "Pending",
-                "resource": {},
-                "startedAt": null,
-                "update": {
-                    "dependencies": {"count": 0, "refs": []},
-                    "disruption": "None",
-                    "observedGeneration": 0,
-                    "lastAssessedAt": null,
-                    "observedGeneration": 0,
-                    "operationId": null,
-                    "owned": {"count": 0, "refs": []},
-                    "preserveState": true,
-                    "reasons": [],
-                    "state": "Unknown",
-                    "targetGeneration": 1,
-                },
-            },
-        });
-        let canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
-        let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
-        StoredResource {
-            resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),
-            zone,
-            uid,
-            owner_uid: None,
-            owner_generation: None,
-            generation: ResourceGeneration::new(1).unwrap(),
-            revision: ZoneRevision::new(1),
-            canonical_json,
-            payload_digest: parsed.digest().unwrap(),
-        }
-    }
-
-    fn clipboard_provider_config() -> Value {
-        json!({
-            "controllerExecutionRef": "Host/host-system",
-            "hostExecutionRef": "Host/host-system",
-            "hostUserRef": "User/alice",
-            "displayWaylandRef": "Provider/display-wayland",
-            "guestSources": [{"guestRef": "Guest/workstation"}],
-        })
-    }
-
-    fn notification_provider_config() -> Value {
-        json!({
-            "controllerExecutionRef": "Host/host-system",
-            "hostExecutionRef": "Host/host-system",
-            "hostUserRef": "User/alice",
-            "displayWaylandRef": "Provider/display-wayland",
-            "guestSources": [{
-                "guestRef": "Guest/workstation",
-                "categories": ["system.info"],
-            }],
-        })
-    }
-
-    #[test]
-    fn committed_interaction_provider_configuration_requires_integrity_bound_typed_rows() {
-        let zone = ZoneId::parse("work").unwrap();
-        let clipboard = committed_provider_resource(
-            "clipboard-wayland",
-            "clipboard-wayland",
-            clipboard_provider_config(),
-        );
-        let notification = committed_provider_resource(
-            "notification-desktop",
-            "notification-desktop",
-            notification_provider_config(),
-        );
-        let clipboard =
-            parse_committed_clipboard_configuration(&zone, ZoneRevision::new(1), &clipboard)
-                .expect("clipboard configuration is accepted");
-        let notification =
-            parse_committed_notification_configuration(&zone, ZoneRevision::new(1), &notification)
-                .expect("notification configuration is accepted");
-        let configuration = CommittedInteractionProviderConfiguration {
-            clipboard: Some(clipboard),
-            notification: Some(notification),
-        };
-
-        assert!(configuration.is_complete());
-        assert!(
-            CommittedInteractionProviderConfiguration {
-                clipboard: configuration.clipboard().cloned(),
-                notification: None,
-            }
-            .is_complete()
-        );
-        assert!(
-            CommittedInteractionProviderConfiguration {
-                clipboard: None,
-                notification: configuration.notification().cloned(),
-            }
-            .is_complete()
-        );
-        assert!(
-            configuration
-                .clipboard()
-                .unwrap()
-                .allows_guest_source(&ResourceRef::parse("Guest/workstation").unwrap())
-        );
-        assert_eq!(
-            configuration
-                .notification()
-                .unwrap()
-                .config()
-                .max_pending_notifications(),
-            64
-        );
-        assert_eq!(
-            configuration.notification().unwrap().observer_user_ref(),
-            &ResourceRef::parse("User/alice").unwrap()
-        );
-
-        let mut mismatched = clipboard_provider_config();
-        mismatched["controllerExecutionRef"] = json!("Host/other");
-        let mismatched =
-            committed_provider_resource("clipboard-wayland", "clipboard-wayland", mismatched);
-        assert!(matches!(
-            parse_committed_clipboard_configuration(&zone, ZoneRevision::new(1), &mismatched,),
-            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        ));
-    }
 
     #[test]
     fn generation_publication_marker_binds_one_complete_set_across_restart() {
@@ -16122,68 +11828,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn committed_interaction_provider_configuration_rejects_tampered_or_invalid_rows() {
-        let zone = ZoneId::parse("work").unwrap();
-        let mut tampered = committed_provider_resource(
-            "clipboard-wayland",
-            "clipboard-wayland",
-            clipboard_provider_config(),
-        );
-        tampered.payload_digest = "sha256:tampered".to_owned();
-        assert!(matches!(
-            parse_committed_clipboard_configuration(&zone, ZoneRevision::new(1), &tampered),
-            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        ));
 
-        let invalid_guest_source = committed_provider_resource(
-            "notification-desktop",
-            "notification-desktop",
-            json!({
-                "controllerExecutionRef": "Host/host-system",
-                "hostExecutionRef": "Host/host-system",
-                "hostUserRef": "User/alice",
-                "displayWaylandRef": "Provider/display-wayland",
-                "guestSources": [{
-                    "guestRef": "Host/host-system",
-                    "categories": ["system.info"],
-                }],
-            }),
-        );
-        assert!(matches!(
-            parse_committed_notification_configuration(
-                &zone,
-                ZoneRevision::new(1),
-                &invalid_guest_source,
-            ),
-            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        ));
-    }
-
-    #[test]
-    fn controller_provider_identity_projection_uses_authoritative_uid_generation_and_revision() {
-        let zone = ZoneId::parse("work").unwrap();
-        let expected_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap();
-        let resource = committed_provider_resource(
-            "runtime-cloud-hypervisor",
-            "runtime-cloud-hypervisor",
-            json!({}),
-        );
-        let (_, uid, generation, revision, digest) =
-            committed_provider_spec(&zone, ZoneRevision::new(1), &resource, &expected_ref)
-                .expect("committed Provider identity");
-        assert_eq!(uid, resource.uid);
-        assert_eq!(generation, resource.generation);
-        assert_eq!(revision, resource.revision);
-        assert_eq!(digest, resource.payload_digest);
-
-        let mut future = resource.clone();
-        future.revision = ZoneRevision::new(2);
-        assert!(matches!(
-            committed_provider_spec(&zone, ZoneRevision::new(1), &future, &expected_ref),
-            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        ));
-    }
 
     #[test]
     fn controller_session_admission_requires_the_exact_owner_binding() {
@@ -16288,38 +11933,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn transient_controller_session_get_errors_do_not_abort_sibling_sessions() {
-        for kind in [
-            StoreErrorKind::ResourceConflict,
-            StoreErrorKind::RevisionExpired,
-            StoreErrorKind::Backpressure,
-            StoreErrorKind::StoreBackpressure,
-            StoreErrorKind::Timeout,
-            StoreErrorKind::Cancelled,
-            StoreErrorKind::ResourcePlaneUnavailable,
-        ] {
-            let error = ControllerSessionCoordinator::controller_session_evidence_read_error(kind);
-            assert!(
-                ControllerSessionCoordinator::controller_session_evidence_error_is_context_local(
-                    &error
-                ),
-                "target-local {kind:?} must requeue only its own Provider session"
-            );
-        }
-        assert!(
-            !ControllerSessionCoordinator::controller_session_evidence_error_is_context_local(
-                &ResourceRuntimeError::StoreReadFailed
-            ),
-            "global store integrity failures must still propagate"
-        );
-        assert_eq!(
-            ControllerSessionCoordinator::controller_session_evidence_read_error(
-                StoreErrorKind::StoreIntegrityFailure
-            ),
-            ResourceRuntimeError::StoreReadFailed
-        );
-    }
 
     #[test]
     fn controller_provider_identity_failures_preserve_global_store_and_auth_fences() {
@@ -16379,757 +11992,15 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn post_teardown_controller_session_clear_does_not_fence_siblings() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
-        let process_ref = ResourceRef::parse("Process/d2b-core-controller").unwrap();
-        materialize_test_bundle(&runtime, Vec::new()).await;
-        let process = BundleResource::new(
-            ResourceTypeName::parse("Process").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("d2b-core-controller").unwrap(),
-                zone.clone(),
-                Some(provider_ref.clone()),
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(
-                br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"test-controller"}"#,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        materialize_test_bundle(&runtime, vec![process]).await;
-        let provider =
-            read_test_resource(&runtime, provider_ref.clone(), "sibling-fence-provider").await;
-        let process =
-            read_test_resource(&runtime, process_ref.clone(), "sibling-fence-process").await;
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        let providers = test_controller_session_providers();
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                process_ref.clone(),
-                process.uid.clone(),
-                process.generation,
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                provider_ref.clone(),
-                provider.uid.clone(),
-                provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        let first_context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &process_ref)
-            .expect("fenced controller context");
-        providers
-            .set_controller_session_waker(zone.clone(), Arc::new(|| Ok(())))
-            .unwrap();
-        let sibling_process_ref = ResourceRef::parse("Process/sibling-controller").unwrap();
-        let sibling_peer = attach_ready_controller(
-            &providers,
-            &zone,
-            sibling_process_ref.to_canonical_string().as_str(),
-            "523e4567-e89b-42d3-a456-426614174004",
-            1,
-            provider_ref.to_canonical_string().as_str(),
-            provider.uid.as_str(),
-            provider.generation.get(),
-            controller_generation,
-        );
-        let sibling_context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &sibling_process_ref)
-            .expect("eligible sibling controller context");
-        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-        let authority = runtime.core_assignment_fences().await.unwrap().4;
-        let authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        coordinator
-            .set_assigned_process_api(Arc::new(
-                runtime
-                    .process_controller_api(DaemonMode::Host, authority, authorization_state)
-                    .unwrap(),
-            ))
-            .unwrap();
-        insert_test_controller_session(&mut coordinator, &first_context).await;
-        providers.fail_controller_bootstrap(&first_context);
-        coordinator.set_controller_session_evidence_test_errors(vec![
-            ResourceRuntimeError::ResourceGetFailed(ResourceErrorKind::Timeout),
-            ResourceRuntimeError::ResourceStatusUpdateFailed(ResourceErrorKind::ResourceConflict),
-        ]);
 
-        assert_eq!(coordinator.fence(&providers).await, Ok(()));
-        assert!(
-            !coordinator
-                .controller_sessions
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-            "post-teardown evidence failure must not reinsert the dead session"
-        );
-        assert!(
-            coordinator
-                .pending_controller_session_clears
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-            "durable evidence clear must remain queued for retry"
-        );
-        assert!(
-            providers.controller_bootstrap_ready(&zone, sibling_context.process_ref()),
-            "a context-local clear failure must not abort an eligible sibling"
-        );
 
-        assert_eq!(coordinator.fence(&providers).await, Ok(()));
-        assert!(
-            !coordinator
-                .pending_controller_session_clears
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-            "the next fence must retry and retire the queued evidence clear"
-        );
-        let cleared = read_test_resource(
-            &runtime,
-            process_ref.clone(),
-            "sibling-fence-cleared-evidence",
-        )
-        .await;
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&cleared.canonical_json)
-                .unwrap()
-                .pointer("/status/resource/controllerSession")
-                .is_none(),
-            "retry must clear durable evidence without restoring transport authority"
-        );
-        assert!(providers.controller_bootstrap_ready(
-            &zone,
-            sibling_context.process_ref()
-        ));
 
-        drop(sibling_peer);
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
 
-    /// One manager-served `Process` row for the G5 bridge tests.
-    struct ControllerPlaneRowFixture {
-        view: Option<ResourceView>,
-    }
 
-    #[async_trait]
-    impl ControllerPlaneView for ControllerPlaneRowFixture {
-        async fn process_view(
-            &self,
-            _process_ref: &ResourceRef,
-        ) -> Result<Option<ResourceView>, d2b_resource_runtime::error::ResourceError> {
-            Ok(self.view.clone())
-        }
-    }
 
-    fn plane_uid_bytes(uid: &ResourceUid) -> [u8; 16] {
-        let hex = uid.as_str().replace('-', "");
-        let mut bytes = [0u8; 16];
-        for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
-            bytes[index] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
-        }
-        bytes
-    }
 
-    /// The manager view of the controller row one bootstrap context describes.
-    fn manager_process_view(
-        context: &crate::process_provider_runtime::ControllerBootstrapContext,
-    ) -> ResourceView {
-        ResourceView {
-            key: d2b_resource_runtime::identity::ResourceKey::new(
-                context.zone().as_str(),
-                "Process",
-                context.process_ref().name().as_str(),
-            ),
-            uid: plane_uid_bytes(context.process_uid()),
-            generation: context.generation().get(),
-            deleting: false,
-            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
-            spec: serde_json::to_vec(&json!({
-                "providerRef": context.process_provider_ref().to_canonical_string(),
-                "processClass": "controller",
-                "template": "test-controller",
-                "executionRef": context.execution_ref().to_canonical_string(),
-            }))
-            .unwrap(),
-            metadata: serde_json::to_vec(&json!({
-                "ownerRef": context.provider_owner_ref().to_canonical_string(),
-                "labels": {},
-                "annotations": {},
-            }))
-            .unwrap(),
-            owner_key: None,
-            status: Some(d2b_resource_runtime::resource::ResourceStatus::Ready),
-            status_generation: Some(context.generation().get()),
-            status_projection: None,
-        }
-    }
 
-    /// A `Provider/system-core`-owned controller context whose Process row is
-    /// only ever minted in the manager (never materialized in the store).
-    async fn manager_served_controller_fixture(
-        runtime: &ZoneResourceRuntime,
-    ) -> (
-        Arc<crate::process_provider_runtime::ProductionProcessProviders>,
-        ResourceRef,
-        crate::process_provider_runtime::ControllerBootstrapContext,
-    ) {
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
-        let process_ref = ResourceRef::parse("Process/manager-controller").unwrap();
-        materialize_test_bundle(runtime, Vec::new()).await;
-        let provider = read_test_resource(runtime, provider_ref.clone(), "g5-provider").await;
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        let providers = test_controller_session_providers();
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                process_ref.clone(),
-                ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
-                ResourceGeneration::new(3).unwrap(),
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                provider_ref.clone(),
-                provider.uid.clone(),
-                provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        let context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &process_ref)
-            .expect("manager-served controller context");
-        (providers, process_ref, context)
-    }
 
-    /// G5: a controller Process row minted in the new plane is visible to the
-    /// session-evidence path through the manager's view.
-    #[tokio::test(flavor = "current_thread")]
-    async fn manager_served_controller_row_is_current_and_evidence_is_live() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let (providers, process_ref, context) =
-            manager_served_controller_fixture(&runtime).await;
-        let coordinator = runtime.controller_session_coordinator();
-
-        assert!(
-            !coordinator
-                .controller_context_is_current(&providers, &context)
-                .await
-                .unwrap(),
-            "the durable store does not serve the manager row"
-        );
-
-        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
-            view: Some(manager_process_view(&context)),
-        }));
-        assert!(
-            coordinator
-                .controller_context_is_current(&providers, &context)
-                .await
-                .unwrap(),
-            "the manager's row is the authority for a converted Process row"
-        );
-        coordinator
-            .persist_controller_session_evidence(
-                &context,
-                Some(ReconnectGeneration::new(1).unwrap()),
-            )
-            .await
-            .expect("manager-served evidence is the live session, not a durable write");
-
-        // A manager row for another identity is not this context's row.
-        let mut mismatched = manager_process_view(&context);
-        mismatched.generation = context.generation().get() + 1;
-        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
-            view: Some(mismatched),
-        }));
-        assert!(
-            !coordinator
-                .controller_context_is_current(&providers, &context)
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            coordinator
-                .persist_controller_session_evidence(
-                    &context,
-                    Some(ReconnectGeneration::new(1).unwrap()),
-                )
-                .await,
-            Err(ResourceRuntimeError::IdentityUnbound),
-            "evidence for a row this context does not describe still refuses"
-        );
-
-        assert_eq!(context.process_ref(), &process_ref);
-
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    /// G5: a row still served by the durable plane keeps the old path, with
-    /// or without a manager that holds no such row.
-    #[tokio::test(flavor = "current_thread")]
-    async fn durable_controller_row_still_resolves_without_a_manager_row() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
-        let process_ref = ResourceRef::parse("Process/durable-controller").unwrap();
-        materialize_test_bundle(&runtime, Vec::new()).await;
-        let process = BundleResource::new(
-            ResourceTypeName::parse("Process").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("durable-controller").unwrap(),
-                zone.clone(),
-                Some(provider_ref.clone()),
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(
-                br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"test-controller"}"#,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        materialize_test_bundle(&runtime, vec![process]).await;
-        let provider = read_test_resource(&runtime, provider_ref.clone(), "g5-durable-provider").await;
-        let process = read_test_resource(&runtime, process_ref.clone(), "g5-durable-process").await;
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        let providers = test_controller_session_providers();
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                process_ref.clone(),
-                process.uid.clone(),
-                process.generation,
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                provider_ref.clone(),
-                provider.uid.clone(),
-                provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        let context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &process_ref)
-            .expect("durable controller context");
-        let coordinator = runtime.controller_session_coordinator();
-
-        assert!(
-            coordinator
-                .controller_context_is_current(&providers, &context)
-                .await
-                .unwrap(),
-            "the durable row still resolves through the old path"
-        );
-        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture { view: None }));
-        assert!(
-            coordinator
-                .controller_context_is_current(&providers, &context)
-                .await
-                .unwrap(),
-            "a manager that does not serve the row keeps the durable path authoritative"
-        );
-
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    /// One manager-served row set for the U12 reader-bridge tests.
-    struct ManagerRowsFixture {
-        rows: Vec<ResourceView>,
-        fail: bool,
-    }
-
-    #[async_trait]
-    impl ControllerPlaneView for ManagerRowsFixture {
-        async fn process_view(
-            &self,
-            _process_ref: &ResourceRef,
-        ) -> Result<Option<ResourceView>, d2b_resource_runtime::error::ResourceError> {
-            Ok(None)
-        }
-
-        async fn rows_of_type(
-            &self,
-            _resource_type: &str,
-        ) -> Result<Vec<ResourceView>, d2b_resource_runtime::error::ResourceError> {
-            if self.fail {
-                return Err(d2b_resource_runtime::error::ResourceError::ManagerRpc(
-                    "manager unreachable".to_owned(),
-                ));
-            }
-            Ok(self.rows.clone())
-        }
-    }
-
-    /// One manager-served `Volume` row, rendered the way the manager's own
-    /// store view renders it (authored spec + metadata, row identity left to
-    /// the manager).
-    fn manager_volume_view(name: &str, owner_ref: Option<&str>) -> ResourceView {
-        ResourceView {
-            key: d2b_resource_runtime::identity::ResourceKey::new("work", "Volume", name),
-            uid: plane_uid_bytes(
-                &ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
-            ),
-            generation: 1,
-            deleting: false,
-            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Resource,
-            spec: serde_json::to_vec(&json!({
-                "providerRef": "Provider/volume-local",
-                "executionRef": "Host/host-system",
-                "source": {
-                    "settings": {
-                        "kind": "nix-closure",
-                        "systemArtifactId": "acceptance-system",
-                    },
-                },
-            }))
-            .unwrap(),
-            metadata: serde_json::to_vec(&json!({
-                "ownerRef": owner_ref,
-                "labels": {},
-                "annotations": {},
-            }))
-            .unwrap(),
-            owner_key: None,
-            status: None,
-            status_generation: None,
-            status_projection: None,
-        }
-    }
-
-    /// U17: the Cloud Hypervisor setup-Volume read is manager-first. The
-    /// manager's row for the guest's system Volume resolves through the same
-    /// bridge the read uses (the durable store holds no row for a converted
-    /// type), an unconverted type keeps the durable path, and a manager RPC
-    /// failure is an error - never absence.
-    #[tokio::test(flavor = "current_thread")]
-    async fn cloud_hypervisor_setup_volume_resolves_from_the_manager_bridge() {
-        let guest_ref = ResourceRef::parse("Guest/acceptance-guest").unwrap();
-        let volume_ref = deterministic_child_ref(&guest_ref, ChildRole::SystemVolume).unwrap();
-        assert_eq!(
-            volume_ref,
-            ResourceRef::parse("Volume/acceptance-guest-system").unwrap()
-        );
-        let manager = ManagerRowsFixture {
-            rows: vec![
-                manager_volume_view("acceptance-guest-system", Some("Guest/acceptance-guest")),
-                manager_volume_view("state", None),
-            ],
-            fail: false,
-        };
-
-        let bridged = bridge_manager_rows(Some(&manager), "Volume")
-            .await
-            .expect("the manager rows bridge");
-        let setup = bridged
-            .iter()
-            .find(|row| row.resource_ref == volume_ref)
-            .expect("the manager-owned setup Volume resolves");
-        let envelope = ResourceEnvelope::from_json(&setup.canonical_json)
-            .expect("the bridged row is a canonical envelope");
-        assert_eq!(envelope.metadata().owner_ref(), Some(&guest_ref));
-        assert_eq!(
-            envelope.spec().provider_ref(),
-            Some(&ResourceRef::parse("Provider/volume-local").unwrap())
-        );
-
-        assert!(
-            bridge_manager_rows(Some(&manager), "vendor-extension.d2bus.org.Report")
-                .await
-                .expect("unconverted types bridge")
-                .is_empty(),
-            "an unconverted type never comes off the manager"
-        );
-
-        let failing = ManagerRowsFixture {
-            rows: Vec::new(),
-            fail: true,
-        };
-        assert!(
-            bridge_manager_rows(Some(&failing), "Volume").await.is_err(),
-            "a manager row-list failure is a read error, never absence"
-        );
-    }
-
-    /// One manager-served `Endpoint` row, rendered the way the manager's own
-    /// store view renders it: the authored spec (exactly the shape the Cloud
-    /// Hypervisor provider's `ch-api` / `guest-control` child roles commit).
-    fn manager_endpoint_view(name: &str, producer_ref: &str, purpose: &str) -> ResourceView {
-        ResourceView {
-            key: d2b_resource_runtime::identity::ResourceKey::new("work", "Endpoint", name),
-            uid: plane_uid_bytes(
-                &ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
-            ),
-            generation: 1,
-            deleting: false,
-            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Resource,
-            spec: serde_json::to_vec(&json!({
-                "providerRef": "Provider/runtime-cloud-hypervisor",
-                "producerRef": producer_ref,
-                "purpose": purpose,
-                "endpointClass": "control",
-                "transport": "opaque-carriage",
-                "locality": if producer_ref.starts_with("Guest/") {
-                    "cross-domain"
-                } else {
-                    "host-local"
-                },
-                "visibility": "provider",
-                "attachmentPolicy": { "supported": true, "maxAttachments": 1 },
-                "consumerPolicy": { "allowedOperations": ["resolve", "attach", "observe"] },
-                "lifecyclePolicy": "recycle-with-producer",
-            }))
-            .unwrap(),
-            metadata: serde_json::to_vec(&json!({
-                "ownerRef": "Guest/acceptance-guest",
-                "labels": {},
-                "annotations": {},
-            }))
-            .unwrap(),
-            owner_key: None,
-            status: None,
-            status_generation: None,
-            status_projection: None,
-        }
-    }
-
-    /// Regression (vmCheck guest preflight): the `guest-session-endpoint`
-    /// read is manager-authority. The manager serves the row the guest's
-    /// provider controller committed (the durable store holds no row for a
-    /// converted type, so a store read answers `ResourceNotFound` - which is
-    /// exactly what must never be the answer for a manager-owned row); a row
-    /// no plane holds is honest absence; an unpublished plane, a manager RPC
-    /// failure and an unconverted type are read failures, never absence.
-    #[tokio::test(flavor = "current_thread")]
-    async fn guest_control_endpoint_read_is_manager_authority() {
-        let endpoint_ref =
-            ResourceRef::parse("Endpoint/acceptance-guest-guest-control").expect("endpoint");
-        let manager = ManagerRowsFixture {
-            rows: vec![manager_endpoint_view(
-                "acceptance-guest-guest-control",
-                "Guest/acceptance-guest",
-                "guest-control",
-            )],
-            fail: false,
-        };
-
-        let resolved = bridge_manager_row(Some(&manager), &endpoint_ref)
-            .await
-            .expect("manager row read")
-            .expect("the manager-owned endpoint resolves");
-        assert_eq!(resolved.resource_ref, endpoint_ref);
-        let value: Value = serde_json::from_slice(&resolved.canonical_json).unwrap();
-        assert_eq!(
-            value.pointer("/spec/producerRef").and_then(Value::as_str),
-            Some("Guest/acceptance-guest")
-        );
-
-        assert_eq!(
-            bridge_manager_row(
-                Some(&manager),
-                &ResourceRef::parse("Endpoint/acceptance-guest-ch-api").expect("endpoint"),
-            )
-            .await
-            .expect("manager row set"),
-            None,
-            "a row the manager does not hold is absence, never a store ResourceNotFound",
-        );
-
-        assert!(
-            bridge_manager_row(None, &endpoint_ref).await.is_err(),
-            "an unpublished plane cannot answer for a converted row: a read failure, not absence",
-        );
-        let failing = ManagerRowsFixture {
-            rows: Vec::new(),
-            fail: true,
-        };
-        assert!(
-            bridge_manager_row(Some(&failing), &endpoint_ref).await.is_err(),
-            "a manager RPC failure is a read failure, never absence",
-        );
-        assert!(
-            bridge_manager_row(
-                Some(&manager),
-                &ResourceRef::parse("vendor-extension.d2bus.org.Report/worker").expect("unconverted"),
-            )
-            .await
-            .is_err(),
-            "an unconverted type has no manager authority to read",
-        );
-    }
-
-    /// The same contract through the runtime seam the guest-session path
-    /// calls: with no published plane the read is an error the callers retry
-    /// (there is no store copy of a converted row to fall back to), never the
-    /// absence answer the caller reports as `guest-session:endpoint-unavailable`.
-    #[tokio::test(flavor = "current_thread")]
-    async fn converted_endpoint_read_without_a_published_plane_is_a_read_error() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let endpoint_ref =
-            ResourceRef::parse("Endpoint/acceptance-guest-guest-control").expect("endpoint");
-        assert!(
-            runtime
-                .committed_manager_row_optional(&endpoint_ref)
-                .await
-                .is_err(),
-            "no manager authority: a read failure, never absence"
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    /// One manager-served row of any resource type, rendered the way the
-    /// manager's own view renders it (authored spec + metadata).
-    fn manager_view_of_type(resource_type: &str) -> ResourceView {
-        ResourceView {
-            key: d2b_resource_runtime::identity::ResourceKey::new("work", resource_type, "fence-row"),
-            uid: plane_uid_bytes(
-                &ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap(),
-            ),
-            generation: 1,
-            deleting: false,
-            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Resource,
-            spec: serde_json::to_vec(&json!({ "typeProbe": resource_type })).unwrap(),
-            metadata: serde_json::to_vec(&json!({
-                "ownerRef": null,
-                "labels": {},
-                "annotations": {},
-            }))
-            .unwrap(),
-            owner_key: None,
-            status: None,
-            status_generation: None,
-            status_projection: None,
-        }
-    }
-
-    /// Table-driven bridge fence (issue #507): every converted type bridges
-    /// through the manager, and once the manager authority is published the
-    /// durable mirror may no longer answer for any of them - the manager's row
-    /// or its honest absence is final. A type outside the registry keeps the
-    /// durable plane in both postures, and before publication (legacy boot /
-    /// fixtures) converted rows still resolve from the durable plane.
-    #[tokio::test(flavor = "current_thread")]
-    async fn every_converted_type_bridges_through_the_manager_never_the_mirror() {
-        use d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
-
-        let manager = ManagerRowsFixture {
-            rows: V3_CONVERTED_RESOURCE_TYPES
-                .iter()
-                .map(|resource_type| manager_view_of_type(resource_type))
-                .collect(),
-            fail: false,
-        };
-
-        for resource_type in V3_CONVERTED_RESOURCE_TYPES {
-            let bridged = bridge_manager_rows(Some(&manager), resource_type)
-                .await
-                .unwrap_or_else(|error| panic!("{resource_type}: bridge failed: {error:?}"));
-            assert!(
-                bridged.iter().any(|row| row
-                    .resource_ref
-                    .resource_type()
-                    .as_str()
-                    == resource_type),
-                "{resource_type}: the manager row bridges"
-            );
-            assert!(
-                !durable_fallback_allowed(resource_type, true),
-                "{resource_type}: the mirror must not answer once the manager authority is published"
-            );
-            assert!(
-                durable_fallback_allowed(resource_type, false),
-                "{resource_type}: before publication the durable plane still serves"
-            );
-        }
-
-        for legacy in [
-            "vendor-extension.d2bus.org.Report",
-            "other-extension.d2bus.org.Widget",
-        ] {
-            assert!(
-                bridge_manager_rows(Some(&manager), legacy)
-                    .await
-                    .expect("an unconverted type bridges to nothing")
-                    .is_empty(),
-                "{legacy}: an unconverted type never comes off the manager"
-            );
-            assert!(
-                durable_fallback_allowed(legacy, true),
-                "{legacy}: the durable plane serves an unconverted type"
-            );
-        }
-    }
-
-    /// Issue #507: the daemon's legacy API binding fences converted types
-    /// exactly from the moment the zone's manager plane is published, and a
-    /// fixture runtime that never publishes a plane keeps the durable plane it
-    /// drives directly (the pre-plane startup path and its fixtures).
-    #[tokio::test(flavor = "current_thread")]
-    async fn legacy_api_fence_latches_on_manager_plane_publication() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        assert_eq!(
-            runtime.backend.check_plane("Volume", "d2bd::test::publication-latch"),
-            Ok(()),
-            "before publication the durable plane serves the fixture"
-        );
-        runtime.attach_v3_planes(Arc::new(parking_lot::Mutex::new(
-            std::collections::HashMap::new(),
-        )));
-        let refusal = runtime
-            .backend
-            .check_plane("Volume", "d2bd::test::publication-latch")
-            .expect_err("after publication the legacy binding refuses converted types");
-        assert_eq!(refusal.resource_type(), "Volume");
-        assert_eq!(refusal.caller(), "d2bd::test::publication-latch");
-        assert!(!refusal.retryable());
-        runtime.shutdown().await.unwrap();
-    }
 
     /// Regression (vmCheck guest preflight): the endpoint-publication stage
     /// must distinguish a child's retry in progress from a child's terminal
@@ -17200,25 +12071,6 @@ mod tests {
         assert!(!row_status_failure_is_retryable(&ready));
     }
 
-    /// The setup-volume stage's absence answer: a converted row neither plane
-    /// holds is absence (`Ok(None)`, the stage stays pending), not a read
-    /// failure that would fail the Guest effect.
-    #[tokio::test(flavor = "current_thread")]
-    async fn cloud_hypervisor_setup_volume_absence_is_not_a_read_failure() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let guest_ref = ResourceRef::parse("Guest/acceptance-guest").unwrap();
-        let volume_ref = deterministic_child_ref(&guest_ref, ChildRole::SystemVolume).unwrap();
-        assert_eq!(
-            runtime
-                .committed_resource_optional(&volume_ref, "cloud-hypervisor-setup-volume")
-                .await
-                .expect("an uncommitted converted row is absence, not a read failure"),
-            None
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
     /// U12: the provider controller's custody gate. A manager-served Guest
     /// row carries no authored finalizer (the daemon's ensure/clear requests
     /// are idempotent no-ops on the converted plane; the manager's
@@ -17242,473 +12094,6 @@ mod tests {
             StoredRowOrigin::Durable,
             [d2b_provider_runtime_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER].into_iter(),
         ));
-    }
-
-    /// G5: the session fence does not retire a live session whose row the
-    /// durable list cannot see but the manager does.
-    #[tokio::test(flavor = "current_thread")]
-    async fn session_fence_consults_the_manager_for_manager_served_rows() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let (providers, process_ref, context) =
-            manager_served_controller_fixture(&runtime).await;
-        providers
-            .set_controller_session_waker(runtime.zone.clone(), Arc::new(|| Ok(())))
-            .unwrap();
-        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-
-        insert_test_controller_session(&mut coordinator, &context).await;
-        coordinator
-            .fence_process_resources(&providers, &[])
-            .await
-            .unwrap();
-        assert!(
-            !coordinator
-                .controller_sessions
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-            "without a manager row the durable fence still retires the session"
-        );
-
-        insert_test_controller_session(&mut coordinator, &context).await;
-        coordinator.attach_plane_view(Arc::new(ControllerPlaneRowFixture {
-            view: Some(manager_process_view(&context)),
-        }));
-        coordinator
-            .fence_process_resources(&providers, &[])
-            .await
-            .unwrap();
-        assert!(
-            coordinator
-                .controller_sessions
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-            "the manager's row keeps the session out of the durable fence"
-        );
-
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    /// G5: the synthesized session evidence is the live session, re-read per
-    /// evaluation, and every uncertainty answers `None`.
-    #[tokio::test(flavor = "current_thread")]
-    async fn live_session_evidence_is_generation_and_liveness_bound() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let (_providers, _process_ref, context) =
-            manager_served_controller_fixture(&runtime).await;
-        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-        insert_test_controller_session(&mut coordinator, &context).await;
-        {
-            let mut sessions = coordinator.controller_sessions.lock().unwrap();
-            let session = sessions.get_mut(context.process_ref()).unwrap();
-            session.service_task = tokio::spawn(async {
-                std::future::pending::<()>().await;
-                Ok::<(), SessionServerError>(())
-            });
-        }
-
-        let evidence = LiveControllerSessionEvidence::controller_session_evidence(
-            &coordinator,
-            context.process_ref(),
-            context.process_uid(),
-            context.generation(),
-        )
-        .expect("a live admitted session is evidence");
-        assert_eq!(evidence["ready"], json!(true));
-        assert_eq!(evidence["sessionGeneration"], json!(1));
-        assert_eq!(
-            evidence["processUid"].as_str(),
-            Some(context.process_uid().as_str())
-        );
-
-        assert!(
-            LiveControllerSessionEvidence::controller_session_evidence(
-                &coordinator,
-                context.process_ref(),
-                context.process_uid(),
-                ResourceGeneration::new(context.generation().get() + 1).unwrap(),
-            )
-            .is_none(),
-            "another generation is not this row's evidence"
-        );
-        assert!(
-            LiveControllerSessionEvidence::controller_session_evidence(
-                &coordinator,
-                context.process_ref(),
-                &ResourceUid::parse("99999999-9999-4999-8999-999999999999").unwrap(),
-                context.generation(),
-            )
-            .is_none(),
-            "another row identity is not this row's evidence"
-        );
-
-        {
-            let mut sessions = coordinator.controller_sessions.lock().unwrap();
-            let session = sessions.get_mut(context.process_ref()).unwrap();
-            session.service_task = tokio::spawn(async { Ok::<(), SessionServerError>(()) });
-        }
-        tokio::task::yield_now().await;
-        assert!(
-            LiveControllerSessionEvidence::controller_session_evidence(
-                &coordinator,
-                context.process_ref(),
-                context.process_uid(),
-                context.generation(),
-            )
-            .is_none(),
-            "a finished service task is not live evidence"
-        );
-
-        drop(coordinator);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn failed_controller_session_clear_retains_live_authority() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/system-core").unwrap();
-        let process_ref = ResourceRef::parse("Process/d2b-core-controller").unwrap();
-        materialize_test_bundle(&runtime, Vec::new()).await;
-        let process = BundleResource::new(
-            ResourceTypeName::parse("Process").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("d2b-core-controller").unwrap(),
-                zone.clone(),
-                Some(provider_ref.clone()),
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(
-                br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"test-controller"}"#,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        materialize_test_bundle(&runtime, vec![process]).await;
-        let provider = read_test_resource(
-            &runtime,
-            provider_ref.clone(),
-            "failed-session-clear-provider",
-        )
-        .await;
-        let process = read_test_resource(
-            &runtime,
-            process_ref.clone(),
-            "failed-session-clear-process",
-        )
-        .await;
-        let controller_generation = runtime
-            .store
-            .runtime_metadata()
-            .await
-            .unwrap()
-            .policy_snapshot
-            .controller_generation
-            .expect("test policy has a controller generation");
-        let providers = test_controller_session_providers();
-        providers
-            .attach_controller_provider_context_for_test(
-                zone.clone(),
-                process_ref.clone(),
-                process.uid.clone(),
-                process.generation,
-                ResourceRef::parse("Provider/system-minijail").unwrap(),
-                provider_ref.clone(),
-                provider.uid.clone(),
-                provider.generation,
-                ResourceRef::parse("Host/host-system").unwrap(),
-                controller_generation,
-            )
-            .unwrap();
-        let context = providers
-            .controller_bootstrap_contexts(&zone)
-            .into_iter()
-            .find(|context| context.process_ref() == &process_ref)
-            .expect("test controller context");
-        assert!(controller_resource_matches(&context, &process));
-        let mut legacy_process = process.clone();
-        legacy_process.owner_generation = None;
-        assert!(
-            controller_resource_matches(&context, &legacy_process),
-            "legacy Process rows without owner generation must still accept session evidence"
-        );
-        let mut recreated_owner = process.clone();
-        recreated_owner.owner_uid =
-            Some(ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap());
-        assert!(
-            !controller_resource_matches(&context, &recreated_owner),
-            "a Process row recycled under the Provider name must not satisfy the new Provider UID"
-        );
-        assert_eq!(
-            controller_session_resource_fences(
-                vec![(process_ref.clone(), context.clone())],
-                &[recreated_owner.clone()],
-            )
-            .len(),
-            1,
-            "session fencing must reject a same-name Process under an older Provider UID",
-        );
-        let mut recreated_generation = process.clone();
-        recreated_generation.owner_generation = Some(
-            ResourceGeneration::new(context.provider_generation().get().saturating_add(1))
-                .unwrap(),
-        );
-        assert!(
-            !controller_resource_matches(&context, &recreated_generation),
-            "a Process row from an older Provider generation must not satisfy the new owner"
-        );
-
-        let mut coordinator = runtime.build_controller_session_coordinator().unwrap();
-        let authority = runtime.core_assignment_fences().await.unwrap().4;
-        let authorization_state = runtime
-            .authorization_state
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        let assigned_process_api = Arc::new(
-            runtime
-                .process_controller_api(DaemonMode::Host, authority, authorization_state)
-                .unwrap(),
-        );
-        coordinator
-            .set_assigned_process_api(Arc::clone(&assigned_process_api))
-            .unwrap();
-        persist_resource_controller_session_evidence(
-            &assigned_process_api,
-            &legacy_process,
-            Some(&json!({ "ready": true })),
-        )
-        .await
-        .expect("persist legacy controller-session evidence");
-        let legacy_persisted = read_test_resource(
-            &runtime,
-            process_ref.clone(),
-            "legacy-controller-session-evidence",
-        )
-        .await;
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&legacy_persisted.canonical_json)
-                .unwrap()
-                .pointer("/status/resource/controllerSession")
-                .is_some(),
-            "legacy Process rows must persist controller-session evidence"
-        );
-        coordinator
-            .persist_controller_session_evidence(
-                &context,
-                Some(ReconnectGeneration::new(1).unwrap()),
-            )
-            .await
-            .expect("seed durable controller-session evidence");
-        *coordinator
-            .assigned_process_api
-            .lock()
-            .unwrap() = None;
-        let policy = controller_resource_endpoint_policy();
-        let catalog = d2b_resource_api::authz::ApiCatalog::standard();
-        let role_ref = ResourceRef::parse("Role/test-controller").unwrap();
-        let role = d2b_resource_api::authz::CompiledRole::new(
-            role_ref.clone(),
-            vec![
-                d2b_resource_api::authz::PolicyRule::new(
-                    &catalog,
-                    [],
-                    [],
-                    [d2b_resource_api::authz::SessionVerb::Connect],
-                    [],
-                    [],
-                    [zone.clone()],
-                    [],
-                )
-                .unwrap(),
-            ],
-        )
-        .unwrap();
-        let metadata = runtime.store.runtime_metadata().await.unwrap();
-        let state = AuthorizationState {
-            snapshot: metadata.policy_snapshot,
-            zone_policy_revision: metadata.current_revision,
-            bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
-            now_tick: 1,
-        };
-        let binding = d2b_resource_api::authz::CompiledRoleBinding::new(
-            role_ref,
-            [BoundSubject {
-                subject_ref: context.provider_owner_ref().clone(),
-                subject_uid: context.provider_uid().clone(),
-            }],
-            d2b_resource_api::authz::BindingScope {
-                zones: [zone.clone()].into_iter().collect(),
-                ..d2b_resource_api::authz::BindingScope::default()
-            },
-            d2b_resource_api::authz::RelayGrantAuthority::None,
-        )
-        .unwrap();
-        let policy_set =
-            PolicySet::new(&catalog, state.snapshot.policy_revision, vec![role], vec![binding])
-                .unwrap();
-        let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
-        let bus_authorizer = BusAuthorizer::new(native, state).unwrap();
-        let (_bus, registrar) =
-            ZoneBus::new(zone.clone(), bus_authorizer, BusConfig::default()).unwrap();
-        coordinator.registrar = Arc::new(Mutex::new(Some(registrar)));
-        let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
-        let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
-        let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).unwrap();
-        let verified_peer =
-            VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).unwrap();
-        let registrar = coordinator.registrar.clone();
-        let mut registrar = registrar
-            .lock()
-            .unwrap()
-            .take()
-            .expect("test registrar");
-        registrar
-            .install_committed_controller_process_subject(
-                &verified_peer,
-                CommittedControllerProcessSubjectInput {
-                    provider_ref: context.provider_owner_ref().clone(),
-                    provider_uid: context.provider_uid().clone(),
-                    process_ref: context.process_ref().clone(),
-                    zone_ref: ResourceRef::parse("Zone/work").unwrap(),
-                    execution_ref: context.execution_ref().clone(),
-                    provider_generation: context.provider_generation(),
-                    controller_generation: context.controller_generation(),
-                },
-            )
-            .unwrap();
-        let initiator = unix_transport(initiator_socket, &policy).unwrap();
-        let responder = unix_transport(responder_socket, &policy).unwrap();
-        let (initiator, responder) = tokio::join!(
-            SessionEngine::establish_initiator(
-                initiator,
-                policy.clone(),
-                HandshakeCredentials::Nn,
-                std::time::Instant::now(),
-            ),
-            SessionEngine::establish_responder(
-                responder,
-                policy.clone(),
-                HandshakeCredentials::Nn,
-                std::time::Instant::now(),
-            ),
-        );
-        let acceptor = registrar
-            .component_session_acceptor(policy, verified_peer)
-            .unwrap();
-        let candidate = acceptor
-            .admit(
-                initiator.unwrap(),
-                TransportEvidence::new(
-                    EvidenceClass::UnixPeer,
-                    BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                ),
-                1,
-            )
-            .await
-            .unwrap();
-        let (ingress, driver) = registrar
-            .register_component_service_session(candidate)
-            .await
-            .unwrap();
-        coordinator
-            .registrar
-            .lock()
-            .unwrap()
-            .replace(registrar);
-        let binding =
-            controller_session_binding(&context, ReconnectGeneration::new(1).unwrap()).unwrap();
-        let service_task = tokio::spawn(async { Ok::<(), SessionServerError>(()) });
-        let session = ControllerSession {
-            context: context.clone(),
-            binding,
-            ingress,
-            driver,
-            _backend_lease: None,
-            resource_client: None,
-            service_task,
-            assignments: BTreeMap::new(),
-            assignment_stream_open: false,
-            assignments_revoked: false,
-            transport_closed: false,
-            ingress_revoked: false,
-        };
-        coordinator
-            .controller_sessions
-            .lock()
-            .unwrap()
-            .insert(process_ref.clone(), session);
-        let registrar_for_retry = coordinator.registrar.lock().unwrap().take();
-        let result = coordinator
-            .remove_controller_session(&process_ref, Some(&context))
-            .await;
-        assert_eq!(
-            result,
-            Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        assert!(
-            coordinator
-                .controller_sessions
-                .lock()
-                .unwrap()
-                .contains_key(&process_ref),
-                "failed ingress teardown must retain the live session authority"
-        );
-        let retained = read_test_resource(
-                &runtime,
-                process_ref.clone(),
-                "failed-ingress-teardown-retains-evidence",
-        )
-        .await;
-        let retained_value: serde_json::Value =
-                serde_json::from_slice(&retained.canonical_json).unwrap();
-        assert!(
-                retained_value
-                    .pointer("/status/resource/controllerSession")
-                    .is_some(),
-                "failed ingress teardown must not clear durable session evidence"
-        );
-        *coordinator.registrar.lock().unwrap() = registrar_for_retry;
-        let result = coordinator
-                .remove_controller_session(&process_ref, Some(&context))
-                .await;
-        assert_eq!(
-                result,
-                Err(ResourceRuntimeError::AuthenticationUnavailable)
-        );
-        assert!(
-                coordinator
-                    .controller_sessions
-                    .lock()
-                    .unwrap()
-                    .contains_key(&process_ref),
-                "failed durable clear must retain the already-torn-down session for retry"
-        );
-        *coordinator.assigned_process_api.lock().unwrap() = Some(assigned_process_api);
-        assert_eq!(
-                coordinator
-                    .remove_controller_session(&process_ref, Some(&context))
-                    .await,
-                Ok(())
-        );
-        assert!(
-                !coordinator
-                    .controller_sessions
-                    .lock()
-                    .unwrap()
-                    .contains_key(&process_ref),
-                "successful retry must perform the final session-map removal"
-        );
-        drop(responder);
-        drop(coordinator);
-        let _ = runtime.shutdown().await;
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -17936,361 +12321,6 @@ mod tests {
         assert!(legacy.requires_migration());
         assert!(legacy.validates_binding("vm-a", "legacy-swtpm:vm:vm-a"));
         assert!(!legacy.validates_binding("vm-b", "legacy-swtpm:vm:vm-a"));
-    }
-
-    #[test]
-    fn broker_response_requires_one_canonical_zone_store() {
-        let response = OpenZoneStoreResponse {
-            zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                "zone-store-work",
-            )
-            .unwrap(),
-            store_identity: "sha256:".to_owned() + &"a".repeat(64),
-            disposition: ZoneStoreDisposition::Opened,
-            fd_index: 0,
-        };
-        assert_eq!(response.fd_index, 0);
-        assert!(response.store_identity.starts_with("sha256:"));
-    }
-
-    #[test]
-    fn opened_fd_is_owned_by_the_runtime_boundary() {
-        let (left, right) = nix::sys::socket::socketpair(
-            nix::sys::socket::AddressFamily::Unix,
-            nix::sys::socket::SockType::SeqPacket,
-            None,
-            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        assert!(left.as_raw_fd() >= 0);
-        drop(right);
-        drop(left);
-    }
-
-    #[tokio::test]
-    async fn production_runtime_opens_and_re_adopts_the_broker_owned_store() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let marker_path = directory.path().join(".d2b-store-marker");
-        let zone = ZoneId::parse("work").unwrap();
-        let marker_identity = "sha256:".to_owned() + &"b".repeat(64);
-        let identity = store_identity(&zone, &marker_identity).unwrap();
-
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let mut marker = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&marker_path)
-            .unwrap();
-        write_provisioning_marker(&mut marker, &identity).unwrap();
-        let (_, acceptor) = mutation_seal_pair(identity.seal_identity());
-        let provisioned = RedbResourceStore::provision_owned_with_audit(
-            database,
-            marker,
-            identity,
-            acceptor,
-            test_audit_sink(directory.path(), "audit-provision"),
-        )
-        .await
-        .unwrap();
-        provisioned.shutdown().await.unwrap();
-
-        let database = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let fd = database.as_raw_fd();
-        assert!(
-            rustix::io::fcntl_getfd(&database)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        );
-        let runtime = ZoneResourceRuntime::open(
-            zone.clone(),
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: marker_identity.clone(),
-                    disposition: ZoneStoreDisposition::Opened,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(runtime.zone(), &zone);
-        assert!(runtime.readiness().store_ready);
-        assert!(!runtime.readiness().resource_api_ready);
-        assert!(!runtime.readiness().local_session_ready);
-        assert!(!runtime.readiness().provider_path_ready);
-        assert_eq!(
-            runtime.core_stage().unwrap(),
-            StartupStage::WaitingForResourceApi
-        );
-        assert_eq!(
-            runtime.readiness_error(),
-            Some(ResourceRuntimeError::PolicyUnavailable)
-        );
-        let zone_status = runtime
-            .dispatch_cli_request(&json!({
-                "method": "ZoneStatus",
-                "zoneRef": "Zone/work",
-            }))
-            .await
-            .unwrap();
-        assert_eq!(zone_status["type"], "error");
-        assert_eq!(zone_status["error"]["kind"], "authorization-denied");
-        let list = runtime
-            .dispatch_cli_request(&json!({
-                "method": "List",
-                "zoneRef": "Zone/work",
-                "resourceType": "Guest",
-            }))
-            .await
-            .unwrap();
-        assert_eq!(list["type"], "error");
-        assert_eq!(list["error"]["kind"], "authorization-denied");
-        assert_eq!(list["error"]["retryClass"], "reauthorize");
-        let watch = runtime
-            .dispatch_cli_request(&json!({
-                "method": "Watch",
-                "zoneRef": "Zone/work",
-                "resourceType": "Guest",
-            }))
-            .await
-            .unwrap();
-        assert_eq!(watch["error"]["kind"], "authorization-denied");
-        let status = runtime
-            .dispatch_cli_request(&json!({
-                "method": "Status",
-                "zoneRef": "Zone/work",
-                "resourceRef": "Guest/corp-vm",
-            }))
-            .await
-            .unwrap();
-        assert_eq!(status["error"]["kind"], "authorization-denied");
-        runtime.shutdown().await.unwrap();
-        assert!(fd >= 0);
-    }
-
-    #[tokio::test]
-    async fn production_runtime_provisions_a_broker_provisioned_store() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let zone = ZoneId::parse("work").unwrap();
-        let marker_identity = "sha256:".to_owned() + &"c".repeat(64);
-        let runtime = ZoneResourceRuntime::open(
-            zone,
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: marker_identity,
-                    disposition: ZoneStoreDisposition::Provisioned,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(runtime.readiness().store_ready);
-        assert!(!runtime.readiness().resource_api_ready);
-        let mut plane = ResourcePlane::new();
-        let owner = plane.insert(runtime).unwrap();
-        assert_eq!(plane.ready_zone_count(), 0);
-        assert!(plane.has_live_request_owners());
-        assert_eq!(
-            plane.shutdown().await,
-            Err(ResourceRuntimeError::LiveRequestOwners)
-        );
-        assert!(plane.has_live_request_owners());
-        drop(owner);
-        assert!(!plane.has_live_request_owners());
-        plane.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn production_runtime_rejects_immutable_store_identity_mismatch() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let marker_path = directory.path().join(".d2b-store-marker");
-        let zone = ZoneId::parse("work").unwrap();
-        let stored_identity = "sha256:".to_owned() + &"e".repeat(64);
-        let identity = store_identity(&zone, &stored_identity).unwrap();
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let mut marker = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&marker_path)
-            .unwrap();
-        write_provisioning_marker(&mut marker, &identity).unwrap();
-        let provisioned = RedbResourceStore::provision_owned_with_audit(
-            database,
-            marker,
-            identity,
-            mutation_seal_pair(
-                store_identity(&zone, &stored_identity)
-                    .unwrap()
-                    .seal_identity(),
-            )
-            .1,
-            test_audit_sink(directory.path(), "audit-mismatch"),
-        )
-        .await
-        .unwrap();
-        provisioned.shutdown().await.unwrap();
-
-        let database = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let result = ZoneResourceRuntime::open(
-            zone,
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: "sha256:".to_owned() + &"f".repeat(64),
-                    disposition: ZoneStoreDisposition::Opened,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-        )
-        .await;
-        assert!(matches!(result, Err(ResourceRuntimeError::StoreOpenFailed)));
-    }
-
-    #[tokio::test]
-    async fn public_reads_use_authenticated_session_after_restart_revisions_rehydrate() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let zone = ZoneId::parse("work").unwrap();
-        let marker_identity = "sha256:".to_owned() + &"d".repeat(64);
-        let revisions = PolicySnapshot {
-            policy_revision: 7,
-            api_catalog_revision: 8,
-            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
-            controller_generation: Some(ControllerGeneration::new(10).unwrap()),
-        };
-        let identity = store_identity(&zone, &marker_identity)
-            .unwrap()
-            .with_revisions(revisions);
-
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let mut marker = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(directory.path().join(".d2b-store-marker"))
-            .unwrap();
-        write_provisioning_marker(&mut marker, &identity).unwrap();
-        let provisioned = RedbResourceStore::provision_owned_with_audit(
-            database,
-            marker,
-            identity,
-            mutation_seal_pair(
-                store_identity(&zone, &marker_identity)
-                    .unwrap()
-                    .with_revisions(revisions)
-                    .seal_identity(),
-            )
-            .1,
-            test_audit_sink(directory.path(), "audit-rehydrate"),
-        )
-        .await
-        .unwrap();
-        provisioned.shutdown().await.unwrap();
-
-        let database = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let runtime = ZoneResourceRuntime::open(
-            zone.clone(),
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: marker_identity,
-                    disposition: ZoneStoreDisposition::Opened,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(runtime.store_metadata.policy_snapshot, revisions);
-
-        let forged_claim = runtime
-            .dispatch_public_cli_request(
-                &json!({
-                    "method": "List",
-                    "zoneRef": "Zone/work",
-                    "resourceType": "Host",
-                    "subjectRef": "User/alice",
-                }),
-                1000,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(forged_claim, ResourceRuntimeError::RequestInvalid);
-
-        let peer_route = runtime
-            .dispatch_public_cli_request(
-                &json!({
-                    "method": "List",
-                    "zoneRef": "Zone/work",
-                    "resourceType": "Host",
-                }),
-                1000,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(peer_route.code(), "resource-runtime-identity-unbound");
-        runtime.shutdown().await.unwrap();
     }
 
     fn network_admission_intent(
@@ -18919,809 +12949,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn production_guest_test_store_opens_with_core_session() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let zone = ZoneId::parse("work").unwrap();
-        let store_identity = "sha256:".to_owned() + &"d".repeat(64);
-        let runtime = ZoneResourceRuntime::open_internal(
-            zone.clone(),
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity,
-                    disposition: ZoneStoreDisposition::Provisioned,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-            None,
-            Arc::new(BrokerEvidenceIndex::default()),
-            None,
-            true,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(runtime.readiness().resource_api_ready);
-        assert!(runtime.core_controller_subject.lock().unwrap().is_some());
-        assert!(runtime.process_status_client.lock().unwrap().is_some());
-        let provider = BundleResource::new(
-            ResourceTypeName::parse("Provider").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("runtime-qemu-media").unwrap(),
-                zone.clone(),
-                None,
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(
-                br#"{"artifactId":"runtime-qemu-media","config":{"controllerExecutionRef":"Host/host-system","networkProviderRef":"Provider/network-local","volumeProviderRef":"Provider/volume-local"}}"#,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let guest_spec_json = br#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"networkAttachments":[],"providerRef":"Provider/runtime-qemu-media","systemArtifactId":null,"volumeAttachmentDefaults":[]}"#;
-        serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(guest_spec_json)
-            .unwrap_or_else(|error| panic!("Guest spec: {error}"));
-        let guest = BundleResource::new(
-            ResourceTypeName::parse("Guest").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("qemu").unwrap(),
-                zone.clone(),
-                None,
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(guest_spec_json).unwrap(),
-        )
-        .unwrap();
-        let bundle = ResourceBundle::new(
-            zone.clone(),
-            vec![provider],
-            "sha256:".to_owned() + &"e".repeat(64),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
-        )
-        .unwrap()
-        .with_zone_uid(runtime.store.identity().zone_uid().clone());
-        runtime
-            .materialize_desired_bundle(&bundle)
-            .await
-            .unwrap_or_else(|error| panic!("test bundle materialization failed: {error:?}"));
-        assert!(
-            runtime
-                .committed_resource_value(
-                    &ResourceRef::parse("Provider/runtime-qemu-media").unwrap(),
-                    "u6-test-provider-read",
-                )
-                .await
-                .is_ok()
-        );
-        let guest_bundle = ResourceBundle::new(
-            zone.clone(),
-            vec![guest],
-            "sha256:".to_owned() + &"f".repeat(64),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
-        )
-        .unwrap()
-        .with_zone_uid(runtime.store.identity().zone_uid().clone());
-        runtime.materialize_desired_bundle(&guest_bundle).await.unwrap();
-        assert!(
-            runtime
-                .committed_resource_value(
-                    &ResourceRef::parse("Guest/qemu").unwrap(),
-                    "u6-test-guest-read",
-                )
-                .await
-                .is_ok()
-        );
-        runtime.shutdown().await.unwrap();
-    }
 
-    #[tokio::test]
-    async fn production_materialization_supplies_fixed_process_provider_rows() {
-        let (_directory, runtime, _broker_evidence) = open_production_guest_runtime_for_test().await;
-        let provider_refs = [
-            "Provider/system-core",
-            "Provider/system-minijail",
-            "Provider/system-systemd",
-        ]
-        .into_iter()
-        .map(|provider| ResourceRef::parse(provider).unwrap())
-        .collect::<BTreeSet<_>>();
-        assert!(
-            load_committed_controller_provider_identities(
-                &runtime.zone,
-                &runtime.store,
-                provider_refs.clone(),
-            )
-            .await
-            .is_err(),
-            "missing fixed Provider rows must fail closed"
-        );
-
-        materialize_test_bundle(&runtime, Vec::new()).await;
-        let identities = load_committed_controller_provider_identities(
-            &runtime.zone,
-            &runtime.store,
-            provider_refs,
-        )
-        .await
-        .expect("materialized fixed Provider identities");
-        assert_eq!(identities.len(), 3);
-
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Process",
-                "bootstrap-process",
-                &runtime.zone,
-                r#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#,
-            )],
-        )
-        .await;
-        let process = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "process-assignment-read-after-bootstrap".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "process-assignment-read-after-bootstrap".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: runtime.zone.clone(),
-                target: ResourceRef::parse("Process/bootstrap-process").unwrap(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let authority = Arc::new(CoreAssignmentAuthority {
-            provider_generation: ResourceGeneration::new(17).unwrap(),
-            controller_generation: ControllerGeneration::new(23).unwrap(),
-            session_generation: ReconnectGeneration::new(19).unwrap(),
-            controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
-        });
-        let resolver = process_assignment_fence_resolver(
-            Arc::clone(&runtime.store),
-            DaemonMode::Host,
-            Arc::clone(&authority),
-        );
-        let fence = resolver(
-            process.resource_ref.clone(),
-            process.uid.clone(),
-            process.revision,
-        )
-        .await
-        .expect("fixed Provider appearance must requeue assignment admission");
-        assert_eq!(fence.resource_uid, process.uid);
-        assert_eq!(fence.provider_generation, authority.provider_generation);
-        assert_eq!(fence.controller_generation, authority.controller_generation);
-        assert_eq!(fence.session_generation, authority.session_generation);
-        assert_eq!(fence.controller_role, authority.controller_role);
-        assert_eq!(
-            fence.target,
-            ResourceRef::parse("Host/host-system").unwrap()
-        );
-        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
-        drop(resolver);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn controller_provider_identity_projection_uses_one_current_store_snapshot() {
-        let (_directory, runtime, broker_evidence) = open_production_guest_runtime_for_test().await;
-        let provider_ref = ResourceRef::parse("Provider/system-minijail").unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Provider",
-                "system-minijail",
-                &runtime.zone,
-                r#"{"artifactId":"system-minijail","config":{}}"#,
-            )],
-        )
-        .await;
-        let stale_revision = runtime.store.runtime_metadata().await.unwrap().current_revision;
-
-        mark_test_resource_phase(&runtime, &provider_ref, &broker_evidence, "Ready").await;
-        let current = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "provider-identity-current-row".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "provider-identity-current-row".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: runtime.zone.clone(),
-                target: provider_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        assert!(current.revision > stale_revision);
-
-        let identities = load_committed_controller_provider_identities(
-            &runtime.zone,
-            &runtime.store,
-            BTreeSet::from([provider_ref.clone()]),
-        )
-        .await
-        .expect("current Provider status revision must not invalidate its identity");
-        assert_eq!(
-            identities.get(&provider_ref),
-            Some(&(current.uid.clone(), current.generation))
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn live_cloud_hypervisor_inputs_use_current_provider_snapshot() {
-        let (_directory, mut runtime, broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let provider_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap();
-        let guest_ref = ResourceRef::parse("Guest/cloud-hypervisor").unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![
-                bundle_resource(
-                    "Provider",
-                    "runtime-cloud-hypervisor",
-                    &zone,
-                    r#"{"artifactId":"runtime-cloud-hypervisor","config":{"controllerExecutionRef":"Host/host-system","defaultVcpus":2,"defaultMemoryMb":512,"defaultMachineType":"q35","watchdog":true,"adoptionWindowMs":30000,"healthCheckIntervalMs":30000,"healthCheckTimeoutMs":5000,"healthCheckFailureThreshold":3,"startupDeadlineMs":120000}}"#,
-                ),
-                bundle_resource(
-                    "Guest",
-                    "cloud-hypervisor",
-                    &zone,
-                    r#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"networkAttachments":[],"providerRef":"Provider/runtime-cloud-hypervisor","systemArtifactId":null,"volumeAttachmentDefaults":[]}"#,
-                ),
-            ],
-        )
-        .await;
-        runtime.store_metadata = runtime.store.runtime_metadata().await.unwrap();
-        let activation_revision = runtime.store_metadata.current_revision;
-        let before = read_test_resource(
-            &runtime,
-            provider_ref.clone(),
-            "cloud-hypervisor-inputs-before-status",
-        )
-        .await;
-        let (_, _, expected_config, _) = runtime
-            .cloud_hypervisor_inputs(&guest_ref)
-            .await
-            .expect("activation snapshot must admit the unchanged Provider config");
-
-        mark_test_resource_phase(&runtime, &provider_ref, &broker_evidence, "Ready").await;
-        let after = read_test_resource(
-            &runtime,
-            provider_ref,
-            "cloud-hypervisor-inputs-after-status",
-        )
-        .await;
-        assert!(after.revision > activation_revision);
-        assert_eq!(after.uid, before.uid);
-        assert_eq!(after.generation, before.generation);
-
-        let (_, _, config, _) = runtime
-            .cloud_hypervisor_inputs(&guest_ref)
-            .await
-            .expect("Provider status revision must not invalidate unchanged CH config");
-        assert_eq!(config, expected_config);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn live_wayland_session_lookup_uses_current_store_snapshot() {
-        let (_directory, mut runtime, broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let guest_ref = ResourceRef::parse("Guest/workstation").unwrap();
-        let host_ref = ResourceRef::parse("Host/host-system").unwrap();
-        let user_ref = ResourceRef::parse("User/alice").unwrap();
-        let session_ref =
-            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
-                .unwrap();
-        let session_spec = d2b_provider_display_wayland::WaylandSessionSpec::new(
-            guest_ref.clone(),
-            host_ref.clone(),
-            user_ref.clone(),
-            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
-            d2b_provider_display_wayland::DisplayIdentity::new(
-                "display",
-                "#112233",
-                "#223344",
-                "#334455",
-            )
-            .unwrap(),
-            true,
-        )
-        .unwrap();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "display-wayland.d2bus.org.WaylandSession",
-                "display-wayland",
-                &zone,
-                &serde_json::to_string(&session_spec).unwrap(),
-            )],
-        )
-        .await;
-        let stored =
-            read_test_resource(&runtime, session_ref.clone(), "wayland-session-before-status")
-                .await;
-        let mut identity = CommittedInteractionIdentity::for_test(
-            zone.clone(),
-            guest_ref,
-            ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap(),
-            host_ref,
-            user_ref,
-            BTreeMap::new(),
-            ResourceGeneration::new(1).unwrap(),
-            None,
-            None,
-            None,
-            None,
-        );
-        identity.wayland_session_uid = stored.uid.clone();
-        runtime.interaction_identity = Some(identity);
-        runtime.readiness.resource_api_ready = true;
-        runtime.store_metadata = runtime.store.runtime_metadata().await.unwrap();
-        let activation_revision = runtime.store_metadata.current_revision;
-        let (_, _, expected_spec) = runtime
-            .committed_wayland_session_for_vm("workstation")
-            .await
-            .expect("activation snapshot must admit the unchanged Wayland session")
-            .expect("Wayland session identity is present");
-
-        mark_test_resource_phase(&runtime, &session_ref, &broker_evidence, "Ready").await;
-        let current =
-            read_test_resource(&runtime, session_ref, "wayland-session-after-status").await;
-        assert!(current.revision > activation_revision);
-        assert_eq!(current.uid, stored.uid);
-        assert_eq!(current.generation, stored.generation);
-
-        let (_, uid, spec) = runtime
-            .committed_wayland_session_for_vm("workstation")
-            .await
-            .expect("Wayland status revision must not invalidate unchanged session")
-            .expect("Wayland session identity remains present");
-        assert_eq!(uid, current.uid);
-        assert_eq!(spec, expected_spec);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn generated_controller_process_assignment_uses_core_authority_identity() {
-        let (_directory, runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Provider",
-                "network-local",
-                &zone,
-                r#"{"artifactId":"acceptance-provider","config":{}}"#,
-            )],
-        )
-        .await;
-        let owner = ResourceRef::parse("Provider/network-local").unwrap();
-        let process = BundleResource::new(
-            ResourceTypeName::parse("Process").unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse("controller-e1e6335ae78671758ea381fce5d44fdd").unwrap(),
-                zone.clone(),
-                Some(owner),
-                BTreeMap::new(),
-                BTreeMap::new(),
-            ),
-            CanonicalJsonObject::parse(
-                br#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/system-minijail","template":"acceptance-controller"}"#,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        materialize_test_bundle(&runtime, vec![process]).await;
-        let process_ref =
-            ResourceRef::parse("Process/controller-e1e6335ae78671758ea381fce5d44fdd").unwrap();
-        let stored = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "generated-controller-process-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "generated-controller-process-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: process_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        let authority = Arc::new(CoreAssignmentAuthority {
-            provider_generation: ResourceGeneration::new(17).unwrap(),
-            controller_generation: ControllerGeneration::new(23).unwrap(),
-            session_generation: ReconnectGeneration::new(19).unwrap(),
-            controller_role: ResourceRef::parse("Process/d2b-core-controller").unwrap(),
-        });
-        let system_minijail = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "generated-controller-process-provider-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "generated-controller-process-provider-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: ResourceRef::parse("Provider/system-minijail").unwrap(),
-                expected_uid: None,
-                projection: StoreProjection::MetadataOnly,
-            })
-            .await
-            .unwrap();
-        assert_ne!(
-            authority.provider_generation,
-            system_minijail.generation,
-            "test must distinguish Core Provider from Process effect Provider",
-        );
-        let resolver = process_assignment_fence_resolver(
-            Arc::clone(&runtime.store),
-            DaemonMode::Host,
-            Arc::clone(&authority),
-        );
-        let fence = resolver(
-            process_ref.clone(),
-            stored.uid.clone(),
-            stored.revision,
-        )
-        .await
-        .expect("generated controller Process assignment");
-        assert_eq!(fence.provider_generation, authority.provider_generation);
-        assert_eq!(fence.controller_generation, authority.controller_generation);
-        assert_eq!(fence.session_generation, authority.session_generation);
-        assert_eq!(fence.controller_role, authority.controller_role);
-        assert_eq!(
-            fence.target,
-            ResourceRef::parse("Host/host-system").unwrap()
-        );
-        assert_eq!(fence.epoch, ASSIGNMENT_EPOCH);
-
-        let wrong_process = bundle_resource(
-            "Process",
-            "wrong-controller-provider",
-            &zone,
-            r#"{"executionRef":"Host/host-system","processClass":"controller","providerRef":"Provider/not-a-process-provider","template":"acceptance-controller"}"#,
-        );
-        materialize_test_bundle(&runtime, vec![wrong_process]).await;
-        let wrong_ref = ResourceRef::parse("Process/wrong-controller-provider").unwrap();
-        let wrong = runtime
-            .store
-            .get(StoreGetRequest {
-                operation: StoreOperationContext {
-                    operation_id: "wrong-controller-provider-read".to_owned(),
-                    idempotency_key: None,
-                    correlation_id: "wrong-controller-provider-read".to_owned(),
-                    trace_id: None,
-                    deadline_ms: 10_000,
-                },
-                zone: zone.clone(),
-                target: wrong_ref.clone(),
-                expected_uid: None,
-                projection: StoreProjection::Full,
-            })
-            .await
-            .unwrap();
-        assert!(matches!(
-            resolver(wrong_ref, wrong.uid, wrong.revision).await,
-            Err(SourceError::Integrity)
-        ));
-
-        let missing_target = ResourceRef::parse("Process/missing-controller").unwrap();
-        assert!(
-            resolver(
-                missing_target,
-                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-                ZoneRevision::new(1),
-            )
-            .await
-            .is_err(),
-            "missing Process target must fail closed"
-        );
-        let _ = runtime.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn sparse_seven_row_bundle_starts_only_present_shared_provider_runners() {
-        let (_directory, mut runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        let resources = vec![
-            bundle_resource(
-                "Provider",
-                "network-local",
-                &zone,
-                r#"{"artifactId":"acceptance-provider","config":{}}"#,
-            ),
-            bundle_resource(
-                "Provider",
-                "runtime-qemu-media",
-                &zone,
-                r#"{"artifactId":"runtime-qemu-media","config":{"controllerExecutionRef":"Host/host-system","networkProviderRef":"Provider/network-local","volumeProviderRef":"Provider/volume-local"}}"#,
-            ),
-            bundle_resource(
-                "User",
-                "alice",
-                &zone,
-                r#"{"displayName":"Alice","groups":[],"osUsername":"alice"}"#,
-            ),
-            bundle_resource(
-                "User",
-                "d2bd",
-                &zone,
-                r#"{"displayName":"d2bd","groups":[],"osUsername":"d2bd"}"#,
-            ),
-            bundle_resource(
-                "Device",
-                "host-kvm",
-                &zone,
-                r#"{"deviceClass":"emulated","arbitration":"exclusive","maxConcurrentClaims":1,"inventory":{}}"#,
-            ),
-            bundle_resource(
-                "Guest",
-                "qemu",
-                &zone,
-                r#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[{"deviceRef":"Device/host-kvm","exclusive":false}],"networkAttachments":[],"providerRef":"Provider/runtime-qemu-media","systemArtifactId":null,"volumeAttachmentDefaults":[]}"#,
-            ),
-            bundle_resource(
-                "Provider",
-                "acceptance-extra",
-                &zone,
-                r#"{"artifactId":"acceptance-provider","config":{}}"#,
-            ),
-        ];
-        assert_eq!(resources.len(), 7);
-        materialize_test_bundle(&runtime, resources).await;
-        assert_eq!(
-            runtime
-                .committed_resources_of_type("Provider")
-                .await
-                .unwrap()
-                .len(),
-            6
-        );
-        runtime.readiness.resource_api_ready = true;
-        runtime.set_provider_path_ready(true);
-        runtime
-            .require_ready()
-            .expect("sparse bundle must reach Host readiness");
-        assert_eq!(runtime.interaction_state, InteractionState::Absent);
-        runtime.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn present_interaction_provider_without_identity_refuses_readiness() {
-        let (_directory, mut runtime, _broker_evidence) =
-            open_production_guest_runtime_for_test().await;
-        let zone = runtime.zone.clone();
-        materialize_test_bundle(
-            &runtime,
-            vec![bundle_resource(
-                "Provider",
-                "display-wayland",
-                &zone,
-                r#"{"artifactId":"display-wayland","config":{}}"#,
-            )],
-        )
-        .await;
-        assert!(
-            interaction_resources_present(&zone, &runtime.store)
-                .await
-                .expect("interaction presence scan")
-        );
-        runtime.readiness.resource_api_ready = true;
-        // A present interaction Provider whose committed identity never
-        // resolved leaves the interaction composition refused: readiness is
-        // withheld rather than reported for a half-composed family.
-        runtime.interaction_state = InteractionState::Refused;
-        runtime.set_provider_path_ready(true);
-        assert_eq!(
-            runtime.require_ready(),
-            Err(ResourceRuntimeError::InteractionConfigurationUnavailable)
-        );
-        runtime.shutdown().await.unwrap();
-    }
-
-    pub(crate) async fn open_production_guest_runtime_for_test() -> (
-        tempfile::TempDir,
-        ZoneResourceRuntime,
-        Arc<BrokerEvidenceIndex>,
-    ) {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("store.redb");
-        let database = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&database_path)
-            .unwrap();
-        let zone = ZoneId::parse("work").unwrap();
-        let broker_evidence = Arc::new(BrokerEvidenceIndex::default());
-        let runtime = ZoneResourceRuntime::open_internal(
-            zone,
-            OpenedZoneStore {
-                response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
-                        "zone-store-work",
-                    )
-                    .unwrap(),
-                    store_identity: "sha256:".to_owned() + &"a".repeat(64),
-                    disposition: ZoneStoreDisposition::Provisioned,
-                    fd_index: 0,
-                },
-                database_fd: database.into(),
-                external_inventory: None,
-            },
-            None,
-            Arc::clone(&broker_evidence),
-            None,
-            true,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        (directory, runtime, broker_evidence)
-    }
-
-    pub(crate) fn bundle_resource(
-        resource_type: &str,
-        name: &str,
-        zone: &ZoneId,
-        spec: &str,
-    ) -> BundleResource {
-        bundle_resource_with_annotations(
-            resource_type,
-            name,
-            zone,
-            spec,
-            BTreeMap::new(),
-        )
-    }
-
-    fn bundle_resource_with_annotations(
-        resource_type: &str,
-        name: &str,
-        zone: &ZoneId,
-        spec: &str,
-        annotations: BTreeMap<String, String>,
-    ) -> BundleResource {
-        BundleResource::new(
-            ResourceTypeName::parse(resource_type).unwrap(),
-            BundleResourceMetadata::new(
-                ResourceName::parse(name).unwrap(),
-                zone.clone(),
-                None,
-                BTreeMap::new(),
-                annotations,
-            ),
-            CanonicalJsonObject::parse(spec.as_bytes()).unwrap(),
-        )
-        .unwrap()
-    }
-
-    pub(crate) async fn materialize_test_bundle(
-        runtime: &ZoneResourceRuntime,
-        resources: Vec<BundleResource>,
-    ) {
-        let zone = runtime.zone.clone();
-        let bundle = ResourceBundle::new(
-            zone,
-            resources,
-            "sha256:".to_owned() + &"b".repeat(64),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
-        )
-        .unwrap()
-        .with_zone_uid(runtime.store.identity().zone_uid().clone());
-        bundle
-            .verify()
-            .unwrap_or_else(|error| panic!("test bundle verification failed: {error:?}"));
-        runtime
-            .materialize_desired_bundle(&bundle)
-            .await
-            .unwrap_or_else(|error| panic!("test bundle materialization failed: {error:?}"));
-    }
-
-    async fn mark_test_resource_ready(
-        runtime: &ZoneResourceRuntime,
-        target: &ResourceRef,
-        broker_evidence: &BrokerEvidenceIndex,
-    ) {
-        mark_test_resource_phase(runtime, target, broker_evidence, "Ready").await;
-    }
-
-    async fn mark_test_resource_phase(
-        runtime: &ZoneResourceRuntime,
-        target: &ResourceRef,
-        broker_evidence: &BrokerEvidenceIndex,
-        phase: &str,
-    ) {
-        let current = runtime
-            .committed_resource_value(target, "u6-test-ready-read")
-            .await
-            .unwrap();
-        let mut status = current.get("status").cloned().unwrap();
-        status["phase"] = Value::String(phase.to_owned());
-        status["observedGeneration"] = current["metadata"]["generation"].clone();
-        let client = runtime.status_client().unwrap();
-        let operation = bounded_operation_id(&format!(
-            "u6-test-ready:{}:{}",
-            target.to_canonical_string(),
-            current["metadata"]["revision"]
-        ));
-        if matches!(
-            target.resource_type().as_str(),
-            "Provider" | "Credential"
-        ) {
-            broker_evidence
-                .insert(DurabilityEvidence {
-                    key: d2b_audit::operation::ZoneOperationKey::derive(
-                        runtime.zone.as_str(),
-                        &operation,
-                    )
-                    .unwrap(),
-                    outcome: d2b_audit::DurabilityOutcome::Success,
-                    effect_durable: true,
-                })
-                .unwrap();
-        }
-        let request = public_update_status_request_from_current(
-            runtime,
-            &json!({
-                "status": status,
-                "expectedRevision": current["metadata"]["revision"],
-            }),
-            &operation,
-            target,
-            current,
-        )
-        .unwrap();
-        let response = client.update_status(request).await;
-        if let Some(error) = response.error.as_ref() {
-            panic!(
-                "test status update rejected: kind={:?} reason={}",
-                error.kind, error.reason
-            );
-        }
-    }
 
     #[test]
     fn gate_keeps_only_bindings_admitted_by_their_volume() {
@@ -19766,86 +12994,211 @@ mod tests {
         ));
     }
 
-    /// The refresh fence must still fail closed when a policy input moves
-    /// under it: the narrowed comparison only ignores Zone resource-revision
-    /// churn, so every policy-snapshot component still yields
-    /// `PolicyUnavailable` for the stale/foreign case it exists to reject.
-    #[test]
-    fn policy_refresh_rejects_a_policy_snapshot_that_moved_under_it() {
-        let zone = ZoneId::parse("work").unwrap();
-        let base = |policy_revision: u64| StoreRuntimeMetadata {
-            store_uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-                .expect("store uid"),
-            zone_uid: ResourceUid::parse("22222222-2222-4222-8222-222222222222")
-                .expect("zone uid"),
-            store_epoch: 1,
-            current_revision: ZoneRevision::new(7),
-            compaction_floor: ZoneRevision::new(2),
-            policy_snapshot: PolicySnapshot {
-                policy_revision,
-                api_catalog_revision: 8,
-                active_configuration_revision: ConfigurationGeneration::new(9)
-                    .expect("configuration generation"),
-                controller_generation: Some(
-                    ControllerGeneration::new(10).expect("controller generation"),
-                ),
-            },
+    const POLICY_INPUT_GUEST_UID: &str = "30e0427b-496f-4190-ba7c-879ccdec7964";
+    const POLICY_INPUT_ROLE_UID: &str = "8a1a6f5e-3d2c-4a5f-9a10-9f0a1c2b3d4e";
+
+    /// One committed policy-input row as the manager serves it: a complete,
+    /// decodable resource envelope (the reader bridge renders exactly this
+    /// shape), so the digest sees the same row facts the compile does.
+    fn policy_input_row(
+        resource_type: &str,
+        name: &str,
+        uid: &str,
+        generation: u64,
+        phase: ResourcePhase,
+    ) -> StoredResource {
+        use d2b_contracts_resource::v3::{
+            CanonicalJsonObject, ManagedBy, ObservedGeneration, PresentationMetadata,
+            ResourceCurrencySet, ResourceMetadata, ResourceName, ResourceSpec, ResourceStatus,
+            ResourceUpdateStatus, UpdateDisruption, UpdateState,
         };
-        let loaded = base(7);
-        assert_eq!(
-            ZoneResourceRuntime::verify_policy_snapshot(&zone, &loaded, &loaded),
-            Ok(())
-        );
-        // The Zone resource revision advancing under the load is not a policy
-        // input: derived children and process churn must never gate the
-        // mutation.
-        let revision_moved = StoreRuntimeMetadata {
-            current_revision: ZoneRevision::new(8),
-            compaction_floor: ZoneRevision::new(3),
-            ..loaded.clone()
-        };
-        assert_eq!(
-            ZoneResourceRuntime::verify_policy_snapshot(&zone, &loaded, &revision_moved),
-            Ok(())
-        );
-        // Every policy-input component still supersedes the loaded rows and
-        // fails the mutation closed.
-        let policy_moved = base(8);
-        let api_catalog_moved = StoreRuntimeMetadata {
-            policy_snapshot: PolicySnapshot {
-                api_catalog_revision: 9,
-                ..loaded.policy_snapshot
-            },
-            ..loaded.clone()
-        };
-        let configuration_moved = StoreRuntimeMetadata {
-            policy_snapshot: PolicySnapshot {
-                active_configuration_revision: ConfigurationGeneration::new(10)
-                    .expect("configuration generation"),
-                ..loaded.policy_snapshot
-            },
-            ..loaded.clone()
-        };
-        let controller_moved = StoreRuntimeMetadata {
-            policy_snapshot: PolicySnapshot {
-                controller_generation: Some(
-                    ControllerGeneration::new(11).expect("controller generation"),
-                ),
-                ..loaded.policy_snapshot
-            },
-            ..loaded.clone()
-        };
-        for (label, moved) in [
-            ("policy", policy_moved),
-            ("api-catalog", api_catalog_moved),
-            ("configuration", configuration_moved),
-            ("controller", controller_moved),
-        ] {
-            assert_eq!(
-                ZoneResourceRuntime::verify_policy_snapshot(&zone, &loaded, &moved),
-                Err(ResourceRuntimeError::PolicyUnavailable),
-                "{label} revision moving under the refresh must fail closed",
-            );
+        let generation = ResourceGeneration::new(generation).expect("generation");
+        let timestamp = Timestamp::parse("2026-09-12T00:00:00.000Z").expect("timestamp");
+        let envelope = ResourceEnvelope::new(
+            ResourceTypeName::parse(resource_type.to_owned()).expect("type"),
+            ResourceMetadata::new(
+                ResourceName::parse(name.to_owned()).expect("name"),
+                ZoneId::parse("work").expect("zone"),
+                ResourceUid::parse(uid.to_owned()).expect("uid"),
+                generation,
+                ZoneRevision::new(generation.get()),
+                None,
+                Vec::new(),
+                None,
+                timestamp.clone(),
+                timestamp,
+                ManagedBy::Api,
+                None,
+                None,
+                None,
+                PresentationMetadata::default(),
+            )
+            .expect("metadata"),
+            ResourceSpec::empty(),
+            ResourceStatus::new(
+                ObservedGeneration::new(0),
+                phase,
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                ResourceUpdateStatus::new(
+                    UpdateState::Unknown,
+                    Vec::new(),
+                    ObservedGeneration::new(0),
+                    ResourceGeneration::new(1).expect("generation one"),
+                    UpdateDisruption::None,
+                    true,
+                    None,
+                    None,
+                    ResourceCurrencySet::new(0, Vec::new()).expect("currency"),
+                    ResourceCurrencySet::new(0, Vec::new()).expect("currency"),
+                )
+                .expect("update status"),
+                CanonicalJsonObject::empty(),
+                None,
+            )
+            .expect("status"),
+        )
+        .expect("envelope");
+        StoredResource {
+            resource_ref: ResourceRef::parse(&format!("{resource_type}/{name}")).expect("ref"),
+            zone: ZoneId::parse("work").expect("zone"),
+            uid: ResourceUid::parse(uid.to_owned()).expect("uid"),
+            owner_uid: None,
+            owner_generation: None,
+            generation,
+            revision: ZoneRevision::new(generation.get()),
+            canonical_json: envelope.canonical_bytes().expect("canonical bytes"),
+            payload_digest: envelope.digest().expect("envelope digest"),
         }
+    }
+
+    fn installed_policy_projection(installed_revision: Option<u64>) -> PolicyProjection {
+        let zone = ZoneId::parse("work").expect("zone");
+        let snapshot = initial_policy_snapshot().expect("snapshot");
+        let (_, state) = runtime_policy(
+            &zone,
+            &snapshot,
+            ZoneRevision::new(installed_revision.unwrap_or(1)),
+            &[],
+        )
+        .expect("bootstrap policy");
+        PolicyProjection {
+            authorizer: Arc::new(runtime_authorizer(&[]).expect("authorizer")),
+            manager_authorizer: None,
+            bus: Arc::new(Mutex::new(None)),
+            authorization_state: Arc::new(Mutex::new(installed_revision.map(|_| state))),
+            policy_refresh: Arc::new(Mutex::new(())),
+            policy_loaded: Arc::new(Mutex::new(installed_revision.is_some())),
+            installed_controller_subjects: Arc::new(Mutex::new(BTreeSet::new())),
+            installed_policy_inputs: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// U14: the committed policy rows are the whole policy input set, and the
+    /// derived revision is not a change signal for them. Removing the row
+    /// that carried the highest generation - the Guest row when its teardown
+    /// completes - lowers the maximum, and a tombstoned row keeps both its
+    /// generation and its uid; the digest is what still tells a refresh the
+    /// inputs moved.
+    #[test]
+    fn policy_input_digest_moves_when_a_row_removal_lowers_the_derived_revision() {
+        let role = policy_input_row(
+            "Role",
+            "operator",
+            POLICY_INPUT_ROLE_UID,
+            1,
+            ResourcePhase::Ready,
+        );
+        let guest = policy_input_row(
+            "Guest",
+            "acceptance-guest",
+            POLICY_INPUT_GUEST_UID,
+            3,
+            ResourcePhase::Ready,
+        );
+        let with_guest = vec![role.clone(), guest.clone()];
+        let without_guest = vec![role.clone()];
+        assert!(
+            ResourceEnvelope::from_json(&guest.canonical_json).is_ok(),
+            "the fixture rows must be the decodable envelopes the manager serves",
+        );
+
+        assert_eq!(
+            policy_snapshot_for_rows(&with_guest)
+                .expect("snapshot")
+                .policy_revision,
+            3,
+        );
+        assert_eq!(
+            policy_snapshot_for_rows(&without_guest)
+                .expect("snapshot")
+                .policy_revision,
+            1,
+            "removing the highest-generation row lowers the derived revision",
+        );
+        assert_ne!(
+            policy_inputs_digest(&with_guest),
+            policy_inputs_digest(&without_guest),
+            "the removed row must still be visible to the refresh",
+        );
+
+        // Read order is a property of the manager call, not of the inputs.
+        assert_eq!(
+            policy_inputs_digest(&with_guest),
+            policy_inputs_digest(&[guest, role.clone()]),
+        );
+        // A tombstone keeps generation and uid but changes the evidence the
+        // compile reads, so it must move the digest too.
+        let tombstoned = policy_input_row(
+            "Role",
+            "operator",
+            POLICY_INPUT_ROLE_UID,
+            1,
+            ResourcePhase::Deleted,
+        );
+        assert_eq!(
+            policy_input_content(&tombstoned).1,
+            b"deleted".as_slice(),
+            "a deleted row is the tombstone class the compile drops grants for",
+        );
+        assert_ne!(
+            policy_inputs_digest(&without_guest),
+            policy_inputs_digest(&[tombstoned]),
+        );
+    }
+
+    /// The Zone bus fences every policy install at the installed revision
+    /// (`BusAuthorizer::replace_policy`), so a refresh following a row
+    /// removal must not hand its compile the regressed derived revision: it
+    /// advances past the installed one instead - the retired durable store's
+    /// commit counter advanced on every commit - and holds it when the inputs
+    /// did not move.
+    #[test]
+    fn policy_revision_never_regresses_against_the_installed_projection() {
+        let projection = installed_policy_projection(Some(2));
+        assert_eq!(
+            projection.next_policy_revision(1, true),
+            3,
+            "a changed input set advances past the installed revision",
+        );
+        assert_eq!(
+            projection.next_policy_revision(7, true),
+            7,
+            "a row generation that did advance keeps its own revision",
+        );
+        assert_eq!(
+            projection.next_policy_revision(1, false),
+            2,
+            "an unchanged input set holds the installed revision",
+        );
+        let unloaded = installed_policy_projection(None);
+        assert_eq!(
+            unloaded.next_policy_revision(1, true),
+            1,
+            "with no installed projection the rows dictate the revision",
+        );
     }
 }

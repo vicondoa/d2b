@@ -15,16 +15,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
 use d2b_provider_audio_pipewire::{AudioBindingPhase, AudioBindingSpec};
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::manager::{ResourceSelector, ResourceView};
 use d2b_resource_runtime::ResourceStatus;
-use d2b_resource_store::{
-    ResourceAssignmentScope, StoreErrorKind, StoreGetRequest, StoreOperationContext,
-    StoreProjection, StoredResource,
-};
 use serde_json::Value;
 
 use super::ZoneResourceRuntime;
@@ -37,7 +33,6 @@ use crate::interaction_driver::{
     InteractionEffectPhase, InteractionEffectRequest, InteractionFinalize, InteractionKind,
     key_ref, shell_pool_spec, shell_session_execution, shell_session_pool_ref,
 };
-use crate::resource_plane_v3::{PlaneRoute, route_resource_type};
 
 /// Production composition adapter for the closed interaction/shell family.
 ///
@@ -71,30 +66,11 @@ impl ProductionInteractionDriverEffects {
             .map_err(|_| InteractionEffectError::Unavailable)
     }
 
-    fn store_get(&self, target: &ResourceRef, operation_id: &str) -> StoreGetRequest {
-        StoreGetRequest {
-            operation: StoreOperationContext {
-                operation_id: operation_id.to_owned(),
-                idempotency_key: None,
-                correlation_id: operation_id.to_owned(),
-                trace_id: None,
-                deadline_ms: 10_000,
-            },
-            zone: self.zone.clone(),
-            target: target.clone(),
-            expected_uid: None,
-            projection: StoreProjection::Full,
-        }
-    }
-
-    /// The manager view of one converted row (`None` for unconverted types).
+    /// The manager view of one row.
     async fn live_view(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<ResourceView>, InteractionEffectError> {
-        if route_resource_type(target.resource_type().as_str()) != PlaneRoute::NewPlane {
-            return Ok(None);
-        }
         let plane = self.plane()?;
         let key = ResourceKey::new(
             self.zone.as_str(),
@@ -108,30 +84,13 @@ impl ProductionInteractionDriverEffects {
             .map_err(|_| InteractionEffectError::Unavailable)
     }
 
-    /// The live phase of one resource: the manager view for converted rows
-    /// (a converted row's actor status is the only status there is, R11), the
-    /// durable row's `/status/phase` for unconverted rows.
+    /// The live phase of one resource from the manager view: the row actor's
+    /// status is the only status there is (R11).
     async fn live_phase(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<&'static str>, InteractionEffectError> {
-        if let Some(view) = self.live_view(target).await? {
-            return Ok(Some(view_phase(&view)));
-        }
-        if route_resource_type(target.resource_type().as_str()) == PlaneRoute::NewPlane {
-            // Converted row absent from the manager: nothing to read.
-            return Ok(None);
-        }
-        let runtime = self.runtime()?;
-        match runtime
-            .store()
-            .get(self.store_get(target, "interaction-phase"))
-            .await
-        {
-            Ok(resource) => Ok(phase_of_json(&resource.canonical_json)),
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => Ok(None),
-            Err(_) => Err(InteractionEffectError::Unavailable),
-        }
+        Ok(self.live_view(target).await?.map(|view| view_phase(&view)))
     }
 
     async fn is_ready(&self, target: &ResourceRef) -> Result<bool, InteractionEffectError> {
@@ -139,27 +98,14 @@ impl ProductionInteractionDriverEffects {
     }
 
     /// The authoritative row of one resource: the manager view re-rendered
-    /// as a durable envelope for converted rows, the durable row itself for
-    /// unconverted rows.
+    /// as a durable envelope.
     async fn live_stored(
         &self,
         target: &ResourceRef,
     ) -> Result<Option<StoredResource>, InteractionEffectError> {
-        if let Some(view) = self.live_view(target).await? {
-            return Ok(Some(stored_from_view(&view)?));
-        }
-        if route_resource_type(target.resource_type().as_str()) == PlaneRoute::NewPlane {
-            return Ok(None);
-        }
-        let runtime = self.runtime()?;
-        match runtime
-            .store()
-            .get(self.store_get(target, "interaction-read"))
-            .await
-        {
-            Ok(resource) => Ok(Some(resource)),
-            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => Ok(None),
-            Err(_) => Err(InteractionEffectError::Unavailable),
+        match self.live_view(target).await? {
+            Some(view) => Ok(Some(stored_from_view(&view)?)),
+            None => Ok(None),
         }
     }
 
@@ -184,44 +130,32 @@ impl ProductionInteractionDriverEffects {
         Ok(true)
     }
 
-    /// Spec documents of every row of one ResourceType: the manager list for
-    /// converted rows, the durable store for unconverted rows.
+    /// Spec documents of every row of one ResourceType, from the manager.
     async fn specs_of_type(
         &self,
         resource_type: &str,
     ) -> Result<Vec<Value>, InteractionEffectError> {
-        if route_resource_type(resource_type) == PlaneRoute::NewPlane {
-            let plane = self.plane()?;
-            let views = plane
-                .client()
-                .list(ResourceSelector {
-                    zone: Some(self.zone.as_str().to_owned()),
-                    type_name: Some(resource_type.to_owned()),
-                    owner: None,
-                })
-                .await
-                .map_err(|_| InteractionEffectError::Unavailable)?;
-            return views
-                .iter()
-                .map(|view| spec_document_value(&view.spec))
-                .collect();
-        }
-        let runtime = self.runtime()?;
-        runtime
-            .committed_resources_of_type(resource_type)
-            .await
-            .map(|resources| {
-                resources
-                    .iter()
-                    .map(envelope_spec_document)
-                    .collect::<Vec<_>>()
+        let plane = self.plane()?;
+        let views = plane
+            .client()
+            .list(ResourceSelector {
+                zone: Some(self.zone.as_str().to_owned()),
+                type_name: Some(resource_type.to_owned()),
+                owner: None,
             })
-            .map_err(|_| InteractionEffectError::Unavailable)
+            .await
+            .map_err(|_| InteractionEffectError::Unavailable)?;
+        views
+            .iter()
+            .map(|view| spec_document_value(&view.spec))
+            .collect()
     }
 
     /// One authoritative audio dependency read (old `fresh_audio_dependency`):
-    /// a missing row fails closed, and a persisted assignment fence must
-    /// stay consistent with the row it fences.
+    /// a missing row fails closed. The row itself is the fence: the persisted
+    /// assignment-fence re-check the old runner-era path did has no durable
+    /// fence to compare against since U14 retired the store, so the row
+    /// identity is what validates.
     async fn fresh_audio_dependency(
         &self,
         target: &ResourceRef,
@@ -230,38 +164,7 @@ impl ProductionInteractionDriverEffects {
             return Err(InteractionEffectError::InvalidResource);
         };
         validate_audio_dependency_identity(&authoritative, target, &self.zone)?;
-        self.validate_audio_assignment(&authoritative).await?;
         Ok(authoritative)
-    }
-
-    /// Re-check one persisted assignment fence against its row (old
-    /// `validate_audio_assignment`, row-consistency half). The old
-    /// controller-identity half compared the Runner's assigned role and
-    /// generations; the v3 plane has no per-resource Runner identity, so the
-    /// row-consistency fence is what remains and it still fails closed.
-    async fn validate_audio_assignment(
-        &self,
-        resource: &StoredResource,
-    ) -> Result<(), InteractionEffectError> {
-        let runtime = self.runtime()?;
-        let Some(assignment) = runtime
-            .store()
-            .assignment_fence(self.zone.clone(), resource.resource_ref.clone())
-            .await
-            .map_err(|_| InteractionEffectError::Unavailable)?
-        else {
-            return Ok(());
-        };
-        if assignment.resource_uid != resource.uid
-            || assignment.resource_revision != resource.revision
-            || assignment.provider_generation.get() == 0
-            || assignment.controller_generation.get() == 0
-            || assignment.session_generation.get() == 0
-            || !matches!(assignment.scope, ResourceAssignmentScope::Primary)
-        {
-            return Err(InteractionEffectError::InvalidResource);
-        }
-        Ok(())
     }
 
     async fn reconcile_display_session(
@@ -326,7 +229,6 @@ impl ProductionInteractionDriverEffects {
         let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
-        self.validate_audio_assignment(&target).await?;
         let runtime = self.runtime()?;
         let mut audio = runtime
             .audio_runtime
@@ -570,22 +472,6 @@ fn view_phase(view: &ResourceView) -> &'static str {
         .as_ref()
         .map(ResourceStatus::wire_phase)
         .unwrap_or("Pending")
-}
-
-fn phase_of_json(bytes: &[u8]) -> Option<&'static str> {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/status/phase")
-                .and_then(Value::as_str)
-                .map(|phase| match phase {
-                    "Ready" => "Ready",
-                    "Deleted" => "Deleted",
-                    "Failed" => "Failed",
-                    _ => "Pending",
-                })
-        })
 }
 
 fn resource_phase(value: &Value) -> Option<&str> {

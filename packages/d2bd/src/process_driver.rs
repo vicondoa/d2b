@@ -1371,14 +1371,24 @@ impl ProcessDriver {
             .find(|attachment| attachment.execution_ref() == binding.execution_ref())?;
         let settings = attachment.settings();
         let source = volume.source();
-        let storage_path_id = match source.settings().kind() {
+        let root = match source.settings().kind() {
             d2b_contracts_resource::v3::volume::SourceKind::LocalPath => {
                 let policy = source.settings().source_policy_id()?.as_str().to_owned();
-                Some(if policy == "state-root" || policy == "default-state" {
-                    "path:state-root".to_owned()
-                } else {
-                    format!("path:{policy}")
-                })
+                Some(crate::process_provider_runtime::ServingWorkerRoot::StoragePath(
+                    if policy == "state-root" || policy == "default-state" {
+                        "path:state-root".to_owned()
+                    } else {
+                        format!("path:{policy}")
+                    },
+                ))
+            }
+            // A `nix-closure` Volume's bytes are the broker-managed
+            // per-Guest store-view farm the bundle names through the
+            // Guest's store-view intent; the ticket composes the served
+            // view root from it (the `ro-store` share's preserved
+            // `store-view/live` redirect).
+            d2b_contracts_resource::v3::volume::SourceKind::NixClosure => {
+                Some(crate::process_provider_runtime::ServingWorkerRoot::StoreViewFarm)
             }
             _ => None,
         };
@@ -1386,7 +1396,7 @@ impl ProcessDriver {
             volume_ref: binding.volume_ref().clone(),
             view: binding.view().clone(),
             guest_ref: binding.execution_ref().clone(),
-            storage_path_id,
+            root,
             view_path: view.path().to_owned(),
             access: binding.access(),
             thread_pool_size: settings.thread_pool_size().unwrap_or(1),
@@ -3149,7 +3159,7 @@ mod tests {
     /// - `owner_ref` = the authored `metadata.ownerRef` (`record.owner_ref()`),
     /// - `owner_uid` = the durable owner linkage (`record.resource.owner_uid`):
     ///   the pre-v3 store resolved `metadata.ownerRef` to the owner row's uid
-    ///   (`d2b-resource-store-redb`, `transaction.rs` re-derives exactly that
+    ///   (`@@REDB-D@@`, `transaction.rs` re-derives exactly that
     ///   linkage), so for `Process/acceptance-guest-vmm` it is the
     ///   `Guest/acceptance-guest` row's uid, and
     /// - `target_ref` = `scoped_target_ref`'s owning Guest.
