@@ -32,15 +32,18 @@ pkgs.testers.runNixOSTest {
   # assert the socket and the daemon, then the live public socket. Optional or
   # managed operator infrastructure is intentionally outside this census.
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     start_all()
+    stage("boot")
 
     # 1. Broker socket is created + listening before its service (socket
     #    activation): systemd binds/ACLs the AF_UNIX socket up front.
-    machine.wait_for_unit("d2b-broker.socket", timeout=30)
+    diag_unit("broker-socket", "d2b-broker.socket", 30)
 
     # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-up", "d2bd.service", 180)
     machine.succeed("test \"$(systemctl show -P Type d2bd.service)\" = notify")
     machine.succeed("test \"$(systemctl show -P NotifyAccess d2bd.service)\" = main")
     machine.succeed("test \"$(systemctl show -P KillMode d2bd.service)\" = process")
@@ -49,12 +52,14 @@ pkgs.testers.runNixOSTest {
     )
 
     # 3. The live public wire surface: d2bd binds its AF_UNIX socket.
+    stage("public-socket")
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.succeed("test -S /run/d2b/public.sock")
+    stage("restart-wire-surface")
     machine.succeed(
         "systemctl restart d2bd.service"
     )
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-restarted", "d2bd.service", 180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
 
@@ -77,8 +82,9 @@ pkgs.testers.runNixOSTest {
         "echo \"$pid\" > \"/sys/fs/cgroup$cg/cgroup.procs\"; "
         "echo \"$pid\""
     ).strip()
+    stage("restart-cgroup-survival")
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-restarted-again", "d2bd.service", 180)
     machine.succeed("test -S /run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     machine.succeed(f"test -d /proc/{survivor_pid}")
@@ -88,6 +94,7 @@ pkgs.testers.runNixOSTest {
     #    live system only with the framework-owned acceptance declaration. This
     #    avoids treating unrelated optional or managed infrastructure as a
     #    framework violation while still failing if a declared unit is absent.
+    stage("acceptance-census")
     declared = set(
         machine.succeed("cat /etc/d2b/daemon-acceptance-units").split()
     )

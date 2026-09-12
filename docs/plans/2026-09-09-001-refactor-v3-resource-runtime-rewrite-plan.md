@@ -196,7 +196,7 @@ flowchart TB
 #### Deferred to Follow-Up Work
 
 - Watch-hub slow-subscriber eviction tuning beyond the bounded-ring-buffer minimum; CreditPool backpressure parity is a Phase B polish item.
-- Copying the handoff specification into the repo for self-containment (source stays in `~/Downloads` for now).
+- Copying the handoff specification into the repo for self-containment (source stays in `~/Downloads` for now). **Done 2026-09-11: copied to `docs/plans/2026-09-09-000-v3-ractor-resource-runtime-rewrite-spec.md` (2171 lines).**
 
 ### Dependencies / Assumptions
 
@@ -222,7 +222,7 @@ This plan owns the resource-runtime rewrite end to end. The broader campaign aro
 
 ### Sources / Research
 
-- Handoff specification (outside the repo): `~/Downloads/d2b-v3-ractor-resource-runtime-rewrite(1).md` - 2171 lines, 40 sections; §38 rules, §36 tests, §37 done-checklist are the normative core. Consider copying it into the repo or plans directory so the plan is self-contained on other machines.
+- Handoff specification (outside the repo): `~/Downloads/d2b-v3-ractor-resource-runtime-rewrite(1).md` - 2171 lines, 40 sections; §38 rules, §36 tests, §37 done-checklist are the normative core. Consider copying it into the repo or plans directory so the plan is self-contained on other machines. **Copied 2026-09-11 to `docs/plans/2026-09-09-000-v3-ractor-resource-runtime-rewrite-spec.md` (2171 lines), which is the in-repo authority copy.**
 - Claim verification against the current tree (2026-09-09), corrections included:
   - `ResourceReconciler` lives at `packages/d2b-controller-toolkit/src/runner.rs:442` with ~7 production implementors across `d2b-core-controller` and `d2bd` (`process_resource_runtime.rs`, `resource_runtime.rs`, `activation_resource_runtime.rs`, `semantic_binding_resource_runtime.rs`, `credential_resource_runtime.rs`, `volume_provider_runtime.rs`).
   - `Runner`/`ControllerSource`/`PendingQueue` all live in `packages/d2b-controller-toolkit/src` (`runner.rs:770`, `runner.rs:267`, `queue.rs:219`).
@@ -390,6 +390,20 @@ Unit index:
 | U14 | Delete old store and controller machinery | store crates, `d2b-controller-toolkit`, workspace manifests | U12 |
 | U15 | Invariant test completion | new runtime tests, host fixtures | U14 |
 | U16 | PR merge and post-merge host-integration | git/`gh` PR against v3, `make test-host-integration` | U15 |
+| U17 | Process-controller ownership of every process launch | `packages/d2bd/src/**` launch sites, `packages/d2b-provider-supervisor` | U12, U14 (sweep) |
+
+### Adjusted sequencing and method (2026-09-11, user-directed)
+
+Keeps the unit order, and fixes the speed levers the Phase B lane surfaced (each of them cost hours of wall time during the 2026-09-10/11 repair chain):
+
+1. **Lane green, then commit immediately** - and commit at every subsequent green boundary. A committed green baseline is the bisect target for U14's deletions; deletions are only cheap once it exists.
+2. **Read-path fence (GitHub #507) before U14's deletions**: legacy-store access to a converted type must fail loudly, so a missing manager-first bridge is an immediate, named error rather than a stale read discovered by a VM run 20 minutes later.
+3. **Diagnostics slice (GitHub #513, excluding the `d2b debug` command) before the remaining units**: fixture failure dumps reach the lane log, per-stage row prints, stage naming on timeout. This is what makes the next blockers cheap; without it every one costs a lane run plus log archaeology, because fixtures currently discard their own row dumps.
+4. **Unit order:** U12 remainder (EphemeralProcess conversion plus the two surviving reconcilers) -> U14 -> U17 launcher sweep -> U15 -> U16.
+5. **GitHub #509 (canonical launch identity) lands before the U17 sweep**, so the launcher conversions do not rediscover the target-ref / owner-uid / vm-role fences one VM run at a time.
+6. **Concurrency discipline:** one VM or Bazel gate at a time (the VM recipe is fragile under a concurrent Bazel client); parallel work is cargo-only or docs; single writer for `packages/d2bd/src/{composition.rs,resource_runtime.rs,resource_plane_v3.rs}`; deletions touching hot files are prepared off-tree, never landed mid-lane.
+
+Out-of-scope follow-ups raised by this lane, tracked as GitHub issues: #505 (VolumeBinding authorship), #506 (provider-specified classes/shape), #508-#513 and #515 (streamlining backlog). #514 was closed by the user without action.
 
 ### U1. Runtime crate scaffold and supply-chain gate
 
@@ -748,6 +762,39 @@ Unit index:
   final Volume removal checked); `D2B_VM_CHECK=resource-operator-activation
   make test-host-integration` -> green (30-step script finished in
   60.44s).
+
+**Status (2026-09-11): midpoint fixtures green; the preflight advanced through
+the Guest conversion to its last stage.** The two Phase A midpoint fixtures
+remain the green proof. `D2B_VM_CHECK=resource-operator-activation
+make test-host-integration` passes on every run this session (PASS 79s in
+the Guest-conversion run, PASS 10s in the endpoint/publication run), and
+`D2B_VM_CHECK=virtiofsd-volume-runtime` stays green per the third-pass
+record above; the 2026-09-10 full-lane sweep still resolved the same
+output path
+(`/nix/store/wryb0s4yz6i8c2rg4claf5qf0q7c8ay6-vm-test-run-d2b-virtiofsd-volume-runtime`),
+but the check was not re-executed after the Guest conversion, so its
+current-tree result rests on that record.
+
+`runtime-cloud-hypervisor-guest-preflight`, the documented expected-red
+check, has moved past the Guest: both post-repair lane runs read
+Guest `acceptance-guest` `Ready` with
+`runtimeReady`/`bootstrapReady`/`activeProcessCount == 1`, the VMM `Process`
+`Ready`, and both Guest-owned `Endpoint` rows (`ch-api`, `guest-control`)
+`Ready` within 0.1s. Its remaining failure is one stage later, the
+`store-view-acceptance-guest` Volume: the layout entry `sync.lock` comes
+back `entry-quarantined` (layout `Degraded`, ro-store attachment
+`Pending`), so the fixture's immediate store-view assertion fails and the
+Volume never publishes `Ready`. That is the open blocker at bookkeeping
+time - a layout adoption/posture question, not the endpoint path - so the
+preflight result is **open**, not green.
+
+The lane as a whole stays **not green** (`make test-host-integration`
+red). The other seven checks were last dispositioned in the 2026-09-10
+lane notes (seven green per-check after serial re-runs); the two harness
+defects recorded there were repaired on 2026-09-10 (QEMU state-disk
+`snapshot=on`; `/homeless-shelter` removed) but the lane has not been
+re-run as a single pass since, and the single `nix build` still aborts
+every sibling on the first failure.
 
 ### R35 consolidated review (2026-09-10)
 
@@ -1408,6 +1455,124 @@ Recorded limitations (the lane's gaps, 2026-09-10):
    `#[allow(dead_code)]` (shared runner plumbing in a merge-owner file) -
    delete it with U6/U9 if they never build it.
 
+**Status (2026-09-11): waves 3-6 landed - core family, U9 interaction rows,
+system-core, Guest - plus the finalize/ownership ordering contract and the
+endpoint/publication repairs.** Each wave below carries this session's
+evidence; the shared merge surface is unchanged (merge owner applies the
+wiring hunks, family files land as delivered).
+
+- **Core controller family (wave 3).** New `packages/d2bd/src/core_driver.rs`
+  (1438 lines; `CORE_RESOURCE_TYPES` = the nine fixed types `Zone`,
+  `ZoneLink`, `Provider`, `Role`, `RoleBinding`, `Quota`,
+  `EmergencyPolicy`, `ResourceExport`, `ResourceImport`; 16 driver tests).
+  `CoreResourceReconciler`, `CORE_RESOURCE_CONTROLLER_REGISTRATIONS`, the
+  descriptor surface and the reconciler block are deleted from
+  `d2b-core-controller`, whose own suites stay green (295 lib +
+  integration/doc). Evidence: `cargo test -p d2bd --lib
+  'core_driver::tests::'` -> 16 passed, 0 failed; `cargo test -p
+  d2b-core-controller` green; the `make check` run of that pass read
+  `Executed 9 out of 468 tests: 465 tests pass and 3 fail locally`, the
+  three failures owned by then-in-flight sibling lanes (manager ordering,
+  rebind fixture, generated doc) and cleared by the runs below.
+- **U9 interaction/shell rows (wave 4).** New
+  `packages/d2bd/src/interaction_driver.rs` (1800 lines;
+  `INTERACTION_TYPES` = the six display/audio/shell rows; 11 tests) and
+  `resource_runtime/interaction_effects.rs` (792 lines);
+  `resource_runtime/interaction_provider_runtime.rs` is deleted and the
+  U9 arms are stripped from `shared_provider_runtime.rs` (which held only
+  the Guest leg afterwards, until wave 6 removed the file). Lane commit
+  `9320d1e6a`. Evidence: `cargo check -p d2bd --tests --features
+  test-support` clean; `cargo test -p d2bd --lib` -> 544 passed / 0 failed
+  / 5 ignored with the merge-owner wiring applied. `make check` was not
+  run by that lane; the whole-tree runs below cover it.
+- **System-core Host/User (wave 5).** New
+  `packages/d2bd/src/system_core_driver.rs` (1218 lines, 13 tests); the
+  typed Host/User handler, its probe/discovery surface, its fence resolver
+  and the Host/User runner block are deleted, and the shared Core-runner
+  plumbing stays for the legs unconverted at that time. Evidence:
+  `cargo check -p d2bd --lib/--tests` clean under `-D warnings` with the
+  byte-exact wiring hunk (sha256 `86c924a899fab6de...`) applied;
+  `cargo test -p d2bd --lib` -> 550 passed / 0 failed / 5 ignored.
+- **Shared-provider family (wave 2, re-verified).** No new conversion this
+  session; the family gained its `finalize` step in the sweep below and
+  its recorded green stands (535 lib tests, `make check` 468/468). The
+  wave-2 limitation 7 is now closed: `PreparedCoreRunner::Provider` no
+  longer exists in the tree.
+- **Guest conversion (wave 6).** New `packages/d2bd/src/guest_driver.rs`
+  (one `Guest` driver over the four runtime Provider rows:
+  cloud-hypervisor, qemu-media, azure container apps, azure virtual
+  machine; 15 tests) and `packages/d2bd/src/guest_effects.rs`
+  (`ProductionGuestDriverEffects` - CH real path re-based onto the
+  manager, framework QEMU/ACA/AzureVM adapters moved verbatim, 3 tests).
+  `Guest` joins `V3_CONVERTED_RESOURCE_TYPES` (31 -> 32). The CH
+  controller's layered status now reaches the wire through the in-memory
+  projection channel (`ResourceContext::set_status_projection` /
+  `ResourceView.status_projection`, R11) instead of a durable Guest row.
+  Deleted: `resource_runtime/guest_provider_runtime.rs` and
+  `resource_runtime/shared_provider_runtime.rs` (whole files);
+  `binding_child_resource_runtime.rs` 880 -> 250 lines (its two live
+  readers kept); `resource_runtime.rs` loses the U6 runner machinery.
+  Evidence: `cargo test -p d2bd --features test-support --lib` -> 612
+  passed / 0 failed / 5 ignored (the 15 `guest_driver` + 3 `guest_effects`
+  tests plus the CH child-set regression); `make check` -> `Executed 11
+  out of 468 tests: 468 tests pass.` after regenerating
+  `docs/reference/daemon-api.md`; lane: `resource-operator-activation`
+  PASS 79s, `runtime-cloud-hypervisor-guest-preflight` FAIL 432s at the
+  CH API-socket wait (the state before the endpoint/publication repairs
+  below).
+- **Finalize/ownership ordering contract.** `ResourceDriver::finalize`
+  (defaulted no-op) now runs before delete on the erased boundary
+  (`driver.rs:162-166`), and `ResourceContext::finalize_owned_resources()`
+  returns `ChildrenDraining` while any owned child row is live
+  (`context.rs:617-621`). All ten converted drivers call it before their
+  own teardown, so a parent's provider stage cannot run ahead of its
+  children while the manager holds the parent row until the last child
+  retires. Evidence: the ten `finalize_finalizes_...` tests ->
+  `10 passed, 0 failed (594 filtered)`; manager tests
+  `delete_pass_runs_finalize_before_delete` and
+  `finalize_holds_each_parent_until_its_owned_children_retire`, plus the
+  ordering repairs `parent_row_retires_after_its_owned_children` and
+  `resumed_delete_holds_reloaded_parent_until_children_retire`;
+  `cargo test -p d2b-resource-runtime manager::tests::` -> 18 passed;
+  `cargo test -p d2b-resource-runtime --lib` -> 90 passed; a whole-tree
+  run read `exit 0` with `Executed 6 out of 468 tests: 468 tests pass.`
+- **Endpoint/publication repairs.** The Endpoint driver now admits the
+  provider's two fixed control shapes per purpose (`ch-api` on the VMM
+  Process, `guest-control` on the Guest - the pre-fix admission set took
+  only the latter, so `ch-api` failed `validate` terminally and the Guest
+  stuck `Pending`); the endpoint-publication gate defers a child's
+  retryable `Failed` until its own requeue converges (a terminal failure
+  still refuses); the `guest-session-endpoint` read is manager-authority
+  for converted rows (absent is `Ok(None)`, never a store
+  `ResourceNotFound`). In the same chain, the manager-row render path
+  (`d2b-resource-api/src/manager_backend.rs::render_envelope`) now emits
+  the complete strict envelope - `metadata.managedBy`,
+  `configurationGeneration`, a complete top-level status, the `Deleted`
+  phase vocabulary, and a digest resealed after any status/deletion stamp
+  - which had made every spec-shaped manager row undecodable to strict
+  readers. Evidence: `cargo test -p d2bd --lib` -> 621 passed;
+  `cargo test -p d2b-resource-api --lib` -> 117 lib + 8 doc;
+  `make check` -> exit 0 (468 test targets;
+  `//packages/d2bd:d2bd_lib_test` recompiled and PASSED in that
+  invocation); lane after the repairs: Guest `Ready`, VMM `Ready` and
+  both Endpoints `Ready` in <= 0.1s, `resource-operator-activation` PASS,
+  `runtime-cloud-hypervisor-guest-preflight` FAIL only at the store-view
+  Volume (see U11).
+
+**Still open in U12.** `EphemeralProcess` remains on the old plane
+(`ProcessResourceReconciler`, `process_resource_runtime.rs:1964`, hosted
+by the guest-local runner spawned from `composition.rs:4620` / `:4726`),
+so the unit's exit criterion - zero non-test `ResourceReconciler`
+implementors outside the delete list - is **unmet**. The only other
+implementors in the tree are test/bench-only (controller-toolkit
+tests/benches, `d2b-resource-api/src/registered.rs` test module), which
+this unit's charter excludes. The wave-2 Network limitation (unconverted
+`Guest` child denied by `PlaneMutationAdmission`) is lifted by the Guest
+conversion; production convergence was not re-run. The recorded
+limitations from the earlier waves otherwise stand, and U14's delete set
+is still blocked on the `EphemeralProcess` path (plus the store-DTO and
+authority moves its scout recorded), so U15/U16 remain downstream.
+
 ### U13. Guest targeting through the target layer
 
 - **Goal:** Explicit Host/Guest target directory; Host-zone resources realize in Guests through the ComponentSession target-control path; session naming stops encoding zone-link semantics for generic traffic.
@@ -1422,6 +1587,176 @@ Recorded limitations (the lane's gaps, 2026-09-10):
   - ZoneLink deletion does not delete unrelated resources targeting the same guest.
   - Stale session generation cannot inherit realization authority.
 - **Verification:** `make check`; unit tests for directory routing and session binding.
+
+**Status (2026-09-11): the target layer is applied in the tree; no converted
+type realizes its own effects through it in production yet.** (The session
+layer itself is now driven from production - see the production-wiring status
+at the end of this section.) `packages/d2b-resource-runtime/src/target.rs`
+(`TargetDirectory`, `ResolvedTarget`, `TargetBinding`, assignment +
+session-generation binding, disconnect/reconnect semantics) and
+`packages/d2b-resource-runtime/src/guest_target.rs` (the frozen
+target-control protocol, codec and host client) live in the crate. The
+plane registers the directory and the Host target with the
+`DeclaredExecutionRef` resolver (`resource_plane_v3.rs:1613-1828`), and
+`ResourcePlaneV3::bind_guest_target` / `unbind_guest_target`
+(`resource_plane_v3.rs:1898` / `:1922`) bind and release a Guest
+assignment against the live ComponentSession generation. The session
+purpose rename landed: `GUEST_COMPONENT_SESSION_PURPOSE = "component-session"`
+(`d2bd-runtime/src/guest_mode.rs:53`) replaces the generic `zone-link`
+literal, with ZoneLink's own purpose, roles and carriage unchanged. The
+guest half is served: `packages/d2bd/src/guest_target_service.rs`
+registers `d2b.target-control.v1.TargetControl` on the same authenticated
+session as the guest-local Resource API, binds the daemon's live
+generation at accept and refuses a non-live generation with no effect;
+`composition.rs:4493-4510` composes it. Evidence in the tree and lanes:
+`changelog.d/u13-target-layer.md` + `changelog.d/u13-guest-side.md`;
+`target.rs` 14 tests and `guest_target.rs` 11 tests (both counted in the
+tree); the crate ran 84 passed / 0 failed at the core merge, 88 at the
+guest-side merge, and 90 after the later U12 waves landed;
+`guest_target_service` 13 tests ->
+`cargo test -p d2bd --lib --features test-support guest_target_service`
+-> 13 passed; `cargo check -p d2bd --tests --features test-support`
+clean; the lane that packaged the protocol prerequisite ran `make check`
+green (468/468).
+
+**Status (2026-09-11, production wiring).** The manager-served Guest path now
+establishes the ComponentSession itself, and the acceptance lane can see it:
+
+- The converted Guest effect path (`guest_effects.rs`, the Cloud Hypervisor
+  arm) drives `composition::ensure_guest_target_session` before the
+  controller session runs: the committed Guest plus its guest-control
+  Endpoint fence the resolution, the session cache keeps it idempotent, and
+  the live generation is registered through
+  `ResourcePlaneV3::bind_guest_target` -> `TargetDirectory::connect_guest`,
+  so `connect_guest` is reachable from production rather than only from the
+  legacy lifecycle helpers. Every assignment the directory holds for that
+  Guest is then re-adopted (`TargetBinding::adopt`) - present target-local
+  realizations re-bind to the live generation, missing ones stay for their
+  owning actor to realize again (F5/R21/R28).
+- Every accepted session publishes
+  `Guest ComponentSession Resource API server starting` at `info` with its
+  live `generation` field (`publish_component_session_started`,
+  `composition.rs`), on the first acceptance after boot exactly like a
+  replacement. `main.rs` initializes `info`, so a `debug`-level line never
+  reaches the host journal the lane greps; the generation published is the
+  accepted route's own generation - the same value the Guest binds as its
+  target-control generation and the parent records in the descriptor.
+- KTD6's guest-mount gate is wired to real evidence:
+  `BindingDriverEffects::guest_mount_ready` receives the row key and
+  `ProductionBindingDriverEffects` answers through
+  `binding_guest_mount_ready` -> `TargetDirectory` -> the live session's
+  `GuestTargetControl`. The evidence is the target-local realization the
+  Guest reports (`TargetObservation::Ready`); no assignment, no live
+  session, no recorded realization, or a stale-generation handle all answer
+  `false`, so a drain never force-clears a serve the target cannot confirm
+  and a steady state never claims a mount nobody realized.
+- **The production Guest-effect map stays intentionally empty, and the gap
+  is now named** (`guest_target_service::production_guest_target_effects`,
+  consumed by `serve_guest`): registering a type is what makes the Guest
+  record and serve realize frames, and no converted type has Guest-side
+  effect code in this tree. A verify-only or placeholder entry would have
+  the Guest record a realization it cannot apply, which is worse than the
+  honest refusal; guest-side realization for converted types (the Guest half
+  of those drivers, including the mutation-seal path a Guest-local commit
+  would need) is follow-on work to U13, not on the Cloud Hypervisor
+  acceptance path. `run_guest_process_reconciliation`, the seed batch, and
+  the legacy paths are untouched.
+
+Tests in the tree: `cargo test -p d2bd --lib --features test-support
+guest_target_session_tests` -> 2 passed (the establishment path against a
+real `TargetDirectory` + in-process `GuestTargetRuntime`: assignment
+survives a disconnect, a stale handle cannot observe on the new generation,
+adoption re-binds it, and the mount gate reads the Guest's own report; plus
+the journal-level publication of the session generation, captured with an
+`info` filter so a `debug` regression fails the test).
+
+Acceptance-lane result (2026-09-11, `D2B_VM_CHECK="resource-operator-activation
+runtime-cloud-hypervisor-guest-preflight" make test-host-integration`):
+`resource-operator-activation` PASS 11s; `runtime-cloud-hypervisor-guest-preflight`
+FAIL 210s at `stage=guest-drained` (fixed in the same change set; the green
+re-run and its stage timings are recorded below). The pre-restart capture,
+restart adoption and the session-generation advance all pass now:
+
+- `d2bd-guest[...]: INFO d2bd: Guest ComponentSession Resource API server
+  starting generation=1` before the restart and `generation=2` after it, with
+  `component-session/guest.json` unchanged across the restart (the fixture
+  compares it byte for byte) and the accepted generation strictly newer;
+- `d2bd[...] INFO Actor{...}: Guest target directory bound to the live session
+  generation guest=Guest/acceptance-guest session_generation=2 assignments=2`
+  (the production establishment path, re-bound on the reconnect);
+- the fixture's `session-generation-advance` jq passes: the Guest row is
+  `phase: Ready`, `observedGeneration == metadata.generation`,
+  `status.resource.runtimeReady == true`, `bootstrapReady == true`,
+  `activeProcessCount == 1`, and the `cloud-hypervisor` process is the same
+  pid and start time as before the restart (the VMM row is Ready at the
+  original pid).
+
+Two root causes on this path are fixed: `retire-before-launch` now requires a
+*proven* identity change (an identity input the pass cannot resolve is unknown,
+not changed), so the daemon adopts its live VMM instead of retiring and
+relaunching it; and the Guest incarnation fence carries the *enrolled* session
+identity generation rather than the live accepted one (which advances on every
+reconnect by design), so a reconnected Guest reports `Ready` instead of
+`Pending`/`runtimeReady=false` forever.
+
+**Guest teardown is fixed (2026-09-11).** `stage=guest-teardown` deleted the
+Guest row, `guest-draining` passed, and `stage=guest-drained` timed out after
+60s: the row stayed `phase: Failed` with
+`status.resource: {"driverFailure": {"operation": "Delete", "retryable": true}}`
+while the journal repeated (about every 0.5s; first line at t=121.0s)
+`WARN Actor{id="0.7"}: d2bd::resource_runtime: Cloud Hypervisor Guest controller
+reconcile refused zone=work guest=acceptance-guest
+error=cloud-hypervisor-resource-authentication`, immediately preceded by
+`closing the authenticated Guest session during deletion failed ...
+stage="deletion-close-session" error=cloud-hypervisor-resource-authentication`.
+Two conflations kept `FinalizationStep::CloseSession` from ever running against
+the live session the deletion path is explicitly meant to *reuse*:
+
+- the resolver read the closed phase vocabulary as lifecycle truth. Once the
+  deleting mark was committed the manager rendered the row's phase as `Deleted`
+  (the `Deleting` tombstone projection in `manager_backend.rs`), and
+  `resolve_committed_guest_session_target` (`composition.rs`) rejected
+  `ResourcePhase::Deleted`/`Failed`, so the delete pass's session target was
+  `None` and `session_key` (`resource_runtime.rs`) answered `Authentication`.
+  The row's own deletion mark is the deleting fact (the same fact the CH
+  provider already reads: `snapshot_from_stored`'s `deleting`, the daemon's
+  `deleting_or_gone`), so the admission rule now admits a row that carries it -
+  the Guest, and the guest-control Endpoint the cascade marked with it. A
+  terminal row that is *not* deleting is refused exactly as before.
+- the deletion steps required the committed guest-control Endpoint row to still
+  exist. That Endpoint is the Guest's owned child: the manager's deletion
+  cascade (F3) marks and retires it on its own schedule, which precedes the
+  Guest's finalization steps. `DrainGuestLocal` and `CloseSession` now resolve
+  the live session by Guest identity - the same identity-scoped lookup
+  `ObserveFinalization` already uses to plan those steps - while the Guest row
+  and its committed uid stay the fence; the session keys actually removed are
+  recorded as closed, unchanged.
+
+Green re-run of the same lane (`D2B_VM_CHECK="resource-operator-activation
+runtime-cloud-hypervisor-guest-preflight" make test-host-integration`):
+both vmChecks PASS (`resource-operator-activation` 78s;
+`runtime-cloud-hypervisor-guest-preflight` 407s). Stage timings in the
+fixture's own clock: `guest-teardown` t=151.6s (delete accepted, +0.24s),
+`guest-draining` t=151.8s (+0.13s), `guest-drained` t=152.0s (+4.63s - the
+Guest row is gone and the VMM child retires), `guest-vmm-process-drained`
+t=156.6s, the vsock socket check passes (+0.01s), `volume-teardown` t=156.8s,
+`volume-binding-draining` t=157.0s (+0.07s), `volume-binding-drained` t=157.0s
+(+1.36s). `guest-draining` reads the row's `metadata.deletionRequestedAt`
+before `guest-drained` proves the row absent, and the volume stages prove the
+binding drains its children first - the ordering evidence the fixture prints.
+Regression proof: `guest_session_target_admission_tests` in `composition.rs`
+fails against the phase-only rule ("a deleting row in phase Deleted must
+resolve its session target") and passes against the deletion-mark rule; the
+non-deleting refusal and the Zone fence are pinned unchanged.
+
+**Also still open in U13 (unchanged by the wiring above).** The host driver
+call sites for target-local *realization* (`TargetBinding::realize/delete`
+from converted drivers) remain unwired, because that is exactly the
+guest-side effect code the empty map above blocks; `TargetDirectory::adopt`
+and `observe` are driven from the session-establishment path and the KTD6
+gate. The guest-local Process/EphemeralProcess path stays under
+`run_guest_process_reconciliation` deliberately
+(`changelog.d/u13-guest-side.md` records it).
 
 ### U14. Delete the old machinery
 
@@ -1471,6 +1806,46 @@ Recorded limitations (the lane's gaps, 2026-09-10):
   - the owning controller's delete tears the process down through the Process resource (no orphaned children).
 - **Verification:** `make check`; `make test-host-integration` lane green; grep gate clean; no fixture assertion weakened to get there.
 
+**Status (2026-09-11): in progress - the launch path for
+provider-controller-committed Processes landed; the GPU/TPM launcher sweep
+and the grep gate remain.** The launch-path slice landed in the tree:
+`PlaneChildMutations` (`resource_runtime/plane_controller_bridge.rs:257`)
+routes converted child types through the manager (`child_mutation_route`),
+`CloudHypervisorResourceSession` commits its converted children (VMM
+Process, both Endpoints, setup Volume) through owner-scoped create-absent
+manager ensures and exact-fenced spec updates, and the daemon's converted
+reads (`committed_resource_optional` / `committed_resource_stored`) are
+manager-first. Evidence: `cargo check -p d2bd --tests --features
+test-support` clean; `cargo test -p d2bd --lib plane_controller_bridge`
+-> 6 passed; the controller-committed Process regression
+`controller_committed_process_child_reaches_the_process_driver`
+(`resource_plane_v3.rs:2931`) passes and proves the child row keeps its
+authored owner reference and reaches the Process driver's launch effect;
+`cargo test -p d2bd --lib` -> 606 passed / 0 failed / 5 ignored (+4 tests
+for the slice). That slice did not run `make check` or the VM lane itself;
+the whole-tree runs recorded under U11/U12 cover the tree it landed on.
+
+**Remaining, and why the grep gate is not clean.** Direct broker
+`SpawnRunner` sites outside the sanctioned Process funnel still live in
+converted launchers: the TPM effect spawns swtpm/swtpm-flush
+(`tpm_effect_port.rs:184-199`, `RunnerRole::Swtpm` / `SwtpmFlush`); the
+GPU effect spawns its worker (`shared_provider_effects.rs:1281-1310`,
+`launch_args: None`, `RunnerRole::Gpu` / `Video`); the VM bring-up
+launcher (`composition.rs:17098-17179`, `VmStartRunner::spawn_runner`)
+still falls through to a raw broker spawn for the roles `supports_node`
+does not cover (guest-owned and durable wayland nodes), while
+provider-supported nodes already route to
+`ProductionProcessProviders::launch_node`; the per-env usbipd spawner
+(`composition.rs:5479-5492`) is currently dead
+(`run_usbipd_perenv_autostart` has no callers) but is still a spawn site;
+and the USBIP attach child port is a fail-closed stub where the attach
+Process row should be (`shared_provider_effects.rs:1085-1124`). The
+sanctioned funnel stays: the Process family reaches the broker through
+`BrokerProcessBackend::request_with_fds` behind `impl
+ProcessLaunchEffectPort for ProviderSupervisor`, and the display/audio/
+shell composition's durable Process path (`interaction_composition.rs`)
+already launches through Process rows.
+
 ---
 
 ## Verification Contract
@@ -1493,7 +1868,10 @@ included). `D2B_VM_CHECK=resource-operator-activation make
 test-host-integration` green on the Process slice. The full lane is not yet
 green as a lane: the Volume fixture does not exist and
 `runtime-cloud-hypervisor-guest-preflight` is expected red under the current
-controller-Process ownership split.
+controller-Process ownership split. **Update (2026-09-11): the Volume
+fixture exists and passes (`virtiofsd-volume-runtime`), and the preflight
+has moved past the Guest to the store-view Volume stage - see the U11
+status above.**
 
 ---
 
@@ -1504,6 +1882,62 @@ controller-Process ownership split.
 - Per-unit: unit's files build under Cargo and Bazel, unit tests green, `changelog.d` entry present, no abandoned-attempt code left in the diff (experimental branches and dead ends are removed before merge).
 - Cleanup: no commented-out old-runtime code, no unused imports from deleted crates, no orphaned BUILD.bazel targets; the handoff specification is copied into the repo (e.g. `docs/` or the plan's directory) so the authority document is self-contained.
 - Ship tail: the PR with the full change set is merged to v3, and host-integration plus `make check` are green on the merged v3 (R38, U16).
+
+### Definition of Done audit (2026-09-11)
+
+The five DoD items against the current tree; each verdict cites the tree or
+this session's verification runs.
+
+- **Global: open.** `make check` is green on the current tree - the last
+  two full runs both exited 0 (`Executed 47 out of 468 tests: 468 tests
+  pass.` in the store-view posture pass; `INFO: Found 468 test targets` /
+  `Build completed successfully, 56 total actions` with
+  `//packages/d2bd:d2bd_lib_test` recompiled and PASSED in the
+  endpoint/publication pass). R11's zero-persistent-writes property is
+  pinned by test
+  (`manager::tests::status_transitions_publish_and_write_zero_store_rows`,
+  `manager_backend::tests::api_status_updates_have_no_persistent_write_path`).
+  `make test-host-integration` is **not** green: the lane is red and
+  `runtime-cloud-hypervisor-guest-preflight` is one stage short (the
+  store-view Volume; see U11). R29 does not hold yet - two execution
+  models coexist (U14 not landed; `d2b-resource-store`, `-redb` and the
+  controller-toolkit runner machinery are still in the Bazel graph). No
+  claim of R1-R38 completeness.
+- **Phase A exit: satisfied.** AE7's two fixtures pass on a real host: the
+  Process slice (`resource-operator-activation`, green on every run this
+  session) and the Volume-with-owned-children slice
+  (`virtiofsd-volume-runtime`, every assertion per the 2026-09-10 third
+  pass, output path unchanged). The consolidated review to signoff
+  completed 2026-09-10 with its findings applied and pinned, and
+  `make check` was green at the boundary (468/468).
+- **Per-unit: partially satisfied.** Green scoped tests are recorded for
+  every landed unit. Changelog coverage had gaps: the three undeclared U12
+  waves and the Guest conversion / finalize-ordering / publication-repair
+  work had no fragment of their own; this bookkeeping pass adds
+  `changelog.d/2026-09-11-u12-core-family.md`,
+  `2026-09-11-u12-interaction-family.md`,
+  `2026-09-11-u12-system-core.md`,
+  `2026-09-11-u12-guest-family.md`,
+  `2026-09-11-manager-finalize-ordering.md` and
+  `2026-09-11-manager-row-reads-and-publication.md` (the endpoint slice
+  already carries `2026-09-11-ch-api-endpoint-realization.md`). U17 is in
+  flight and still needs its own fragment at landing.
+  Abandoned-attempt code: the Guest/lane sweeps removed their diagnostics
+  (byte-identical revert recorded for `volume_driver.rs`; the `diag:` grep
+  is empty), but the applied-then-superseded `handoff/u13-target-layer/`
+  patch directory (whose README says "delete after applying") and three
+  untracked agent-config directories (`.clinerules/`, `.cursor/`,
+  `.windsurf/`) still sit in the tree.
+- **Cleanup: spec copy satisfied; the rest open.** The handoff
+  specification is now in-repo at
+  `docs/plans/2026-09-09-000-v3-ractor-resource-runtime-rewrite-spec.md`
+  (2171 lines, matching the source document's length). Unused imports
+  from deleted crates and orphaned Bazel targets belong to U14's cutover
+  and cannot be assessed before it lands; the old store crates and
+  controller-toolkit are still live entries in `bazel/checks/BUILD.bazel`.
+- **Ship tail: open.** No PR exists and the branch is unpushed (U16
+  reconnaissance); U14 and U15 have not landed; U17 is in flight; the
+  host-integration lane is red (R38, U16).
 
 ---
 

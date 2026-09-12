@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
     execution_policy::BoundedToken,
-    volume_binding::{VolumeBindingReadinessFence, VolumeBindingSpec},
+    resource_status::StatusCode,
+    volume_binding::{
+        VolumeBindingReadinessFence, VolumeBindingSpec, VolumeBindingStatusResource,
+    },
 };
 
 use crate::error::VirtiofsBindingError;
@@ -213,6 +216,35 @@ impl StoredBinding {
             uid: self.uid.clone(),
             generation: self.generation,
             revision: self.revision,
+        }
+    }
+
+    /// The fenced public status projection for one observation of this
+    /// binding (KTD3).
+    ///
+    /// The projection is the controller's only public output, and its fence
+    /// is derived from this binding's own identity, never from a caller: the
+    /// UID pins reassignment, the generation pins spec changes, and the
+    /// revision names the row revision the evidence was observed at. The
+    /// manager plane carries no Zone revision and maps the row generation
+    /// onto the wire revision (KTD8), so the caller passes that same row
+    /// revision in [`StoredBinding::new`] and the projection's revision is
+    /// exactly the revision of the row it describes. Currency stays a
+    /// read-side decision ([`VolumeBindingStatusResource::readiness_is_current`]):
+    /// a projection authored under any other identity, or ahead of the
+    /// stored revision, is never current.
+    pub fn status_projection(
+        &self,
+        ready: bool,
+        reason: Option<VirtiofsBindingError>,
+    ) -> VolumeBindingStatusResource {
+        VolumeBindingStatusResource {
+            ready,
+            fence: self.fence(),
+            reason: reason.map(|reason| {
+                StatusCode::parse(reason.code())
+                    .expect("frozen binding error codes are valid status codes")
+            }),
         }
     }
 

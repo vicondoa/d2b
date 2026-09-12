@@ -285,12 +285,25 @@ impl ResourceActorState {
     /// message carries the row generation this actor holds, so a status that
     /// crosses a spec commit is never recorded as state of the newer row.
     fn transition(&mut self, status: ResourceStatus) {
+        self.transition_published(status, None);
+    }
+
+    /// [`Self::transition`] with the pass's wire-visible `status.resource`
+    /// projection attached (R11: in-memory only, dropped with the next
+    /// status). The projection is `None` for transitions no driver pass
+    /// produced.
+    fn transition_published(
+        &mut self,
+        status: ResourceStatus,
+        projection: Option<serde_json::Value>,
+    ) {
         self.status = status;
         self.evaluate_watchers();
         let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
             key: self.row.key.clone(),
             generation: self.row.generation,
             status,
+            projection,
         });
     }
 
@@ -431,15 +444,24 @@ impl ResourceActorState {
         match self.driver.reconcile(&mut self.ctx).await {
             Ok(crate::driver::ReconcileOutcome::Satisfied) => {
                 self.effect_running = false;
-                self.transition(ResourceStatus::Ready);
+                let projection = self.ctx.take_status_projection();
+                self.transition_published(ResourceStatus::Ready, projection);
             }
             Ok(crate::driver::ReconcileOutcome::InProgress { operation }) => {
                 // Long effect in flight (R5): the mailbox stays responsive;
-                // completion arrives as `EffectCompleted`.
+                // completion arrives as `EffectCompleted`. A projection this
+                // pass computed still publishes: the layer is the driver's
+                // current evidence, not a reward for a concluded pass, and
+                // the status it rides stays the pass's `Reconciling`. Only
+                // invalidation (a spec change or deletion) clears it.
+                if let Some(projection) = self.ctx.take_status_projection() {
+                    self.transition_published(self.status, Some(projection));
+                }
                 self.pending_operation = Some(operation);
             }
             Err(failure) => {
                 self.effect_running = false;
+                let _ = self.ctx.take_status_projection();
                 self.handle_driver_failure(failure);
             }
         }
@@ -729,6 +751,21 @@ pub(crate) mod test_support {
         PanicOnce,
         /// Fail retryably (requeue path, R13).
         FailRetryable,
+        /// First pass spawns a long effect that completes with a retryable
+        /// failure; every later pass is satisfied. Proves the effect-failure
+        /// path backs off through the requeue timer instead of re-entering
+        /// the pass at effect-completion rate.
+        EffectFailsRetryableOnce,
+        /// First pass publishes a status projection and returns
+        /// `InProgress` on a gated long effect; every later pass is
+        /// satisfied. Proves a pass that computed evidence publishes it
+        /// even while its effect is still in flight.
+        InProgressWithProjectionOnce,
+        /// First pass publishes a status projection and is satisfied; every
+        /// later pass publishes none (the driver's evidence went stale).
+        /// Proves a spec change invalidates the old generation's projection
+        /// instead of carrying it onto the new row.
+        ProjectionOnce,
     }
 
     /// One live read a fake driver performed through its context
@@ -870,11 +907,38 @@ pub(crate) mod test_support {
             let mode = *self.shared.reconcile_mode.lock();
             match mode {
                 ReconcileMode::Satisfied => Ok(ReconcileOutcome::Satisfied),
+                ReconcileMode::ProjectionOnce => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) == 1 {
+                        ctx.set_status_projection(serde_json::json!({
+                            "phase": "Ready",
+                            "evidence": "generation-one",
+                        }));
+                    }
+                    Ok(ReconcileOutcome::Satisfied)
+                }
                 ReconcileMode::PanicOnce => {
                     *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
                     panic!("fake reconcile crash");
                 }
                 ReconcileMode::FailRetryable => Err(FakeDriverError),
+                ReconcileMode::EffectFailsRetryableOnce => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
+                        // The requeued pass converges.
+                        *self.shared.reconcile_mode.lock() = ReconcileMode::Satisfied;
+                        return Ok(ReconcileOutcome::Satisfied);
+                    }
+                    let operation = ctx.begin_operation();
+                    let sender = ctx.effect_sender();
+                    tokio::spawn(async move {
+                        let _ = sender.send(EffectCompleted {
+                            operation,
+                            result: EffectResult::Failed(DriverFailure::retryable(
+                                DriverOp::Reconcile,
+                            )),
+                        });
+                    });
+                    Ok(ReconcileOutcome::InProgress { operation })
+                }
                 ReconcileMode::BlockedInline => {
                     self.shared.enter_reconcile();
                     self.shared.wait_gate().await;
@@ -888,6 +952,29 @@ pub(crate) mod test_support {
                         self.shared.exit_reconcile();
                         return Ok(ReconcileOutcome::Satisfied);
                     }
+                    let operation = ctx.begin_operation();
+                    let sender = ctx.effect_sender();
+                    let shared = self.shared.clone();
+                    tokio::spawn(async move {
+                        shared.wait_gate().await;
+                        shared.exit_reconcile();
+                        let _ = sender.send(EffectCompleted {
+                            operation,
+                            result: EffectResult::Completed,
+                        });
+                    });
+                    Ok(ReconcileOutcome::InProgress { operation })
+                }
+                ReconcileMode::InProgressWithProjectionOnce => {
+                    self.shared.enter_reconcile();
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
+                        self.shared.exit_reconcile();
+                        return Ok(ReconcileOutcome::Satisfied);
+                    }
+                    ctx.set_status_projection(serde_json::json!({
+                        "phase": "Pending",
+                        "evidence": "first-pass",
+                    }));
                     let operation = ctx.begin_operation();
                     let sender = ctx.effect_sender();
                     let shared = self.shared.clone();

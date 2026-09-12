@@ -651,18 +651,6 @@ struct ServerState {
     v3_planes:
         std::sync::Arc<parking_lot::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
 }
-#[cfg(test)]
-pub(crate) fn install_test_resource_plane(
-    state: &Arc<ServerState>,
-    plane: resource_runtime::ResourcePlane,
-) -> Arc<resource_runtime::ResourcePlane> {
-    let plane = Arc::new(plane);
-    *state
-        .resource_plane
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::clone(&plane));
-    plane
-}
 
 /// Closed failures while composing one Zone-owned Gateway Guest route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4322,6 +4310,28 @@ fn load_gateway_guest_zone_link_options(
     }))
 }
 
+/// The journal-visible event every accepted Guest ComponentSession publishes.
+///
+/// The host journal is where the Guest console is forwarded, and `d2bd`'s
+/// tracing filter defaults to `info` (`main.rs`), so this is the only level at
+/// which the Guest's accept is observable there. The acceptance lane greps the
+/// exact message and parses the `generation` field out of it.
+pub(crate) const COMPONENT_SESSION_STARTED_EVENT: &str =
+    "Guest ComponentSession Resource API server starting";
+
+/// Publish one accepted ComponentSession's live generation.
+///
+/// Every acceptance - the first one after boot exactly like a replacement
+/// after a parent reconnect - announces the generation carried by the accepted
+/// session's authenticated route. That route generation is the same value the
+/// Guest binds as the live target-control generation
+/// (`GuestTargetService::bind_session`) and the same value the parent records
+/// in the session descriptor, so one line tells the operator which generation
+/// is live on both sides of the boundary.
+pub(crate) fn publish_component_session_started(generation: u64) {
+    tracing::info!(generation, "{COMPONENT_SESSION_STARTED_EVENT}");
+}
+
 /// Start the fixed Guest target agent. Unlike [`serve`], this path never
 /// loads `DaemonConfig`, binds a public operator socket, or opens a Host Zone
 /// store. Any optional credential input belongs to the Guest-local
@@ -4508,7 +4518,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                 guest_target,
             )),
             identity.zone().clone(),
-            std::collections::BTreeMap::new(),
+            crate::guest_target_service::production_guest_target_effects(),
         ),
     );
     tracing::info!("Guest target-control service composed");
@@ -4624,11 +4634,8 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                             identity.zone().clone(),
                         ),
                     );
-                    tracing::debug!(
-                        generation = route.reconnect_generation().get(),
-                        "Guest ComponentSession Resource API server starting",
-                    );
                     let generation = route.reconnect_generation().get();
+                    publish_component_session_started(generation);
                     active = Some((
                         tokio::spawn(async move {
                             let result = ttrpc.serve_ttrpc_services(services).await;
@@ -4729,6 +4736,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     resource_client,
                     identity.zone().clone(),
                 ));
+            publish_component_session_started(route.reconnect_generation().get());
             active = Some((
                 tokio::spawn(async move { ttrpc.serve_ttrpc_services(services).await }),
                 process_task,
@@ -8016,7 +8024,7 @@ fn dispatch_wave6_resource_reconcile(
         .and_then(Value::as_str)
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     if resource_type == "Guest"
-        && !resource_runtime::U6_SHARED_PROVIDER_RUNNERS
+        && !crate::guest_driver::GUEST_REGISTRATIONS
             .iter()
             .any(|registration| registration.provider_ref == provider_ref)
     {
@@ -11710,17 +11718,58 @@ fn cloud_hypervisor_api_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
+/// The producer-derived Endpoint generation one guest-control Endpoint
+/// carries.
+///
+/// The old daemon publication stage stamped `status.resource.endpointGeneration`
+/// from the Endpoint row's own generation; `Endpoint` is a converted type, so
+/// a manager row has no durable status to read and the row's committed
+/// generation is the same value the old stage published.
 fn status_generation(value: &Value) -> Option<ResourceGeneration> {
     value
         .pointer("/status/resource/endpointGeneration")
         .or_else(|| value.pointer("/status/resource/endpoint_generation"))
         .and_then(Value::as_u64)
+        .or_else(|| value.pointer("/metadata/generation").and_then(Value::as_u64))
         .and_then(|generation| ResourceGeneration::new(generation).ok())
+}
+
+/// The committed-identity admission rule for one row a Guest session target
+/// is resolved from.
+///
+/// The row must carry a complete committed identity (Zone, uid, generation)
+/// and must not have published a terminal phase - *unless* `deleting` says it
+/// is in its delete pass. The wire vocabulary has no `Deleting` phase: the
+/// manager projects a deleting row as the `Deleted` tombstone and a retried
+/// delete failure as `Failed` (see `manager_backend::stamp_status`), so the
+/// projected phase cannot tell "deleting" from "gone". The row's own deletion
+/// mark is that fact, and a deleting row still exists, still owns the
+/// committed identity its session was authenticated against, and still owns
+/// the live session the deletion path reuses - so it is admitted.
+fn session_target_row_admitted(
+    envelope: &ResourceEnvelope,
+    zone: &ZoneId,
+    deleting: bool,
+) -> bool {
+    envelope.metadata().zone() == zone
+        && !envelope.metadata().uid().as_str().is_empty()
+        && envelope.metadata().generation().get() != 0
+        && (deleting
+            || !matches!(
+                envelope.status().phase(),
+                ResourcePhase::Failed | ResourcePhase::Deleted
+            ))
 }
 
 /// Resolve one committed Guest and its controller-owned guest-control
 /// Endpoint. The returned target contains only store identities; endpoint
 /// carriage remains private to the Process Provider intent.
+///
+/// A row in its delete pass is admitted on its deletion mark - the Guest and,
+/// while the Guest is deleting, the guest-control Endpoint the cascade marked
+/// with it - so the delete pass can still resolve the live session it reuses
+/// while closing it (see [`session_target_row_admitted`] for the wire-phase
+/// consequence).
 pub(crate) async fn resolve_committed_guest_session_target(
     runtime: &resource_runtime::ZoneResourceRuntime,
     guest_ref: &ResourceRef,
@@ -11736,14 +11785,8 @@ pub(crate) async fn resolve_committed_guest_session_target(
         &serde_json::to_vec(&guest_value).map_err(|_| "guest-session:guest-invalid".to_owned())?,
     )
     .map_err(|_| "guest-session:guest-invalid".to_owned())?;
-    if guest.metadata().zone() != runtime.zone()
-        || guest.metadata().uid().as_str().is_empty()
-        || guest.metadata().generation().get() == 0
-        || matches!(
-            guest.status().phase(),
-            ResourcePhase::Failed | ResourcePhase::Deleted
-        )
-    {
+    let guest_deleting = guest.metadata().deletion_requested_at().is_some();
+    if !session_target_row_admitted(&guest, runtime.zone(), guest_deleting) {
         return Err("guest-session:guest-identity-invalid".to_owned());
     }
     let provider_ref = guest
@@ -11777,10 +11820,19 @@ pub(crate) async fn resolve_committed_guest_session_target(
         d2b_provider_runtime_cloud_hypervisor::ChildRole::GuestControlEndpoint,
     )
     .map_err(|_| "guest-session:endpoint-ref-invalid".to_owned())?;
-    let endpoint_value = runtime
-        .committed_resource_value(&endpoint_ref, "guest-session-endpoint")
+    // `Endpoint` is a converted type: the manager is its only writer, so the
+    // row is read from the manager authority - an absent row is the honest
+    // not-committed answer (the provider controller has not committed the
+    // child batch yet), and the pre-v3 store is never consulted for a row it
+    // does not own (a store `ResourceNotFound` would read as absence for a
+    // manager-owned row). A manager or plane failure stays a read failure.
+    let Some(endpoint_value) = runtime
+        .committed_manager_row_optional(&endpoint_ref)
         .await
-        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+        .map_err(|_| "guest-session:endpoint-read-failed".to_owned())?
+    else {
+        return Err("guest-session:endpoint-unavailable".to_owned());
+    };
     let endpoint = ResourceEnvelope::from_json(
         &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
@@ -11806,10 +11858,14 @@ pub(crate) async fn resolve_committed_guest_session_target(
             .consumer_policy()
             .allowed_operations()
             .contains(&EndpointOperation::Resolve)
-        || matches!(
-            endpoint.status().phase(),
-            ResourcePhase::Failed | ResourcePhase::Deleted
-        )
+        // The guest-control Endpoint is the Guest's owned child: a deleting
+        // Guest has cascaded the deletion mark onto it, so the Guest's
+        // deleting fact admits the endpoint's terminal projection for the
+        // same reason it admits the Guest's (the carriage row still exists
+        // and still holds the identity the session was fenced on). A terminal
+        // Endpoint under a Guest that is *not* deleting stays refused: that
+        // carriage is going away under a live Guest.
+        || !session_target_row_admitted(&endpoint, runtime.zone(), guest_deleting)
         || endpoint.metadata().generation().get() == 0
     {
         return Err("guest-session:endpoint-identity-invalid".to_owned());
@@ -11827,6 +11883,120 @@ pub(crate) async fn resolve_committed_guest_session_target(
         provider_uid: provider.metadata().uid().clone(),
         provider_generation: provider.metadata().generation(),
     })
+}
+
+#[cfg(test)]
+mod guest_session_target_admission_tests {
+    use super::*;
+
+    const UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    /// One committed row as the manager renders it: the wire phase the closed
+    /// status vocabulary carries and the deletion mark the writer committed.
+    /// Rendered from the contract's golden envelope shape so the strict
+    /// reader decodes exactly what a live read serves.
+    fn row(phase: &str, uid: &str, generation: u64, zone: &str, deleted: Option<&str>) -> ResourceEnvelope {
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "metadata": {
+                "configurationGeneration": 7,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "deletionRequestedAt": deleted,
+                "finalizers": [],
+                "generation": generation,
+                "managedBy": "configuration",
+                "name": "acceptance-guest",
+                "ownerRef": null,
+                "revision": 1,
+                "uid": uid,
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "zone": zone,
+            },
+            "spec": {"providerRef": "Provider/runtime-cloud-hypervisor"},
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": generation,
+                "outcome": null,
+                "phase": phase,
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": generation,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": generation,
+                },
+            },
+            "type": "Guest",
+        });
+        ResourceEnvelope::from_json(&serde_json::to_vec(&value).expect("JSON"))
+            .expect("strict envelope")
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    /// The deletion mark is the deleting fact: a row the manager renders as
+    /// the `Deleted` tombstone (or as `Failed` for a retried delete failure)
+    /// still owns its committed identity and the live session the deletion
+    /// path reuses, so the session target stays resolvable for it.
+    #[test]
+    fn a_deleting_row_is_admitted_on_its_deletion_mark() {
+        let deleted = Some("2026-07-22T00:00:00.000Z");
+        for phase in ["Deleted", "Failed", "Ready"] {
+            let envelope = row(phase, UID, 1, "work", deleted);
+            assert!(
+                session_target_row_admitted(&envelope, &zone(), true),
+                "a deleting row in phase {phase} must resolve its session target"
+            );
+        }
+    }
+
+    /// The non-deleting rule is unchanged: a terminal projection without a
+    /// deletion mark is still refused, a live one is admitted.
+    #[test]
+    fn a_non_deleting_row_keeps_the_terminal_phase_refusal() {
+        for phase in ["Deleted", "Failed"] {
+            let envelope = row(phase, UID, 1, "work", None);
+            assert!(
+                !session_target_row_admitted(&envelope, &zone(), false),
+                "a non-deleting row in phase {phase} must stay refused"
+            );
+        }
+        let ready = row("Ready", UID, 1, "work", None);
+        assert!(session_target_row_admitted(&ready, &zone(), false));
+    }
+
+    /// The Zone fence is independent of the deleting fact. (The uid and
+    /// generation completeness checks are unreachable for a strictly decoded
+    /// envelope: the contract rejects an empty uid or a zero generation at
+    /// decode time.)
+    #[test]
+    fn the_zone_fence_holds_for_deleting_rows_too() {
+        let deleted = Some("2026-07-22T00:00:00.000Z");
+        for row_deleting in [true, false] {
+            let envelope = row(
+                if row_deleting { "Deleted" } else { "Ready" },
+                UID,
+                1,
+                "other",
+                if row_deleting { deleted } else { None },
+            );
+            assert!(
+                !session_target_row_admitted(&envelope, &zone(), row_deleting),
+                "a row of another Zone must never fence this Zone's session"
+            );
+        }
+    }
 }
 
 /// Resolve the private ComponentSession carriage for a committed Guest
@@ -11871,10 +12041,17 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
     {
         return Err("guest-session:committed-identity-changed".to_owned());
     }
-    let endpoint_value = runtime
-        .committed_resource_value(target.endpoint_ref(), "guest-session-endpoint")
+    // The converted `Endpoint` row is read from the manager authority; see
+    // [`resolve_committed_guest_session_target`]. An absent row means the
+    // provider controller has not committed the child batch yet, and a
+    // manager/plane failure stays a read failure the callers retry.
+    let Some(endpoint_value) = runtime
+        .committed_manager_row_optional(target.endpoint_ref())
         .await
-        .map_err(|_| "guest-session:endpoint-unavailable".to_owned())?;
+        .map_err(|_| "guest-session:endpoint-read-failed".to_owned())?
+    else {
+        return Err("guest-session:endpoint-unavailable".to_owned());
+    };
     let endpoint = ResourceEnvelope::from_json(
         &serde_json::to_vec(&endpoint_value)
             .map_err(|_| "guest-session:endpoint-invalid".to_owned())?,
@@ -12385,6 +12562,378 @@ pub(crate) async fn invalidate_guest_component_session_for_guest(
         .lock()
         .await
         .remove(&target.key());
+}
+
+/// Establish (or re-establish) the authenticated ComponentSession of one
+/// manager-served Cloud Hypervisor Guest and register its live generation as
+/// the Zone target directory's realization authority for that Guest (U13).
+///
+/// This is the production entry the converted Guest effect path drives, so a
+/// Guest realized through the manager is no longer reachable only from the
+/// legacy lifecycle helpers: the committed Guest and its guest-control
+/// Endpoint fence the resolution, the session cache makes the call idempotent
+/// while the session is live, and every target-layer consumer (the
+/// target-control channel, the F5 adoption of a reconnect, and the
+/// target-local observations the drivers read) works from this binding.
+///
+/// On a connect the assignments the directory holds for this Guest are
+/// re-adopted through the target layer: a target-local realization present
+/// inside the Guest is re-bound to the live generation, and one the Guest
+/// cannot confirm is reported missing so the owning actor realizes it again -
+/// never inherited from the previous session (R21, R28).
+pub(crate) async fn ensure_guest_target_session(
+    state: &ServerState,
+    zone: &ZoneId,
+    guest_ref: &ResourceRef,
+) -> Result<(), String> {
+    let Some(guest) = crate::guest_target_control::guest_target_ref(guest_ref) else {
+        return Err("guest-session:subject-not-a-guest".to_owned());
+    };
+    let plane = state
+        .v3_planes
+        .lock()
+        .get(zone.as_str())
+        .map(std::sync::Arc::clone)
+        .ok_or_else(|| "guest-session:zone-plane-unavailable".to_owned())?;
+    // A directory that already holds the live cached session's generation has
+    // nothing to establish. One holding an older generation - another session
+    // path replaced the session without binding it - is re-bound below, and a
+    // lost live session falls through to a fresh connect.
+    if let d2b_resource_runtime::target::TargetAvailability::Connected {
+        session_generation,
+    } = plane.targets().availability(&guest)
+        && let Some(cached) = live_cached_guest_session_generation(state, zone, guest_ref).await
+        && cached <= session_generation
+    {
+        return Ok(());
+    }
+    let runtime = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.zone(zone).ok())
+        .ok_or_else(|| "guest-session:zone-runtime-unavailable".to_owned())?;
+    let target = resolve_committed_guest_session_target(&runtime, guest_ref)
+        .await
+        .map_err(|reason| format!("guest-session:unresolved:{reason}"))?;
+    let session = connect_guest_component_session_for_guest(state, &target).await?;
+    let generation = session.generation();
+    // The connect may have raced another pass (the session cache is shared):
+    // a generation the directory already holds is nothing to bind.
+    if let d2b_resource_runtime::target::TargetAvailability::Connected {
+        session_generation,
+    } = plane.targets().availability(&guest)
+        && session_generation >= generation
+    {
+        return Ok(());
+    }
+    let control = crate::guest_target_control::session_target_control(
+        std::sync::Arc::clone(&session),
+        generation,
+    )
+    .map_err(|error| format!("guest-session:target-control-unavailable:{error}"))?;
+    plane
+        .bind_guest_target(&guest, generation, control)
+        .map_err(|error| format!("guest-session:target-bind-refused:{error}"))?;
+    adopt_guest_target_assignments(plane.targets(), &guest, generation).await;
+    Ok(())
+}
+
+/// The generation of the live cached ComponentSession to one Guest, when the
+/// session cache holds one (U13).
+async fn live_cached_guest_session_generation(
+    state: &ServerState,
+    zone: &ZoneId,
+    guest_ref: &ResourceRef,
+) -> Option<u64> {
+    let sessions = state.guest_component_sessions.lock().await;
+    sessions
+        .values()
+        .filter(|session| session.route_binding().liveness().is_live())
+        .find(|session| {
+            session.identity().zone() == zone && session.identity().guest_ref() == guest_ref
+        })
+        .map(|session| session.generation())
+}
+
+/// Re-adopt every assignment the directory holds for one Guest after a
+/// (re)connect: the target layer is the only place that re-binds a handle to
+/// the live session generation, and a source the Guest cannot confirm is left
+/// for its owning actor to realize again (F5).
+async fn adopt_guest_target_assignments(
+    directory: &std::sync::Arc<d2b_resource_runtime::target::TargetDirectory>,
+    guest: &d2b_resource_runtime::target::TargetRef,
+    session_generation: u64,
+) {
+    let assignments = directory.assignments_for(guest);
+    if assignments.is_empty() {
+        return;
+    }
+    let mut adopted = 0usize;
+    for source in &assignments {
+        let Some(assignment) = directory.assignment(source) else {
+            continue;
+        };
+        let binding = d2b_resource_runtime::target::TargetBinding::new(
+            std::sync::Arc::clone(directory),
+            assignment,
+        );
+        match binding.adopt().await {
+            Ok((_, outcome)) => {
+                adopted += 1;
+                tracing::debug!(
+                    guest = %guest,
+                    source = %source,
+                    discovery = ?outcome.adopted(),
+                    "Guest target assignment re-adopted on reconnect",
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    guest = %guest,
+                    source = %source,
+                    error = %error,
+                    "Guest target assignment adoption did not answer",
+                );
+            }
+        }
+    }
+    tracing::info!(
+        guest = %guest,
+        session_generation,
+        assignments = assignments.len(),
+        adopted,
+        "Guest target directory bound to the live session generation",
+    );
+}
+
+/// The KTD6 guest-mount observation of one VolumeBinding row: whether the
+/// Guest target of `key`'s assignment currently reports the row's target-local
+/// realization serving (U13).
+///
+/// The evidence is the Zone target directory's answer through the live
+/// authenticated ComponentSession - the same boundary every other target-local
+/// observation crosses. A row that is not assigned to a guest, a guest with no
+/// live session, a source the Guest holds no realization for, and one whose
+/// realization has not converged all report `false`; only
+/// [`TargetObservation::Ready`] answers `true`.
+pub(crate) async fn binding_guest_mount_ready(
+    state: &ServerState,
+    zone: &ZoneId,
+    key: &d2b_resource_runtime::identity::ResourceKey,
+) -> bool {
+    let directory = state
+        .v3_planes
+        .lock()
+        .get(zone.as_str())
+        .map(|plane| std::sync::Arc::clone(plane.targets()));
+    let Some(directory) = directory else {
+        return false;
+    };
+    target_local_mount_observed(&directory, key).await
+}
+
+/// One row's target-local observation through an already-resolved directory.
+///
+/// The assignment is re-bound to the live session generation first (the only
+/// operation that accepts a handle minted under an older generation), so an
+/// assignment that predates the live session is still observable; a target
+/// that cannot answer at all stays `false`, never "absent".
+pub(crate) async fn target_local_mount_observed(
+    directory: &std::sync::Arc<d2b_resource_runtime::target::TargetDirectory>,
+    key: &d2b_resource_runtime::identity::ResourceKey,
+) -> bool {
+    let Some(assignment) = directory.assignment(key) else {
+        return false;
+    };
+    if assignment.target().guest().is_none() {
+        return false;
+    }
+    let binding = d2b_resource_runtime::target::TargetBinding::new(
+        std::sync::Arc::clone(directory),
+        assignment,
+    );
+    let Ok((binding, _)) = binding.adopt().await else {
+        return false;
+    };
+    matches!(
+        binding.observe().await,
+        Ok(d2b_resource_runtime::target::TargetObservation::Ready { .. })
+    )
+}
+
+#[cfg(test)]
+mod guest_target_session_tests {
+    use super::*;
+    use d2b_resource_runtime::guest_target::{GuestTargetRuntime, target_local_spec_digest};
+    use d2b_resource_runtime::identity::ResourceKey;
+    use d2b_resource_runtime::target::{
+        TargetDirectory, TargetError, TargetObservation, TargetRef,
+    };
+
+    fn guest() -> TargetRef {
+        TargetRef::guest("acceptance-guest").expect("guest target")
+    }
+
+    fn binding_key() -> ResourceKey {
+        ResourceKey::new("work", "VolumeBinding", "vol-binding-1")
+    }
+
+    /// Connect one in-process guest session generation the way the daemon's
+    /// authenticated accept does: bind the live generation, mint its control
+    /// capability, hand it to the directory.
+    fn connect(
+        runtime: &Arc<GuestTargetRuntime>,
+        directory: &Arc<TargetDirectory>,
+        generation: u64,
+    ) {
+        runtime.bind_session(generation).expect("bind live generation");
+        directory
+            .connect_guest(
+                &guest(),
+                generation,
+                runtime.control(generation).expect("control capability"),
+            )
+            .expect("connect guest target");
+    }
+
+    /// U13 establishment path: a live session generation connected through the
+    /// directory carries the assignment, adoption re-binds it across a
+    /// reconnect, and the KTD6 gate reads the target-local realization the
+    /// Guest actually reports instead of a default.
+    #[tokio::test]
+    async fn a_reconnect_rebinds_the_assignment_and_the_gate_reads_target_evidence() {
+        let directory = Arc::new(TargetDirectory::new());
+        let runtime = Arc::new(GuestTargetRuntime::new(guest()));
+        connect(&runtime, &directory, 1);
+        let key = binding_key();
+        directory
+            .assign(&key, &[0x42; 16], 3, "Guest/acceptance-guest")
+            .expect("assign to the guest target");
+
+        // Nothing realized inside the Guest yet: the gate has no evidence.
+        assert!(!target_local_mount_observed(&directory, &key).await);
+
+        let handle = directory
+            .assignment(&key)
+            .expect("assignment")
+            .target()
+            .guest()
+            .expect("guest handle")
+            .clone();
+        let spec = br#"{"view":"controller","mountPath":"/nix/.ro-store"}"#.to_vec();
+        directory
+            .realize(
+                &handle,
+                &key,
+                spec.clone(),
+                &target_local_spec_digest(&spec),
+                "/run/d2b/binding1.sock",
+            )
+            .await
+            .expect("realize through the guest path");
+        assert_eq!(
+            directory.observe(&handle, &key).await,
+            Ok(TargetObservation::Realizing { session_generation: 1 }),
+            "a recorded realization is not ready before its effect converged",
+        );
+        runtime.mark_ready(&key).expect("target-local effect converged");
+        assert!(target_local_mount_observed(&directory, &key).await);
+
+        // The session drops: desired state and the assignment stay (R21), a
+        // stale handle cannot answer on the new generation (R28), and the
+        // gate fails closed while the target is gone.
+        assert_eq!(
+            directory
+                .disconnect_guest(&guest(), 1)
+                .expect("disconnect live session")
+                .session_generation(),
+            1,
+        );
+        assert!(directory.assignment(&key).is_some(), "the assignment survives the target loss");
+        assert!(!target_local_mount_observed(&directory, &key).await);
+
+        connect(&runtime, &directory, 2);
+        assert_eq!(
+            directory.observe(&handle, &key).await,
+            Err(TargetError::StaleSessionGeneration),
+            "the previous generation's handle cannot inherit the new session's authority",
+        );
+        adopt_guest_target_assignments(&directory, &guest(), 2).await;
+        assert_eq!(
+            directory
+                .assignment(&key)
+                .expect("assignment")
+                .target()
+                .guest()
+                .expect("guest handle")
+                .session_generation(),
+            Some(2),
+            "adoption re-binds the assignment to the live generation",
+        );
+        assert!(
+            target_local_mount_observed(&directory, &key).await,
+            "the realization the Guest still holds is adopted, not re-invented",
+        );
+    }
+
+    /// Capture everything one action emits with the daemon's default filter
+    /// applied (`main.rs` initializes `info`): an event below that level never
+    /// reaches the host journal, where the Guest console is forwarded.
+    fn capture_journal_output(action: impl FnOnce()) -> String {
+        #[derive(Clone)]
+        struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("journal buffer").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buffer {
+            type Writer = Buffer;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buffer = Buffer(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        String::from_utf8(buffer.0.lock().expect("journal buffer").clone())
+            .expect("journal output is utf-8")
+    }
+
+    /// Regression (U13): every acceptance publishes the live session
+    /// generation at the level the host journal shows, under the event name
+    /// the acceptance lane greps. The pre-restart capture is the first
+    /// acceptance of the Guest's boot, so a publisher that only fired on a
+    /// replacement - or only at `debug` - is exactly the regression this
+    /// pins.
+    #[test]
+    fn the_session_generation_is_published_at_journal_level() {
+        let output = capture_journal_output(|| publish_component_session_started(7));
+        assert!(
+            output.contains(COMPONENT_SESSION_STARTED_EVENT),
+            "the accept event must be journal-visible: {output:?}",
+        );
+        assert!(
+            output.contains("generation=7"),
+            "the accept event must carry the live session generation: {output:?}",
+        );
+    }
 }
 
 #[cfg(test)]
@@ -16002,12 +16551,7 @@ async fn open_resource_plane(
                     return Err(error);
                 }
             };
-        runtime.set_shared_provider_effects(Arc::new(
-            resource_runtime::DaemonSharedProviderEffects::new(
-                Arc::new(state.clone()),
-                zone.clone(),
-            ),
-        ));
+
         runtime.set_provider_path_ready(provider_ready);
         let descriptors = materialization_bundle
             .resources
@@ -16236,27 +16780,6 @@ async fn open_resource_plane(
         // small VM creates a store-read thundering herd that trips their
         // own startup deadlines.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if let Err(error) = runtime
-            .start_u6_controller_runners(Arc::new(state.clone()))
-            .await
-        {
-            tracing::error!(
-                zone = %runtime.zone(),
-                error = ?error,
-                "Guest runtime Provider runners refused during startup",
-            );
-            let _ = runtime.shutdown().await;
-            let _ = plane.shutdown().await;
-            while let Some((_, runtime, _)) = remaining.next() {
-                let _ = runtime.shutdown().await;
-            }
-        // Stagger runner-family startups: each family's initial full-zone
-        // list is expensive, and starting every family concurrently on a
-        // small VM creates a store-read thundering herd that trips their
-        // own startup deadlines.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Err(error);
-        }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {

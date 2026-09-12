@@ -29,7 +29,7 @@ use d2b_core::{
 use d2b_core_controller::ResourceKey;
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
-    GuestExecutionBinding, IdentityBinding, LaunchTicket, OperationBinding,
+    GuestExecutionBinding, IdentityBinding, LaunchIdentity, LaunchTicket, OperationBinding,
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessProvider,
     ProcessStatusReport, ReadinessExpectation, SandboxCompiler, StopClass, execution_commitment,
     runtime_scope_commitment,
@@ -50,6 +50,7 @@ use d2bd_runtime::vm_start_support::{
 use sha2::{Digest, Sha256};
 
 use crate::provider_effects::FixedEffectAdapter;
+use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
@@ -215,125 +216,205 @@ fn resource_identity_matches(
     resource_identity_mismatches(managed, context).is_empty()
 }
 
-fn resource_identity_mismatches(
+/// One identity field comparison between the identity this daemon retained
+/// when it realized (or adopted) a process and the identity the current pass
+/// resolves.
+///
+/// Required fields are always known on both sides; the per-pass resolved
+/// inputs (KTD7 - the committed zone/provider/owner identities and the
+/// target selector a source may or may not retain) are optional, and an
+/// unbound reference is *unknown*, never a value.
+struct IdentityField {
+    field: &'static str,
+    managed: Option<String>,
+    requested: Option<String>,
+}
+
+impl IdentityField {
+    /// Any difference, including one side unknown: the strict comparison the
+    /// destructive identity gates use (`finalize`, `stop`, `has_active`), so
+    /// an unresolved request refuses rather than proceeds.
+    fn mismatch(&self) -> bool {
+        self.managed != self.requested
+    }
+
+    /// A *proven* change: both sides known and different. An input this pass
+    /// cannot resolve is unknown, so it never invalidates the identity a
+    /// better-informed pass established (2026-09-11: the manager-served
+    /// Guest's VMM was retired and relaunched on every daemon restart because
+    /// the first recovery pass could not resolve the owning Guest's uid and
+    /// the next one could).
+    fn proven_change(&self) -> bool {
+        matches!(
+            (&self.managed, &self.requested),
+            (Some(managed), Some(requested)) if managed != requested
+        )
+    }
+
+    /// The preserved mismatch rendering (`none` for an unbound side).
+    fn render(&self) -> String {
+        format!(
+            "{}(managed={},requested={})",
+            self.field,
+            self.managed.as_deref().unwrap_or("none"),
+            self.requested.as_deref().unwrap_or("none"),
+        )
+    }
+}
+
+fn resource_identity_fields(
     managed: &ManagedResource,
     context: &ProcessResourceContext<'_>,
-) -> Vec<String> {
-    let mut mismatches = Vec::new();
-    let mut compare = |field: &str, managed: String, requested: String| {
-        if managed != requested {
-            mismatches.push(format!("{field}(managed={managed},requested={requested})"));
-        }
-    };
-    compare(
+) -> Vec<IdentityField> {
+    fn required(
+        fields: &mut Vec<IdentityField>,
+        field: &'static str,
+        managed: String,
+        requested: String,
+    ) {
+        fields.push(IdentityField {
+            field,
+            managed: Some(managed),
+            requested: Some(requested),
+        });
+    }
+    fn optional(
+        fields: &mut Vec<IdentityField>,
+        field: &'static str,
+        managed: Option<String>,
+        requested: Option<String>,
+    ) {
+        fields.push(IdentityField {
+            field,
+            managed,
+            requested,
+        });
+    }
+    let mut fields = Vec::new();
+    required(
+        &mut fields,
         "zone",
         managed.zone.to_canonical_string(),
         context.zone.to_canonical_string(),
     );
-    compare(
+    optional(
+        &mut fields,
         "zone_uid",
-        managed
-            .zone_uid
-            .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
-        context
-            .zone_uid
-            .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+        managed.zone_uid.as_ref().map(ResourceUid::to_canonical_string),
+        context.zone_uid.as_ref().map(ResourceUid::to_canonical_string),
     );
-    compare(
+    required(
+        &mut fields,
         "resource_ref",
         managed.resource_ref.to_canonical_string(),
         context.resource_ref.to_canonical_string(),
     );
-    compare(
+    required(
+        &mut fields,
         "provider_ref",
         managed.provider_ref.to_canonical_string(),
         context.provider_ref.to_canonical_string(),
     );
-    compare(
+    optional(
+        &mut fields,
         "provider_uid",
         managed
             .provider_uid
             .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceUid::to_canonical_string),
         context
             .provider_uid
             .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceUid::to_canonical_string),
     );
-    compare(
+    optional(
+        &mut fields,
         "provider_generation",
         managed
             .provider_generation
-            .map(|generation| generation.get().to_string())
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(|generation| generation.get().to_string()),
         context
             .provider_generation
-            .map(|generation| generation.get().to_string())
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(|generation| generation.get().to_string()),
     );
-    compare(
+    optional(
+        &mut fields,
         "owner_ref",
         managed
             .owner_ref
             .as_ref()
-            .map(ResourceRef::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceRef::to_canonical_string),
         context
             .owner_ref
             .as_ref()
-            .map(ResourceRef::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceRef::to_canonical_string),
     );
-    compare(
+    optional(
+        &mut fields,
         "owner_uid",
-        managed
-            .owner_uid
-            .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
-        context
-            .owner_uid
-            .as_ref()
-            .map(ResourceUid::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+        managed.owner_uid.as_ref().map(ResourceUid::to_canonical_string),
+        context.owner_uid.as_ref().map(ResourceUid::to_canonical_string),
     );
-    compare(
+    required(
+        &mut fields,
         "resource_uid",
         managed.uid.to_canonical_string(),
         context.resource_uid.to_canonical_string(),
     );
-    compare(
+    required(
+        &mut fields,
         "resource_generation",
         managed.generation.get().to_string(),
         context.resource_generation.get().to_string(),
     );
-    compare(
+    required(
+        &mut fields,
         "controller_generation",
         managed.controller_generation.get().to_string(),
         context.controller_generation.get().to_string(),
     );
-    compare(
+    optional(
+        &mut fields,
         "target_ref",
         managed
             .target_ref
             .as_ref()
-            .map(ResourceRef::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceRef::to_canonical_string),
         context
             .target_ref
             .as_ref()
-            .map(ResourceRef::to_canonical_string)
-            .unwrap_or_else(|| "none".to_owned()),
+            .map(ResourceRef::to_canonical_string),
     );
-    mismatches
+    fields
 }
 
+fn resource_identity_mismatches(
+    managed: &ManagedResource,
+    context: &ProcessResourceContext<'_>,
+) -> Vec<String> {
+    resource_identity_fields(managed, context)
+        .iter()
+        .filter(|field| field.mismatch())
+        .map(IdentityField::render)
+        .collect()
+}
+
+/// The *proven* identity changes only: both sides known and different. The
+/// retire-before-launch pre-flight uses this rule because it destroys a live
+/// process, and an identity input the current pass cannot resolve is unknown
+/// rather than changed; the target observation (broker registration plus the
+/// Provider's own adoption classification) stays the authority on whether a
+/// running process matches.
+fn resource_identity_changes(
+    managed: &ManagedResource,
+    context: &ProcessResourceContext<'_>,
+) -> Vec<String> {
+    resource_identity_fields(managed, context)
+        .iter()
+        .filter(|field| field.proven_change())
+        .map(IdentityField::render)
+        .collect()
+}
 fn identity_changed_error(mismatches: Vec<String>) -> String {
     tracing::warn!(
         mismatches = %mismatches.join(","),
@@ -406,6 +487,10 @@ pub(crate) struct ProcessResourceContext<'a> {
     /// Binding-declared serving-worker launch inputs, when this Process is a
     /// VolumeBinding-owned serving worker.
     pub(crate) worker_launch: Option<ServingWorkerLaunch>,
+    /// The canonical launch identity the owning row resolved (KTD7). The
+    /// ticket builder consumes this value instead of re-deriving the owner,
+    /// target, VM, or legacy role from the fields above.
+    pub(crate) launch: Option<LaunchIdentity>,
 }
 
 impl<'a> ProcessResourceContext<'a> {
@@ -441,7 +526,14 @@ impl<'a> ProcessResourceContext<'a> {
             user_ref: None,
             guest_descriptor_digest: None,
             worker_launch: None,
+            launch: None,
         }
+    }
+
+    /// Attach the row-resolved canonical launch identity (KTD7).
+    pub(crate) fn with_launch_identity(mut self, launch: LaunchIdentity) -> Self {
+        self.launch = Some(launch);
+        self
     }
 
     /// Attach the binding-declared serving-worker launch inputs.
@@ -3209,7 +3301,13 @@ impl ProductionProcessProviders {
             .cloned()
             .collect::<Vec<_>>();
         for managed in managed {
-            let mut mismatches = resource_identity_mismatches(&managed, context);
+            // U13/U6 restart adoption: this pass destroys a live process, so
+            // only a *proven* identity change retires it. A per-pass resolved
+            // input the current context cannot resolve is unknown, never a
+            // change (the manager-served Guest's VMM was retired and relaunched
+            // on every daemon restart when the recovery pass resolved the
+            // owning Guest's uid after the adopt that seeded the entry).
+            let mut mismatches = resource_identity_changes(&managed, context);
             if managed.provider != provider {
                 mismatches.push(format!(
                     "provider(managed={:?},requested={provider:?})",
@@ -3228,15 +3326,23 @@ impl ProductionProcessProviders {
                     managed.execution_ref
                 ));
             }
-            if managed.runtime_scope != runtime_scope {
+            if let (Some(managed_scope), Some(requested_scope)) =
+                (managed.runtime_scope.as_ref(), runtime_scope.as_ref())
+                && managed_scope != requested_scope
+            {
                 mismatches.push(format!(
-                    "runtime_scope(managed={:?},requested={runtime_scope:?})",
-                    managed.runtime_scope
+                    "runtime_scope(managed={managed_scope:?},requested={requested_scope:?})"
                 ));
             }
             if mismatches.is_empty() {
                 continue;
             }
+            tracing::warn!(
+                resource = %managed.resource_ref.to_canonical_string(),
+                identity = %managed.identity.to_hex(),
+                mismatches = ?mismatches,
+                "retiring a managed process whose identity changed"
+            );
             self.retire_managed_resource(&managed).await?;
             self.forget_resource_in_zone(
                 &managed.zone,
@@ -3577,36 +3683,34 @@ fn resource_ticket(
         ExecutionDomain::User => d2b_core::processes::ProcessExecutionDomain::User,
     };
     let user_ref = execution.user_ref().map(ResourceRef::to_canonical_string);
-    let target_vm_name = match execution.execution_ref().resource_type().as_str() {
-        "Guest" => Some(execution.execution_ref().name().as_str()),
-        "Host" => match context.target_ref.as_ref() {
-            Some(target) if target.resource_type().as_str() == "Guest" => {
-                Some(target.name().as_str())
-            }
-            None => context
-                .owner_ref
-                .as_ref()
-                .filter(|owner| owner.resource_type().as_str() == "Guest")
-                .map(|owner| owner.name().as_str()),
-            Some(_) => return Err("provider-ticket:invalid-target".to_owned()),
-        },
-        _ => return Err("provider-ticket:invalid-execution-ref".to_owned()),
+    // One canonical identity: the row layers attach it; a context without one
+    // (target-local probes and fixtures) resolves through the same resolver
+    // instead of a second derivation.
+    let launch = match context.launch.clone() {
+        Some(launch) => launch,
+        None => resolve_launch_identity(&LaunchRow {
+            owner_ref: context.owner_ref.as_ref(),
+            owner_uid: context.owner_uid.clone(),
+            execution_ref: execution.execution_ref(),
+            process_name: context.resource_ref.name().as_str(),
+            template: execution.template().as_str(),
+            declared_target: context.target_ref.as_ref().zip(context.owner_ref.as_ref()),
+        })
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?,
     };
+    let intent_vm = launch.vm();
     let execution_ref = execution.execution_ref().to_canonical_string();
-    let owner_ref = context
-        .owner_ref
-        .as_ref()
+    let owner_ref = launch
+        .owner_ref()
         .map(ResourceRef::to_canonical_string);
     let exact_static_controller = execution.process_class() == ProcessClass::Controller
-        && context
-            .owner_ref
-            .as_ref()
+        && launch
+            .owner_ref()
             .is_some_and(|owner| owner.resource_type().as_str() == "Provider");
     let managed_identity_agent = is_managed_identity_agent_context(context, execution);
     if exact_static_controller
-        && context
-            .owner_ref
-            .as_ref()
+        && launch
+            .owner_ref()
             .is_some_and(is_credential_provider_ref)
         && execution.execution_ref().resource_type().as_str() != "Guest"
     {
@@ -3628,10 +3732,7 @@ fn resource_ticket(
             owner_ref.as_deref(),
         )
     });
-    let binding_worker = context
-        .owner_ref
-        .as_ref()
-        .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
+    let binding_worker = launch.is_binding_worker();
     let generic_intent = if exact_static_controller {
         None
     } else if managed_identity_agent {
@@ -3657,9 +3758,8 @@ fn resource_ticket(
             execution.template().as_str(),
             Some("Provider/volume-virtiofs"),
         )
-    } else if let Some(owner) = context
-        .owner_ref
-        .as_ref()
+    } else if let Some(owner) = launch
+        .owner_ref()
         .filter(|owner| owner.resource_type().as_str() == "Guest")
     {
         if context.resource_ref.resource_type().as_str() != "Process"
@@ -3680,7 +3780,7 @@ fn resource_ticket(
         )
     } else {
         bundle.find_runner_intent_for_process_in_vm(
-            target_vm_name,
+            intent_vm,
             &execution_ref,
             execution_domain,
             user_ref.as_deref(),
@@ -3747,14 +3847,15 @@ fn resource_ticket(
             .map_err(|_| "provider-ticket:invalid-operation")?,
         required_identity(provider),
     )
+    .map_err(|error| format!("provider-ticket:{}", error.code()))?
+    .with_launch_identity(launch.clone())
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
     ticket = ticket
         .with_inherited_fd_count(if exact_static_controller || managed_identity_agent {
             if managed_identity_agent
-                || context
-                .owner_ref
-                .as_ref()
-                .is_some_and(|owner| is_credential_provider_ref(&owner))
+                || launch
+                    .owner_ref()
+                    .is_some_and(is_credential_provider_ref)
             {
                 2
             } else {
@@ -3764,13 +3865,6 @@ fn resource_ticket(
             0
         })
         .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    if execution.execution_ref().resource_type().as_str() == "Host"
-        && let Some(target_ref) = context.target_ref.as_ref()
-    {
-        ticket = ticket
-            .with_target_ref(target_ref.clone())
-            .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    }
     let ticket = match context.guest_execution.as_ref() {
         Some(binding) if execution.execution_ref().resource_type().as_str() == "Guest" => ticket
             .with_guest_execution_binding(binding.clone())
@@ -3799,13 +3893,13 @@ fn resource_ticket(
         context.resource_generation.get(),
     );
     let ticket = ticket
-        .with_runtime_identity(zone_uid, context.owner_ref.clone(), runtime_scope)
+        .with_runtime_identity(zone_uid, launch.owner_ref().cloned(), runtime_scope)
         .map_err(|error| format!("provider-ticket:{}", error.code()))?;
     let ticket = match context.owner_uid.clone() {
-        Some(owner_uid) => ticket
+        Some(owner_uid) if ticket.owner_uid().is_none() => ticket
             .with_owner_uid(owner_uid)
             .map_err(|error| format!("provider-ticket:{}", error.code()))?,
-        None => ticket,
+        _ => ticket,
     };
     let ticket = match activation_input {
         Some(input) => ticket
@@ -3952,14 +4046,14 @@ fn build_ticket(
     let operation_uid = stable_uid("operation", vm, &node.id.0, generation);
     let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
     let ticket = LaunchTicket::new(
-        process_ref,
+        process_ref.clone(),
         stable_uid("process", vm, &node.id.0, generation),
         ResourceGeneration::new(generation).map_err(|_| ProcessConformanceError::InvalidTicket)?,
         ControllerGeneration::new(1).map_err(|_| ProcessConformanceError::InvalidTicket)?,
         owner_provider,
         component,
         template,
-        execution_ref,
+        execution_ref.clone(),
         ExecutionDomain::System,
         None,
         selected_provider,
@@ -3967,8 +4061,23 @@ fn build_ticket(
         OperationBinding::new(operation_uid, deadline_ms)?,
         required_identity(provider),
     )?;
+    // A bundle process-DAG node names its own VM: the execution target alone
+    // (a shared `Host/host-system`) cannot name the DAG's vm, and the broker's
+    // identity fence resolves the node's runner intent under that name.
+    let launch_identity = LaunchIdentity::new(
+        None,
+        None,
+        execution_ref,
+        None,
+        process_ref.name().as_str(),
+        false,
+    )
+    .and_then(|identity| identity.with_vm(vm))
+    .map_err(|_| ProcessConformanceError::InvalidTicket)?;
     Ok(ticket
         .with_execution_commitment(commitment)
+        .map_err(|_| ProcessConformanceError::InvalidTicket)?
+        .with_launch_identity(launch_identity)
         .map_err(|_| ProcessConformanceError::InvalidTicket)?
         .with_readiness(ReadinessExpectation::None))
 }
@@ -4353,6 +4462,83 @@ mod tests {
         );
     }
 
+    /// A per-pass resolved identity input the current context cannot resolve
+    /// is unknown, never a change: the manager-served Guest's VMM was retired
+    /// and relaunched on every daemon restart because the recovery pass that
+    /// adopted the live process could not resolve the owning Guest's uid and
+    /// the next pass could (U13/U6, 2026-09-11).
+    #[test]
+    fn identity_change_is_proven_only_when_both_sides_resolve() {
+        let resource_ref =
+            ResourceRef::parse("Process/acceptance-guest-vmm").expect("resource ref");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let guest_ref = ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
+        let guest_uid =
+            ResourceUid::parse("30e0427b-496f-4190-ba7c-879ccdec7964").expect("guest uid");
+        let other_guest_uid =
+            ResourceUid::parse("30e0427b-496f-4190-ba7c-879ccdec7965").expect("guest uid");
+        let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider ref");
+        let managed = ManagedResource {
+            zone: ZoneId::parse("work").expect("zone"),
+            zone_uid: Some(zone_uid.clone()),
+            resource_ref: resource_ref.clone(),
+            provider: ManagedProvider::Minijail,
+            provider_ref: provider_ref.clone(),
+            provider_uid: None,
+            provider_generation: None,
+            owner_ref: Some(guest_ref.clone()),
+            owner_uid: None,
+            template: BoundedToken::parse("cloud-hypervisor-runner").expect("template"),
+            identity: ProcessIdentityDigest::from_bytes([7; 32]),
+            uid: uid.clone(),
+            generation: ResourceGeneration::new(4).expect("generation"),
+            controller_generation: ControllerGeneration::new(1).expect("controller generation"),
+            execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
+            target_ref: None,
+            runtime_scope: None,
+        };
+        let context = ProcessResourceContext::new(
+            ZoneId::parse("work").expect("zone"),
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(4).expect("generation"),
+            ZoneRevision::new(4),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_lifecycle_identity(Some(zone_uid.clone()), Some(1), None)
+        .with_owner_ref(Some(guest_ref))
+        .with_owner_uid(Some(guest_uid.clone()));
+        // The stored entry could not resolve the owner; the request can. That
+        // asymmetry is not a change, so the retire pre-flight keeps the live
+        // process - while the strict comparison still reports the difference
+        // the destructive gates refuse on.
+        assert!(resource_identity_changes(&managed, &context).is_empty());
+        assert_eq!(
+            resource_identity_mismatches(&managed, &context),
+            [format!(
+                "owner_uid(managed=none,requested={})",
+                guest_uid.to_canonical_string()
+            )]
+        );
+        // A proven change - both sides known and different - still retires.
+        let mut resolved = managed.clone();
+        resolved.owner_uid = Some(guest_uid.clone());
+        assert!(resource_identity_changes(&resolved, &context).is_empty());
+        let changed = context.clone().with_owner_uid(Some(other_guest_uid.clone()));
+        assert_eq!(
+            resource_identity_changes(&resolved, &changed),
+            [format!(
+                "owner_uid(managed={},requested={})",
+                guest_uid.to_canonical_string(),
+                other_guest_uid.to_canonical_string()
+            )]
+        );
+    }
+
     #[test]
     fn managed_resource_finalization_requires_the_current_resource_identity() {
         let resource_ref = ResourceRef::parse("Process/worker").expect("resource ref");
@@ -4724,6 +4910,96 @@ mod tests {
                 Some(ReadinessClass::ReadyCondition),
             ),
             Err("provider-ticket:template-not-found".to_owned())
+        );
+    }
+
+    /// The bundle process-DAG ticket path names its own VM in the launch
+    /// identity: every node shares the `Host/host-system` execution target, so
+    /// only the DAG's `vm` can select the node's trusted runner intent - and
+    /// the broker's identity fence reads that value instead of re-deriving the
+    /// VM from the execution target.
+    #[test]
+    fn process_dag_ticket_names_its_vm_in_the_launch_identity() {
+        use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
+
+        let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::new(),
+        );
+        let node = ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            id: NodeId("virtiofsd-worker".to_owned()),
+            role: ProcessRole::Virtiofsd,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            network_interfaces: Vec::new(),
+            profile: d2b_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("virtiofsd-worker")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+
+        let ticket = build_ticket(
+            &resolver,
+            "corp-vm",
+            &node,
+            ManagedProvider::Minijail,
+            Duration::from_secs(5),
+        )
+        .expect("bundle node ticket");
+        let identity = ticket.launch_identity();
+        assert_eq!(identity.vm(), Some("corp-vm"));
+        assert_eq!(identity.launch_vm(), "corp-vm");
+        assert_eq!(identity.role(), "virtiofsd-worker");
+        assert_eq!(
+            identity.execution_ref().resource_type().as_str(),
+            "Host",
+            "the DAG node executes on the shared host target"
         );
     }
 }

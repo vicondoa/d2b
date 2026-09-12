@@ -18,15 +18,19 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode { };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     import shlex
 
     start_all()
+    stage("boot")
 
-    machine.wait_for_unit("d2b-broker.socket", timeout=30)
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("broker-socket", "d2b-broker.socket", 30)
+    diag_unit("daemon-up", "d2bd.service", 180)
 
     # The broker is socket-activated, but starting the service directly keeps a
     # live Type=notify process long enough to read its /proc posture.
+    stage("broker-start")
     machine.succeed("systemctl start d2b-broker.service")
     broker_pid = machine.succeed(
         "for i in $(seq 1 100); do "
@@ -35,11 +39,13 @@ pkgs.testers.runNixOSTest {
         "echo \"$pid\"; exit 0; fi; "
         "sleep 0.2; "
         "done; "
-        "systemctl status --no-pager d2b-broker.service >&2; "
+        "echo 'd2b-broker.service did not publish a MainPID within 20s:'; "
+        "systemctl status --no-pager d2b-broker.service; "
         "exit 1"
     ).strip()
     print(f"live d2b-broker PID: {broker_pid}")
 
+    stage("broker-posture")
     unit_raw = machine.succeed(
         "systemctl show d2b-broker.service "
         "-p CapabilityBoundingSet "
@@ -151,6 +157,7 @@ pkgs.testers.runNixOSTest {
             return 0
         raise AssertionError(f"unknown systemd boolean value: {value!r}")
 
+    stage("posture-oracle")
     expected_uid = int(machine.succeed(f"id -u {shlex.quote(unit['User'])}").strip())
     expected_gid = int(
         machine.succeed(f"getent group {shlex.quote(unit['Group'])} | cut -d: -f3").strip()

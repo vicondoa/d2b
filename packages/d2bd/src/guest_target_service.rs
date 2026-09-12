@@ -120,9 +120,34 @@ impl GuestTargetRefusal {
 ///
 /// The composition owns the map: a type appears here exactly when this Guest
 /// has the effect code to apply its target-local spec (see the module consumer
-/// note). Today the map is empty - no converted type has Guest-side effect
-/// code yet - so every type is refused rather than recorded.
+/// note).
 pub(crate) type GuestTargetEffects = BTreeMap<ResourceTypeName, Arc<dyn GuestTargetEffect>>;
+
+/// The production Guest-side effect map (U13).
+///
+/// **This map is intentionally empty, and that is the gap, not an oversight.**
+/// Registering a type here is what makes the service record and serve its
+/// realize frames; no converted type has Guest-side effect code in this tree,
+/// so a placeholder entry would have the Guest record a realization it cannot
+/// apply - strictly worse than the honest refusal the empty map produces.
+///
+/// What exists instead, and what this map deliberately does not replace:
+///
+/// - the Guest's own children are realized by the preserved Guest-local path
+///   (`run_guest_process_reconciliation` over the Guest-local store) and by
+///   the Cloud Hypervisor controller's seed batch (U6);
+/// - a Host-zone resource whose spec targets a Guest is assigned to the Zone
+///   target directory and reaches the Guest through the authenticated
+///   ComponentSession ([`GuestTargetService`]); until its type is registered
+///   here, that realize frame is refused with no state.
+///
+/// Guest-side realization for converted types (the Guest half of those
+/// drivers, applying the host-resolved spec inside the Guest) is follow-on
+/// work to U13; it is not on the Cloud Hypervisor acceptance path, which this
+/// map does not serve either way.
+pub(crate) fn production_guest_target_effects() -> GuestTargetEffects {
+    GuestTargetEffects::new()
+}
 
 /// The Guest-mode target-control service.
 ///

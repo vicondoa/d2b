@@ -408,43 +408,44 @@ impl BrokerLaunchResolver for BundleBackedLaunchResolver {
 }
 
 impl BundleBackedLaunchResolver {
+    /// Resolve one launch ticket against the trusted bundle.
+    ///
+    /// Every fence refusal below - no trusted intent for the ticket's role,
+    /// template, execution target, scope, or descriptor posture - is a
+    /// *resolution* refusal: the daemon holds no trusted launch configuration
+    /// this ticket names, so nothing was launched, nothing was observed, and
+    /// no process identity is in question. It is reported as
+    /// [`ProcessEffectError::ResolutionFailed`] (never
+    /// [`ProcessEffectError::IdentityChanged`]), so the effect ports project it
+    /// as `LaunchFailed` rather than `AdoptionAmbiguous`: an adopt probe the
+    /// fence refuses must not read as an ambiguous identity, which the Process
+    /// driver would quarantine as terminal (R15 is about observed identity,
+    /// not about a ticket that never resolved).
     fn resolve_intent(
         &self,
         request: &ProcessRequest,
     ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
         let ticket = request.ticket();
+        // The launch identity was resolved once from the durable row; this
+        // fence reads it instead of re-deriving the VM scope, the legacy
+        // role, or the binding worker's host-exec/guest-target split.
+        let identity = ticket.launch_identity();
         if !matches!(
             ticket.execution_ref().resource_type().as_str(),
             "Host" | "Guest"
         ) {
             return Err(ProcessEffectError::UnsupportedProvider);
         }
-        let vm_name = match (
-            ticket.execution_ref().resource_type().as_str(),
-            ticket.target_ref(),
-        ) {
-            ("Guest", None) => ticket.execution_ref().name().as_str(),
-            ("Host", None) => ticket.execution_ref().name().as_str(),
-            ("Host", Some(target)) if target.resource_type().as_str() == "Guest" => {
-                target.name().as_str()
-            }
-            _ => return Err(ProcessEffectError::IdentityChanged),
-        };
-        let binding_worker_launch = ticket
-            .owner_ref()
-            .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
+        let vm_name = identity.vm_or_execution();
+        let binding_worker_launch = identity.is_binding_worker();
         // KTD7 host-exec/guest-target split: a binding-owned serving worker
         // executes on the Host the signed serving template binds; the
         // attachment's Guest is only the ticket's target ref. The launch's
         // VM identity is therefore the execution host, exactly as the
         // serving intent was minted under it (the broker daemon fences the
         // requested vm_id against the intent's own vm name).
-        let launch_vm_name = if binding_worker_launch {
-            ticket.execution_ref().name().as_str()
-        } else {
-            vm_name
-        };
-        let process_role_id = ticket.process_ref().name().as_str();
+        let launch_vm_name = identity.launch_vm();
+        let process_role_id = identity.role();
         let intent_id = intent_id_legacy_runner(vm_name, process_role_id);
         let expected_execution_ref = ticket.execution_ref().to_canonical_string();
         let expected_execution_domain = match ticket.domain() {
@@ -498,7 +499,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: guest vmm launch requires a zone uid"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             self.bundle.find_guest_vmm_intent_for_zone_uid(
                 zone_uid,
@@ -573,7 +574,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved intent vm or legacy role mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let typed_identity = !legacy_identity && !ticket.has_controller_launch_binding();
         if typed_identity {
@@ -583,7 +584,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: typed launch requires a zone uid"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             let Some(runtime_scope) = ticket.runtime_scope() else {
                 warn!(
@@ -591,7 +592,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: typed launch requires a runtime scope"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             };
             let expected_scope = runtime_scope_commitment(
                 zone_uid,
@@ -610,7 +611,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: runtime scope commitment mismatch"
                 );
-                return Err(ProcessEffectError::IdentityChanged);
+                return Err(ProcessEffectError::ResolutionFailed);
             }
         }
         let inherited_fd_count = ticket.inherited_fd_table().count();
@@ -627,7 +628,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: inherited descriptor table does not match the runner role"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if intent.execution_ref != expected_execution_ref {
             warn!(
@@ -635,7 +636,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved execution ref mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let expected_domain = match intent.execution_domain {
             d2b_core::processes::ProcessExecutionDomain::System => ExecutionDomain::System,
@@ -647,7 +648,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved execution domain mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let expected_user_ref = intent
             .user_ref
@@ -660,7 +661,7 @@ impl BundleBackedLaunchResolver {
                     resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved user ref failed to parse"
                 );
-                ProcessEffectError::IdentityChanged
+                ProcessEffectError::ResolutionFailed
             })?;
         if ticket.user_ref() != expected_user_ref.as_ref() {
             warn!(
@@ -668,7 +669,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: resolved user ref mismatch"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if ticket.execution_ref().resource_type().as_str() == "Guest"
             && ticket.guest_execution_binding().is_none()
@@ -678,7 +679,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: guest execution requires a guest binding"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         if ticket.execution_ref().resource_type().as_str() == "Host"
             && ticket.guest_execution_binding().is_some()
@@ -688,7 +689,7 @@ impl BundleBackedLaunchResolver {
                 resource = %ticket.process_ref().to_canonical_string(),
                 "identity-rejection: host execution must not carry a guest binding"
             );
-            return Err(ProcessEffectError::IdentityChanged);
+            return Err(ProcessEffectError::ResolutionFailed);
         }
         let guest_execution =
             ticket
@@ -737,7 +738,7 @@ impl BundleBackedLaunchResolver {
                         resource = %ticket.process_ref().to_canonical_string(),
                     "identity-rejection: trusted bundle content identity missing"
                 );
-                    ProcessEffectError::IdentityChanged
+                    ProcessEffectError::ResolutionFailed
                 })?,
             activation_input: ticket.activation_input().cloned(),
             guest_execution,

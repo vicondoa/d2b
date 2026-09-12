@@ -20,6 +20,7 @@ pub const MAX_LAUNCH_ARGS_TOTAL_BYTES: usize = 16 * 1024;
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
+use crate::launch_identity::LaunchIdentity;
 use crate::sandbox::SandboxPlan;
 
 /// Maximum launch deadline, matching the frozen resource-API request
@@ -386,6 +387,11 @@ pub struct LaunchTicket {
     zone_uid: Option<ResourceUid>,
     owner_ref: Option<ResourceRef>,
     owner_uid: Option<ResourceUid>,
+    /// The canonical launch identity this ticket carries: owner ref/UID,
+    /// execution target, cross-target selector, VM scope, and legacy runner
+    /// role. The broker's identity fence consumes it instead of re-deriving
+    /// its fields.
+    launch_identity: LaunchIdentity,
     runtime_scope: Option<ConfigurationDigest>,
     resource_revision: Option<ZoneRevision>,
     resource_generation: ResourceGeneration,
@@ -466,12 +472,22 @@ impl LaunchTicket {
         let provider_ref = ResourceRef::parse(&format!("Provider/{}", selected_provider.as_str()))
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         let inherited_fd_table = InheritedFdTable::new(digests.fd_table, 0)?;
+        let launch_identity = LaunchIdentity::new(
+            None,
+            None,
+            execution_ref.clone(),
+            None,
+            process_ref.name().as_str(),
+            false,
+        )
+        .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         Ok(Self {
             process_ref,
             process_uid,
             zone_uid: None,
             owner_ref: None,
             owner_uid: None,
+            launch_identity,
             runtime_scope: None,
             resource_revision: None,
             resource_generation,
@@ -535,9 +551,50 @@ impl LaunchTicket {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         self.zone_uid = Some(zone_uid);
-        self.owner_ref = owner_ref;
+        if let Some(owner_ref) = owner_ref {
+            self.launch_identity = self
+                .launch_identity
+                .clone()
+                .with_owner(owner_ref.clone())
+                .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+            self.owner_ref = Some(owner_ref);
+        }
         self.runtime_scope = Some(runtime_scope);
         Ok(self)
+    }
+
+    /// Carry the canonical launch identity of this launch.
+    ///
+    /// The identity is resolved once from the durable row (owner ref, owner
+    /// UID, execution target, target selector, VM, legacy role) and adopted
+    /// together with its owner and target inputs, so the ticket and its
+    /// identity can never drift. The execution target and the legacy role
+    /// must already match this ticket's own process identity.
+    pub fn with_launch_identity(
+        mut self,
+        identity: LaunchIdentity,
+    ) -> Result<Self, ProcessConformanceError> {
+        if identity.execution_ref() != &self.execution_ref
+            || identity.role() != self.process_ref.name().as_str()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        if let Some(owner) = identity.owner_ref() {
+            self.owner_ref = Some(owner.clone());
+        }
+        if let Some(owner_uid) = identity.owner_uid() {
+            self.owner_uid = Some(owner_uid.clone());
+        }
+        if let Some(target) = identity.target_ref() {
+            self.target_ref = Some(target.clone());
+        }
+        self.launch_identity = identity;
+        Ok(self)
+    }
+
+    /// Borrow the canonical launch identity this ticket carries.
+    pub const fn launch_identity(&self) -> &LaunchIdentity {
+        &self.launch_identity
     }
 
     /// Bind the immutable UID of the semantic owner.
@@ -548,6 +605,11 @@ impl LaunchTicket {
         if self.owner_ref.is_none() || self.owner_uid.is_some() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        self.launch_identity = self
+            .launch_identity
+            .clone()
+            .with_owner_uid(owner_uid.clone())
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.owner_uid = Some(owner_uid);
         Ok(self)
     }
@@ -564,6 +626,11 @@ impl LaunchTicket {
         if self.owner_ref.is_some() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        self.launch_identity = self
+            .launch_identity
+            .clone()
+            .with_owner(owner_ref.clone())
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.owner_ref = Some(owner_ref);
         Ok(self)
     }
@@ -592,6 +659,11 @@ impl LaunchTicket {
         if target_ref.resource_type().as_str() != "Guest" || self.target_ref.is_some() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        self.launch_identity = self
+            .launch_identity
+            .clone()
+            .with_target_ref(target_ref.clone())
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.target_ref = Some(target_ref);
         Ok(self)
     }
@@ -1363,6 +1435,53 @@ mod tests {
         assert_eq!(
             bound.resource_client_binding(),
             Some(ConfigurationDigest::from_bytes([11; 32]))
+        );
+    }
+
+    #[test]
+    fn launch_identity_tracks_the_ticket_owner_target_and_vm() {
+        let owner = ResourceRef::parse("VolumeBinding/data").unwrap();
+        let target = ResourceRef::parse("Guest/acceptance-guest").unwrap();
+        let zone_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let owner_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174001").unwrap();
+        let scope = ConfigurationDigest::from_bytes([3; 32]);
+
+        let ticket = fixtures::ticket_builder()
+            .execution_ref(ResourceRef::parse("Host/host-system").unwrap())
+            .build()
+            .unwrap()
+            .with_target_ref(target.clone())
+            .unwrap()
+            .with_runtime_identity(zone_uid, Some(owner.clone()), scope)
+            .unwrap()
+            .with_owner_uid(owner_uid.clone())
+            .unwrap();
+
+        let identity = ticket.launch_identity();
+        assert_eq!(identity.owner_ref(), Some(&owner));
+        assert_eq!(identity.owner_uid(), Some(&owner_uid));
+        assert_eq!(identity.target_ref(), Some(&target));
+        assert_eq!(identity.vm(), Some("acceptance-guest"));
+        assert_eq!(identity.launch_vm(), "host-system");
+        assert!(identity.is_binding_worker());
+        assert_eq!(identity.role(), ticket.process_ref().name().as_str());
+
+        // A ticket that already named its own execution target cannot adopt an
+        // identity for another one.
+        let mismatched = LaunchIdentity::new(
+            None,
+            None,
+            ResourceRef::parse("Host/other-host").unwrap(),
+            None,
+            ticket.process_ref().name().as_str(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            ticket.with_launch_identity(mismatched).unwrap_err(),
+            ProcessConformanceError::InvalidTicket
         );
     }
 

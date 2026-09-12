@@ -696,6 +696,10 @@ fn acquire_verify_lock(farm_root: &Path) -> Result<File, String> {
         .map_err(|err| format!("open {}: {err}", path.display()))?;
     flock(file.as_raw_fd(), FlockArg::LockExclusive)
         .map_err(|err| format!("lock {}: {err}", path.display()))?;
+    // Same `file-record` owner evidence StoreSync writes: a lock without a
+    // verifiable live owner stays quarantined for the daemon.
+    hardlink_farm::SyncLockOwnerRecord::record_current_process(&file)
+        .map_err(|err| format!("record {} owner: {err}", path.display()))?;
     Ok(file)
 }
 

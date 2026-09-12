@@ -1,16 +1,26 @@
 //! Endpoint resource driver (U7): the v3 `ResourceDriver` conversion of the
 //! daemon-owned Endpoint realization path (R4, R8, R9; F4).
 //!
-//! The driver covers the transport-unix / purpose `virtiofsd` realization
-//! case per preserved behavior (the binding-owned virtiofsd socket, old
-//! `binding_child_resource_runtime`): recover probes the socket on the
-//! host target, reconcile realizes the socket through the provider port as
-//! a long effect, and delete participates in the preserved endpoint-first
-//! teardown ordering - the endpoint is removed BEFORE the worker Process
-//! child (the binding driver deletes its own endpoint child first, then
-//! the worker; the drain finalizer and recycle-with-producer semantics are
-//! preserved: an endpoint with `recycle-with-producer` lifecycle goes away
-//! with its producer and nothing outlives it).
+//! The driver covers the endpoint shapes the v3 plane realizes, per
+//! preserved behavior:
+//!
+//! - the transport-unix / purpose `virtiofsd` socket (the binding-owned
+//!   virtiofsd socket, old `binding_child_resource_runtime`): recover probes
+//!   the socket on the host target, reconcile realizes the socket through
+//!   the provider port as a long effect, and delete participates in the
+//!   preserved endpoint-first teardown ordering - the endpoint is removed
+//!   BEFORE the worker Process child (the binding driver deletes its own
+//!   endpoint child first, then the worker; the drain finalizer and
+//!   recycle-with-producer semantics are preserved: an endpoint with
+//!   `recycle-with-producer` lifecycle goes away with its producer and
+//!   nothing outlives it);
+//! - the guest-runtime control endpoints the Cloud Hypervisor provider's
+//!   fixed child roles declare (`ch-api` on the guest's VMM Process,
+//!   `guest-control` on the Guest): the nested VMM carries both private
+//!   rendezvous, so the same recover/reconcile/delete verbs run against the
+//!   guest's committed VMM Process row instead of a socket this daemon
+//!   creates (U17: the row's actor owns its status; the old publication
+//!   stage wrote both rows from exactly that evidence).
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`EndpointDriverFactory`] registration under `Endpoint`.
@@ -26,7 +36,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
-    endpoint::{EndpointClass, EndpointLifecyclePolicy, EndpointSpec, EndpointTransport},
+    endpoint::{
+        EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
+        EndpointVisibility,
+    },
     ResourceRef, ResourceSpec,
 };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
@@ -41,6 +54,109 @@ pub(crate) const ENDPOINT_TYPE_NAME: &str = "Endpoint";
 
 /// The frozen purpose of the binding-owned virtiofsd socket.
 const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
+
+/// The producer one guest-runtime control purpose is declared with, exactly
+/// as the Cloud Hypervisor provider's fixed child roles commit it
+/// (`GuestChildBatch::from_descriptor`): `ch-api` is created on the guest's
+/// VMM Process (`process_ref`), `guest-control` on the Guest itself
+/// (`owner_ref`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GuestControlProducer {
+    /// The guest's VMM Process child (`Process/<guest>-vmm`).
+    VmmProcess,
+    /// The Guest itself.
+    Guest,
+}
+
+impl GuestControlProducer {
+    /// The producer ResourceType the provider's role vocabulary declares.
+    pub(crate) const fn resource_type(self) -> &'static str {
+        match self {
+            Self::VmmProcess => d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess
+                .resource_type(),
+            Self::Guest => "Guest",
+        }
+    }
+
+    /// The locality the provider materializes for this producer
+    /// (`materialize_child_payload`: `cross-domain` exactly for the
+    /// Guest-produced endpoint, `host-local` for the VMM-Process-produced
+    /// one, whose API socket lives on the host beside the VMM).
+    pub(crate) const fn locality(self) -> EndpointLocality {
+        match self {
+            Self::VmmProcess => EndpointLocality::HostLocal,
+            Self::Guest => EndpointLocality::CrossDomain,
+        }
+    }
+}
+
+/// The producer the Cloud Hypervisor provider's own child-role vocabulary
+/// declares for one guest-runtime control purpose, or `None` for any other
+/// purpose. Derived from the provider's role list, so the closed family
+/// cannot drift from the children a guest's provider controller commits.
+pub(crate) fn guest_control_producer(purpose: &str) -> Option<GuestControlProducer> {
+    use d2b_provider_runtime_cloud_hypervisor::ChildRole;
+    for (role, producer) in [
+        (ChildRole::ChApiEndpoint, GuestControlProducer::VmmProcess),
+        (ChildRole::GuestControlEndpoint, GuestControlProducer::Guest),
+    ] {
+        if role.purpose() == Some(purpose) {
+            return Some(producer);
+        }
+    }
+    None
+}
+
+/// Whether one purpose belongs to the guest-runtime control family.
+pub(crate) fn guest_control_purpose(purpose: &str) -> bool {
+    guest_control_producer(purpose).is_some()
+}
+
+/// The realization the v3 plane owns for one admitted Endpoint spec. Anything
+/// outside this closed set is refused at validate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EndpointRealization {
+    /// The binding-owned virtiofsd socket: transport unix, purpose
+    /// `virtiofsd`, realized by the serving worker Process child on the host.
+    VirtiofsdSocket,
+    /// One guest-runtime control endpoint: a provider-visible control
+    /// endpoint the Cloud Hypervisor provider's fixed child roles declare
+    /// (`ch-api` on the guest's VMM Process, `guest-control` on the Guest).
+    /// The nested VMM carries both private rendezvous - the Cloud Hypervisor
+    /// API socket and the authenticated guest-control session - so the
+    /// realization is the evidence row's committed VMM Process being live,
+    /// the evidence the old daemon publication stage read.
+    GuestControl,
+}
+
+/// Classify one Endpoint spec onto the realization the plane owns.
+pub(crate) fn endpoint_realization(spec: &EndpointSpec) -> Option<EndpointRealization> {
+    if spec.endpoint_class() == EndpointClass::Service
+        && spec.transport() == EndpointTransport::Unix
+        && spec.purpose().as_str() == VIRTIOFSD_PURPOSE
+        && spec.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
+    {
+        return Some(EndpointRealization::VirtiofsdSocket);
+    }
+    // The control family is exactly the shape the provider's own child roles
+    // commit, per purpose: the producer role's ResourceType and the locality
+    // the provider materializes for that producer. `ch-api` is produced by
+    // the VMM Process (host-local: the API socket lives on the host beside
+    // the VMM), `guest-control` by the Guest (cross-domain). No other
+    // producer/purpose pairing is admitted, and nothing else about the
+    // Endpoint family is relaxed.
+    if spec.endpoint_class() == EndpointClass::Control
+        && spec.transport() == EndpointTransport::OpaqueCarriage
+        && spec.visibility() == EndpointVisibility::Provider
+        && spec.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
+        && let Some(producer) = guest_control_producer(spec.purpose().as_str())
+        && spec.producer_ref().resource_type().as_str() == producer.resource_type()
+        && spec.locality() == producer.locality()
+    {
+        return Some(EndpointRealization::GuestControl);
+    }
+    None
+}
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -279,16 +395,12 @@ impl EndpointDriver {
             .map_err(|_| self.error(EndpointDriverErrorKind::SpecInvalid, op))
     }
 
-    /// The daemon-owned shape this driver realizes: the binding-owned
-    /// virtiofsd socket (transport unix, purpose virtiofsd, recycle with
-    /// its producer). Any other shape stays on the old reconciler until
-    /// its conversion unit.
+    /// The closed set of Endpoint shapes the v3 plane realizes: the
+    /// binding-owned virtiofsd socket and the Guest-produced control
+    /// endpoints the Cloud Hypervisor provider declares. Any other shape
+    /// stays on the old reconciler until its conversion unit.
     fn check_shape(&self, spec: &EndpointSpec, op: DriverOp) -> Result<(), EndpointDriverError> {
-        if spec.transport() != EndpointTransport::Unix
-            || spec.purpose().as_str() != "virtiofsd"
-            || spec.endpoint_class() != EndpointClass::Service
-            || spec.lifecycle_policy() != EndpointLifecyclePolicy::RecycleWithProducer
-        {
+        if endpoint_realization(spec).is_none() {
             return Err(self.error(EndpointDriverErrorKind::ShapeUnsupported, op));
         }
         Ok(())
@@ -816,5 +928,196 @@ mod tests {
         let mut d = driver(FakeSocketEffects::new()).await;
         let failure = d.reconcile(&mut ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal);
+    }
+
+    // -- guest-runtime control endpoints ------------------------------------------
+
+    /// The producer and locality the Cloud Hypervisor provider's own child-role
+    /// vocabulary declares for one guest-runtime control purpose
+    /// (`GuestChildBatch::from_descriptor` + `materialize_child_payload`):
+    /// `ch-api` is created on the guest's VMM Process and materialized
+    /// host-local (the Cloud Hypervisor API socket lives on the host beside
+    /// the VMM), `guest-control` on the Guest and materialized cross-domain.
+    fn provider_control_shape(purpose: &str) -> (ResourceRef, EndpointLocality) {
+        let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
+        match super::guest_control_producer(purpose).expect("declared control purpose") {
+            super::GuestControlProducer::VmmProcess => (
+                d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+                    &guest,
+                    d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+                )
+                .expect("deterministic VMM child"),
+                EndpointLocality::HostLocal,
+            ),
+            super::GuestControlProducer::Guest => (guest, EndpointLocality::CrossDomain),
+        }
+    }
+
+    /// One control endpoint exactly as the provider commits it for `purpose`.
+    fn guest_control_endpoint_spec(purpose: &str) -> EndpointSpec {
+        let (producer, locality) = provider_control_shape(purpose);
+        control_endpoint_spec(purpose, producer, locality)
+    }
+
+    fn control_endpoint_spec(
+        purpose: &str,
+        producer: ResourceRef,
+        locality: EndpointLocality,
+    ) -> EndpointSpec {
+        EndpointSpec::new(
+            ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
+            producer,
+            EndpointClass::Control,
+            EndpointTransport::OpaqueCarriage,
+            BoundedToken::parse(purpose).expect("purpose"),
+            None,
+            locality,
+            EndpointVisibility::Provider,
+            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
+                .expect("attachment policy"),
+            EndpointConsumerPolicy::new(
+                vec![],
+                vec![],
+                vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
+            )
+            .expect("consumer policy"),
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .expect("endpoint spec")
+    }
+
+    /// Regression (vmCheck guest preflight): the provider commits `ch-api` on
+    /// the VMM Process with locality `host-local`, not on the Guest with
+    /// `cross-domain`. The admission set previously took the Guest-produced
+    /// shape as the whole family, so the committed `ch-api` row failed
+    /// `validate` terminally (`endpoint-shape-unsupported`), the guest's
+    /// endpoint-publication stage refused its `Failed` phase, and the Guest
+    /// never reached Ready.
+    #[test]
+    fn provider_committed_control_shapes_are_admitted() {
+        for purpose in ["ch-api", "guest-control"] {
+            let spec = guest_control_endpoint_spec(purpose);
+            assert_eq!(
+                super::endpoint_realization(&spec),
+                Some(super::EndpointRealization::GuestControl),
+                "{purpose} is one of the provider's fixed child-role endpoints",
+            );
+        }
+        // The family is derived from the provider's own vocabulary: the
+        // admitted purposes are exactly the role purposes it declares.
+        for purpose in ["ch-api", "guest-control"] {
+            assert!(super::guest_control_purpose(purpose));
+        }
+        assert!(!super::guest_control_purpose("virtiofsd"));
+        assert!(!super::guest_control_purpose("aca-sandbox-agent"));
+    }
+
+    /// A look-alike control endpoint stays refused at validate: the admitted
+    /// family is the Cloud Hypervisor provider's fixed child roles with the
+    /// producer and locality that role is committed with - not every
+    /// control-shaped Endpoint, and not either role's purpose on the other
+    /// role's producer.
+    #[tokio::test]
+    async fn look_alike_control_endpoints_stay_refused() {
+        let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
+        let vmm = ResourceRef::parse("Process/acceptance-guest-vmm").expect("vmm");
+        let with_transport = |purpose: &str, producer: ResourceRef, locality, transport| {
+            EndpointSpec::new(
+                ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
+                producer,
+                EndpointClass::Control,
+                transport,
+                BoundedToken::parse(purpose).expect("purpose"),
+                None,
+                locality,
+                EndpointVisibility::Provider,
+                d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(false, 0)
+                    .expect("attachment policy"),
+                EndpointConsumerPolicy::new(vec![], vec![], vec![]).expect("consumer policy"),
+                EndpointLifecyclePolicy::RecycleWithProducer,
+            )
+            .expect("endpoint spec")
+        };
+        let cases = [
+            (
+                "an undeclared purpose",
+                with_transport(
+                    "aca-sandbox-agent",
+                    guest.clone(),
+                    EndpointLocality::CrossDomain,
+                    EndpointTransport::OpaqueCarriage,
+                ),
+            ),
+            (
+                "a non-carriage transport",
+                with_transport(
+                    "guest-control",
+                    guest.clone(),
+                    EndpointLocality::CrossDomain,
+                    EndpointTransport::Unix,
+                ),
+            ),
+            (
+                "guest-control on the VMM Process producer",
+                control_endpoint_spec("guest-control", vmm.clone(), EndpointLocality::CrossDomain),
+            ),
+            (
+                "ch-api on the Guest producer",
+                control_endpoint_spec("ch-api", guest.clone(), EndpointLocality::HostLocal),
+            ),
+            (
+                "ch-api materialized cross-domain",
+                control_endpoint_spec("ch-api", vmm.clone(), EndpointLocality::CrossDomain),
+            ),
+            (
+                "guest-control materialized host-local",
+                control_endpoint_spec("guest-control", guest, EndpointLocality::HostLocal),
+            ),
+        ];
+        for (case, spec) in cases {
+            let mut ctx = fixture(test_row(&spec));
+            let mut d = driver(FakeSocketEffects::new()).await;
+            assert_eq!(
+                d.validate(&mut ctx).await.expect_err(case).class(),
+                FailureClass::Terminal,
+                "{case} must stay refused",
+            );
+        }
+    }
+
+    /// U17: the guest's nested VMM carries the `ch-api` and `guest-control`
+    /// rendezvous, so their converted rows are the plane's to realize; the
+    /// driver admits both (their row's actor owns the status the guest's
+    /// provider controller gates on) and runs the same
+    /// validate/recover/reconcile/delete verbs as any other admitted shape.
+    #[tokio::test]
+    async fn guest_control_shapes_realize_through_the_endpoint_verbs() {
+        for purpose in ["ch-api", "guest-control"] {
+            let fake = FakeSocketEffects::new();
+            let mut ctx = fixture(test_row(&guest_control_endpoint_spec(purpose)));
+            let mut d = driver(fake.clone()).await;
+
+            d.validate(&mut ctx).await.expect("validate admits the shape");
+            // The VMM evidence the production probe reads is not present in
+            // this unit fixture: recover reports the endpoint missing and
+            // reconcile realizes it through the effect port.
+            assert_eq!(
+                d.recover(&mut ctx).await.expect("recover"),
+                RecoveryOutcome::Missing
+            );
+            match d.reconcile(&mut ctx).await.expect("reconcile") {
+                ReconcileOutcome::InProgress { .. } => {}
+                other => panic!("expected InProgress, got {other:?}"),
+            }
+            for _ in 0..16 {
+                tokio::task::yield_now().await;
+            }
+            assert!(fake.call_order().contains(&"ensure-socket"));
+            assert_eq!(
+                d.reconcile(&mut ctx).await.expect("reconcile"),
+                ReconcileOutcome::Satisfied
+            );
+            d.delete(&mut ctx).await.expect("delete converges");
+        }
     }
 }

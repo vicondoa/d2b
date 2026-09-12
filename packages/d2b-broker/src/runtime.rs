@@ -2362,6 +2362,19 @@ fn serving_worker_launch(
         && intent.owner_ref.as_deref() == Some("Provider/volume-virtiofs")
 }
 
+/// Index of the controller-bootstrap escrow fd on a `SpawnRunner` response.
+///
+/// Only a non-serving `ProviderController` launch carries the escrow
+/// descriptor: the binding-owned serving worker deliberately attaches none
+/// (`validate_spawn_runner_request_fds`), so its response fd vector holds the
+/// pidfd alone. Advertising index 1 for that launch made the supervisor's
+/// strict decode reject a spawn that had already succeeded
+/// (`ProcessEffectError::PidfdUnavailable`), orphaning the worker.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn controller_bootstrap_fd_index(role: RunnerRole, serving_worker: bool) -> Option<u32> {
+    (role == RunnerRole::ProviderController && !serving_worker).then_some(1)
+}
+
 /// Real-wire dispatch. Matches the opaque-ID
 /// `d2b_contracts_broker::broker_wire::BrokerRequest` tuple-newtype shape and
 /// wires the live executors into the dispatch arms that have a ready
@@ -4247,7 +4260,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 return Err(error);
             }
             let controller_bootstrap_fd_index =
-                (req.role == RunnerRole::ProviderController).then_some(1);
+                controller_bootstrap_fd_index(req.role, serving_worker);
             let console_fd_index = if outcome.extra_response_fds.is_empty()
                 || req.role == RunnerRole::ProviderController
             {
@@ -15162,6 +15175,28 @@ mod tests {
         digest.update(b"d2b-process-provider-v1");
         digest.update(provider_name.as_bytes());
         digest.finalize().into()
+    }
+
+    /// A launch that carried no bootstrap escrow descriptor must not
+    /// advertise one: the supervisor decodes the response index strictly, and
+    /// an out-of-range index rejected an already-running serving worker
+    /// (`ProcessEffectError::PidfdUnavailable`), orphaning the virtiofsd
+    /// worker the broker had just spawned.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn response_bootstrap_index_tracks_the_serving_worker_posture() {
+        assert_eq!(
+            controller_bootstrap_fd_index(RunnerRole::ProviderController, false),
+            Some(1)
+        );
+        assert_eq!(
+            controller_bootstrap_fd_index(RunnerRole::ProviderController, true),
+            None
+        );
+        assert_eq!(
+            controller_bootstrap_fd_index(RunnerRole::CloudHypervisor, false),
+            None
+        );
     }
 
     /// R35 blocker: the serving-worker posture is a property of the resolved

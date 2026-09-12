@@ -25,10 +25,23 @@ system store path, `g-<hex>`; **not** the truncated u32 token):
 | `store-view/state/current`                        | host-only      | `-> generations/<generation_id>`                                         |
 | `store-view/state/generations/<id>/`              | host-only      | `system -> /nix/store/...`, `marker.json`, host `meta.json`              |
 | `store-view/gcroots/generation-<id>`              | host-only      | symlink to the generation's system store path (GC pin)                   |
-| `store-view/sync.lock`                            | host-only      | `flock(2)` exclusion for the op                                          |
+| `store-view/sync.lock`                            | host-only      | `flock(2)` exclusion for the op; carries the broker's live-owner record  |
 
 The guest `d2b-meta` share points at `store-view/meta/` only; `state/`,
 `gcroots/`, and `sync.lock` are never exposed to the guest.
+
+`sync.lock` is the `Volume` layout's `file-record` entry. While the broker
+holds the exclusive `flock(2)` it writes a closed owner record
+(`schema`, kernel-reported `owner` (`comm`), `pid`,
+`processStartTimeTicks`, `bootId`) into the file
+(`d2b_host::hardlink_farm::SyncLockOwnerRecord`; the same helper records the
+creator when the daemon provisions a lock no broker materialized). The
+daemon's anchored Volume adapter reads that record before adopting the entry
+and verifies it against the kernel: the current boot id must match, the
+recorded pid must be alive at exactly the recorded start time, and its
+kernel-reported name must equal the recorded owner. Anything else - a missing
+record, a foreign payload, a dead process, another boot - is ambiguity, and
+the entry stays quarantined.
 
 Publish ordering is fixed: materialise `live/` + `meta/`/`state/`
 generations + the gcroot, copy `db.dump`, then swap `state/current`,

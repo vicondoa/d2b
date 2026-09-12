@@ -68,6 +68,7 @@ use d2b_resource_api::manager_backend::nix_bundle_subject;
 use d2b_resource_runtime::context::SpecDecoder;
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
     AdmissionDecision, DesiredResource, MutationAdmission, MutationRequest,
     MutationSubject, ResourceManager, ResourceManagerArgs, ResourceManagerClient, ResourceManagerMsg,
@@ -96,8 +97,8 @@ use crate::credential_driver::{
 };
 use crate::endpoint_driver::{AsyncSocketEffect, EndpointDriverArgs, EndpointDriverFactory, endpoint_spec_decoder};
 use crate::process_driver::{
-    ProcessDriverArgs, ProcessDriverEffects, ProcessDriverFactory, ProductionProcessDriverEffects,
-    process_spec_decoder,
+    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, ProcessDriverFactory,
+    ProductionProcessDriverEffects, process_spec_decoder,
 };
 use crate::semantic_binding_resource_runtime::{
     TELEMETRY_BINDING_TYPE, TELEMETRY_SERVICE_TYPE, TelemetryDriverFactory,
@@ -110,6 +111,10 @@ use crate::shared_provider_driver::{
     SharedProviderDriverArgs, SharedProviderDriverEffects, SharedProviderDriverFactory,
     shared_provider_spec_decoder,
 };
+use crate::guest_driver::{
+    GuestDriverArgs, GuestDriverEffects, GuestDriverFactory, guest_spec_decoder,
+};
+use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_driver::{SystemCoreDriverFactory, system_core_spec_decoder};
 use crate::core_driver::{CoreDriverEffects, CoreResourceDriverFactory, CORE_RESOURCE_TYPES, core_spec_decoder};
@@ -134,7 +139,7 @@ const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// Converted types (KTD4 Phase A): served exclusively by the new plane.
-pub const CONVERTED_TYPES: [&str; 31] =
+pub const CONVERTED_TYPES: [&str; 32] =
     d2b_contracts_resource::v3::V3_CONVERTED_RESOURCE_TYPES;
 
 /// Which runtime serves a resource type during Phase A.
@@ -747,17 +752,130 @@ struct SocketRemoveEffect {
     zone_token: BoundedToken,
 }
 
+/// Presence evidence for the guest-runtime control endpoints (`ch-api`,
+/// `guest-control`).
+///
+/// The guest's nested VMM carries both private rendezvous - the Cloud
+/// Hypervisor API socket and the authenticated guest-control session - and
+/// the guest's committed VMM Process row (`Process/<guest>-vmm`) reports
+/// `Ready` exactly while the launch that carries them is live. The old daemon
+/// stage published both endpoint rows `Ready` from that same evidence
+/// (`reconcile_cloud_hypervisor_endpoints`); since U17 the row's actor owns
+/// its status (R11, AE6), so the Endpoint actor reads the guest's VMM row and
+/// publishes it. The plane table is resolved lazily per read - the
+/// composition fills it only after its per-zone loop finishes.
+struct GuestControlEndpointProbe {
+    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+    zone: ZoneId,
+}
+
+impl GuestControlEndpointProbe {
+    fn new(
+        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+        zone: ZoneId,
+    ) -> Self {
+        Self { planes, zone }
+    }
+
+    /// Whether the producer Guest's committed VMM Process row reports
+    /// `Ready` at its current generation.
+    ///
+    /// The evidence row follows the provider's own declaration for the
+    /// purpose: `ch-api` is produced by the VMM Process itself (the producer
+    /// row is the evidence row), `guest-control` by the Guest (the evidence
+    /// row is the guest's deterministic VMM child).
+    async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
+        let Some(producer) = crate::endpoint_driver::guest_control_producer(purpose) else {
+            return false;
+        };
+        if producer_ref.resource_type().as_str() != producer.resource_type() {
+            return false;
+        }
+        let vmm_ref = match producer {
+            crate::endpoint_driver::GuestControlProducer::VmmProcess => producer_ref.clone(),
+            crate::endpoint_driver::GuestControlProducer::Guest => {
+                let Ok(vmm_ref) =
+                    d2b_provider_runtime_cloud_hypervisor::deterministic_child_ref(
+                        producer_ref,
+                        d2b_provider_runtime_cloud_hypervisor::ChildRole::VmmProcess,
+                    )
+                else {
+                    return false;
+                };
+                vmm_ref
+            }
+        };
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return false;
+        };
+        let key = ResourceKey::new(
+            self.zone.as_str(),
+            vmm_ref.resource_type().as_str(),
+            vmm_ref.name().as_str(),
+        );
+        match plane.client().get(key).await {
+            Ok(Some(view)) => view.observed_status() == Some(ResourceStatus::Ready),
+            Ok(None) => false,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    producer = %producer_ref.to_canonical_string(),
+                    purpose,
+                    error = %error,
+                    "guest control endpoint probe: VMM row read failed",
+                );
+                false
+            }
+        }
+    }
+}
+
+/// Dispatches each admitted Endpoint purpose onto the realization the plane
+/// owns: `virtiofsd` onto the host socket effect, the guest-runtime control
+/// purposes onto the guest's VMM evidence. The driver refuses every other
+/// purpose at validate, so anything else is a retryable failure (R13).
+struct EndpointEnsureEffect {
+    socket: Arc<SocketWaitEffect>,
+    control: Arc<GuestControlEndpointProbe>,
+}
+
 #[async_trait::async_trait]
-impl AsyncSocketEffect for SocketRemoveEffect {
+impl AsyncSocketEffect for EndpointEnsureEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if purpose != VIRTIOFSD_PURPOSE {
-            return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
+        if crate::endpoint_driver::guest_control_purpose(purpose) {
+            let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
+            loop {
+                if self.control.present(producer_ref, purpose).await {
+                    return Ok(());
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(
+                        "guest control endpoint is not realized within its realize budget"
+                            .to_owned(),
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
-        match self.path_for(producer_ref).await {
-            Some(path) => remove_socket_file(&path),
-            // Unknown producer: nothing was realized on this target.
-            None => Ok(()),
+        self.socket.run(producer_ref, purpose).await
+    }
+}
+
+/// Removal for the same dispatch: the guest-runtime control endpoints are
+/// owned by the guest's nested VMM (the daemon creates nothing to remove), so
+/// their removal converges without effects; `virtiofsd` keeps the preserved
+/// endpoint-first socket removal.
+struct EndpointRemoveEffect {
+    socket: Arc<SocketRemoveEffect>,
+}
+
+#[async_trait::async_trait]
+impl AsyncSocketEffect for EndpointRemoveEffect {
+    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
+        if crate::endpoint_driver::guest_control_purpose(purpose) {
+            return Ok(());
         }
+        self.socket.run(producer_ref, purpose).await
     }
 }
 
@@ -775,6 +893,20 @@ impl SocketRemoveEffect {
             &target.volume_ref,
             &target.execution_ref,
         )?)
+    }
+}
+
+#[async_trait::async_trait]
+impl AsyncSocketEffect for SocketRemoveEffect {
+    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
+        if purpose != VIRTIOFSD_PURPOSE {
+            return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
+        }
+        match self.path_for(producer_ref).await {
+            Some(path) => remove_socket_file(&path),
+            // Unknown producer: nothing was realized on this target.
+            None => Ok(()),
+        }
     }
 }
 
@@ -806,6 +938,28 @@ impl ZoneVolumeRootResolver {
             zone = %self.zone.as_str(),
             volume = %volume_name,
             stage,
+            "v3 Volume source resolution failed"
+        );
+        d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
+    }
+
+    /// [`Self::source_unresolved`] for an anchored open that failed with a
+    /// concrete OS error. The errno is the only evidence that distinguishes a
+    /// farm that does not exist yet, a mode/ownership denial, and a mount
+    /// boundary, so it is logged rather than dropped.
+    fn source_open_failed(
+        &self,
+        stage: &'static str,
+        volume_name: &str,
+        path: &Path,
+        error: &std::io::Error,
+    ) -> d2b_provider_volume_local::VolumeLocalError {
+        tracing::warn!(
+            zone = %self.zone.as_str(),
+            volume = %volume_name,
+            stage,
+            path = %path.display(),
+            error = %error,
             "v3 Volume source resolution failed"
         );
         d2b_provider_volume_local::VolumeLocalError::SourceUnresolved
@@ -903,10 +1057,12 @@ impl ZoneVolumeRootResolver {
         {
             return Err(self.source_unresolved("store-sync-response", &anchor.volume_name));
         }
-        let file = open_anchored_directory(&farm_path)
-            .map_err(|_| self.source_unresolved("store-view-open", &anchor.volume_name))?;
-        let marker_root = open_anchored_directory(&self.marker_root)
-            .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
+        let file = open_anchored_directory(&farm_path).map_err(|error| {
+            self.source_open_failed("store-view-open", &anchor.volume_name, &farm_path, &error)
+        })?;
+        let marker_root = open_anchored_directory(&self.marker_root).map_err(|error| {
+            self.source_open_failed("marker-root", &anchor.volume_name, &self.marker_root, &error)
+        })?;
         Ok(crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
             .with_marker_root(marker_root)?
             .with_preexisting_state())
@@ -1007,29 +1163,61 @@ fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd>
             "unanchored directory",
         ));
     }
+    let names: Vec<&std::ffi::OsStr> = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    let Some((leaf, ancestors)) = names.split_last() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unanchored directory",
+        ));
+    };
     let mut current = open(
         Path::new("/"),
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
     )
     .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
-    for component in path.components() {
-        let std::path::Component::Normal(name) = component else {
-            continue;
-        };
+    for name in ancestors {
+        // A pure anchor: `O_PATH` needs only search permission on the parent
+        // and none on the component itself, which is exactly what the
+        // store-view chain grants the daemon (`root:d2bd 0750` plus the
+        // traversal-only `u:d2bd:--x` ACLs the runner paths add). Opening an
+        // intermediate `O_RDONLY` would instead demand read on directories
+        // that are traversal-only by design and fail EACCES.
         current = openat2(
             &current,
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            *name,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             Mode::empty(),
-            ResolveFlags::BENEATH
-                | ResolveFlags::NO_SYMLINKS
-                | ResolveFlags::NO_MAGICLINKS
-                | ResolveFlags::NO_XDEV,
+            resolve_beneath(),
         )
         .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
     }
-    Ok(current)
+    // The leaf is the handle the Volume driver keeps; it stays readable.
+    let leaf = openat2(
+        &current,
+        *leaf,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+        resolve_beneath(),
+    )
+    .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
+    Ok(leaf)
+}
+
+/// Resolution flags shared by every component of an anchored walk: never
+/// escape the directory the walk is anchored at, never follow a symlink or
+/// magic link, never cross a mount boundary.
+fn resolve_beneath() -> ResolveFlags {
+    ResolveFlags::BENEATH
+        | ResolveFlags::NO_SYMLINKS
+        | ResolveFlags::NO_MAGICLINKS
+        | ResolveFlags::NO_XDEV
 }
 
 /// The production volume effects: the controller closure rebuilds the
@@ -1140,6 +1328,7 @@ pub struct ConstructionInputs {
     pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: Arc<dyn SharedProviderDriverEffects>,
+    pub guest_effects: Arc<dyn GuestDriverEffects>,
     pub interaction_effects: Arc<dyn InteractionDriverEffects>,
 }
 
@@ -1221,7 +1410,10 @@ impl ConstructionInputs {
             core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
             process_effects: Arc::new(
                 ProductionProcessDriverEffects::new(process_providers)
-                    .with_committed_provider_identities(registry_source),
+                    .with_committed_provider_identities(registry_source)
+                    .with_guest_owner_identities(Arc::new(PlaneGuestOwnerIdentities {
+                        state: Arc::clone(state),
+                    })),
             ),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
@@ -1250,6 +1442,22 @@ impl ConstructionInputs {
                         })
                     }
                 }),
+                // U13/KTD6: the guest-mount gate reads the Zone target
+                // directory for the row's assignment (the plane is resolved
+                // at call time - it is registered on `state` after this
+                // provider directory is built).
+                Arc::new({
+                    let state = Arc::clone(state);
+                    let zone = zone.clone();
+                    move |key: &ResourceKey| {
+                        let state = Arc::clone(&state);
+                        let zone = zone.clone();
+                        let key = key.clone();
+                        Box::pin(async move {
+                            crate::binding_guest_mount_ready(&state, &zone, &key).await
+                        })
+                    }
+                }),
             )),
             endpoint_effects: {
                 let wait = Arc::new(SocketWaitEffect {
@@ -1258,16 +1466,33 @@ impl ConstructionInputs {
                     zone_token: endpoint_zone_token.clone(),
                 });
                 let present = Arc::clone(&wait);
+                let control = Arc::new(GuestControlEndpointProbe::new(
+                    Arc::clone(&state.v3_planes),
+                    zone.clone(),
+                ));
+                let ensure_control = Arc::clone(&control);
                 Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
                     Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
                         let present = Arc::clone(&present);
-                        Box::pin(async move { present.present(producer_ref, purpose).await })
+                        let control = Arc::clone(&control);
+                        Box::pin(async move {
+                            if crate::endpoint_driver::guest_control_purpose(purpose) {
+                                control.present(producer_ref, purpose).await
+                            } else {
+                                present.present(producer_ref, purpose).await
+                            }
+                        })
                     }),
-                    wait,
-                    Arc::new(SocketRemoveEffect {
-                        registry: Arc::clone(&registry),
-                        socket_runtime_dir: endpoint_socket_runtime_dir,
-                        zone_token: endpoint_zone_token,
+                    Arc::new(EndpointEnsureEffect {
+                        socket: Arc::clone(&wait),
+                        control: ensure_control,
+                    }),
+                    Arc::new(EndpointRemoveEffect {
+                        socket: Arc::new(SocketRemoveEffect {
+                            registry: Arc::clone(&registry),
+                            socket_runtime_dir: endpoint_socket_runtime_dir,
+                            zone_token: endpoint_zone_token,
+                        }),
                     }),
                 ))
             },
@@ -1278,11 +1503,51 @@ impl ConstructionInputs {
                 zone.clone(),
                 controller_generation,
             )),
+            guest_effects: Arc::new(ProductionGuestDriverEffects::new(
+                Arc::clone(state),
+                zone.clone(),
+                controller_generation,
+            )),
             interaction_effects: Arc::new(ProductionInteractionDriverEffects::new(
                 Arc::clone(state),
                 zone.clone(),
             )),
         })
+    }
+}
+
+/// Production `GuestOwnerIdentitySource` (KTD7): the pre-v3 plane owns `Guest`,
+/// so its durable rows are the authority for a Guest-owned Process launch's
+/// owner uid. The old store resolved every row's `metadata.ownerRef` to the
+/// owner row's uid and the old descriptor composer read that linkage into the
+/// launch ticket; the converted manager row cannot carry it for an
+/// unconverted owner, so the Process effects resolve the same durable value
+/// here.
+struct PlaneGuestOwnerIdentities {
+    state: Arc<crate::ServerState>,
+}
+
+#[async_trait::async_trait]
+impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
+    async fn guest_owner_uid(&self, zone: &ZoneId, guest_ref: &ResourceRef) -> Option<ResourceUid> {
+        let runtime = self
+            .state
+            .resource_plane
+            .lock()
+            .ok()
+            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(zone).ok()))?;
+        match runtime.guest_owner_uid(guest_ref).await {
+            Ok(uid) => Some(uid),
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone.as_str(),
+                    guest = %guest_ref.to_canonical_string(),
+                    error = ?error,
+                    "guest owner identity read failed; the launch ticket keeps owner_uid unbound",
+                );
+                None
+            }
+        }
     }
 }
 
@@ -1448,6 +1713,11 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.shared_provider_effects),
             },
         )))?;
+        providers.register(Arc::new(GuestDriverFactory::new(GuestDriverArgs {
+            zone: inputs.zone.as_str().to_owned(),
+            controller_generation: inputs.authority.controller_generation,
+            effects: Arc::clone(&inputs.guest_effects),
+        })))?;
         providers.register(Arc::new(SystemCoreDriverFactory::new()))?;
         providers.register(Arc::new(CoreResourceDriverFactory::with_effects(
             Arc::clone(&inputs.core_effects),
@@ -1487,6 +1757,10 @@ impl ResourcePlaneV3 {
                 ResourceTypeName::new(resource_type),
                 shared_provider_spec_decoder(),
             );
+        }
+        // U12: the four runtime-Provider Guests.
+        for resource_type in [crate::guest_driver::GUEST_TYPE_NAME] {
+            decoders.insert(ResourceTypeName::new(resource_type), guest_spec_decoder());
         }
         decoders.insert(
             ResourceTypeName::new("Host"),
@@ -1706,6 +1980,18 @@ impl ResourcePlaneV3 {
 
     pub fn store(&self) -> &Arc<SpecStore> {
         &self.store
+    }
+
+    /// Re-register the durable rows the production effects resolve
+    /// per-resource anchors from (U17: a provider controller session commits
+    /// converted Volume/VolumeBinding children through the manager after the
+    /// plane's durable loads, and a Volume root whose anchor is not registered
+    /// stays unresolved until a reload). The manager stays the only writer:
+    /// this reads its store, it never mutates it.
+    pub async fn reload_registry(&self) -> Result<(), PlaneError> {
+        self.registry
+            .load_from_store(&self.zone_token, &self.store)
+            .await
     }
 
     pub fn registry(&self) -> &Arc<PlaneResourceRegistry> {
@@ -1979,9 +2265,7 @@ impl ResourcePlaneV3 {
         report.removed = plan.remove;
         report.api_protected = plan.api_protected;
         // The production effects resolve per-resource anchors durably.
-        self.registry
-            .load_from_store(&self.zone_token, &self.store)
-            .await?;
+        self.reload_registry().await?;
         Ok(report)
     }
 }
@@ -2030,7 +2314,20 @@ mod tests {
         .expect("bundle row")
     }
 
-    struct FakeProcessEffects;
+    /// The plane's Process effects double: the launch succeeds and is
+    /// counted, so a test can prove a committed `Process` row reached the
+    /// driver's launch path (the counter is the test's observable).
+    struct FakeProcessEffects {
+        launches: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FakeProcessEffects {
+        fn new() -> Self {
+            Self {
+                launches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
 
     #[async_trait::async_trait]
     impl ProcessDriverEffects for FakeProcessEffects {
@@ -2040,6 +2337,8 @@ mod tests {
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
             _timeout: Duration,
         ) -> Result<ProcessIdentityDigest, String> {
+            self.launches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(ProcessIdentityDigest::from_bytes([0u8; 32]))
         }
 
@@ -2287,6 +2586,37 @@ mod tests {
         }
     }
 
+    /// Guest effects that stay Pending: the plane tests only need the Guest
+    /// driver registered, never a Guest reaching Ready.
+    struct FakeGuestEffects;
+
+    #[async_trait::async_trait]
+    impl crate::guest_driver::GuestDriverEffects for FakeGuestEffects {
+        async fn reconcile(
+            &self,
+            _kind: crate::guest_driver::GuestKind,
+            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+        ) -> Result<
+            crate::guest_driver::GuestEffectOutcome,
+            crate::guest_driver::GuestEffectError,
+        > {
+            Ok(crate::guest_driver::GuestEffectOutcome::phase(
+                crate::guest_driver::GuestEffectPhase::Pending,
+            ))
+        }
+
+        async fn finalize(
+            &self,
+            _kind: crate::guest_driver::GuestKind,
+            _request: &crate::guest_driver::GuestEffectRequest<'_>,
+        ) -> Result<
+            crate::guest_driver::GuestFinalizeStage,
+            crate::guest_driver::GuestEffectError,
+        > {
+            Ok(crate::guest_driver::GuestFinalizeStage::Complete)
+        }
+    }
+
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
@@ -2311,13 +2641,14 @@ mod tests {
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 core_effects: Arc::new(crate::core_driver::FailClosedCoreDriverEffects),
-                process_effects: Arc::new(FakeProcessEffects),
+                process_effects: Arc::new(FakeProcessEffects::new()),
                 volume_effects: Arc::new(FakeVolumeEffects),
                 binding_effects: Arc::new(FakeBindingEffects),
                 endpoint_effects: Arc::new(FakeEndpointEffects),
                 activation_effects: Arc::new(FakeActivationEffects),
                 credential_effects: Arc::new(FakeCredentialEffects),
                 shared_provider_effects: Arc::new(FakeSharedProviderEffects),
+                guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
             },
             readiness,
@@ -2332,14 +2663,14 @@ mod tests {
         for converted in CONVERTED_TYPES {
             assert_eq!(route_resource_type(converted), PlaneRoute::NewPlane);
         }
-        for unconverted in ["Guest", "EphemeralProcess"] {
+        for unconverted in ["EphemeralProcess"] {
             assert_eq!(
                 route_resource_type(unconverted),
                 PlaneRoute::OldPlane,
                 "{unconverted} must stay on the old plane"
             );
         }
-        assert_eq!(CONVERTED_TYPES.len(), 31);
+        assert_eq!(CONVERTED_TYPES.len(), 32);
     }
 
     /// KTD7: the committed Provider identities the composition resolves are
@@ -2480,24 +2811,32 @@ mod tests {
                 serde_json::json!({"providerRef": "Provider/volume-local"}),
             ),
             bundle_row("Guest", "work", serde_json::json!({"systemArtifactId": "a"})),
+            bundle_row("EphemeralProcess", "runner", serde_json::json!({})),
         ]);
 
         let report = plane.ingest_nix_bundle(&bundle).await.expect("ingest");
-        assert_eq!(report.applied, vec![ResourceKey::new("test", "Volume", "state")]);
+        assert!(report.applied.contains(&ResourceKey::new("test", "Volume", "state")));
+        assert!(report.applied.contains(&ResourceKey::new("test", "Guest", "work")));
+        assert_eq!(report.applied.len(), 2, "the converted rows route through the manager");
         assert!(report.removed.is_empty());
         assert!(report.api_protected.is_empty());
         assert_eq!(report.pass_through_count, 1);
 
-        // Converted row persisted with provenance Nix before any actor
-        // effect ran (F1).
-        let row = plane
-            .client()
-            .get_row(ResourceKey::new("test", "Volume", "state"))
-            .await
-            .expect("get_row")
-            .expect("converted row");
-        assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
-        assert_eq!(row.generation, 1);
+        // Converted rows persist with provenance Nix before any actor effect
+        // ran (F1).
+        for key in [
+            ResourceKey::new("test", "Volume", "state"),
+            ResourceKey::new("test", "Guest", "work"),
+        ] {
+            let row = plane
+                .client()
+                .get_row(key)
+                .await
+                .expect("get_row")
+                .expect("converted row");
+            assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
+            assert_eq!(row.generation, 1);
+        }
 
         // Unconverted rows pass through with the bundle's integrity intact.
         let plan = partition_nix_bundle(&ZoneId::parse("test").unwrap(), &bundle, plane.store())
@@ -2505,7 +2844,10 @@ mod tests {
             .expect("partition");
         let old_bundle = plan.old_bundle(&bundle).expect("old bundle");
         assert_eq!(old_bundle.resources.len(), 1);
-        assert_eq!(old_bundle.resources[0].resource_type().as_str(), "Guest");
+        assert_eq!(
+            old_bundle.resources[0].resource_type().as_str(),
+            "EphemeralProcess"
+        );
         old_bundle.verify().expect("rebuilt bundle verifies");
 
         // Re-ingest is idempotent: no new generation, nothing removed.
@@ -2594,5 +2936,281 @@ mod tests {
         }
         assert!(gone, "removed Nix row must retire after cleanup");
         plane.shutdown().await;
+    }
+
+    /// U17: a `Process` child a provider controller commits through the
+    /// manager is owned and launched by the Process driver. The old plane
+    /// wrote this row to the pre-v3 store, where no actor exists - the
+    /// committed row now reaches the driver's launch effect, which is what
+    /// the fixture's nested-VMM socket wait stands on.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn controller_committed_process_child_reaches_the_process_driver() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        inputs.process_effects = Arc::new(FakeProcessEffects {
+            launches: Arc::clone(&launches),
+        });
+        let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        let owner = ResourceRef::parse("Guest/acceptance-guest").expect("owner");
+        let target = ResourceRef::parse("Process/acceptance-guest-vmm").expect("target");
+        let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
+            Arc::clone(&plane),
+            ZoneId::parse("test").expect("zone"),
+            owner.clone(),
+        );
+
+        let committed = port
+            .ensure(&target, &controller_child_envelope("running"))
+            .await
+            .expect("child commit");
+        assert_eq!(committed.resource_ref, target);
+        assert_ne!(committed.uid.as_str(), "");
+
+        // The driver runs for the committed row: with the plane's fake
+        // effects the launch is observable, and the row keeps the authored
+        // owner reference and spec layer through the manager's rendering.
+        let mut launched = false;
+        for _ in 0..200 {
+            if launches.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                launched = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            launched,
+            "the controller-committed Process child never reached a launch effect"
+        );
+        let view = plane
+            .client()
+            .get(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
+            .await
+            .expect("view")
+            .expect("committed child");
+        let row = d2b_resource_api::manager_backend::manager_row_stored(&view).expect("render");
+        let envelope =
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&row.canonical_json)
+                .expect("envelope");
+        assert_eq!(envelope.metadata().owner_ref(), Some(&owner));
+        let spec: serde_json::Value =
+            serde_json::from_slice(&envelope.spec().base().to_canonical_bytes()).expect("spec");
+        assert_eq!(
+            spec.get("processClass").and_then(serde_json::Value::as_str),
+            Some("worker")
+        );
+        assert_eq!(
+            spec.get("template").and_then(serde_json::Value::as_str),
+            Some("cloud-hypervisor-runner")
+        );
+        plane.shutdown().await;
+    }
+
+    /// Process effects double that adopts after the first launch: the driver's
+    /// `Ready` (and only `Ready`) publishes the committed child row, exactly
+    /// as the production provider's retained identity does.
+    struct AdoptingProcessEffects {
+        launched: std::sync::atomic::AtomicBool,
+    }
+
+    fn adopted_report() -> d2b_process_conformance::ProcessStatusReport {
+        d2b_process_conformance::ProcessStatusReport {
+            provider: BoundedToken::parse("system-minijail").expect("provider token"),
+            identity: ProcessIdentityDigest::from_bytes([0x51; 32]),
+            wait_reap_owner: d2b_process_conformance::WaitReapOwner::Local,
+            execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
+            domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
+            user_ref: None,
+            digests: d2b_process_conformance::testing::fixtures::compiled_digests(),
+            phase: d2b_process_conformance::ProcessPhaseClass::Ready,
+            last_exit: None,
+            adoption: d2b_process_conformance::AdoptionCondition::Adopted,
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessDriverEffects for AdoptingProcessEffects {
+        async fn launch(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
+            _timeout: Duration,
+        ) -> Result<ProcessIdentityDigest, String> {
+            self.launched.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(ProcessIdentityDigest::from_bytes([0x51; 32]))
+        }
+
+        async fn adopt(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
+            if self.launched.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(crate::process_provider_runtime::ProviderAdoption::Adopted(
+                    adopted_report(),
+                ))
+            } else {
+                Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+            }
+        }
+
+        async fn stop(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
+            _term_timeout: Duration,
+            _kill_timeout: Duration,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        async fn stop_stale(
+            &self,
+            _provider_ref: &ResourceRef,
+            _candidate: &d2b_process_conformance::AdoptionCandidate,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn finalize(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn has_active(
+            &self,
+            _zone: &ZoneId,
+            _zone_uid: Option<&ResourceUid>,
+            _resource_ref: &ResourceRef,
+        ) -> bool {
+            false
+        }
+    }
+
+    /// U17: the guest-runtime control endpoints (`ch-api`, `guest-control`)
+    /// are realized by the guest's committed VMM Process row being `Ready` -
+    /// the exact evidence the old daemon publication stage wrote both rows
+    /// `Ready` from. The plane's probe reads that row through the published
+    /// plane table, so the Endpoint actor publishes the same evidence the
+    /// guest's provider controller gates its Guest readiness on.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn guest_control_endpoints_are_realized_with_the_committed_vmm_process() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.process_effects = Arc::new(AdoptingProcessEffects {
+            launched: std::sync::atomic::AtomicBool::new(false),
+        });
+        let zone = ZoneId::parse("test").expect("zone");
+        let planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        planes
+            .lock()
+            .insert(zone.as_str().to_owned(), Arc::clone(&plane));
+        let probe = GuestControlEndpointProbe::new(Arc::clone(&planes), zone.clone());
+        let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
+        // The producer the provider's own child-role vocabulary declares per
+        // purpose: `ch-api` on the guest's VMM Process, `guest-control` on
+        // the Guest.
+        let vmm = ResourceRef::parse("Process/acceptance-guest-vmm").expect("vmm");
+
+        // Before the guest's provider controller commits anything the
+        // evidence is absent, and a purpose outside the control family is
+        // never this probe's answer.
+        assert!(!probe.present(&vmm, "ch-api").await);
+        assert!(!probe.present(&guest, "guest-control").await);
+        assert!(!probe.present(&guest, "virtiofsd").await);
+        // The producer/purpose pair is the provider's declaration, not a
+        // free choice: neither purpose is realized off the other's producer.
+        assert!(!probe.present(&guest, "ch-api").await);
+        assert!(!probe.present(&vmm, "guest-control").await);
+
+        let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
+            Arc::clone(&plane),
+            zone.clone(),
+            guest.clone(),
+        );
+        port.ensure(
+            &ResourceRef::parse("Process/acceptance-guest-vmm").expect("target"),
+            &controller_child_envelope("running"),
+        )
+        .await
+        .expect("child commit");
+
+        let mut realized = false;
+        for _ in 0..200 {
+            if probe.present(&vmm, "ch-api").await
+                && probe.present(&guest, "guest-control").await
+            {
+                realized = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            realized,
+            "both control endpoints must report realized once the committed VMM Process row is Ready"
+        );
+        plane.shutdown().await;
+    }
+
+    /// The anchored walk that resolves the store-view farm must need only
+    /// search permission on the ancestors (the chain is deliberately
+    /// traversal-only for the daemon) and must still hand back the leaf.
+    #[test]
+    fn anchored_walk_needs_only_search_on_ancestors() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let farm = dir
+            .path()
+            .join("zones/work/guests/acceptance-guest/store-view");
+        std::fs::create_dir_all(&farm).expect("farm");
+        // Search-only intermediate: the daemon's grant on the chain is `--x`.
+        let traversal_only = dir.path().join("zones/work/guests");
+        std::fs::set_permissions(&traversal_only, std::fs::Permissions::from_mode(0o111))
+            .expect("chmod traversal-only");
+
+        let opened = open_anchored_directory(&farm).expect("search-only ancestors must open");
+
+        let leaf = std::fs::symlink_metadata(&farm).expect("farm stat");
+        let handle = rustix::fs::fstat(&opened).expect("fstat");
+        assert_eq!(handle.st_ino, leaf.ino(), "the handle is the leaf inode");
+    }
+
+    /// One provider-authored child envelope as the Cloud Hypervisor controller
+    /// renders it: the authored identity (no uid - the store stamps it), the
+    /// spec layer, and the status the driver replaces.
+    fn controller_child_envelope(desired_lifecycle: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Process",
+            "metadata": {
+                "name": "acceptance-guest-vmm",
+                "zone": "test",
+                "ownerRef": "Guest/acceptance-guest",
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "updatedAt": "1970-01-01T00:00:00.000Z",
+                "generation": 1,
+                "revision": 1,
+                "managedBy": "controller",
+            },
+            "spec": {
+                "providerRef": "Provider/system-minijail",
+                "executionRef": "Host/host-system",
+                "processClass": "worker",
+                "template": "cloud-hypervisor-runner",
+                "desiredLifecycle": desired_lifecycle,
+                "sandbox": {},
+            },
+            "status": {
+                "observedGeneration": 0,
+                "phase": "Pending",
+                "conditions": [],
+                "resource": {},
+            },
+        }))
+        .expect("child envelope")
     }
 }

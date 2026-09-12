@@ -596,18 +596,41 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
             guard
                 .validate_resource(root_uid(root)?)
                 .map_err(|_| VolumeLocalError::EffectFailed)?;
+            let owner_proof = match entry.lease_class() {
+                // No declared lease: nothing to prove about a live owner.
+                d2b_contracts_resource::v3::volume::LeaseClass::None => {
+                    OwnerProof::NotApplicable
+                }
+                // `file-record`: the file must carry the live owner's record.
+                // The broker (or the daemon itself, for a lock it created)
+                // writes it under the exclusive lock; ownership is verified
+                // against the kernel, never against a caller-supplied name.
+                d2b_contracts_resource::v3::volume::LeaseClass::FileRecord => {
+                    match d2b_host::hardlink_farm::SyncLockOwnerRecord::read_locked(&target)
+                        .and_then(|record| record.verify_live())
+                    {
+                        Ok(()) => OwnerProof::Live,
+                        Err(reason) => {
+                            tracing::debug!(
+                                volume = ?root_uid(root)?,
+                                path = entry.declared().path(),
+                                reason = %reason,
+                                "volume file-record lease owner is not verifiable; quarantining",
+                            );
+                            OwnerProof::Unknown
+                        }
+                    }
+                }
+                // No live-lease reader exists for the other classes: an
+                // entry that declares one never adopts on an unproven owner.
+                _ => OwnerProof::Unknown,
+            };
             Ok(ObservedEntry {
                 present: true,
                 drift,
                 symlink_encountered: false,
                 foreign_children: false,
-                owner_proof: if entry.lease_class()
-                    == d2b_contracts_resource::v3::volume::LeaseClass::None
-                {
-                    OwnerProof::NotApplicable
-                } else {
-                    OwnerProof::Unknown
-                },
+                owner_proof,
             })
         })
     }
@@ -654,6 +677,17 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
                     )
                     .map_err(|_| VolumeLocalError::EffectFailed)?;
                     apply_metadata(&target, &self.resolver, entry)?;
+                    if entry.lease_class()
+                        == d2b_contracts_resource::v3::volume::LeaseClass::FileRecord
+                    {
+                        // The creator of a file-record lock is its first live
+                        // owner: record the identity the kernel reports for
+                        // this process so a later pass can verify (or refute)
+                        // that ownership. A broker StoreSync that takes the
+                        // lock overwrites the record with its own identity.
+                        d2b_host::hardlink_farm::SyncLockOwnerRecord::record_current_process(&target)
+                            .map_err(|_| VolumeLocalError::EffectFailed)?;
+                    }
                     fsync(&target).map_err(|_| VolumeLocalError::EffectFailed)?;
                 }
                 EntryType::Symlink => {

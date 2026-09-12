@@ -386,6 +386,12 @@ pub struct ResourceContext {
     next_operation: u64,
     decoded_spec: OnceCell<Box<dyn Any + Send>>,
     status: Option<Box<dyn Any + Send>>,
+    /// Free-form status projection for the read surfaces (R11: in-memory
+    /// only, never persisted). The erased status slot above is typed and
+    /// driver-private; this is the closed-JSON `status.resource` layer the
+    /// manager renders onto the wire for rows whose consumer contract
+    /// carries one (the Cloud Hypervisor Guest runtime status).
+    status_projection: Option<serde_json::Value>,
     /// The owning resource's key, resolved by the manager from the row's
     /// owner uid. Drivers select their launch shape from it; `None` for
     /// roots and for rows whose owner row is not in this manager.
@@ -416,6 +422,7 @@ impl ResourceContext {
             next_operation: 1,
             decoded_spec: OnceCell::new(),
             status: None,
+            status_projection: None,
             owner_key: None,
         }
     }
@@ -498,6 +505,21 @@ impl ResourceContext {
     /// Replace the in-memory status slot (R11: never persisted).
     pub fn set_status<T: Any + Send>(&mut self, status: T) {
         self.status = Some(Box::new(status));
+    }
+
+    /// Publish the wire-visible `status.resource` layer of this row (R11:
+    /// in-memory only). The actor takes it after the pass that set it and the
+    /// manager renders it onto the row's status; a driver that publishes no
+    /// projection leaves the layer empty, exactly as today.
+    pub fn set_status_projection(&mut self, projection: serde_json::Value) {
+        self.status_projection = Some(projection);
+    }
+
+    /// Take the pending status projection, if any. Called by the actor after
+    /// each driver pass: the projection belongs to the pass that set it, so
+    /// it is consumed, never carried into a later status.
+    pub fn take_status_projection(&mut self) -> Option<serde_json::Value> {
+        self.status_projection.take()
     }
 
     /// Execution target of this resource (R19).

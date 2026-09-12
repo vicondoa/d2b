@@ -8,6 +8,8 @@ pub mod volume_driver;
 pub mod activation_driver;
 pub(crate) mod shared_provider_driver;
 pub(crate) mod shared_provider_effects;
+pub(crate) mod guest_driver;
+pub(crate) mod guest_effects;
 pub(crate) mod system_core_driver;
 /// U12: the core-family `ResourceDriver`. Registered on the v3 plane by
 /// `resource_plane_v3`; until that registration lands the module is only

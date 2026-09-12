@@ -627,6 +627,127 @@ rec {
       writableStore = true;
     };
 
+  # Fixture diagnostics prelude, interpolated at the top of each VM fixture's
+  # `testScript` (issue #513). The runNixOSTest driver discards
+  # `machine.execute` output and never re-prints what a timed-out
+  # `wait_until_succeeds` last saw, so the row set at failure never reached the
+  # lane log. The prelude provides:
+  #
+  #   stage(name)          announce the phase, so a failure names it in one line
+  #   diag(cmd, label)     run a diagnostic command and echo its captured output
+  #   diag_step(name, action, rows=..., explain=..., wait=...)
+  #                        run one step; on failure echo its dumps and the
+  #                        daemon explanation lines
+  #   diag_wait(name, command, timeout, rows=..., explain=...)
+  #                        the `wait_until_succeeds` form of `diag_step`
+  #
+  # `rows` entries are (label, shell command) dumps of the row set the stage
+  # was asserting on; `explain` entries are (journal unit or null, token) whose
+  # last daemon lines explain those rows. Diagnostics only: every assertion and
+  # timeout is passed through unchanged.
+  fixtureDiagnostics = ''
+      # ---- d2b fixture diagnostics (issue #513) --------------------------
+      # The test driver discards machine.execute output and does not re-print
+      # the output a timed-out wait_until_succeeds last saw, so a failed lane
+      # used to leave only the command text in the log. These helpers push the
+      # row set and the daemon explanation lines into the driver log (stdout
+      # and stderr of the test driver, that is the lane log).
+      #
+      # Diagnostics only: no assertion and no timeout is changed here.
+      import time as _diag_time
+
+      _diag_t0 = _diag_time.monotonic()
+      _diag_stage = "startup"
+
+      def _diag_elapsed():
+          return f"{_diag_time.monotonic() - _diag_t0:.1f}s"
+
+      def _diag_print(*lines):
+          for line in lines:
+              print(line, flush=True)
+
+      def stage(name):
+          global _diag_stage
+          _diag_stage = name
+          _diag_print(f"[d2b] stage={name} t={_diag_elapsed()}")
+
+      def diag(command, label="diagnostic output"):
+          try:
+              status, output = machine.execute(command, timeout=120)
+          except Exception as error:
+              _diag_print(
+                  f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label}: "
+                  f"diagnostic command failed: {error}"
+              )
+              return -1
+          _diag_print(
+              f"[d2b] stage={_diag_stage} t={_diag_elapsed()} {label} "
+              f"(exit {status}):"
+          )
+          _diag_print(command)
+          for line in output.rstrip().splitlines():
+              _diag_print("    " + line)
+          return status
+
+      def _diag_journal(unit, token):
+          scope = f"-u {unit} " if unit else ""
+          select = f"| grep -F -- {token!r} " if token else ""
+          return (
+              f"journalctl {scope}--no-pager -o cat -b -n 4000 2>/dev/null "
+              f"{select}| tail -n 60 || true"
+          )
+
+      def unit_dumps(unit):
+          """Row dumps for a systemd unit waiting to become active."""
+          return [
+              (
+                  f"{unit} status",
+                  f"systemctl status {unit} --no-pager 2>&1 | tail -n 40 "
+                  "|| true",
+              ),
+          ]
+
+      def diag_step(name, action, rows=(), explain=(), wait=None):
+          stage(name)
+          try:
+              return action()
+          except Exception as error:
+              labels = ", ".join(label for label, _ in rows) or "none"
+              failing = f" wait={name}" if wait else ""
+              _diag_print(
+                  f"[d2b] FAIL stage={name} t={_diag_elapsed()}{failing} "
+                  f"rows=[{labels}]: {error}"
+              )
+              if wait:
+                  _diag_print(f"[d2b] failing wait: {wait}")
+              for label, command in rows:
+                  diag(command, f"row dump: {label}")
+              for unit, token in explain:
+                  detail = f"journal {unit or 'all'}"
+                  if token:
+                      detail += f" lines matching {token!r}"
+                  diag(_diag_journal(unit, token), detail)
+              raise
+
+      def diag_unit(name, unit, timeout):
+          """wait_for_unit with the unit status and journal on timeout."""
+          return diag_step(
+              name,
+              lambda: machine.wait_for_unit(unit, timeout=timeout),
+              unit_dumps(unit),
+              [(unit, None)],
+          )
+
+      def diag_wait(name, command, timeout, rows=(), explain=()):
+          return diag_step(
+              name,
+              lambda: machine.wait_until_succeeds(command, timeout=timeout),
+              rows,
+              explain,
+              command,
+          )
+  '';
+
   # Re-exported so tests can assert against the shared declaration.
   inherit baseD2bConfig mkGuestSystem mkRuntimeCloudHypervisorArtifact
     mkAcceptanceProviderArtifact mkVolumeProviderArtifact;

@@ -6,6 +6,12 @@
 { pkgs, self }:
 
 let
+  # Shared fixture diagnostics (issue #513): row dumps and per-stage markers.
+  d2bLib = import ./lib.nix {
+    inherit self;
+    inherit (pkgs) lib;
+  };
+
   # The Guest target agent boots from enrollment-owner inputs (it never
   # generates them): a 32-byte ComponentSession key pair and a bundle whose
   # sha256 self-hash covers the canonical JSON without `bundleHash`.
@@ -138,18 +144,24 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     start_all()
+    stage("boot")
     machine.wait_for_unit("multi-user.target", timeout=180)
 
     # The Guest target agent must boot from the enrolled bundle and key pair
     # and reach its AF_VSOCK listener; a bundle or key it cannot read fails
     # closed here instead of restart-looping unnoticed.
-    machine.wait_for_unit("d2bd-guest.service", timeout=120)
+    diag_unit("guest-daemon", "d2bd-guest.service", 120)
     machine.succeed("systemctl is-active --quiet d2bd-guest.service")
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-listener-bound",
         "journalctl -u d2bd-guest.service --no-pager -b "
         "| grep -F 'Guest ComponentSession listener bound'",
         timeout=60,
+        rows=unit_dumps("d2bd-guest.service"),
+        explain=[("d2bd-guest.service", None)],
     )
     machine.fail(
         "journalctl --no-pager -b "
@@ -158,6 +170,7 @@ pkgs.testers.runNixOSTest {
 
     # The shell pool daemon is declared but dormant: the target-local Process
     # owner starts or adopts the pool.
+    stage("shell-pool-posture")
     machine.succeed("systemctl cat d2b-shpool-daemon.service")
     machine.succeed(
         "test \"$(systemctl show -P PAMName d2b-shpool-daemon.service)\" = d2b-shpool-daemon"

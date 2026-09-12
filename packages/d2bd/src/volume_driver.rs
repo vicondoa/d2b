@@ -442,6 +442,15 @@ impl VolumeDriver {
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
     /// mailbox never blocks on it; completion arrives as
     /// [`d2b_resource_runtime::context::EffectCompleted`].
+    ///
+    /// A layout report that is not `Ready` (Degraded/Pending) completes as a
+    /// retryable failure rather than as a success. `Completed` re-enters the
+    /// pass immediately, which would respawn the effect - and, for a Nix
+    /// closure source, re-run the broker `StoreSync` the source resolution
+    /// performs - at completion rate with no bound. The retryable class is
+    /// the actor's documented ownership (R13): it schedules exactly one
+    /// requeue after its backoff, so a degraded layout retries at a fixed
+    /// interval instead of spinning.
     fn spawn_layout(
         &mut self,
         ctx: &mut ResourceContext,
@@ -456,9 +465,14 @@ impl VolumeDriver {
         tokio::spawn(async move {
             let result = effects.ensure_layout(&uid, &spec, provider.as_ref(), None).await;
             let effect_result = match result {
-                Ok(ready) => {
-                    layout_ready.store(ready, std::sync::atomic::Ordering::SeqCst);
+                Ok(true) => {
+                    layout_ready.store(true, std::sync::atomic::Ordering::SeqCst);
                     d2b_resource_runtime::context::EffectResult::Completed
+                }
+                Ok(false) => {
+                    d2b_resource_runtime::context::EffectResult::Failed(
+                        DriverFailure::retryable(DriverOp::Reconcile),
+                    )
                 }
                 Err(_) => d2b_resource_runtime::context::EffectResult::Failed(
                     DriverFailure::retryable(DriverOp::Reconcile),
@@ -605,7 +619,7 @@ mod tests {
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{DriverOp, FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
@@ -619,6 +633,8 @@ mod tests {
     struct FakeLayoutEffects {
         calls: parking_lot::Mutex<Vec<&'static str>>,
         ready: AtomicBool,
+        /// Report a Degraded/Pending layout instead of a Ready one.
+        degraded: AtomicBool,
     }
 
     impl FakeLayoutEffects {
@@ -626,7 +642,15 @@ mod tests {
             Arc::new(Self {
                 calls: parking_lot::Mutex::new(Vec::new()),
                 ready: AtomicBool::new(false),
+                degraded: AtomicBool::new(false),
             })
+        }
+
+        /// A port whose layout report stays Degraded/Pending (`Ok(false)`).
+        fn degraded() -> Arc<Self> {
+            let fake = Self::new();
+            fake.degraded.store(true, std::sync::atomic::Ordering::SeqCst);
+            fake
         }
 
         fn call_order(&self) -> Vec<&'static str> {
@@ -644,6 +668,9 @@ mod tests {
             _owner_ref: Option<&ResourceRef>,
         ) -> Result<bool, String> {
             self.calls.lock().push("ensure-layout");
+            if self.degraded.load(std::sync::atomic::Ordering::SeqCst) {
+                return Ok(false);
+            }
             self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(true)
         }
@@ -979,6 +1006,61 @@ mod tests {
             .position(|entry| entry.starts_with("spawned:"))
             .map(|offset| ensure_index + offset)
             .expect("spawn notification after ensure")
+    }
+
+    // -- degraded layout: one effect per pass, retry owned by the actor --------
+
+    /// A Degraded/Pending layout report (`Ok(false)`) must not complete as a
+    /// success: `Completed` re-enters the pass immediately, which respawns the
+    /// effect - and, for a Nix closure source, the broker `StoreSync` the
+    /// source resolution performs - at completion rate with no bound. The
+    /// report is a retryable failure, so the actor's one backoff requeue owns
+    /// the retry and the effect runs at most once per pass.
+    #[tokio::test]
+    async fn degraded_layout_reports_one_retryable_failure_per_pass() {
+        let fake = FakeLayoutEffects::degraded();
+        let manager = RecordingManager::new();
+        let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        let outcome = d.reconcile(&mut f.ctx).await.expect("reconcile spawns the effect");
+        assert!(matches!(outcome, ReconcileOutcome::InProgress { .. }), "{outcome:?}");
+        let completed = f.effects.recv().await.expect("typed completion");
+        let failure = match completed.result {
+            d2b_resource_runtime::context::EffectResult::Failed(failure) => failure,
+            other => panic!("a degraded layout must not complete as success: {other:?}"),
+        };
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(
+            fake.call_order(),
+            vec!["ensure-layout"],
+            "exactly one layout effect per pass; the driver never re-spawns on its own"
+        );
+        assert!(
+            !manager
+                .order()
+                .iter()
+                .any(|entry| entry.starts_with("ensure:VolumeBinding/")),
+            "a degraded layout derives no binding children"
+        );
+
+        // The actor's requeue delivers the next pass; exactly one more effect.
+        let outcome = d.reconcile(&mut f.ctx).await.expect("requeued pass");
+        assert!(matches!(outcome, ReconcileOutcome::InProgress { .. }), "{outcome:?}");
+        let _ = f.effects.recv().await.expect("typed completion");
+        assert_eq!(
+            fake.call_order(),
+            vec!["ensure-layout", "ensure-layout"],
+            "one layout effect per reconcile pass"
+        );
+
+        // Once the layout is Ready the same port converges without another
+        // effect on the pass that observes it.
+        fake.degraded.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = d.reconcile(&mut f.ctx).await.expect("reconcile after ready");
+        let _ = f.effects.recv().await.expect("ready completion");
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("children pass"), ReconcileOutcome::Satisfied);
     }
 
     // -- deterministic child identity -----------------------------------------

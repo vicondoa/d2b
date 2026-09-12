@@ -482,7 +482,12 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
         // Only a status the actor published for this exact row generation is
         // observed state of it; a status carried over from an older
         // generation is not (see `ResourceView::status_generation`).
-        stamp_status(&mut stored, status, view.generation)?;
+        stamp_status(
+            &mut stored,
+            status,
+            view.generation,
+            view.observed_status_projection(),
+        )?;
         stamped = true;
     }
     if view.deleting {
@@ -603,7 +608,7 @@ fn render_envelope(
             "zone": key.zone,
         },
         "spec": serde_json::to_value(&spec_value).map_err(|_| envelope_invalid())?,
-        "status": manager_status_value("Pending", None, generation),
+        "status": manager_status_value("Pending", None, generation, None),
         "type": key.type_name,
     });
     let canonical =
@@ -624,24 +629,31 @@ fn render_envelope(
 /// generation.
 ///
 /// The manager runs no update assessment, so the currency object reports
-/// `Unknown` with empty owned/dependency sets. A failed actor's closed
-/// failure classification is not a status member - the status object is
-/// closed to unknown fields - and stays observable under the free-form
-/// `resource` layer instead.
+/// `Unknown` with empty owned/dependency sets. The free-form `resource` layer
+/// carries the row's driver-published projection when it has one; otherwise a
+/// failed actor's closed failure classification rides there (the status
+/// object itself is closed to unknown fields).
 fn manager_status_value(
     phase: &str,
     failure: Option<&DriverFailure>,
     generation: u64,
+    projection: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    let resource = match failure {
-        Some(failure) => serde_json::json!({
-            "driverFailure": {
-                "operation": format!("{:?}", failure.op()),
-                "retryable": failure.class()
-                    == d2b_resource_runtime::error::FailureClass::Retryable,
-            },
-        }),
-        None => serde_json::json!({}),
+    let resource = match projection {
+        // The driver published this row's own `status.resource` layer (the
+        // Cloud Hypervisor Guest runtime status): it is what the type's
+        // consumers read, so it stands in for the default empty layer.
+        Some(projection) => projection.clone(),
+        None => match failure {
+            Some(failure) => serde_json::json!({
+                "driverFailure": {
+                    "operation": format!("{:?}", failure.op()),
+                    "retryable": failure.class()
+                        == d2b_resource_runtime::error::FailureClass::Retryable,
+                },
+            }),
+            None => serde_json::json!({}),
+        },
     };
     serde_json::json!({
         "completedAt": serde_json::Value::Null,
@@ -679,6 +691,7 @@ fn stamp_status(
     stored: &mut StoredResource,
     status: ResourceStatus,
     generation: u64,
+    projection: Option<&serde_json::Value>,
 ) -> Result<(), StoreError> {
     let (phase, failure) = match status {
         ResourceStatus::Pending | ResourceStatus::Recovering | ResourceStatus::Reconciling => {
@@ -692,7 +705,7 @@ fn stamp_status(
         // `shared_provider_effects::live_phase`) already apply.
         ResourceStatus::Deleting => ("Deleted", None),
     };
-    let projected = manager_status_value(phase, failure.as_ref(), generation);
+    let projected = manager_status_value(phase, failure.as_ref(), generation, projection);
     let mut value =
         CanonicalJsonValue::parse(&stored.canonical_json).map_err(|_| envelope_invalid())?;
     let CanonicalJsonValue::Object(root) = &mut value else {

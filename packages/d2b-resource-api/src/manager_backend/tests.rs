@@ -675,6 +675,7 @@ fn rendered_rows_round_trip_through_the_strict_envelope_reader() {
         owner_key: None,
         status,
         status_generation,
+        status_projection: None,
     };
 
     for (label, status, status_generation, expected_phase) in [
@@ -775,6 +776,7 @@ fn rendered_full_envelopes_keep_the_strict_reader_contract() {
         owner_key: None,
         status,
         status_generation,
+        status_projection: None,
     };
     for (label, status, status_generation, deleting, expected_phase) in [
         (

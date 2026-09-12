@@ -665,6 +665,19 @@ fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
             },
         )
     })?;
+    // Record the live owner while the exclusive lock is held. This is the
+    // `file-record` lease evidence the daemon verifies (kernel start-time +
+    // boot id + comm) before adopting the broker-owned lock; without it the
+    // daemon keeps the entry quarantined.
+    hardlink_farm::SyncLockOwnerRecord::record_current_process(&file).map_err(|error| {
+        StoreSyncError::at(
+            ErrorStage::Lock,
+            HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: format!("record sync.lock owner: {error}"),
+            },
+        )
+    })?;
     Ok(file)
 }
 

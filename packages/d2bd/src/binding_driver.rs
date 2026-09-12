@@ -246,14 +246,21 @@ pub(crate) trait BindingDriverEffects: Send + Sync + 'static {
     /// Guest mount observation (the KTD6 drain gate): whether the target
     /// Guest currently observes the mount.
     ///
-    /// A present mount keeps the durable deleting mark and the owned
-    /// children - the drain never force-clears a serve that is still mounted
-    /// (old `ChildReadinessPort::observe_guest_mount`, sourced from the
-    /// Endpoint child's published state). The new plane has no guest-mount
-    /// observation surface yet (it arrives with the guest target layer,
-    /// U13), so the default answers "no mount observed" - exactly the old
-    /// plane's answer while the Endpoint had no published state.
-    async fn guest_mount_ready(&self, _binding: &StoredBinding) -> Result<bool, String> {
+    /// The evidence is the target layer's, never a second channel (U13): the
+    /// owning row's assignment in the Zone target directory is asked through
+    /// the live authenticated ComponentSession, and only a target-local
+    /// realization the Guest reports `ready` for that source answers `true`.
+    /// A target the directory cannot reach, a loose row, and a source the
+    /// Guest holds no realization for all answer `false` - the same
+    /// fail-closed answer the old plane gave while the Endpoint child had no
+    /// published state. A present mount therefore keeps the durable deleting
+    /// mark and the owned children (the drain never force-clears a serve that
+    /// is still mounted).
+    async fn guest_mount_ready(
+        &self,
+        _key: &ResourceKey,
+        _binding: &StoredBinding,
+    ) -> Result<bool, String> {
         Ok(false)
     }
 }
@@ -265,10 +272,9 @@ pub(crate) type ServingEffectFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Se
 
 /// Production effects over the preserved virtiofs serving adapter. U9 wires
 /// the adapter construction (the same inputs the old
-/// `ChildReadinessPort` consumed). The guest-mount gate keeps the trait
-/// default: this plane has no guest-mount observation surface yet (U13), so
-/// production answers "no mount observed" exactly as the old plane did
-/// while the Endpoint child had no published state.
+/// `ChildReadinessPort` consumed); U13 wires the guest-mount observation over
+/// the Zone target directory, so the KTD6 drain gate reads the target layer's
+/// own evidence instead of the old Endpoint-published state.
 pub(crate) struct ProductionBindingDriverEffects {
     ready: Arc<
         dyn for<'a> Fn(&'a d2b_provider_volume_virtiofs::SocketIdentity) -> ServingEffectFuture<'a, bool>
@@ -281,6 +287,12 @@ pub(crate) struct ProductionBindingDriverEffects {
             ) -> ServingEffectFuture<'a, Result<(), String>>
             + Send
             + Sync,
+    >,
+    /// Guest mount observation (U13/KTD6): one row key resolved through the
+    /// Zone target directory - a target-local realization the Guest reports
+    /// `ready` for that source is the only `true` answer.
+    guest_mount: Arc<
+        dyn for<'a> Fn(&'a ResourceKey) -> ServingEffectFuture<'a, bool> + Send + Sync,
     >,
 }
 
@@ -300,11 +312,17 @@ impl ProductionBindingDriverEffects {
                 + Send
                 + Sync,
         >,
+        guest_mount: Arc<
+            dyn for<'a> Fn(&'a ResourceKey) -> ServingEffectFuture<'a, bool> + Send + Sync,
+        >,
     ) -> Self {
-        Self { ready, remove }
+        Self {
+            ready,
+            remove,
+            guest_mount,
+        }
     }
 }
-
 #[async_trait::async_trait]
 impl BindingDriverEffects for ProductionBindingDriverEffects {
     async fn socket_ready(
@@ -319,6 +337,14 @@ impl BindingDriverEffects for ProductionBindingDriverEffects {
         socket: &d2b_provider_volume_virtiofs::SocketIdentity,
     ) -> Result<(), String> {
         (self.remove)(socket).await
+    }
+
+    async fn guest_mount_ready(
+        &self,
+        key: &ResourceKey,
+        _binding: &StoredBinding,
+    ) -> Result<bool, String> {
+        Ok((self.guest_mount)(key).await)
     }
 }
 
@@ -579,9 +605,10 @@ impl BindingDriver {
     }
 
     /// The stored binding for one row: strict neutral spec plus the
-    /// identity the fence is pinned to (uid from the durable row; the
-    /// revision is not carried by the new store and the readiness fence
-    /// does not compare revisions, matching the old behavior).
+    /// identity the fence is pinned to (uid from the durable row; the new
+    /// store carries no Zone revision, so the fence's observation revision
+    /// is the row revision the manager plane publishes - the row
+    /// generation, which the manager maps onto the wire revision, KTD8).
     fn stored_binding(
         &self,
         ctx: &ResourceContext,
@@ -596,7 +623,15 @@ impl BindingDriver {
             binding,
             uid,
             generation,
-            d2b_contracts_resource::v3::ZoneRevision::new(0),
+            // The fence revision names the row revision the projection was
+            // authored at. The manager has no separate Zone revision: its
+            // wire revision *is* the row generation (KTD8), so a projection
+            // pinned to any other ordinal would either claim an observation
+            // the row never held or fall behind the row it describes. The
+            // read side keeps the guard - a fence ahead of the row's own
+            // revision, under another uid, or under another generation is
+            // never current.
+            d2b_contracts_resource::v3::ZoneRevision::new(generation.get()),
         ))
     }
 
@@ -805,7 +840,7 @@ impl ResourceDriver for BindingDriver {
         let socket_ready = self.effects.socket_ready(&socket).await;
         let mount_ready = self
             .effects
-            .guest_mount_ready(&stored)
+            .guest_mount_ready(ctx.key(), &stored)
             .await
             .unwrap_or(false);
         ctx.set_status(BindingDriverStatus::ServingChildren {
@@ -814,9 +849,29 @@ impl ResourceDriver for BindingDriver {
             socket_ready,
             mount_ready,
         });
-        if mutated {
-            // The child rows were (re)committed this pass: re-check them on
-            // the preserved resync cadence.
+        // KTD3: the fenced projection is the wire-visible readiness, and the
+        // row's actor republishes it on every concluding pass - a pass that
+        // published none would clear the manager's projection layer. `ready`
+        // is the serving evidence this plane can observe: the worker's
+        // private socket listening. The guest-mount half of the controller's
+        // Ready phase is a *drain* gate (U13 wires it to the target layer's
+        // own observation), not a readiness term here: no converted type has
+        // Guest-side effect code yet, so a projection gated on a target-local
+        // realization would pin readiness false forever while the share is
+        // actually being served. `mount_ready` stays in the typed status for
+        // consumers that need it.
+        let reason = (!socket_ready).then_some(VirtiofsBindingError::BindingNotReady);
+        ctx.set_status_projection(
+            serde_json::to_value(stored.status_projection(socket_ready, reason))
+                .expect("the fenced binding projection is always serializable"),
+        );
+        if mutated || !socket_ready {
+            // The child rows were (re)committed this pass, or the socket is
+            // not serving yet: re-check on the preserved resync cadence (the
+            // Runner contract's repair interval) - the same shape the Guest
+            // driver uses while its Provider phase is not Ready, so a
+            // readiness the port cannot observe yet converges without
+            // depending on a watch delivery.
             ctx.requeue_after(BINDING_RESYNC);
         }
         Ok(ReconcileOutcome::Satisfied)
@@ -850,7 +905,7 @@ impl ResourceDriver for BindingDriver {
         {
             if self
                 .effects
-                .guest_mount_ready(&stored)
+                .guest_mount_ready(ctx.key(), &stored)
                 .await
                 .unwrap_or(false)
             {
@@ -895,6 +950,11 @@ impl ResourceDriver for BindingDriver {
 mod tests {
     use std::sync::Arc;
 
+    use d2b_contracts_resource::v3::{
+        ResourceGeneration, ResourceUid, ZoneRevision,
+        resource_status::StatusCode,
+        volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
+    };
     use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding, WORKER_TEMPLATE};
     use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration};
     use d2b_resource_runtime::driver::{
@@ -902,6 +962,8 @@ mod tests {
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
@@ -956,7 +1018,11 @@ mod tests {
             Ok(())
         }
 
-        async fn guest_mount_ready(&self, _binding: &StoredBinding) -> Result<bool, String> {
+        async fn guest_mount_ready(
+            &self,
+            _key: &ResourceKey,
+            _binding: &StoredBinding,
+        ) -> Result<bool, String> {
             self.log.lock().push("guest-mount".to_owned());
             Ok(self.mounted.load(std::sync::atomic::Ordering::SeqCst))
         }
@@ -1327,7 +1393,8 @@ mod tests {
         // The not-yet-current child set re-checks on the preserved resync.
         assert_eq!(f.requeue.scheduled().len(), 1);
 
-        // Second pass: the same children are current, no churn, no requeue.
+        // Second pass: the same children are current, no churn; the socket
+        // is still not serving, so the repair cadence keeps re-checking.
         d.reconcile(&mut f.ctx).await.expect("reconcile again");
         let ensures = f
             .manager
@@ -1336,7 +1403,7 @@ mod tests {
             .filter(|entry| entry.starts_with("ensure:"))
             .count();
         assert_eq!(ensures, 4, "two passes, two ensures each");
-        assert_eq!(f.requeue.scheduled().len(), 1);
+        assert_eq!(f.requeue.scheduled().len(), 2);
         assert!(matches!(
             f.ctx.status::<BindingDriverStatus>(),
             Some(BindingDriverStatus::ServingChildren {
@@ -1344,6 +1411,164 @@ mod tests {
                 ..
             })
         ));
+
+        // Once the socket serves, the binding converges and stops requeueing.
+        fake.make_ready();
+        d.reconcile(&mut f.ctx).await.expect("reconcile third");
+        assert_eq!(f.requeue.scheduled().len(), 2);
+        assert!(matches!(
+            f.ctx.status::<BindingDriverStatus>(),
+            Some(BindingDriverStatus::ServingChildren {
+                converged: true,
+                socket_ready: true,
+                ..
+            })
+        ));
+    }
+
+    // -- fenced status projection (KTD3) ---------------------------------------
+
+    /// The converted binding's wire view carries `resource.ready` and the
+    /// fence of the row's own identity: the driver projection is rendered
+    /// verbatim by the manager-backed API, and the frozen reader accepts it
+    /// for exactly this row.
+    #[tokio::test]
+    async fn fenced_projection_renders_as_the_wire_status_resource() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let row = binding_row([0x42; 16]);
+        let mut f = fixture(row.clone(), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        d.validate(&mut f.ctx).await.expect("validate");
+        fake.make_ready();
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+
+        let projection = f
+            .ctx
+            .take_status_projection()
+            .expect("the concluding pass publishes the fenced projection");
+        let typed = serde_json::from_value::<VolumeBindingStatusResource>(projection.clone())
+            .expect("the projection is the typed fenced contract");
+        assert!(typed.ready, "the worker socket is serving");
+        assert!(typed.reason.is_none());
+
+        // The manager-backed API renders exactly this layer as the wire
+        // `status.resource` of a row whose status is current for its
+        // generation (the same rendering the fixture's `jq` waits read).
+        let view = ResourceView {
+            key: f.ctx.key().clone(),
+            uid: *f.ctx.uid(),
+            generation: f.ctx.generation(),
+            deleting: false,
+            provenance: ResourceProvenance::Resource,
+            spec: row.spec.clone(),
+            metadata: Vec::new(),
+            owner_key: None,
+            status: Some(ResourceStatus::Ready),
+            status_generation: Some(f.ctx.generation()),
+            status_projection: Some(projection.clone()),
+        };
+        let stored =
+            d2b_resource_api::manager_backend::manager_row_stored(&view).expect("wire render");
+        let wire: serde_json::Value =
+            serde_json::from_slice(&stored.canonical_json).expect("wire envelope json");
+        let resource = &wire["status"]["resource"];
+        assert_eq!(resource, &projection, "the projection is the whole wire layer");
+        assert_eq!(resource["ready"], serde_json::json!(true));
+        assert_eq!(
+            resource["fence"]["uid"], wire["metadata"]["uid"],
+            "the fence names the row's own uid"
+        );
+        assert_eq!(
+            resource["fence"]["generation"], wire["metadata"]["generation"],
+            "the fence names the row's own generation"
+        );
+        assert_eq!(
+            resource["fence"]["revision"], wire["metadata"]["revision"],
+            "the fence revision is the row revision the manager publishes"
+        );
+        assert!(resource["fence"]["revision"].as_u64().expect("revision") > 0);
+
+        // And the frozen reader accepts it for exactly that identity.
+        let uid = ResourceUid::parse(wire["metadata"]["uid"].as_str().expect("uid")).expect("uid");
+        let generation = ResourceGeneration::new(
+            wire["metadata"]["generation"].as_u64().expect("generation"),
+        )
+        .expect("generation");
+        let revision = ZoneRevision::new(wire["metadata"]["revision"].as_u64().expect("revision"));
+        let typed =
+            serde_json::from_value::<VolumeBindingStatusResource>(resource.clone()).expect("typed");
+        assert!(typed.readiness_is_current(&uid, generation, revision));
+    }
+
+    /// The fence cannot be satisfied vacuously: a pass that cannot observe
+    /// the serving socket publishes `ready: false` under the frozen reason,
+    /// and a projection authored under an older identity (or ahead of the
+    /// stored revision) never reports the row ready.
+    #[tokio::test]
+    async fn stale_or_not_serving_fences_never_report_ready() {
+        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log());
+        let row = binding_row([0x42; 16]);
+        let mut f = fixture(row.clone(), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+        let pending = serde_json::from_value::<VolumeBindingStatusResource>(
+            f.ctx.take_status_projection().expect("projection"),
+        )
+        .expect("typed projection");
+        assert!(!pending.ready, "no socket was observed serving");
+        assert_eq!(
+            pending.reason.as_ref().map(StatusCode::as_str),
+            Some("binding-not-ready"),
+            "the not-ready projection carries the frozen provider reason"
+        );
+
+        // The row moves to generation 2 (a spec change): the next pass pins
+        // the projection to the new identity, and the old one can never
+        // report the newer row ready.
+        let mut advanced = row.clone();
+        advanced.generation = 2;
+        let manager2 = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake2 = FakeServingEffects::shared(manager2.log());
+        let mut f2 = fixture(advanced, manager2);
+        let mut d2 = driver(fake2.clone()).await;
+        fake2.make_ready();
+        d2.reconcile(&mut f2.ctx).await.expect("reconcile");
+        let current = serde_json::from_value::<VolumeBindingStatusResource>(
+            f2.ctx.take_status_projection().expect("projection"),
+        )
+        .expect("typed projection");
+        assert!(current.ready);
+        assert_eq!(current.fence.generation.get(), 2);
+
+        let uid = current.fence.uid.clone();
+        let generation = current.fence.generation;
+        let revision = current.fence.revision;
+        assert!(
+            !pending.readiness_is_current(&uid, generation, revision),
+            "a fence from the older row generation never reports the new row ready"
+        );
+        assert!(current.readiness_is_current(&uid, generation, revision));
+
+        // A fence ahead of the stored revision is not current: the revision
+        // is a currency bound, not a free field.
+        let ahead = VolumeBindingStatusResource {
+            ready: true,
+            fence: VolumeBindingReadinessFence {
+                uid: uid.clone(),
+                generation,
+                revision: ZoneRevision::new(revision.get() + 1),
+            },
+            reason: None,
+        };
+        assert!(!ahead.readiness_is_current(&uid, generation, revision));
+
+        // And a fence under a foreign identity is never current.
+        let foreign =
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("foreign uid");
+        assert!(!current.readiness_is_current(&foreign, generation, revision));
     }
 
     // -- launch authority: plan + typed, argv-free worker child ---------------

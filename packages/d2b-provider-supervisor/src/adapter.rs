@@ -880,6 +880,23 @@ mod tests {
 
     use super::*;
 
+    /// A resolution refusal is not an ambiguous identity: the effect ports
+    /// project `ResolutionFailed` as `LaunchFailed`, so an adopt probe the
+    /// trusted-intent fence refuses cannot reach the Process driver as
+    /// `adoption-ambiguous` and be quarantined as terminal (R15 is about
+    /// observed identity). Observed identity drift keeps `AdoptionAmbiguous`.
+    #[test]
+    fn resolution_refusals_are_not_adoption_ambiguity() {
+        assert_eq!(
+            map_error(ProcessEffectError::ResolutionFailed),
+            ProcessConformanceError::LaunchFailed
+        );
+        assert_eq!(
+            map_error(ProcessEffectError::IdentityChanged),
+            ProcessConformanceError::AdoptionAmbiguous
+        );
+    }
+
     struct ControlledBackend {
         started: Mutex<Option<Sender<()>>>,
         release: Mutex<Receiver<()>>,

@@ -249,6 +249,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
     import hashlib
     import json
     import time
@@ -278,15 +280,44 @@ pkgs.testers.runNixOSTest {
             f"d2b --zone work --json {command} >{out}"
         )
 
+    # The row set every volume-chain wait asserts on. On timeout the shared
+    # `diag_wait` dumps print exactly these projections (plus the daemon lines
+    # mentioning the binding) into the driver log, so the lane log carries the
+    # evidence the wait last saw (issue #513).
+    chain_projection = (
+        "[.resources[] | {type: .type, name: .metadata.name, "
+        "owner: .metadata.ownerRef, phase: .status.phase, "
+        "gen: .metadata.generation, obs: .status.observedGeneration, "
+        "template: .spec.template, purpose: .spec.purpose, "
+        "producer: .spec.producerRef}]"
+    )
+    chain_row_dumps = [
+        (
+            f"{kind} rows",
+            d2b(f"list {kind}", f"/run/d2b-diag-{kind.lower()}.json")
+            + f" && jq -c '{chain_projection}' "
+            + f"/run/d2b-diag-{kind.lower()}.json || true",
+        )
+        for kind in ["Volume", "VolumeBinding", "Process", "Endpoint"]
+    ] + [
+        (
+            "vms dir",
+            "ls -la /run/d2b/vms/acceptance-guest/ 2>&1 "
+            "|| echo 'no vms dir'",
+        ),
+    ]
+
     start_all()
+    stage("boot")
     machine.wait_for_unit("nftables.service", timeout=180)
     machine.wait_for_unit("d2b-broker.socket", timeout=30)
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-up", "d2bd.service", 180)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
 
     # 1. Volume realize: the Nix-ingested Volume is Ready with a manager
     #    identity and an observed generation (U10 ingestion -> U7 driver).
-    machine.wait_until_succeeds(
+    diag_wait(
+        "volume-realized",
         f"{d2b('list Volume', '/run/d2b-volume-realized.json')} && "
         "jq -e '"
         "([.resources[] | select(.type == \"Volume\" and "
@@ -300,33 +331,19 @@ pkgs.testers.runNixOSTest {
         ".status.observedGeneration == .metadata.generation))' "
         "/run/d2b-volume-realized.json",
         timeout=180,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", "Volume/state")],
     )
 
     def dump_rows(tag):
-        machine.succeed(
-            d2b("list Volume", "/run/d2b-diag-volume.json") + "; "
-            + d2b("list VolumeBinding", "/run/d2b-diag-binding.json") + "; "
-            + d2b("list Process", "/run/d2b-diag-process.json") + "; "
-            + d2b("list Endpoint", "/run/d2b-diag-endpoint.json") + "; echo OK"
-        )
-        print("=== volume-chain rows: " + tag)
-        for kind in ["volume", "binding", "process", "endpoint"]:
-            print(machine.succeed(
-                "jq -c '[.resources[] | {type: .type, name: .metadata.name, "
-                "owner: .metadata.ownerRef, phase: .status.phase, "
-                "gen: .metadata.generation, obs: .status.observedGeneration, "
-                "template: .spec.template, purpose: .spec.purpose, "
-                "producer: .spec.producerRef}]' "
-                "/run/d2b-diag-" + kind + ".json"
-            ))
-        print("=== socket dir:")
-        print(machine.succeed(
-            "ls -la /run/d2b/vms/acceptance-guest/ 2>&1 || echo 'no vms dir'"
-        ))
+        stage(tag)
+        for label, command in chain_row_dumps:
+            diag(command, f"{tag}: {label}")
 
     # 2. The Volume side minted exactly one deterministic VolumeBinding
     #    child through the manager, and that child converged.
-    machine.wait_until_succeeds(
+    diag_wait(
+        "binding-realized",
         f"{d2b('list VolumeBinding', '/run/d2b-binding-realized.json')} && "
         "jq -e '"
         f"([.resources[] | select(.type == \"VolumeBinding\" and "
@@ -344,12 +361,15 @@ pkgs.testers.runNixOSTest {
         ".spec.mountPath == \"/state\"))' "
         "/run/d2b-binding-realized.json",
         timeout=120,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", binding_name)],
     )
 
     # 3. The binding owns the virtiofsd worker Process and its private
     #    Endpoint as managed children; the worker is realized (a live
     #    virtiofsd process) and the serving socket is bound.
-    machine.wait_until_succeeds(
+    diag_wait(
+        "worker-realized",
         f"{d2b('list Process', '/run/d2b-worker-realized.json')} && "
         "jq -e '"
         f"([.resources[] | select(.type == \"Process\" and "
@@ -365,44 +385,51 @@ pkgs.testers.runNixOSTest {
         ".status.observedGeneration == .metadata.generation)] | length) == 1' "
         "/run/d2b-worker-realized.json",
         timeout=120,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", "virtiofsd-worker")],
     )
-    try:
-        machine.wait_until_succeeds(
-            f"{d2b('list Endpoint', '/run/d2b-endpoint-realized.json')} && "
-            f"{d2b('list Process', '/run/d2b-worker-producer.json')} && "
-            "jq -e --slurpfile proc /run/d2b-worker-producer.json '"
-            f"([.resources[] | select(.type == \"Endpoint\" and "
-            f".metadata.ownerRef == \"VolumeBinding/{binding_name}\")] | length) "
-            "== 1 and "
-            f"([$proc[0].resources[] | select(.type == \"Process\" and "
-            f".metadata.ownerRef == \"VolumeBinding/{binding_name}\" and "
-            ".status.phase == \"Ready\" and "
-            ".status.observedGeneration == .metadata.generation)] | length) "
-            "== 1 and "
-            f"(.resources[] | select(.type == \"Endpoint\" and "
-            f".metadata.ownerRef == \"VolumeBinding/{binding_name}\") | "
-            "(.status.phase == \"Ready\" and "
-            ".status.observedGeneration == .metadata.generation and "
-            ".spec.transport == \"unix\" and "
-            "(.spec.purpose == \"virtiofsd\" and "
-            "(.spec.producerRef as $producer | "
-            "any($proc[0].resources[]; "
-            ".type == \"Process\" and "
-            "\"\\(.type)/\\(.metadata.name)\" == $producer)))))' "
-            "/run/d2b-endpoint-realized.json",
-            timeout=120,
-        )
-    except Exception:
-        dump_rows("endpoint wait failed")
-        raise
-    machine.wait_until_succeeds(
+    diag_wait(
+        "endpoint-realized",
+        f"{d2b('list Endpoint', '/run/d2b-endpoint-realized.json')} && "
+        f"{d2b('list Process', '/run/d2b-worker-producer.json')} && "
+        "jq -e --slurpfile proc /run/d2b-worker-producer.json '"
+        f"([.resources[] | select(.type == \"Endpoint\" and "
+        f".metadata.ownerRef == \"VolumeBinding/{binding_name}\")] | length) "
+        "== 1 and "
+        f"([$proc[0].resources[] | select(.type == \"Process\" and "
+        f".metadata.ownerRef == \"VolumeBinding/{binding_name}\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length) "
+        "== 1 and "
+        f"(.resources[] | select(.type == \"Endpoint\" and "
+        f".metadata.ownerRef == \"VolumeBinding/{binding_name}\") | "
+        "(.status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation and "
+        ".spec.transport == \"unix\" and "
+        "(.spec.purpose == \"virtiofsd\" and "
+        "(.spec.producerRef as $producer | "
+        "any($proc[0].resources[]; "
+        ".type == \"Process\" and "
+        "\"\\(.type)/\\(.metadata.name)\" == $producer)))))' "
+        "/run/d2b-endpoint-realized.json",
+        timeout=120,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", binding_name)],
+    )
+    diag_wait(
+        "serving-socket",
         f"test -S {socket_path}",
         timeout=60,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", "virtiofsd")],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "virtiofsd-process",
         "test \"$(ps -eo args= | awk '/virtiofsd/ && !/awk/ {c++} END {print c+0}')\" "
         "-ge 1",
         timeout=60,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", "virtiofsd")],
     )
 
     # 4. Deleting the owning Volume drives the whole chain through the
@@ -420,19 +447,18 @@ pkgs.testers.runNixOSTest {
             "/run/d2b-volume-delete.json")
     )
 
-    try:
-        machine.wait_until_succeeds(
-            f"{d2b('list VolumeBinding', '/run/d2b-binding-deleting.json')} && "
-            "jq -e '"
-            f"any(.resources[]; .type == \"VolumeBinding\" and "
-            f".metadata.name == \"{binding_name}\" and "
-            ".metadata.deletionRequestedAt != null)' "
-            "/run/d2b-binding-deleting.json",
-            timeout=60,
-        )
-    except Exception:
-        dump_rows("binding deleting wait failed")
-        raise
+    diag_wait(
+        "binding-deleting",
+        f"{d2b('list VolumeBinding', '/run/d2b-binding-deleting.json')} && "
+        "jq -e '"
+        f"any(.resources[]; .type == \"VolumeBinding\" and "
+        f".metadata.name == \"{binding_name}\" and "
+        ".metadata.deletionRequestedAt != null)' "
+        "/run/d2b-binding-deleting.json",
+        timeout=60,
+        rows=chain_row_dumps,
+        explain=[("d2bd.service", binding_name)],
+    )
 
     # Sample the teardown window: the Endpoint row and the worker Process
     # row must both disappear, the Endpoint never after the worker, and no

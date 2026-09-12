@@ -38,7 +38,7 @@ use d2b_contracts_resource::v3::{
     ZoneId, ZoneRevision,
     process::{DesiredLifecycle, ProcessClass, ProcessSpec, RestartClass},
 };
-use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, ProcessIdentityDigest};
+use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, ProcessIdentityDigest};
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
@@ -52,6 +52,7 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use crate::process_provider_runtime::{
     ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, execution_target_allowed,
 };
+use crate::process_resource_runtime::{LaunchRow, resolve_launch_identity};
 
 /// The one resource type this factory serves (KTD4 Phase A). `EphemeralProcess`
 /// stays on the old reconciler until its conversion unit.
@@ -76,6 +77,9 @@ const KILL_TIMEOUT: Duration = Duration::from_secs(30);
 enum ProcessDriverErrorKind {
     /// The durable spec did not decode as the closed Process contract.
     SpecInvalid,
+    /// The row's launch identity is incomplete or invalid; the named
+    /// construction error is the only diagnosis.
+    IdentityIncomplete,
     /// The spec selected a Provider this driver does not own.
     ProviderUnsupported,
     /// The spec's execution target is not drivable in this daemon mode.
@@ -97,6 +101,7 @@ impl ProcessDriverErrorKind {
         match self {
             Self::ProviderEffect | Self::DrainPending => FailureClass::Retryable,
             Self::SpecInvalid
+            | Self::IdentityIncomplete
             | Self::ProviderUnsupported
             | Self::ExecutionUnsupported
             | Self::TemplateUnavailable
@@ -124,6 +129,7 @@ impl core::fmt::Display for ProcessDriverError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self.kind {
             ProcessDriverErrorKind::SpecInvalid => "process-spec-invalid",
+            ProcessDriverErrorKind::IdentityIncomplete => "process-identity-incomplete",
             ProcessDriverErrorKind::ProviderUnsupported => "process-provider-unsupported",
             ProcessDriverErrorKind::ExecutionUnsupported => "process-execution-unsupported",
             ProcessDriverErrorKind::TemplateUnavailable => "process-template-unavailable",
@@ -217,12 +223,12 @@ pub(crate) struct ProcessResourceIdentity {
     /// the effects cannot re-read the spec at finalize time (KTD7).
     pub(crate) process_class: ProcessClass,
     pub(crate) provider_ref: ResourceRef,
-    /// Semantic owner (binding workers, static controllers, guest VMM
-    /// processes); the Phase A host driver leaves owner/target wiring to the
-    /// composition unit, which owns owner-key resolution.
-    pub(crate) owner_ref: Option<ResourceRef>,
-    pub(crate) owner_uid: Option<ResourceUid>,
-    pub(crate) target_ref: Option<ResourceRef>,
+    /// The canonical launch identity (KTD7), resolved once from this row:
+    /// semantic owner ref/UID, execution target, cross-target selector, VM
+    /// scope, and the legacy runner role. The ticket, the broker fence, and
+    /// this driver's adopt/probe path all consume this one value; none of
+    /// them re-derives its fields.
+    pub(crate) launch: LaunchIdentity,
     pub(crate) zone_uid: Option<ResourceUid>,
     pub(crate) policy_revision: Option<u64>,
     pub(crate) provider_assignment_generation: Option<ResourceGeneration>,
@@ -253,7 +259,7 @@ impl ProcessResourceIdentity {
             ZoneRevision::new(self.resource_generation.get()),
             &self.provider_ref,
             self.controller_generation,
-            self.target_ref.clone(),
+            self.launch.target_ref().cloned(),
         )
         .with_guest_execution(self.guest_execution.as_ref())
         .with_lifecycle_identity(
@@ -261,13 +267,14 @@ impl ProcessResourceIdentity {
             self.policy_revision,
             self.provider_assignment_generation,
         )
-        .with_owner_ref(self.owner_ref.clone())
-        .with_owner_uid(self.owner_uid.clone())
+        .with_owner_ref(self.launch.owner_ref().cloned())
+        .with_owner_uid(self.launch.owner_uid().cloned())
         .with_provider_identity(
             self.controller_provider_uid.as_ref(),
             self.controller_provider_generation,
         )
         .with_worker_launch(self.worker_launch.clone())
+        .with_launch_identity(self.launch.clone())
     }
 }
 
@@ -357,12 +364,31 @@ pub(crate) trait CommittedProviderIdentitySource: Send + Sync + 'static {
     ) -> Option<(ResourceUid, ResourceGeneration)>;
 }
 
+/// KTD7 Guest-owner identity source: the owning `Guest` row's durable uid for
+/// one canonical Guest reference. `Guest` has not been converted, so a
+/// converted Process row owned by a Guest cannot carry the durable owner
+/// linkage the pre-v3 store computed (`record.owner_uid` = the resolved owner
+/// row's uid) - the manager row carries only the authored
+/// `metadata.ownerRef`. The old descriptor composer read the linkage first
+/// and the owner identity cache second; a reference this source cannot
+/// resolve stays unbound, so the Cloud Hypervisor launch stays refused closed
+/// (the broker requires the owner uid to bind `d2b.guest_uid=`).
+#[async_trait::async_trait]
+pub(crate) trait GuestOwnerIdentitySource: Send + Sync + 'static {
+    /// The owning row's durable uid for one `Guest` reference, when the
+    /// plane that owns `Guest` retains the row.
+    async fn guest_owner_uid(&self, zone: &ZoneId, guest_ref: &ResourceRef) -> Option<ResourceUid>;
+}
+
 /// Production effects over the composed fixed Providers.
 pub(crate) struct ProductionProcessDriverEffects {
     providers: Arc<ProductionProcessProviders>,
     /// Committed Provider identities (KTD7), wired by the plane's
     /// construction path from the composition-resolved snapshot.
     committed_provider_identities: Option<Arc<dyn CommittedProviderIdentitySource>>,
+    /// Guest-owner durable identities (KTD7), wired by the plane's
+    /// construction path from the pre-v3 plane that owns `Guest` rows.
+    guest_owner_identities: Option<Arc<dyn GuestOwnerIdentitySource>>,
 }
 
 impl ProductionProcessDriverEffects {
@@ -370,6 +396,7 @@ impl ProductionProcessDriverEffects {
         Self {
             providers,
             committed_provider_identities: None,
+            guest_owner_identities: None,
         }
     }
 
@@ -384,45 +411,86 @@ impl ProductionProcessDriverEffects {
         self
     }
 
+    /// Attach the Guest-owner identity source (KTD7). Unwired effects leave a
+    /// Guest-owned row's owner uid unbound, so the Cloud Hypervisor launch
+    /// refuses closed instead of inventing an identity.
+    pub(crate) fn with_guest_owner_identities(
+        mut self,
+        source: Arc<dyn GuestOwnerIdentitySource>,
+    ) -> Self {
+        self.guest_owner_identities = Some(source);
+        self
+    }
+
     /// The provider-layer context for one row: the committed
-    /// controller-provider identity (KTD7) and, for guest-owned rows, the
-    /// catalog-bound Guest setup descriptor digest.
-    fn resource_context<'a>(
+    /// controller-provider identity (KTD7), the owning Guest's durable uid
+    /// for a guest-owned row, and the catalog-bound Guest setup descriptor
+    /// digest.
+    async fn resource_context<'a>(
         &self,
         identity: &'a ProcessResourceIdentity,
     ) -> ProcessResourceContext<'a> {
+        let guest_owner_uid =
+            resolve_guest_owner_uid(self.guest_owner_identities.as_deref(), identity).await;
         process_resource_context(
             identity,
             self.committed_provider_identities.as_deref(),
+            guest_owner_uid.as_ref(),
             |zone, guest| self.providers.guest_setup_descriptor_digest(zone, guest),
         )
     }
 }
 
+/// The owning Guest's durable uid for a row whose own linkage is absent.
+/// A row that already carries a linked owner uid keeps it (the old
+/// composer's precedence), and only a Guest owner is ever resolved; without
+/// a source the slot stays unbound and the launch refuses closed.
+async fn resolve_guest_owner_uid(
+    source: Option<&dyn GuestOwnerIdentitySource>,
+    identity: &ProcessResourceIdentity,
+) -> Option<ResourceUid> {
+    if identity.launch.owner_uid().is_some() {
+        return None;
+    }
+    let guest = identity
+        .launch
+        .owner_ref()
+        .filter(|owner| owner.resource_type().as_str() == "Guest")?;
+    source?.guest_owner_uid(&identity.zone, guest).await
+}
+
 /// Build the provider-layer context for one row: the committed
-/// controller-provider identity (KTD7) first, then the catalog-bound `Guest`
-/// setup descriptor digest for a guest-owned row.
+/// controller-provider identity (KTD7) first, then the owning Guest's
+/// durable uid and the catalog-bound `Guest` setup descriptor digest for a
+/// guest-owned row.
 ///
 /// The digest is the old runner's `set_guest_descriptor_digests` input and the
 /// private guest VMM intent lookup (`find_guest_vmm_intent`) refuses a ticket
 /// without it (`provider-ticket:guest-descriptor-unbound`), so a
 /// controller-minted `Process/<guest>-vmm` row cannot launch end to end until
-/// the bundle's descriptor digest is bound. Rows without a Guest owner bind
-/// nothing, and a Guest the bundle carries no descriptor for stays unbound -
-/// the ticket path still refuses closed.
-fn process_resource_context<'a>(
+/// the bundle's descriptor digest is bound. The owner uid is the linkage the
+/// old composer read from the durable row (the broker refuses a Cloud
+/// Hypervisor launch without it). Rows without a Guest owner bind nothing, and
+/// a Guest the plane or bundle does not retain stays unbound - the ticket
+/// path still refuses closed.
+pub(crate) fn process_resource_context<'a>(
     identity: &'a ProcessResourceIdentity,
     committed_provider_identities: Option<&dyn CommittedProviderIdentitySource>,
+    guest_owner_uid: Option<&ResourceUid>,
     guest_descriptor_digest: impl Fn(&ZoneId, &ResourceRef) -> Option<SchemaFingerprint>,
 ) -> ProcessResourceContext<'a> {
     let context =
         bind_committed_controller_provider_identity(identity, committed_provider_identities);
     let Some(guest) = identity
-        .owner_ref
-        .as_ref()
+        .launch
+        .owner_ref()
         .filter(|owner| owner.resource_type().as_str() == "Guest")
     else {
         return context;
+    };
+    let context = match guest_owner_uid {
+        Some(guest_owner_uid) => context.with_owner_uid(Some(guest_owner_uid.clone())),
+        None => context,
     };
     match guest_descriptor_digest(&identity.zone, guest) {
         Some(digest) => context.with_guest_descriptor_digest(Some(&digest)),
@@ -448,8 +516,8 @@ fn bind_committed_controller_provider_identity<'a>(
         return context;
     }
     let Some(provider_owner) = identity
-        .owner_ref
-        .as_ref()
+        .launch
+        .owner_ref()
         .filter(|owner| owner.resource_type().as_str() == "Provider")
     else {
         return context;
@@ -468,7 +536,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProcessIdentityDigest, String> {
-        let context = self.resource_context(identity);
+        let context = self.resource_context(identity).await;
         self.providers
             .launch_resource(context, spec, timeout)
             .await
@@ -481,7 +549,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         self.providers
-            .adopt_resource(self.resource_context(identity), spec)
+            .adopt_resource(self.resource_context(identity).await, spec)
             .await
     }
 
@@ -494,7 +562,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
     ) -> Result<bool, String> {
         self.providers
             .stop_resource(
-                self.resource_context(identity),
+                self.resource_context(identity).await,
                 spec,
                 term_timeout,
                 kill_timeout,
@@ -514,7 +582,7 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
 
     async fn finalize(&self, identity: &ProcessResourceIdentity) -> Result<(), String> {
         self.providers
-            .finalize_resource(self.resource_context(identity))
+            .finalize_resource(self.resource_context(identity).await)
             .await
     }
 
@@ -759,17 +827,14 @@ impl ProcessDriver {
         Ok(())
     }
 
-    /// Re-derive the adoption/launch identity (KTD7) from the durable row plus
-    /// the zone-authority inputs. Target-local evidence (pidfd, /proc
-    /// starttime, socket path) stays behind the provider effect port.
+    /// Resolve the adoption/launch identity (KTD7) from the durable row plus
+    /// the zone-authority inputs.
     ///
-    /// A binding-owned virtiofsd worker executes on the host (the signed
-    /// `virtiofsd-worker` template binds the Host execution reference) and is
-    /// targeted at the attachment's Guest through the ticket's target ref
-    /// (KTD7) - the host-exec/guest-target split the old binding runner
-    /// preserved. The authoritative target input is the owning VolumeBinding
-    /// row's declared execution ref; every other owner keeps an unbound
-    /// target.
+    /// Owner ref/UID, execution target, target selector, VM scope, and legacy
+    /// role come from one resolver ([`resolve_launch_identity`]) so this
+    /// driver, the legacy runtime, and the ticket builder cannot disagree
+    /// about any field. Target-local evidence (pidfd, /proc starttime, socket
+    /// path) stays behind the provider effect port.
     async fn identity(
         &self,
         ctx: &mut ResourceContext,
@@ -777,6 +842,7 @@ impl ProcessDriver {
         op: DriverOp,
     ) -> Result<ProcessResourceIdentity, ProcessDriverError> {
         let key = ctx.key();
+        let resource_label = format!("{}/{}", key.type_name, key.name);
         let resource_type = ContractResourceTypeName::parse(&key.type_name)
             .map_err(|_| self.error(ProcessDriverErrorKind::SpecInvalid, op))?;
         let name = ResourceName::parse(&key.name)
@@ -792,8 +858,21 @@ impl ProcessDriver {
         // and have no spec to consult when they finalize (KTD7).
         let (_, spec) = self.decoded_spec(ctx, op)?;
         let process_class = spec.execution().process_class();
+        // The manager resolves an owner key only for owners that are its own
+        // rows; an owned child of an unconverted owner falls back to the
+        // authored reference the row was ingested with (a Guest owner never
+        // appears in the plane).
+        let owner_ref = ctx
+            .owner_key()
+            .and_then(|owner| ResourceRef::parse(&format!("{}/{}", owner.type_name, owner.name)).ok())
+            .or_else(|| crate::resource_plane_v3::decode_metadata_owner_ref(ctx.metadata()));
+        // A binding-owned virtiofsd worker executes on the host (the signed
+        // `virtiofsd-worker` template binds the Host execution reference) and
+        // is targeted at the attachment's Guest through the ticket's target
+        // ref (KTD7). The authoritative target input is the owning
+        // VolumeBinding row's declared execution ref.
         let mut worker_launch = None;
-        let target_ref = match ctx.owner_key().cloned() {
+        let declared_target = match ctx.owner_key().cloned() {
             Some(owner) if owner.type_name == "VolumeBinding" => match ctx.get(&owner).await {
                 Ok(Some(row)) => {
                     let binding = serde_json::from_slice::<ResourceSpec>(&row.spec)
@@ -815,6 +894,26 @@ impl ProcessDriver {
             },
             _ => None,
         };
+        let launch = resolve_launch_identity(&LaunchRow {
+            owner_ref: owner_ref.as_ref(),
+            owner_uid: ctx.owner().and_then(resource_uid_from_bytes_bytes),
+            execution_ref: spec.execution().execution_ref(),
+            process_name: name.as_str(),
+            template: spec.execution().template().as_str(),
+            // The binding row is the owner that declares this target, so the
+            // declared-target rule applies to it.
+            declared_target: declared_target
+                .as_ref()
+                .zip(owner_ref.as_ref()),
+        })
+        .map_err(|error| {
+            tracing::warn!(
+                resource = %resource_label,
+                identity_error = error.code(),
+                "process launch identity incomplete"
+            );
+            self.error(ProcessDriverErrorKind::IdentityIncomplete, op)
+        })?;
         Ok(ProcessResourceIdentity {
             zone,
             resource_ref: ResourceRef::new(resource_type, name),
@@ -822,15 +921,7 @@ impl ProcessDriver {
             resource_generation,
             process_class,
             provider_ref: provider_ref.clone(),
-            owner_ref: ctx
-                .owner_key()
-                .and_then(|owner| ResourceRef::parse(&format!("{}/{}", owner.type_name, owner.name)).ok())
-                // The manager resolves an owner key only for owners that are
-                // its own rows; an owned child of an unconverted owner falls
-                // back to the authored reference the row was ingested with.
-                .or_else(|| crate::resource_plane_v3::decode_metadata_owner_ref(ctx.metadata())),
-            owner_uid: ctx.owner().and_then(resource_uid_from_bytes_bytes),
-            target_ref,
+            launch,
             zone_uid: self.authority.zone_uid.clone(),
             policy_revision: self.authority.policy_revision,
             provider_assignment_generation: self.authority.provider_assignment_generation,
@@ -914,6 +1005,11 @@ impl ProcessDriver {
         spec: &ProcessSpec,
         op: DriverOp,
     ) -> Result<(), ProcessDriverError> {
+        tracing::warn!(
+            resource = %identity.resource_ref.to_canonical_string(),
+            operation = ?op,
+            "stopping a managed process for its driver operation"
+        );
         self.effects
             .stop(
                 identity,
@@ -988,9 +1084,16 @@ fn resource_uid_from_bytes_bytes(bytes: &[u8; 16]) -> Option<d2b_contracts_resou
 
 /// Map preserved provider error spellings onto the closed driver kinds (the
 /// same classification as the old `map_provider_error`).
+///
+/// `resolution-failed` is the supervisor's code for a launch ticket the
+/// trusted bundle refuses to resolve (no matching intent, wrong execution
+/// target/scope/descriptor posture). Nothing was launched and nothing was
+/// observed, so the probe answer is the ticket's resolution failing - the same
+/// terminal class as `template-not-found` - never an ambiguous identity to
+/// quarantine (R15 is about observed identity).
 fn map_provider_error(error: String, op: DriverOp) -> ProcessDriverError {
     tracing::warn!(operation = ?op, error = %error, "process provider effect failed");
-    let kind = if error.contains("template-not-found") {
+    let kind = if error.contains("template-not-found") || error.contains("resolution-failed") {
         ProcessDriverErrorKind::TemplateUnavailable
     } else if error.contains("quarantined")
         || error.contains("identity")
@@ -1523,6 +1626,7 @@ mod tests {
     /// row set; `delete` records the retirement nudge and removes the row.
     struct OwnershipManager {
         owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
         deleted: parking_lot::Mutex<Vec<ResourceKey>>,
     }
 
@@ -1530,8 +1634,16 @@ mod tests {
         fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
             Arc::new(Self {
                 owned: parking_lot::Mutex::new(vec![row]),
+                rows: parking_lot::Mutex::new(Vec::new()),
                 deleted: parking_lot::Mutex::new(Vec::new()),
             })
+        }
+
+        /// Serve one row by key (`get`), for rows the driver reads besides its
+        /// own (the owning `VolumeBinding` a serving worker resolves).
+        fn with_row(self: &Arc<Self>, row: StoredDesiredResource) -> Arc<Self> {
+            self.rows.lock().push(row);
+            Arc::clone(self)
         }
     }
 
@@ -1547,9 +1659,14 @@ mod tests {
 
         async fn get(
             &self,
-            _key: &ResourceKey,
+            key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected get".into()))
+            Ok(self
+                .rows
+                .lock()
+                .iter()
+                .find(|row| row.key == *key)
+                .cloned())
         }
 
         async fn view(
@@ -1652,6 +1769,16 @@ mod tests {
     }
 
     fn fixture_with(row: StoredDesiredResource, manager: Arc<dyn ManagerEndpoint>) -> Fixture {
+        fixture_owned_by(row, manager, None)
+    }
+
+    /// Fixture whose row resolves the given manager owner key (the shape the
+    /// manager attaches for an owned child).
+    fn fixture_owned_by(
+        row: StoredDesiredResource,
+        manager: Arc<dyn ManagerEndpoint>,
+        owner_key: Option<ResourceKey>,
+    ) -> Fixture {
         let (effects_tx, effects_rx) = mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = mpsc::unbounded_channel();
         let (requeue, requeue_rx) = RecordingRequeue::new();
@@ -1663,7 +1790,8 @@ mod tests {
             Arc::new(requeue.clone()),
             effects_tx,
             notify_tx,
-        );
+        )
+        .with_owner_key(owner_key);
         Fixture {
             ctx,
             effects: effects_rx,
@@ -1778,8 +1906,8 @@ mod tests {
             .await
             .expect("identity");
         assert_eq!(
-            identity.owner_ref,
-            Some(ResourceRef::parse("Provider/network-local").expect("owner ref"))
+            identity.launch.owner_ref(),
+            Some(ResourceRef::parse("Provider/network-local").expect("owner ref")).as_ref()
         );
     }
 
@@ -1856,8 +1984,8 @@ mod tests {
             "the row decodes as a controller"
         );
         assert_eq!(
-            identity.owner_ref,
-            Some(ResourceRef::parse("Provider/network-local").expect("owner ref"))
+            identity.launch.owner_ref(),
+            Some(ResourceRef::parse("Provider/network-local").expect("owner ref")).as_ref()
         );
 
         let source = FixedProviderIdentities::default().with(
@@ -1931,6 +2059,237 @@ mod tests {
             .expect("identity")
     }
 
+    /// The old `scoped_target_ref` bound a Guest-owned guest-runtime process
+    /// to its owning Guest: the launch ticket names the Guest as its target.
+    /// The launch identity fence derives the launch VM name from that target
+    /// ref, and without it the guest VMM intent is refused
+    /// (`identity-rejection: resolved intent vm or legacy role mismatch`), so
+    /// a controller-committed `Process/<guest>-vmm` could never launch.
+    #[tokio::test]
+    async fn guest_runtime_row_targets_its_owning_guest() {
+        let mut f = fixture(guest_vmm_row());
+        let identity = guest_vmm_identity(&mut f).await;
+        assert_eq!(
+            identity.launch.target_ref(),
+            Some(ResourceRef::parse("Guest/acceptance-guest").expect("guest target")).as_ref(),
+            "the guest VMM launch ticket must target the owning Guest"
+        );
+
+        // A Guest-owned row outside the guest-runtime template families keeps
+        // an unbound target: only the families the bundle's guest intents are
+        // minted for take the host-exec/guest-target split.
+        let mut row = guest_vmm_row();
+        row.key = ResourceKey::new("work", "Process", "acceptance-guest-helper");
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#.to_vec();
+        let mut f = fixture(row);
+        let identity = guest_vmm_identity(&mut f).await;
+        assert_eq!(identity.launch.target_ref(), None);
+    }
+
+    /// A VolumeBinding-owned serving worker: the owning binding declares the
+    /// attachment Guest, which becomes the ticket's target ref, while the
+    /// launch VM stays the Host the signed serving template binds (KTD7
+    /// host-exec/guest-target split). The driver resolves this through the
+    /// one launch-identity resolver instead of a call-site rule.
+    #[tokio::test]
+    async fn binding_owned_worker_identity_targets_the_attachment_guest() {
+        let binding_key = ResourceKey::new(
+            "work",
+            "VolumeBinding",
+            "vol-binding-000000000000000000000000",
+        );
+        let binding_row = StoredDesiredResource {
+            key: binding_key.clone(),
+            uid: [0x42; 16],
+            generation: 1,
+            owner_uid: None,
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: serde_json::json!({
+                "providerRef": "Provider/volume-virtiofs",
+                "volumeRef": "Volume/data",
+                "executionRef": "Guest/acceptance-guest",
+                "view": "root",
+                "access": "read-only",
+                "mountPath": "/mnt/data",
+            })
+            .to_string()
+            .into_bytes(),
+            metadata: Vec::new(),
+            created_at: 0,
+        };
+        let mut row = test_row();
+        row.key = ResourceKey::new("work", "Process", "vol-vfd-deadbeef");
+        row.owner_uid = Some([0x42; 16]);
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"virtiofsd-worker","drainTimeout":"250ms"}"#.to_vec();
+        let manager = OwnershipManager::with_owned(row.clone()).with_row(binding_row);
+        let mut f = fixture_owned_by(row, manager, Some(binding_key));
+        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let identity = d
+            .typed
+            .identity(
+                &mut f.ctx,
+                &ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+                DriverOp::Reconcile,
+            )
+            .await
+            .expect("identity");
+
+        assert_eq!(
+            identity.launch.owner_ref(),
+            Some(&ResourceRef::parse("VolumeBinding/vol-binding-000000000000000000000000").expect("owner ref"))
+        );
+        assert_eq!(
+            identity.launch.target_ref(),
+            Some(&ResourceRef::parse("Guest/acceptance-guest").expect("guest target"))
+        );
+        assert!(identity.launch.is_binding_worker());
+        assert_eq!(identity.launch.vm(), Some("acceptance-guest"));
+        assert_eq!(identity.launch.launch_vm(), "host-system");
+    }
+
+    /// A binding-owned worker whose owning binding row cannot be read is an
+    /// incomplete identity: it fails once, at construction, instead of
+    /// reaching the fence without the attachment target the serving intent
+    /// resolves under.
+    #[tokio::test]
+    async fn binding_owned_worker_without_its_binding_row_fails_construction() {
+        let binding_key = ResourceKey::new(
+            "work",
+            "VolumeBinding",
+            "vol-binding-000000000000000000000000",
+        );
+        let mut row = test_row();
+        row.key = ResourceKey::new("work", "Process", "vol-vfd-deadbeef");
+        row.owner_uid = Some([0x42; 16]);
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"virtiofsd-worker"}"#.to_vec();
+        let manager = OwnershipManager::with_owned(row.clone());
+        let mut f = fixture_owned_by(row, manager, Some(binding_key));
+        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let error = d
+            .typed
+            .identity(
+                &mut f.ctx,
+                &ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
+                DriverOp::Reconcile,
+            )
+            .await
+            .expect_err("an incomplete launch identity is refused at construction");
+        assert_eq!(error.to_string(), "process-identity-incomplete");
+    }
+
+    /// The launch ticket for a Guest-owned guest-runtime Process must carry
+    /// the owner identity the old descriptor composer produced for the same
+    /// row (`ProcessResourceRuntime::context`, `process_resource_runtime.rs`):
+    ///
+    /// - `owner_ref` = the authored `metadata.ownerRef` (`record.owner_ref()`),
+    /// - `owner_uid` = the durable owner linkage (`record.resource.owner_uid`):
+    ///   the pre-v3 store resolved `metadata.ownerRef` to the owner row's uid
+    ///   (`d2b-resource-store-redb`, `transaction.rs` re-derives exactly that
+    ///   linkage), so for `Process/acceptance-guest-vmm` it is the
+    ///   `Guest/acceptance-guest` row's uid, and
+    /// - `target_ref` = `scoped_target_ref`'s owning Guest.
+    ///
+    /// The manager row cannot carry the linkage for an unconverted owner
+    /// (`Guest` stays on the pre-v3 plane), so the process effects resolve the
+    /// same durable uid from that plane. Assert on the ticket values, never on
+    /// which source was consulted.
+    #[tokio::test]
+    async fn guest_vmm_ticket_carries_the_old_descriptor_owner_identity() {
+        let guest_ref = ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
+        let guest_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174001").expect("guest uid");
+        let mut f = fixture(guest_vmm_row());
+        let identity = guest_vmm_identity(&mut f).await;
+        assert_eq!(
+            identity.launch.owner_uid(), None,
+            "a manager row cannot link an unconverted Guest owner"
+        );
+
+        let context =
+            super::process_resource_context(&identity, None, Some(&guest_uid), |_, _| None);
+
+        assert_eq!(context.owner_ref.as_ref(), Some(&guest_ref));
+        assert_eq!(context.owner_uid.as_ref(), Some(&guest_uid));
+        assert_eq!(context.target_ref.as_ref(), Some(&guest_ref));
+    }
+
+    /// The Guest-owner resolution reads the pre-v3 plane only for a Guest
+    /// owner whose row carries no linked uid; a linked uid always wins (the
+    /// old composer's precedence: `record.resource.owner_uid` first, the
+    /// owner identity cache second), and a non-Guest owner never reaches the
+    /// Guest plane. Without a wired source the slot stays unbound, so the
+    /// launch still refuses closed.
+    #[tokio::test]
+    async fn guest_owner_uid_resolution_keeps_the_old_composer_precedence() {
+        struct FixedGuestOwners {
+            uid: ResourceUid,
+            consulted: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl super::GuestOwnerIdentitySource for FixedGuestOwners {
+            async fn guest_owner_uid(
+                &self,
+                zone: &ZoneId,
+                guest_ref: &ResourceRef,
+            ) -> Option<ResourceUid> {
+                self.consulted
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(zone.as_str(), "work");
+                assert_eq!(guest_ref.name().as_str(), "acceptance-guest");
+                Some(self.uid.clone())
+            }
+        }
+
+        let guest_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174001").expect("guest uid");
+        let source = FixedGuestOwners {
+            uid: guest_uid.clone(),
+            consulted: std::sync::atomic::AtomicUsize::new(0),
+        };
+
+        let mut f = fixture(guest_vmm_row());
+        let identity = guest_vmm_identity(&mut f).await;
+        assert_eq!(
+            super::resolve_guest_owner_uid(Some(&source), &identity).await,
+            Some(guest_uid.clone())
+        );
+        assert_eq!(
+            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+
+        let mut linked = guest_vmm_identity(&mut f).await;
+        linked.launch = linked
+            .launch
+            .clone()
+            .with_owner_uid(guest_uid)
+            .expect("linked owner uid");
+        assert_eq!(
+            super::resolve_guest_owner_uid(Some(&source), &linked).await,
+            None
+        );
+        assert_eq!(
+            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a linked owner uid never consults the Guest plane"
+        );
+
+        let mut f = fixture(controller_row());
+        let controller = controller_identity(&mut f).await;
+        assert_eq!(
+            super::resolve_guest_owner_uid(Some(&source), &controller).await,
+            None
+        );
+        assert_eq!(
+            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a non-Guest owner never consults the Guest plane"
+        );
+        assert_eq!(super::resolve_guest_owner_uid(None, &identity).await, None);
+    }
+
     /// The old runner bound the bundle's Guest setup descriptor digest for
     /// guest-owned rows (`set_guest_descriptor_digests`); the private guest VMM
     /// intent lookup refuses a ticket without it
@@ -1941,12 +2300,12 @@ mod tests {
         let mut f = fixture(guest_vmm_row());
         let identity = guest_vmm_identity(&mut f).await;
         assert_eq!(
-            identity.owner_ref,
-            Some(ResourceRef::parse("Guest/acceptance-guest").expect("owner ref"))
+            identity.launch.owner_ref(),
+            Some(ResourceRef::parse("Guest/acceptance-guest").expect("owner ref")).as_ref()
         );
         let digest = guest_descriptor_digest();
         let consulted = std::cell::Cell::new(false);
-        let context = super::process_resource_context(&identity, None, |zone, guest| {
+        let context = super::process_resource_context(&identity, None, None, |zone, guest| {
             consulted.set(true);
             assert_eq!(zone.as_str(), "work");
             assert_eq!(guest.name().as_str(), "acceptance-guest");
@@ -1965,7 +2324,7 @@ mod tests {
     async fn non_guest_rows_keep_the_guest_descriptor_digest_unbound() {
         let mut f = fixture(controller_row());
         let identity = controller_identity(&mut f).await;
-        let context = super::process_resource_context(&identity, None, |_, _| {
+        let context = super::process_resource_context(&identity, None, None, |_, _| {
             panic!("a Provider-owned row must not consult a Guest descriptor")
         });
         assert_eq!(context.guest_descriptor_digest, None);
@@ -1977,8 +2336,22 @@ mod tests {
     async fn missing_catalog_descriptor_keeps_the_guest_digest_unbound() {
         let mut f = fixture(guest_vmm_row());
         let identity = guest_vmm_identity(&mut f).await;
-        let context = super::process_resource_context(&identity, None, |_, _| None);
+        let context = super::process_resource_context(&identity, None, None, |_, _| None);
         assert_eq!(context.guest_descriptor_digest, None);
+    }
+
+    /// A supervisor that refuses to resolve the ticket - the identity fence
+    /// finding no trusted intent for the role, template, target, scope, or
+    /// descriptor posture - reports `resolution-failed`. Nothing was launched
+    /// and nothing was observed, so the probe classifies terminally as an
+    /// unavailable template; it must never be read as an ambiguous identity
+    /// and quarantined (R15).
+    #[test]
+    fn resolution_refusals_are_never_identity_ambiguity() {
+        let refused = super::map_provider_error("resolution-failed".to_owned(), DriverOp::Reconcile);
+        assert_eq!(refused.to_string(), "process-template-unavailable");
+        let observed = super::map_provider_error("adoption-ambiguous".to_owned(), DriverOp::Reconcile);
+        assert_eq!(observed.to_string(), "process-identity-ambiguous");
     }
 
     #[tokio::test]

@@ -402,16 +402,58 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    ${d2bLib.fixtureDiagnostics}
+
+    # Row projections the shared diagnostics print on a timed-out wait; they
+    # mirror the fields the waits assert on (issue #513).
+    diag_projection = (
+        "[.resources[] | {type: .type, name: .metadata.name, "
+        "owner: .metadata.ownerRef, uid: .metadata.uid, "
+        "gen: .metadata.generation, phase: .status.phase, "
+        "obs: .status.observedGeneration, "
+        "provider: .spec.providerRef, execution: .spec.executionRef, "
+        "processClass: .spec.processClass, template: .spec.template, "
+        "conditions: [.status.conditions[]? | "
+        "{type: .type, status: .status, reason: .reason}], "
+        "outcome: (.status.outcome | "
+        "if . == null then null else "
+        "{code: .code, retryable: .retryable} end), "
+        "resource: .status.resource}]"
+    )
+
+    def live_rows(label, resource_type):
+        return (
+            label,
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            f"d2b --zone work --json list {resource_type} 2>/dev/null | "
+            f"jq -c '{diag_projection}' 2>/dev/null || true",
+        )
+
+    def saved_rows(label, path):
+        return (
+            label,
+            f"jq -c '{diag_projection}' {path} 2>/dev/null "
+            f"|| cat {path} 2>/dev/null || true",
+        )
+
+    def summary_rows():
+        return (
+            "preflight summary",
+            "cat /run/d2b-preflight-summary.log 2>/dev/null || true",
+        )
+
     start_all()
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    stage("boot")
+    diag_unit("daemon-up", "d2bd.service", 180)
     machine.wait_for_unit("d2b-broker.socket", timeout=30)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
     machine.succeed("systemctl start d2b-broker.service")
-    machine.wait_for_unit("d2b-broker.service", timeout=30)
+    diag_unit("broker-service", "d2b-broker.service", 30)
 
     # Capture only the public, redacted Resource projection before waiting on
     # the nested VMM. This keeps a missing API socket diagnostic without
     # waiting for unrelated fixture controller sessions.
+    stage("preflight-capture")
     machine.succeed(
         "set -o pipefail; "
         ": > /run/d2b-preflight-summary.log; "
@@ -445,57 +487,60 @@ pkgs.testers.runNixOSTest {
         "'session-authentication-failed|session-generation-stale' || true); "
         "printf 'ComponentSession terminal error count: %s\\n' \"$session_errors\" "
         ">> /run/d2b-preflight-summary.log; "
-        "cat /run/d2b-preflight-summary.log >&2"
+        "cat /run/d2b-preflight-summary.log"
+    )
+    diag(
+        "cat /run/d2b-preflight-summary.log",
+        "preflight summary",
     )
 
     # Both storage Providers use the authenticated host acceptance controller.
     # Their separate owner identities must establish live ResourceV3 sessions;
     # a stale pause fixture would leave these controller Processes pending.
-    machine.wait_until_succeeds(
+    diag_wait(
+        "controller-sessions",
         "test \"$(journalctl -u d2bd.service --no-pager -o cat -b "
         "| grep -Fc 'external Provider controller ResourceV3 session live')\" -ge 2",
         # Cold artifact extraction inside a fresh VM varies widely on shared
         # hardware; this waits an eventual state, not a timing SLO.
         timeout=180,
+        rows=[summary_rows(), live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "ResourceV3 session")],
     )
-    try:
-        machine.wait_until_succeeds(
-            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-            "d2b --zone work --json list Process "
-            ">/run/d2b-volume-controller-processes.json && "
-            "jq -e '"
-            "([.resources[] | select(.type == \"Process\" and "
-            ".metadata.ownerRef == \"Provider/volume-local\" and "
-            ".spec.providerRef == \"Provider/system-minijail\" and "
-            ".spec.processClass == \"controller\" and "
-            ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
-            ".status.phase == \"Ready\" and "
-            ".status.observedGeneration == .metadata.generation)] | length == 1) and "
-            "([.resources[] | select(.type == \"Process\" and "
-            ".metadata.ownerRef == \"Provider/volume-virtiofs\" and "
-            ".spec.providerRef == \"Provider/system-minijail\" and "
-            ".spec.processClass == \"controller\" and "
-            ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
-            ".status.phase == \"Ready\" and "
-            ".status.observedGeneration == .metadata.generation)] | length == 1)' "
-            "/run/d2b-volume-controller-processes.json",
-            # Same cold-start variance as the session wait above.
-            timeout=180,
-        )
-    except Exception:
-        # A timed-out wait must say what the rows actually held: the phase and
-        # the generation the status was published for, per controller row.
-        machine.execute(
-            "jq -c '[.resources[] | select(.spec.processClass == \"controller\") "
-            "| {owner: .metadata.ownerRef, name: .metadata.name, "
-            "uid: .metadata.uid, generation: .metadata.generation, "
-            "phase: .status.phase, "
-            "observedGeneration: .status.observedGeneration, "
-            "conditions: [.status.conditions[]? | .type]}]' "
-            "/run/d2b-volume-controller-processes.json >&2 || "
-            "cat /run/d2b-volume-controller-processes.json >&2 || true"
-        )
-        raise
+    diag_wait(
+        "volume-controller-processes",
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json list Process "
+        ">/run/d2b-volume-controller-processes.json && "
+        "jq -e '"
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/volume-local\" and "
+        ".spec.providerRef == \"Provider/system-minijail\" and "
+        ".spec.processClass == \"controller\" and "
+        ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length == 1) and "
+        "([.resources[] | select(.type == \"Process\" and "
+        ".metadata.ownerRef == \"Provider/volume-virtiofs\" and "
+        ".spec.providerRef == \"Provider/system-minijail\" and "
+        ".spec.processClass == \"controller\" and "
+        ".spec.template == \"controller-volume-acceptance-provider-acceptance-controller\" and "
+        ".status.phase == \"Ready\" and "
+        ".status.observedGeneration == .metadata.generation)] | length == 1)' "
+        "/run/d2b-volume-controller-processes.json",
+        # Same cold-start variance as the session wait above.
+        timeout=180,
+        # The rows hold the phase and generation the status was published for,
+        # per controller row.
+        rows=[
+            saved_rows(
+                "Controller Process rows",
+                "/run/d2b-volume-controller-processes.json",
+            ),
+            summary_rows(),
+        ],
+        explain=[("d2bd.service", "acceptance-controller")],
+    )
     machine.succeed(
         "test \"$(ps -eo pid=,args= | awk '$NF ~ /acceptance-controller$/ {print $1}' "
         "| wc -l)\" -ge 2 && "
@@ -505,40 +550,50 @@ pkgs.testers.runNixOSTest {
     # The VMM API socket is the first nested-VM proof. Volume convergence can
     # legitimately precede the nested boot, so keep this bound aligned with
     # Guest readiness rather than failing before the U7 Runner re-enters.
+    stage("nested-vmm-api-socket")
     machine.succeed(
         "for attempt in $(seq 1 180); do "
         "test -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock "
         "&& exit 0; "
         "sleep 1; "
         "done; "
-        "echo 'Cloud Hypervisor API socket did not become ready within 180s' >&2; "
-        "cat /run/d2b-preflight-summary.log >&2; "
+        "echo 'Cloud Hypervisor API socket did not become ready within 180s'; "
+        "cat /run/d2b-preflight-summary.log; "
         "for resource_type in Volume VolumeBinding; do "
-        "echo \"=== $resource_type ===\" >&2; "
+        "echo \"=== $resource_type ===\"; "
         "timeout 10s runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list \"$resource_type\" 2>/dev/null | "
         "jq -c '.resources[] | {name: .metadata.name, phase: .status.phase, "
         "observedGeneration: .status.observedGeneration, "
         "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
-        "ready: .status.resource.ready}' >&2 || true; "
+        "ready: .status.resource.ready}' || true; "
         "done; "
-        "echo '=== Process ===' >&2; "
+        "echo '=== Process ==='; "
         "timeout 10s runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process 2>/dev/null | "
         "jq -c '.resources[] | select(.name | startswith(\"vol-vfd\")) | "
         "{name: .metadata.name, phase: .status.phase, "
         "conditions: [.status.conditions[]? | {type: .type, reason: .reason}], "
-        "outcome: .status.outcome, update: .status.update}' >&2 || true; "
+        "outcome: .status.outcome, update: .status.update}' || true; "
         "exit 1"
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-console-boot-id",
         "journalctl --no-pager -b "
         "| grep -q 'D2B_GUEST_BOOT_ID='",
         timeout=30,
+        rows=[
+            (
+                "host journal tail",
+                "journalctl --no-pager -o cat -b -n 120 2>/dev/null || true",
+            ),
+        ],
+        explain=[(None, "D2B_GUEST_BOOT_ID")],
     )
     machine.sleep(5)
+    stage("guest-session-enrollment")
     machine.succeed(
         "guest_uid=$(runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -575,20 +630,20 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         "test -e /dev/kvm && test -r /dev/kvm && test -w /dev/kvm || "
-        "{ echo 'required KVM capability unavailable: /dev/kvm' >&2; exit 1; }"
+        "{ echo 'required KVM capability unavailable: /dev/kvm'; exit 1; }"
     )
     machine.succeed(
         "test -e /dev/vhost-net && test -r /dev/vhost-net && test -w /dev/vhost-net || "
-        "{ echo 'required Cloud Hypervisor vhost capability unavailable: /dev/vhost-net' >&2; exit 1; }"
+        "{ echo 'required Cloud Hypervisor vhost capability unavailable: /dev/vhost-net'; exit 1; }"
     )
     machine.succeed(
         "test -r /sys/fs/cgroup/cgroup.controllers || "
-        "{ echo 'required cgroup v2 capability unavailable' >&2; exit 1; }"
+        "{ echo 'required cgroup v2 capability unavailable'; exit 1; }"
     )
     machine.succeed(
         "for controller in cpu memory io pids cpuset; do "
         "grep -qw \"$controller\" /sys/fs/cgroup/cgroup.controllers || "
-        "{ echo \"required cgroup controller unavailable: $controller\" >&2; exit 1; }; "
+        "{ echo \"required cgroup controller unavailable: $controller\"; exit 1; }; "
         "done"
     )
     machine.succeed(
@@ -596,7 +651,7 @@ pkgs.testers.runNixOSTest {
         "grep -qw 'cpu' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control && "
         "grep -qw 'memory' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control && "
         "grep -qw 'pids' /sys/fs/cgroup/d2b.slice/cgroup.subtree_control || "
-        "{ echo 'required delegated d2b.slice cgroup posture unavailable' >&2; exit 1; }"
+        "{ echo 'required delegated d2b.slice cgroup posture unavailable'; exit 1; }"
     )
     machine.succeed(
         "! journalctl -u d2bd.service --no-pager -b 2>/dev/null "
@@ -643,6 +698,7 @@ pkgs.testers.runNixOSTest {
         "/etc/d2b/zones/work/resource-bundle.json"
     )
 
+    stage("guest-ready")
     machine.succeed(
         "for attempt in $(seq 1 45); do "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -661,7 +717,7 @@ pkgs.testers.runNixOSTest {
         ".metadata.name == \"acceptance-guest\" and "
         ".status.phase == \"Failed\")' "
         "/run/d2b-guest-ready.json >/dev/null; then "
-        "echo 'Guest reported a terminal failure' >&2; exit 1; fi; "
+        "echo 'Guest reported a terminal failure'; exit 1; fi; "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process >/run/d2b-vmm-fast-fail.json && "
         "if jq -e 'any(.resources[]; "
@@ -669,12 +725,12 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Failed\" and "
         ".status.outcome.retryable != true)' "
         "/run/d2b-vmm-fast-fail.json >/dev/null; then "
-        "echo 'VMM Process reported a terminal failure' >&2; exit 1; fi; "
+        "echo 'VMM Process reported a terminal failure'; exit 1; fi; "
         "if journalctl -u d2bd.service --no-pager -b "
         "| grep -q 'session-authentication-failed\\|session-generation-stale'; then "
-        "echo 'ComponentSession reported a terminal failure' >&2; exit 1; fi; "
+        "echo 'ComponentSession reported a terminal failure'; exit 1; fi; "
         "sleep 1; done; "
-        "echo 'Guest readiness failed:' >&2; "
+        "echo 'Guest readiness failed:'; "
         "jq -c '.resources[] | select(.type == \"Guest\" and "
         ".metadata.name == \"acceptance-guest\") | "
         "{name: .metadata.name, uid: .metadata.uid, "
@@ -686,8 +742,8 @@ pkgs.testers.runNixOSTest {
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
         "resource: .status.resource}' "
-        "/run/d2b-guest-ready.json >&2; "
-        "echo 'Dependent Process status:' >&2; "
+        "/run/d2b-guest-ready.json; "
+        "echo 'Dependent Process status:'; "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process | "
         "jq -c '.resources[] | "
@@ -701,9 +757,9 @@ pkgs.testers.runNixOSTest {
         "outcome: (.status.outcome | "
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
-        "resource: .status.resource}' >&2; "
+        "resource: .status.resource}'; "
         "for resource_type in Endpoint Volume Provider; do "
-        "echo \"$resource_type status:\" >&2; "
+        "echo \"$resource_type status:\"; "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list \"$resource_type\" | "
         "jq -c '.resources[] | {name: .metadata.name, uid: .metadata.uid, "
@@ -715,9 +771,10 @@ pkgs.testers.runNixOSTest {
         "outcome: (.status.outcome | "
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
-        "resource: .status.resource}' >&2; done; exit 1"
+        "resource: .status.resource}'; done; exit 1"
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-vmm-process-ready",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-process-ready.json && "
@@ -741,8 +798,14 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Ready\")] | length == 1)' "
         "/run/d2b-process-ready.json",
         timeout=30,
+        rows=[saved_rows("Process rows", "/run/d2b-process-ready.json")],
+        explain=[
+            ("d2bd.service", "acceptance-guest-vmm"),
+            ("d2bd.service", "cloud-hypervisor-runner"),
+        ],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-endpoints-ready",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Endpoint "
         ">/run/d2b-endpoint-ready.json && "
@@ -752,8 +815,11 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Ready\")] | length == 2)' "
         "/run/d2b-endpoint-ready.json",
         timeout=30,
+        rows=[saved_rows("Endpoint rows", "/run/d2b-endpoint-ready.json")],
+        explain=[("d2bd.service", "Guest/acceptance-guest")],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-volume-ready",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Volume "
         ">/run/d2b-volume-ready.json && "
@@ -768,6 +834,8 @@ pkgs.testers.runNixOSTest {
         ".status.observedGeneration == .metadata.generation)] | length == 1)' "
         "/run/d2b-volume-ready.json",
         timeout=180,
+        rows=[saved_rows("Volume rows", "/run/d2b-volume-ready.json")],
+        explain=[("d2bd.service", "acceptance-guest-system")],
     )
     machine.succeed(
         "jq -e '"
@@ -795,7 +863,8 @@ pkgs.testers.runNixOSTest {
     # the neutral binding chain. The Volume side mints exactly one
     # deterministically named binding owned by the Volume, and only a
     # current fence (binding UID and generation) can report it ready.
-    machine.wait_until_succeeds(
+    diag_wait(
+        "volume-binding-ready",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list VolumeBinding "
         ">/run/d2b-binding-ready.json && "
@@ -813,11 +882,19 @@ pkgs.testers.runNixOSTest {
         ".status.resource.fence.revision > 0)] | length) == 1' "
         "/run/d2b-binding-ready.json",
         timeout=180,
+        rows=[
+            saved_rows("VolumeBinding rows", "/run/d2b-binding-ready.json"),
+            live_rows("Volume rows", "Volume"),
+        ],
+        explain=[
+            ("d2bd.service", "vol-binding-6a8ea4307a30f7ceae6533f2"),
+        ],
     )
     # The virtiofs serving side owns only its worker Process and private
     # Endpoint as binding-owned children; the worker adopts the per-Volume
     # vfd principal synthesized from the declared attachment.
-    machine.wait_until_succeeds(
+    diag_wait(
+        "binding-worker-ready",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         ">/run/d2b-binding-worker.json && "
@@ -841,11 +918,29 @@ pkgs.testers.runNixOSTest {
         ".status.phase == \"Ready\")] | length) == 1' "
         "/run/d2b-binding-endpoint.json",
         timeout=60,
+        rows=[
+            saved_rows("Process rows", "/run/d2b-binding-worker.json"),
+            saved_rows("Endpoint rows", "/run/d2b-binding-endpoint.json"),
+        ],
+        explain=[
+            ("d2bd.service", "vol-binding-6a8ea4307a30f7ceae6533f2"),
+            ("d2bd.service", "virtiofsd"),
+        ],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-api-socket",
         "test -S "
         "/var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock",
         timeout=30,
+        rows=[
+            summary_rows(),
+            (
+                "guest state dir",
+                "ls -la /var/lib/d2b/zones/work/guests/acceptance-guest/ "
+                "2>&1 || true",
+            ),
+        ],
+        explain=[("d2bd.service", "acceptance-guest")],
     )
     machine.succeed(
         "test -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock && "
@@ -914,18 +1009,30 @@ pkgs.testers.runNixOSTest {
         "| grep -F 'Guest process bundle validation failed'"
     )
 
+    stage("restart-adoption")
     machine.succeed("systemctl restart d2bd.service")
-    machine.wait_for_unit("d2bd.service", timeout=180)
+    diag_unit("daemon-restarted", "d2bd.service", 180)
     machine.wait_for_file("/run/d2b/public.sock", timeout=30)
-    machine.wait_until_succeeds(
+    diag_wait(
+        "api-socket-after-restart",
         "test -S "
         "/var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock",
         timeout=30,
+        rows=[
+            live_rows("Guest rows", "Guest"),
+            (
+                "guest state dir",
+                "ls -la /var/lib/d2b/zones/work/guests/acceptance-guest/ "
+                "2>&1 || true",
+            ),
+        ],
+        explain=[("d2bd.service", "acceptance-guest")],
     )
     machine.succeed(f"test -d /proc/{runner_pid}")
     machine.succeed(
         f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
     )
+    stage("session-generation-advance")
     machine.succeed(
         "rm -f /run/d2b-guest-adopted.json /run/d2b-process-adopted.json; "
         "for attempt in $(seq 1 60); do "
@@ -983,16 +1090,16 @@ pkgs.testers.runNixOSTest {
         ".status.resource.activeProcessCount == 1)' "
         "/run/d2b-guest-adopted.json && exit 0; "
         "sleep 1; done; "
-        "echo 'Guest ComponentSession generation did not advance after restart:' >&2; "
+        "echo 'Guest ComponentSession generation did not advance after restart:'; "
         "printf 'before=%s after=%s\\n' "
         "\"$(cat /run/d2b-guest-session-generation-before 2>/dev/null || true)\" "
         "\"$(journalctl --no-pager -b 2>/dev/null | "
         "grep -F 'Guest ComponentSession Resource API server starting' | "
         "grep -oE 'generation[[:space:]]*=[[:space:]]*[0-9]+' | "
-        "grep -oE '[0-9]+' | tail -1)\" >&2; "
-        "jq -c '.' /run/d2b-guest-session-before.json >&2 || true; "
-        "jq -c '.' /run/d2b-guest-session-after.json >&2 || true; "
-        "echo 'Post-restart Guest readiness failed:' >&2; "
+        "grep -oE '[0-9]+' | tail -1)\"; "
+        "jq -c '.' /run/d2b-guest-session-before.json || true; "
+        "jq -c '.' /run/d2b-guest-session-after.json || true; "
+        "echo 'Post-restart Guest readiness failed:'; "
         "jq -c '.resources[] | select(.type == \"Guest\" and "
         ".metadata.name == \"acceptance-guest\") | "
         "{name: .metadata.name, uid: .metadata.uid, "
@@ -1004,8 +1111,8 @@ pkgs.testers.runNixOSTest {
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
         "resource: .status.resource}' "
-        "/run/d2b-guest-adopted.json >&2 || true; "
-        "echo 'Post-restart Process readiness failed:' >&2; "
+        "/run/d2b-guest-adopted.json || true; "
+        "echo 'Post-restart Process readiness failed:'; "
         "jq -c '.resources[] | "
         "{name: .metadata.name, uid: .metadata.uid, "
         "owner: .metadata.ownerRef, provider: .spec.providerRef, "
@@ -1018,7 +1125,7 @@ pkgs.testers.runNixOSTest {
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
         "resource: .status.resource}' "
-        "/run/d2b-process-adopted.json >&2 || true; "
+        "/run/d2b-process-adopted.json || true; "
         "exit 1"
     )
     machine.succeed(
@@ -1033,6 +1140,7 @@ pkgs.testers.runNixOSTest {
         f"test \"$#\" -eq 2 && test \"$1\" = {runner_pid} && "
         f"test \"$2\" = {runner_start}"
     )
+    stage("guest-teardown")
     machine.succeed(
         "for attempt in $(seq 1 30); do "
         "guest_revision=$(runuser -u alice -- env "
@@ -1045,9 +1153,11 @@ pkgs.testers.runNixOSTest {
         "--revision \"$guest_revision\" "
         ">/run/d2b-guest-delete.json 2>/run/d2b-guest-delete.err && exit 0; "
         "sleep 1; done; "
-        "echo 'Guest deletion did not complete within 30s:' >&2; "
+        "echo 'Guest deletion did not complete within 30s:'; "
         "jq -c '{resourceRef: .resourceRef, revision: .revision}' "
-        "/run/d2b-guest-delete.json >&2 || true; "
+        "/run/d2b-guest-delete.json || true; "
+        "echo 'last delete stderr:'; "
+        "cat /run/d2b-guest-delete.err 2>/dev/null || true; "
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Guest | "
         "jq -c '.resources[] | select(.type == \"Guest\" and "
@@ -1060,7 +1170,7 @@ pkgs.testers.runNixOSTest {
         "outcome: (.status.outcome | "
         "if . == null then null else "
         "{code: .code, retryable: .retryable} end), "
-        "resource: .status.resource}' >&2 || true; "
+        "resource: .status.resource}' || true; "
         "exit 1"
     )
     machine.succeed(
@@ -1068,7 +1178,8 @@ pkgs.testers.runNixOSTest {
         ".revision > 0' "
         "/run/d2b-guest-delete.json"
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-draining",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json reconcile Guest/acceptance-guest "
         ">/run/d2b-guest-finalize.json 2>/dev/null || true; "
@@ -1080,8 +1191,14 @@ pkgs.testers.runNixOSTest {
         ".metadata.deletionRequestedAt != null)' "
         "/run/d2b-guest-draining.json",
         timeout=30,
+        rows=[
+            saved_rows("Guest rows", "/run/d2b-guest-draining.json"),
+            summary_rows(),
+        ],
+        explain=[("d2bd.service", "acceptance-guest")],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-drained",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json reconcile Guest/acceptance-guest "
         ">/run/d2b-guest-finalize.json 2>/dev/null || true; "
@@ -1089,12 +1206,17 @@ pkgs.testers.runNixOSTest {
         "d2b --zone work --json list Guest "
         "| jq -e 'all(.resources[]; .metadata.name != \"acceptance-guest\")'",
         timeout=60,
+        rows=[live_rows("Guest rows", "Guest")],
+        explain=[("d2bd.service", "acceptance-guest")],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "guest-vmm-process-drained",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list Process "
         "| jq -e 'all(.resources[]; .metadata.name != \"acceptance-guest-vmm\")'",
         timeout=30,
+        rows=[live_rows("Process rows", "Process")],
+        explain=[("d2bd.service", "acceptance-guest-vmm")],
     )
     machine.succeed(
         "test ! -S /var/lib/d2b/zones/work/guests/acceptance-guest/acceptance-guest.sock"
@@ -1104,6 +1226,7 @@ pkgs.testers.runNixOSTest {
     # through its drain: deletion is requested first, then the worker and
     # the private endpoint are gone before the binding disappears, leaving
     # no orphaned serving effects.
+    stage("volume-teardown")
     machine.succeed(
         "volume_revision=$(runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
@@ -1114,7 +1237,8 @@ pkgs.testers.runNixOSTest {
         "d2b --zone work --json delete Volume/state "
         "--revision \"$volume_revision\" >/run/d2b-volume-state-delete.json"
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "volume-binding-draining",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list VolumeBinding "
         ">/run/d2b-binding-draining.json && "
@@ -1123,8 +1247,15 @@ pkgs.testers.runNixOSTest {
         ".metadata.deletionRequestedAt != null)' "
         "/run/d2b-binding-draining.json",
         timeout=30,
+        rows=[
+            saved_rows("VolumeBinding rows", "/run/d2b-binding-draining.json"),
+        ],
+        explain=[
+            ("d2bd.service", "vol-binding-6a8ea4307a30f7ceae6533f2"),
+        ],
     )
-    machine.wait_until_succeeds(
+    diag_wait(
+        "volume-binding-drained",
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json list VolumeBinding "
         ">/run/d2b-binding-drained.json && "
@@ -1139,6 +1270,14 @@ pkgs.testers.runNixOSTest {
         "jq -e 'all(.resources[]; .metadata.ownerRef != "
         "\"VolumeBinding/vol-binding-6a8ea4307a30f7ceae6533f2\")'",
         timeout=120,
+        rows=[
+            saved_rows("VolumeBinding rows", "/run/d2b-binding-drained.json"),
+            live_rows("Process rows", "Process"),
+            live_rows("Endpoint rows", "Endpoint"),
+        ],
+        explain=[
+            ("d2bd.service", "vol-binding-6a8ea4307a30f7ceae6533f2"),
+        ],
     )
   '';
 }

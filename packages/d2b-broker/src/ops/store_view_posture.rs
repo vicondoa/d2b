@@ -1,9 +1,10 @@
 //! Single-inode store-view posture helpers.
 //!
 //! StoreSync is allowed to posture broker-owned metadata inodes it creates
-//! (`state/`, `gcroots/`, `sync.lock`, and integrity files). It must never
-//! recurse into `live/`, because those package trees are hardlinked to
-//! `/nix/store`.
+//! (`state/`, `gcroots/`, `sync.lock`, and integrity files) plus the
+//! ancestor chain the daemon must walk to reach the farm (below
+//! `<state-root>/zones`). It must never recurse into `live/`, because those
+//! package trees are hardlinked to `/nix/store`.
 
 use std::fs::OpenOptions;
 use std::os::fd::AsFd;
@@ -32,6 +33,9 @@ impl std::error::Error for PostureError {}
 #[derive(Debug, Clone, Copy)]
 struct Principals {
     owner_uid: Uid,
+    /// The daemon principal's primary group: the group every ancestor the
+    /// daemon must traverse is postured for.
+    daemon_gid: Gid,
     host_gid: Gid,
     runner_gid: Gid,
 }
@@ -40,6 +44,7 @@ struct Principals {
 fn resolve_principals() -> Result<Principals, PostureError> {
     Ok(Principals {
         owner_uid: Uid::current(),
+        daemon_gid: Gid::current(),
         host_gid: Gid::current(),
         runner_gid: Gid::current(),
     })
@@ -47,7 +52,7 @@ fn resolve_principals() -> Result<Principals, PostureError> {
 
 #[cfg(not(test))]
 fn resolve_principals() -> Result<Principals, PostureError> {
-    let owner_uid = User::from_name("d2bd")
+    let daemon = User::from_name("d2bd")
         .map_err(|err| PostureError {
             path: "d2bd".to_owned(),
             detail: format!("lookup user: {err}"),
@@ -55,8 +60,9 @@ fn resolve_principals() -> Result<Principals, PostureError> {
         .ok_or_else(|| PostureError {
             path: "d2bd".to_owned(),
             detail: "user not found".to_owned(),
-        })?
-        .uid;
+        })?;
+    let owner_uid = daemon.uid;
+    let daemon_gid = daemon.gid;
     let host_gid = Group::from_name("d2b")
         .map_err(|err| PostureError {
             path: "d2b".to_owned(),
@@ -79,6 +85,7 @@ fn resolve_principals() -> Result<Principals, PostureError> {
         .gid;
     Ok(Principals {
         owner_uid,
+        daemon_gid,
         host_gid,
         runner_gid,
     })
@@ -95,6 +102,7 @@ pub(crate) fn posture_store_view_matrix_paths(
     vm: &str,
 ) -> Result<(), PostureError> {
     let principals = resolve_principals()?;
+    posture_daemon_traverse_ancestors(store_root, principals.daemon_gid)?;
     posture_existing(
         store_root,
         PathKind::Dir,
@@ -165,6 +173,57 @@ pub(crate) fn posture_store_view_matrix_paths(
         principals.owner_uid,
         principals.host_gid,
     )?;
+    Ok(())
+}
+
+/// Posture every ancestor between the farm root and the first
+/// world-traversable directory so the daemon's group can search it.
+///
+/// The daemon reaches `<state-root>/zones/<zone>/guests/<guest>/store-view`
+/// through an anchored walk that needs search (`--x`) permission on each
+/// ancestor. Those ancestors are created by the broker, so their traversal
+/// grant is owned here with the rest of the store-view matrix instead of
+/// depending on the broker's umask, its group, or spawn-time ACLs that are
+/// only established later. The posture adds group search only: existing mode
+/// bits are preserved and group write is never granted. A directory the
+/// daemon's group can already search (group search bit set and owned by that
+/// group, or world-searchable) is left untouched, and the walk stops at the
+/// first world-searchable ancestor - the directories above it already grant
+/// search to every principal.
+fn posture_daemon_traverse_ancestors(
+    store_root: &Path,
+    daemon_gid: Gid,
+) -> Result<(), PostureError> {
+    use std::os::unix::fs::MetadataExt as _;
+    for directory in store_root.ancestors().skip(1) {
+        let meta = match std::fs::symlink_metadata(directory) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(io_error(directory, format!("stat: {err}"))),
+        };
+        if meta.file_type().is_symlink() {
+            return Err(io_error(directory, "ancestor is a symlink".to_owned()));
+        }
+        if !meta.is_dir() {
+            return Err(io_error(directory, "expected directory".to_owned()));
+        }
+        let mode = meta.mode() & 0o7777;
+        if mode & 0o001 != 0 {
+            // World-searchable: this directory and every ancestor above it
+            // already grant search to every principal, so the posture stops
+            // here and leaves the unowned levels alone.
+            break;
+        }
+        if meta.gid() == daemon_gid.as_raw() && mode & 0o010 != 0 {
+            continue;
+        }
+        chown(directory, None, Some(daemon_gid))
+            .map_err(|err| io_error(directory, format!("chown: {err}")))?;
+        if mode & 0o010 == 0 {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode | 0o010))
+                .map_err(|err| io_error(directory, format!("chmod group-traverse: {err}")))?;
+        }
+    }
     Ok(())
 }
 
@@ -253,5 +312,116 @@ fn io_error(path: &Path, detail: String) -> PostureError {
     PostureError {
         path: path.display().to_string(),
         detail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::PathBuf;
+
+    /// Build the broker-shaped farm path
+    /// `<root>/zones/work/guests/acceptance-guest/store-view` and return the
+    /// farm root plus the ancestors below `zones`, innermost first.
+    fn farm_chain(root: &Path) -> (PathBuf, Vec<PathBuf>) {
+        let farm = root
+            .join("zones")
+            .join("work")
+            .join("guests")
+            .join("acceptance-guest")
+            .join("store-view");
+        std::fs::create_dir_all(&farm).expect("create farm chain");
+        let ancestors = vec![
+            root.join("zones").join("work").join("guests").join("acceptance-guest"),
+            root.join("zones").join("work").join("guests"),
+            root.join("zones").join("work"),
+            root.join("zones"),
+        ];
+        (farm, ancestors)
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::symlink_metadata(path).expect("stat").mode() & 0o7777
+    }
+
+    fn gid_of(path: &Path) -> u32 {
+        std::fs::symlink_metadata(path).expect("stat").gid()
+    }
+
+    #[test]
+    fn matrix_posture_makes_the_ancestor_chain_group_traversable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (farm, ancestors) = farm_chain(dir.path());
+        // The broker creates the chain under UMask=0027; the worst shape it
+        // can land in is owner-only, which the daemon's group cannot search.
+        for ancestor in &ancestors {
+            set_mode(ancestor, 0o700);
+        }
+
+        posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
+
+        let daemon_gid = Gid::current().as_raw();
+        for ancestor in &ancestors {
+            assert_eq!(
+                gid_of(ancestor),
+                daemon_gid,
+                "ancestor {} must belong to the daemon's group",
+                ancestor.display()
+            );
+            let mode = mode_of(ancestor);
+            assert_ne!(
+                mode & 0o010,
+                0,
+                "ancestor {} must be group-searchable",
+                ancestor.display()
+            );
+            assert_eq!(
+                mode & 0o040,
+                0,
+                "ancestor {} must stay traversal-only (no group read)",
+                ancestor.display()
+            );
+            assert_eq!(
+                mode & 0o022,
+                0,
+                "ancestor {} must never be group/other writable",
+                ancestor.display()
+            );
+        }
+        // The farm root itself keeps the matrix posture: daemon-owned and
+        // readable by the runner group, never writable by it.
+        assert_eq!(mode_of(&farm), 0o755);
+        assert_eq!(gid_of(&farm), daemon_gid);
+    }
+
+    #[test]
+    fn matrix_posture_leaves_an_already_searchable_chain_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (farm, ancestors) = farm_chain(dir.path());
+        let (guest_dir, guests_dir, zone_dir, zones_dir) = (
+            ancestors[0].clone(),
+            ancestors[1].clone(),
+            ancestors[2].clone(),
+            ancestors[3].clone(),
+        );
+        // `guests` is already searchable by the daemon's group; `zone` is
+        // world-searchable, so the posture must stop there and leave every
+        // directory above untouched.
+        set_mode(&guest_dir, 0o700);
+        set_mode(&guests_dir, 0o750);
+        set_mode(&zone_dir, 0o755);
+        set_mode(&zones_dir, 0o700);
+
+        posture_store_view_matrix_paths(&farm, "acceptance-guest").expect("posture");
+
+        assert_eq!(mode_of(&guest_dir), 0o710, "the denied ancestor is postured");
+        assert_eq!(mode_of(&guests_dir), 0o750, "searchable ancestor untouched");
+        assert_eq!(mode_of(&zone_dir), 0o755, "world-searchable ancestor untouched");
+        assert_eq!(mode_of(&zones_dir), 0o700, "walk stops above world-search");
     }
 }

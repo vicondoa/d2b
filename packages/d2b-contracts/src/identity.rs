@@ -53,8 +53,11 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
 /// The resource types the v3 resource runtime owns end to end (R35/F1
 /// exclusive per-type partition): served only by the per-zone manager plane,
 /// never by the pre-v3 durable store.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 31] = [
+pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 32] = [
     "Process",
+    // U12: the four runtime-Provider Guests (cloud-hypervisor, qemu-media,
+    // azure container apps, azure virtual machine).
+    "Guest",
     "Volume",
     "VolumeBinding",
     "Endpoint",

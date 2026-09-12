@@ -350,6 +350,228 @@ pub fn sync_lock_path(store_root: &Path) -> PathBuf {
     store_root.join("sync.lock")
 }
 
+/// Schema token of the `sync.lock` owner record.
+pub const SYNC_LOCK_OWNER_SCHEMA: &str = "d2b.store-sync.lock-owner/v1";
+
+/// Hard cap on the owner-record bytes. A larger `sync.lock` is refused
+/// unread, so a foreign writer can never make the reader allocate.
+pub const SYNC_LOCK_OWNER_MAX_BYTES: usize = 512;
+
+/// Why a `sync.lock` owner record is not trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncLockOwnerError {
+    /// The record bytes could not be read, or exceeded the byte cap.
+    Io,
+    /// The bytes are not the closed canonical record.
+    Malformed,
+    /// The record was written under a different boot.
+    ForeignBoot,
+    /// The recorded process is not alive with the recorded start time.
+    ProcessGone,
+    /// The live process's kernel-reported name differs from the record.
+    OwnerMismatch,
+}
+
+impl core::fmt::Display for SyncLockOwnerError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Io => "sync-lock-owner-record-unreadable",
+            Self::Malformed => "sync-lock-owner-record-malformed",
+            Self::ForeignBoot => "sync-lock-owner-record-foreign-boot",
+            Self::ProcessGone => "sync-lock-owner-record-process-gone",
+            Self::OwnerMismatch => "sync-lock-owner-record-owner-mismatch",
+        })
+    }
+}
+
+impl std::error::Error for SyncLockOwnerError {}
+
+/// The live-owner record the broker writes into `sync.lock` while it
+/// holds the exclusive `flock(2)` on it.
+///
+/// The record is the `file-record` lease evidence the daemon verifies
+/// before adopting a broker-owned lock. Ownership is proven against the
+/// kernel, never against a caller-supplied name: [`Self::verify_live`]
+/// re-reads `/proc/<pid>/stat` and requires the recorded start time and
+/// the kernel-reported process name (`comm`) to match, and the record's
+/// boot id to be the current boot. A lock whose record is missing,
+/// malformed, stale, or names a dead process stays ambiguous and
+/// quarantines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SyncLockOwnerRecord {
+    /// Fixed schema token ([`SYNC_LOCK_OWNER_SCHEMA`]).
+    pub schema: String,
+    /// Kernel-reported process name (`comm`) of the owner.
+    pub owner: String,
+    /// Owner pid at record time.
+    pub pid: i32,
+    /// Owner `/proc/<pid>/stat` field 22 (start-time ticks).
+    pub process_start_time_ticks: u64,
+    /// `/proc/sys/kernel/random/boot_id` at record time.
+    pub boot_id: String,
+}
+
+impl SyncLockOwnerRecord {
+    /// Record the calling process as the live owner.
+    ///
+    /// The owner name is the kernel-reported `comm` of this process, so
+    /// the record can only ever claim the identity the kernel reports.
+    pub fn for_current_process() -> Result<Self, SyncLockOwnerError> {
+        let pid = std::process::id() as i32;
+        let (owner, start_ticks) = process_identity(pid)?;
+        Ok(Self {
+            schema: SYNC_LOCK_OWNER_SCHEMA.to_owned(),
+            owner,
+            pid,
+            process_start_time_ticks: start_ticks,
+            boot_id: current_boot_id()?,
+        })
+    }
+
+    /// Parse and shape-check the closed record.
+    pub fn parse(bytes: &[u8]) -> Result<Self, SyncLockOwnerError> {
+        let record: Self = serde_json::from_slice(bytes).map_err(|_| SyncLockOwnerError::Malformed)?;
+        record.validate_shape()?;
+        Ok(record)
+    }
+
+    /// Serialize to the canonical record bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        // The shape is fixed by `validate_shape`, so serialization cannot
+        // fail for a record this type constructed or parsed.
+        serde_json::to_vec(self).unwrap_or_default()
+    }
+
+    /// Check the closed shape: schema token, bounded printable owner,
+    /// positive pid, non-zero start time, boot-id spelling.
+    pub fn validate_shape(&self) -> Result<(), SyncLockOwnerError> {
+        if self.schema != SYNC_LOCK_OWNER_SCHEMA
+            || self.owner.is_empty()
+            || self.owner.len() > 64
+            || !self
+                .owner
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+            || self.pid <= 1
+            || self.process_start_time_ticks == 0
+            || self.boot_id.len() != 36
+            || !self
+                .boot_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        {
+            return Err(SyncLockOwnerError::Malformed);
+        }
+        Ok(())
+    }
+
+    /// Verify the record against the live kernel: same boot, recorded
+    /// process alive at exactly the recorded start time, and the
+    /// kernel-reported process name equal to the recorded owner.
+    pub fn verify_live(&self) -> Result<(), SyncLockOwnerError> {
+        self.validate_shape()?;
+        if self.boot_id != current_boot_id()? {
+            return Err(SyncLockOwnerError::ForeignBoot);
+        }
+        let (owner, start_ticks) = process_identity(self.pid)?;
+        if start_ticks != self.process_start_time_ticks {
+            return Err(SyncLockOwnerError::ProcessGone);
+        }
+        if owner != self.owner {
+            return Err(SyncLockOwnerError::OwnerMismatch);
+        }
+        Ok(())
+    }
+
+    /// Write the record at offset 0 of the locked file and truncate any
+    /// trailing bytes a previous, longer record left behind.
+    pub fn write_locked(&self, fd: impl std::os::fd::AsFd) -> Result<(), SyncLockOwnerError> {
+        self.validate_shape()?;
+        let bytes = self.to_bytes();
+        if bytes.is_empty() || bytes.len() > SYNC_LOCK_OWNER_MAX_BYTES {
+            return Err(SyncLockOwnerError::Malformed);
+        }
+        write_all_at(&fd, &bytes)?;
+        rustix::fs::ftruncate(fd, bytes.len() as u64).map_err(|_| SyncLockOwnerError::Io)?;
+        Ok(())
+    }
+
+    /// Read the record the owner wrote into the locked file.
+    pub fn read_locked(fd: impl std::os::fd::AsFd) -> Result<Self, SyncLockOwnerError> {
+        let stat = rustix::fs::fstat(&fd).map_err(|_| SyncLockOwnerError::Io)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+            || stat.st_size <= 0
+            || stat.st_size as usize > SYNC_LOCK_OWNER_MAX_BYTES
+        {
+            return Err(SyncLockOwnerError::Malformed);
+        }
+        let mut bytes = vec![0u8; stat.st_size as usize];
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let read = rustix::io::pread(&fd, &mut bytes[offset..], offset as u64)
+                .map_err(|_| SyncLockOwnerError::Io)?;
+            if read == 0 {
+                return Err(SyncLockOwnerError::Io);
+            }
+            offset += read;
+        }
+        Self::parse(&bytes)
+    }
+
+    /// Record the calling process into an already-locked `sync.lock`.
+    pub fn record_current_process(fd: impl std::os::fd::AsFd) -> Result<Self, SyncLockOwnerError> {
+        let record = Self::for_current_process()?;
+        record.write_locked(fd)?;
+        Ok(record)
+    }
+}
+
+/// Write the full buffer at offset 0 (short `pwrite` loops).
+fn write_all_at(fd: impl std::os::fd::AsFd, bytes: &[u8]) -> Result<(), SyncLockOwnerError> {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let written = rustix::io::pwrite(&fd, &bytes[offset..], offset as u64)
+            .map_err(|_| SyncLockOwnerError::Io)?;
+        if written == 0 {
+            return Err(SyncLockOwnerError::Io);
+        }
+        offset += written;
+    }
+    Ok(())
+}
+
+/// The current boot id, as the kernel reports it.
+pub fn current_boot_id() -> Result<String, SyncLockOwnerError> {
+    let raw = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map_err(|_| SyncLockOwnerError::Io)?;
+    Ok(raw.trim().to_owned())
+}
+
+/// Read one process's kernel-reported `(comm, start-time ticks)` from
+/// `/proc/<pid>/stat`. Field 2 is the parenthesized `comm` (which may
+/// itself contain spaces and parentheses, so the parse splits at the
+/// last `)`) and field 22 is the start time in clock ticks.
+fn process_identity(pid: i32) -> Result<(String, u64), SyncLockOwnerError> {
+    if pid <= 1 {
+        return Err(SyncLockOwnerError::ProcessGone);
+    }
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map_err(|_| SyncLockOwnerError::ProcessGone)?;
+    let open = raw.find('(').ok_or(SyncLockOwnerError::Malformed)?;
+    let close = raw.rfind(')').ok_or(SyncLockOwnerError::Malformed)?;
+    if close <= open {
+        return Err(SyncLockOwnerError::Malformed);
+    }
+    let owner = raw[open + 1..close].to_owned();
+    let start_ticks = raw[close + 1..]
+        .split_whitespace()
+        .nth(19)
+        .and_then(|field| field.parse::<u64>().ok())
+        .ok_or(SyncLockOwnerError::Malformed)?;
+    Ok((owner, start_ticks))
+}
+
 /// Guest-served per-generation metadata dir
 /// (`meta/generations/<generation-id>`).
 pub fn meta_generation_dir(store_root: &Path, generation_id: &str) -> PathBuf {
@@ -2528,5 +2750,135 @@ mod tests {
                 .starts_with("live.repair.stage.")),
             "repair stage dir should be cleaned"
         );
+    }
+
+    // -- sync.lock owner record ----------------------------------------------
+
+    fn locked_lock_file(dir: &Path) -> std::fs::File {
+        let path = sync_lock_path(dir);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap()
+    }
+
+    #[test]
+    fn sync_lock_owner_record_round_trips_and_verifies_live() {
+        let dir = tempdir().unwrap();
+        let file = locked_lock_file(dir.path());
+        let written = SyncLockOwnerRecord::record_current_process(&file).unwrap();
+        assert_eq!(written.schema, SYNC_LOCK_OWNER_SCHEMA);
+        assert!(written.pid > 1);
+        assert!(written.process_start_time_ticks > 0);
+        assert_eq!(written.boot_id, current_boot_id().unwrap());
+
+        let read = SyncLockOwnerRecord::read_locked(&file).unwrap();
+        assert_eq!(read, written);
+        read.verify_live().expect("own record is live");
+        // The owner name is the kernel-reported comm, not a caller string.
+        let (comm, ticks) = process_identity(std::process::id() as i32).unwrap();
+        assert_eq!(read.owner, comm);
+        assert_eq!(read.process_start_time_ticks, ticks);
+    }
+
+    #[test]
+    fn sync_lock_owner_record_rewrite_leaves_no_trailing_bytes() {
+        let dir = tempdir().unwrap();
+        let file = locked_lock_file(dir.path());
+        let long = SyncLockOwnerRecord {
+            schema: SYNC_LOCK_OWNER_SCHEMA.to_owned(),
+            owner: "x".repeat(64),
+            pid: std::process::id() as i32,
+            process_start_time_ticks: 1,
+            boot_id: current_boot_id().unwrap(),
+        };
+        long.write_locked(&file).unwrap();
+        let short = SyncLockOwnerRecord::record_current_process(&file).unwrap();
+        let raw = std::fs::read(sync_lock_path(dir.path())).unwrap();
+        assert_eq!(raw, short.to_bytes(), "no stale bytes from the longer record");
+        assert_eq!(SyncLockOwnerRecord::read_locked(&file).unwrap(), short);
+    }
+
+    #[test]
+    fn sync_lock_owner_record_refuses_foreign_and_stale_owners() {
+        let dir = tempdir().unwrap();
+        let file = locked_lock_file(dir.path());
+        let mut record = SyncLockOwnerRecord::record_current_process(&file).unwrap();
+
+        // An absent record (the file exists but carries no bytes) and a
+        // non-record payload both stay malformed: no adoption evidence.
+        std::fs::write(sync_lock_path(dir.path()), b"").unwrap();
+        assert_eq!(
+            SyncLockOwnerRecord::read_locked(&file).unwrap_err(),
+            SyncLockOwnerError::Malformed
+        );
+        std::fs::write(sync_lock_path(dir.path()), b"not a record").unwrap();
+        assert_eq!(
+            SyncLockOwnerRecord::read_locked(&file).unwrap_err(),
+            SyncLockOwnerError::Malformed
+        );
+
+        // A record from another boot is stale.
+        record.boot_id = "00000000-0000-0000-0000-000000000000".to_owned();
+        assert_eq!(
+            record.verify_live().unwrap_err(),
+            SyncLockOwnerError::ForeignBoot
+        );
+
+        // A record naming a live process that is not the recorded owner
+        // (the kernel's comm disagrees) is refused.
+        record.boot_id = current_boot_id().unwrap();
+        record.owner = "not-the-broker".to_owned();
+        assert_eq!(
+            record.verify_live().unwrap_err(),
+            SyncLockOwnerError::OwnerMismatch
+        );
+
+        // A record naming a process that does not exist is refused.
+        record.owner = std::process::id().to_string();
+        record.pid = i32::MAX;
+        assert_eq!(
+            record.verify_live().unwrap_err(),
+            SyncLockOwnerError::ProcessGone
+        );
+    }
+
+    #[test]
+    fn sync_lock_owner_record_caps_oversize_payloads() {
+        let dir = tempdir().unwrap();
+        let file = locked_lock_file(dir.path());
+        std::fs::write(
+            sync_lock_path(dir.path()),
+            vec![b'a'; SYNC_LOCK_OWNER_MAX_BYTES + 1],
+        )
+        .unwrap();
+        assert_eq!(
+            SyncLockOwnerRecord::read_locked(&file).unwrap_err(),
+            SyncLockOwnerError::Malformed
+        );
+
+        // The shape check also refuses an unbounded owner name.
+        let mut record = SyncLockOwnerRecord::for_current_process().unwrap();
+        record.owner = "x".repeat(65);
+        assert_eq!(
+            record.validate_shape().unwrap_err(),
+            SyncLockOwnerError::Malformed
+        );
+    }
+
+    #[test]
+    fn sync_lock_owner_record_reads_the_kernel_stat_shape() {
+        // Field 2 (comm) is parenthesized and may itself contain spaces and
+        // parentheses, so the parse splits at the last `)`; the kernel's
+        // `/proc/<pid>/comm` is an independent read of the same field.
+        let pid = std::process::id() as i32;
+        let (owner, start_ticks) = process_identity(pid).unwrap();
+        assert!(start_ticks > 0);
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
+        assert_eq!(owner, comm.trim());
+        assert_eq!(process_identity(pid).unwrap(), (owner, start_ticks));
     }
 }

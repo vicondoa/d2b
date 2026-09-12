@@ -34,7 +34,9 @@ use d2b_core_controller::{
     UpdateAssessmentState, UpgradePlan, ValidationResult, WatchFailure,
     WatchSelector as ControllerSelector,
 };
-use d2b_process_conformance::{AdoptionCandidate, GuestExecutionBinding};
+use d2b_process_conformance::{
+    AdoptionCandidate, GuestExecutionBinding, LaunchIdentity, LaunchIdentityError,
+};
 use d2b_resource_api::{
     ResourceApiClient, ResourceStoreBackend,
     service::{UnavailableUpgradeDispatcher, UpgradeDispatcher},
@@ -445,33 +447,115 @@ impl core::fmt::Debug for ProcessResourceRuntime {
     }
 }
 
-fn scoped_target_ref(
+/// The row inputs one launch identity resolves from.
+///
+/// Every field either is persisted on the durable row or is authored in its
+/// metadata/spec; nothing here is guessed, and no caller derives a subset of
+/// the identity on its own.
+pub(crate) struct LaunchRow<'a> {
+    /// The row's semantic owner (manager owner key, or the authored
+    /// `metadata.ownerRef` for an owner the manager does not hold).
+    pub(crate) owner_ref: Option<&'a ResourceRef>,
+    /// The durable owner linkage the row persists.
+    pub(crate) owner_uid: Option<ResourceUid>,
+    /// The exact execution target declared by the row's Process spec.
+    pub(crate) execution_ref: &'a ResourceRef,
+    /// The row's Process name (its legacy runner role id).
+    pub(crate) process_name: &'a str,
+    /// The template the row's Process spec declares.
+    pub(crate) template: &'a str,
+    /// A target ref declared for this row together with the owner it belongs
+    /// to (the owning `VolumeBinding`'s attachment, or the runtime's target
+    /// selector). It is authoritative only for its own owner.
+    pub(crate) declared_target: Option<(&'a ResourceRef, &'a ResourceRef)>,
+}
+
+/// Resolve the one canonical [`LaunchIdentity`] of a Process row (KTD7).
+///
+/// The owner ref/UID, execution target, and the legacy role come straight
+/// from the row. The launch target is derived here and only here:
+///
+/// - a declared target (the attachment Guest a `VolumeBinding`-owned worker
+///   serves, or the runtime's owner-scoped selector) applies when it belongs
+///   to the row's own owner;
+/// - otherwise a Guest-owned guest-runtime row - the nested VMM, the qemu
+///   media runner - targets its owning Guest (the old `scoped_target_ref`
+///   rule), because its signed template executes on the Host while its launch
+///   intent is minted for the Guest.
+///
+/// A row whose launch cannot be named completely fails here, once, naming the
+/// missing input ([`LaunchIdentityError`]).
+pub(crate) fn resolve_launch_identity(
+    row: &LaunchRow<'_>,
+) -> Result<LaunchIdentity, LaunchIdentityError> {
+    let owner = row.owner_ref;
+    let declared_target = match row.declared_target {
+        Some((target, target_owner)) if owner == Some(target_owner) => Some(target),
+        _ => None,
+    };
+    // The host-exec/guest-target split only exists for Host execution: a
+    // Guest execution target already names its own VM.
+    let target_ref = if row.execution_ref.resource_type().as_str() == "Host" {
+        declared_target
+            .cloned()
+            .or_else(|| {
+                owner
+                    .filter(|owner| {
+                        owner.resource_type().as_str() == "Guest"
+                            && guest_runtime_process_matches(
+                                row.template,
+                                row.process_name,
+                                owner.name().as_str(),
+                            )
+                    })
+                    .cloned()
+            })
+    } else {
+        None
+    };
+    let binding_worker = owner.is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding");
+    LaunchIdentity::new(
+        owner.cloned(),
+        row.owner_uid.clone(),
+        row.execution_ref.clone(),
+        target_ref,
+        row.process_name,
+        binding_worker,
+    )
+}
+
+fn scoped_launch_identity(
     record: &DesiredRecord,
     target_owner_ref: Option<&ResourceRef>,
     target_ref: Option<&ResourceRef>,
-) -> Option<ResourceRef> {
-    let owner = record.owner_ref();
-    match (target_owner_ref, target_ref, owner.as_ref()) {
-        (Some(expected_owner), Some(target), Some(owner)) if expected_owner == owner => {
-            Some(target.clone())
+    owner_uid: Option<ResourceUid>,
+) -> Result<LaunchIdentity, LaunchIdentityError> {
+    let owner_ref = record.owner_ref();
+    let (execution_ref, template) = match &record.process {
+        DesiredProcess::Process(spec) => (spec.execution().execution_ref(), spec.execution().template()),
+        DesiredProcess::Ephemeral(spec) => {
+            (spec.execution().execution_ref(), spec.execution().template())
         }
-        _ => match (&record.process, owner) {
-            (DesiredProcess::Process(spec), Some(owner))
-                if owner.resource_type().as_str() == "Guest"
-                    && guest_runtime_process_matches(
-                        spec.execution().template().as_str(),
-                        record.resource.resource_ref.name().as_str(),
-                        owner.name().as_str(),
-                    ) =>
-            {
-                Some(owner)
-            }
-            _ => None,
-        },
-    }
+    };
+    resolve_launch_identity(&LaunchRow {
+        owner_ref: owner_ref.as_ref(),
+        owner_uid,
+        execution_ref,
+        process_name: record.resource.resource_ref.name().as_str(),
+        template: template.as_str(),
+        declared_target: target_ref.zip(target_owner_ref),
+    })
 }
 
-fn guest_runtime_process_matches(template: &str, process_name: &str, guest_name: &str) -> bool {
+/// Whether one Template + Process name pair is a Guest-owned guest-runtime
+/// process (the nested VMM, the qemu media runner): the rule the old
+/// `scoped_target_ref` used to bind such a row's launch target to its owning
+/// Guest, now one rule inside [`resolve_launch_identity`].
+pub(crate) fn guest_runtime_process_matches(
+    template: &str,
+    process_name: &str,
+    guest_name: &str,
+) -> bool {
     GUEST_RUNTIME_PROCESS_TEMPLATES
         .iter()
         .any(|(expected_template, suffix)| {
@@ -575,12 +659,23 @@ impl ProcessResourceRuntime {
     }
 
     fn context<'a>(&self, record: &'a DesiredRecord) -> ProcessResourceContext<'a> {
-        let target_ref = scoped_target_ref(
+        let owner_ref = record.owner_ref();
+        let owner_uid = record.resource.owner_uid.clone().or_else(|| {
+            owner_ref
+                .as_ref()
+                .and_then(|owner| self.owner_uids.get(owner))
+        });
+        // One resolver produces the launch identity; the context carries the
+        // resolved value so the ticket builder consumes it instead of
+        // re-deriving owner/target/vm fields. A row the resolver refuses
+        // stays uninhabited here and fails, named, when a ticket is built.
+        let launch = scoped_launch_identity(
             record,
             self.target_owner_ref.as_ref(),
             self.target_ref.as_ref(),
-        );
-        let owner_ref = record.owner_ref();
+            owner_uid.clone(),
+        )
+        .ok();
         let controller_provider_ref = metadata_resource_ref(
             &record.resource,
             "d2b.d2bus.org/controller-provider-ref",
@@ -596,7 +691,7 @@ impl ProcessResourceRuntime {
         let committed_controller_provider_identity = controller_provider_ref
             .as_ref()
             .and_then(|provider| self.controller_provider_identity(provider));
-        ProcessResourceContext::new(
+        let context = ProcessResourceContext::new(
             self.zone.clone(),
             &record.resource.resource_ref,
             &record.resource.uid,
@@ -604,7 +699,7 @@ impl ProcessResourceRuntime {
             record.resource.revision,
             &record.provider_ref,
             self.controller_generation,
-            target_ref,
+            launch.as_ref().and_then(LaunchIdentity::target_ref).cloned(),
         )
         .with_user_ref(match &record.process {
             DesiredProcess::Process(spec) => spec.execution().user_ref(),
@@ -619,13 +714,7 @@ impl ProcessResourceRuntime {
                 .map(GuestExecutionBinding::provider_generation),
         )
         .with_owner_ref(owner_ref.clone())
-        .with_owner_uid(
-            record.resource.owner_uid.clone().or_else(|| {
-                owner_ref
-                    .as_ref()
-                    .and_then(|owner| self.owner_uids.get(owner))
-            }),
-        )
+        .with_owner_uid(owner_uid)
         .with_controller_provider_ref(controller_provider_ref)
         .with_guest_descriptor_digest(
             owner_ref
@@ -646,7 +735,11 @@ impl ProcessResourceRuntime {
                     .as_ref()
                     .map(|(_, generation)| generation.clone()))
                 .or(controller_provider_generation),
-        )
+        );
+        match launch {
+            Some(launch) => context.with_launch_identity(launch),
+            None => context,
+        }
     }
 
     fn controller_provider_identity(
@@ -5161,9 +5254,24 @@ mod tests {
             controller_provider_uid: None,
             controller_provider_generation: None,
         };
+        let target_of = |
+            record: &DesiredRecord,
+            target_owner_ref: Option<&ResourceRef>,
+            target_ref: Option<&ResourceRef>,
+        | {
+            scoped_launch_identity(
+                record,
+                target_owner_ref,
+                target_ref,
+                record.resource.owner_uid.clone(),
+            )
+            .expect("complete launch identity")
+            .target_ref()
+            .cloned()
+        };
 
         assert_eq!(
-            scoped_target_ref(
+            target_of(
                 &make_record(session_ref.to_canonical_string().as_str()),
                 Some(&session_ref),
                 Some(&guest_ref),
@@ -5171,7 +5279,7 @@ mod tests {
             Some(guest_ref.clone())
         );
         assert_eq!(
-            scoped_target_ref(
+            target_of(
                 &make_record("Provider/other"),
                 Some(&session_ref),
                 Some(&guest_ref),
@@ -5188,7 +5296,7 @@ mod tests {
         vmm_record.resource.resource_ref =
             ResourceRef::parse("Process/acceptance-guest-vmm").expect("VMM ref");
         vmm_record.process = DesiredProcess::Process(vmm);
-        assert_eq!(scoped_target_ref(&vmm_record, None, None), Some(vmm_owner));
+        assert_eq!(target_of(&vmm_record, None, None), Some(vmm_owner));
 
         let qemu = serde_json::from_str::<ProcessSpec>(
             r#"{"executionRef":"Host/host-system","processClass":"worker","template":"qemu-media-runner"}"#,
@@ -5199,7 +5307,176 @@ mod tests {
         qemu_record.resource.resource_ref =
             ResourceRef::parse("Process/media-vm-qemu").expect("QEMU VMM ref");
         qemu_record.process = DesiredProcess::Process(qemu);
-        assert_eq!(scoped_target_ref(&qemu_record, None, None), Some(qemu_owner));
+        assert_eq!(target_of(&qemu_record, None, None), Some(qemu_owner));
+    }
+
+    /// One row shape -> complete canonical identity or a named construction
+    /// error. The shapes are the four owner kinds a Process row takes
+    /// (host-owned worker, Guest-owned guest-runtime child, binding-owned
+    /// serving worker, Provider-owned controller) plus one incomplete row.
+    #[test]
+    fn launch_identity_table_covers_owner_shapes() {
+        let guest_ref = || ResourceRef::parse("Guest/acceptance-guest").expect("guest ref");
+        let binding_ref = || ResourceRef::parse("VolumeBinding/data").expect("binding ref");
+
+        struct Case {
+            label: &'static str,
+            owner_ref: Option<ResourceRef>,
+            owner_uid: Option<&'static str>,
+            execution_ref: &'static str,
+            process_name: &'static str,
+            template: &'static str,
+            declared_target: Option<(ResourceRef, ResourceRef)>,
+            expected: Expected,
+        }
+
+        enum Expected {
+            Complete {
+                target_ref: Option<ResourceRef>,
+                vm: Option<&'static str>,
+                launch_vm: &'static str,
+                binding_worker: bool,
+            },
+            Error(&'static str),
+        }
+
+        let cases = [
+            Case {
+                label: "host-owned",
+                owner_ref: None,
+                owner_uid: None,
+                execution_ref: "Host/host-system",
+                process_name: "worker",
+                template: "reaction",
+                declared_target: None,
+                expected: Expected::Complete {
+                    target_ref: None,
+                    vm: None,
+                    launch_vm: "host-system",
+                    binding_worker: false,
+                },
+            },
+            Case {
+                label: "guest-owned",
+                owner_ref: Some(guest_ref()),
+                owner_uid: Some("323e4567-e89b-42d3-a456-426614174001"),
+                execution_ref: "Host/host-system",
+                process_name: "acceptance-guest-vmm",
+                template: "cloud-hypervisor-runner",
+                declared_target: None,
+                expected: Expected::Complete {
+                    target_ref: Some(guest_ref()),
+                    vm: Some("acceptance-guest"),
+                    launch_vm: "acceptance-guest",
+                    binding_worker: false,
+                },
+            },
+            Case {
+                label: "binding-owned",
+                owner_ref: Some(binding_ref()),
+                owner_uid: None,
+                execution_ref: "Host/host-system",
+                process_name: "vol-vfd-deadbeef",
+                template: "virtiofsd-worker",
+                declared_target: Some((guest_ref(), binding_ref())),
+                expected: Expected::Complete {
+                    target_ref: Some(guest_ref()),
+                    vm: Some("acceptance-guest"),
+                    launch_vm: "host-system",
+                    binding_worker: true,
+                },
+            },
+            Case {
+                label: "controller-owned",
+                owner_ref: Some(
+                    ResourceRef::parse("Provider/network-local").expect("provider ref"),
+                ),
+                owner_uid: Some("123e4567-e89b-42d3-a456-426614174010"),
+                execution_ref: "Host/host-system",
+                process_name: "controller",
+                template: "reaction",
+                declared_target: None,
+                expected: Expected::Complete {
+                    target_ref: None,
+                    vm: None,
+                    launch_vm: "host-system",
+                    binding_worker: false,
+                },
+            },
+            Case {
+                label: "incomplete: binding worker without its attachment target",
+                owner_ref: Some(binding_ref()),
+                owner_uid: None,
+                execution_ref: "Host/host-system",
+                process_name: "vol-vfd-deadbeef",
+                template: "virtiofsd-worker",
+                declared_target: None,
+                expected: Expected::Error("launch-identity-missing-target-ref"),
+            },
+        ];
+
+        for case in cases {
+            let owner_ref = case.owner_ref.clone();
+            let owner_uid = case
+                .owner_uid
+                .map(|uid| ResourceUid::parse(uid).expect("owner uid"));
+            let execution_ref =
+                ResourceRef::parse(case.execution_ref).expect("execution ref");
+            let resolved = resolve_launch_identity(&LaunchRow {
+                owner_ref: owner_ref.as_ref(),
+                owner_uid: owner_uid.clone(),
+                execution_ref: &execution_ref,
+                process_name: case.process_name,
+                template: case.template,
+                declared_target: case
+                    .declared_target
+                    .as_ref()
+                    .map(|(target, owner)| (target, owner)),
+            });
+            match (&case.expected, resolved) {
+                (
+                    Expected::Complete {
+                        target_ref,
+                        vm,
+                        launch_vm,
+                        binding_worker,
+                    },
+                    Ok(identity),
+                ) => {
+                    assert_eq!(
+                        identity.target_ref(),
+                        target_ref.as_ref(),
+                        "{}: target ref",
+                        case.label
+                    );
+                    assert_eq!(identity.vm(), *vm, "{}: vm", case.label);
+                    assert_eq!(identity.launch_vm(), *launch_vm, "{}: launch vm", case.label);
+                    assert_eq!(
+                        identity.is_binding_worker(),
+                        *binding_worker,
+                        "{}: binding worker",
+                        case.label
+                    );
+                    assert_eq!(
+                        identity.owner_uid(),
+                        owner_uid.as_ref(),
+                        "{}: owner uid",
+                        case.label
+                    );
+                }
+                (Expected::Complete { .. }, Err(error)) => {
+                    panic!("{}: expected a complete identity, got {error}", case.label)
+                }
+                (Expected::Error(code), Err(error)) => {
+                    assert_eq!(error.code(), *code, "{}: named error", case.label)
+                }
+                (Expected::Error(code), Ok(identity)) => panic!(
+                    "{}: expected construction error {code}, got identity with vm {:?}",
+                    case.label,
+                    identity.vm()
+                ),
+            }
+        }
     }
 
     fn identity_record(revision: u64) -> DesiredRecord {

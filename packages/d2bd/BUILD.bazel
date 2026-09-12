@@ -395,6 +395,8 @@ rust_test(
         "src/resource_runtime.rs",
         "src/process_resource_runtime.rs",
         "src/activation_driver.rs",
+        "src/guest_driver.rs",
+        "src/guest_effects.rs",
         "src/shared_provider_driver.rs",
         "src/shared_provider_effects.rs",
         "src/system_core_driver.rs",
@@ -491,6 +493,7 @@ rust_test(
     deps = [
         ":d2bd_lib_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-host:d2b_host_test_support",
         "//packages/d2b-provider-network-local:d2b_provider_network_local",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

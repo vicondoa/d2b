@@ -1003,6 +1003,7 @@ mod tests {
             owner_key: Some(ResourceKey::new("work", "Provider", "runtime")),
             status,
             status_generation: Some(generation),
+            status_projection: None,
         }
     }
 

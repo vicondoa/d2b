@@ -313,6 +313,17 @@ impl ResourceMetadata {
     pub fn finalizers(&self) -> &[FinalizerId] {
         &self.finalizers
     }
+
+    /// Borrow the deletion request instant, if deletion was requested.
+    ///
+    /// This is the writer-committed "deletion is in progress" fact. The
+    /// universal phase vocabulary has no `Deleting` value, so a deleting row
+    /// reads as the `Deleted` tombstone (or `Failed` for a retried delete
+    /// failure) and callers that must tell "deleting" from "gone" read this
+    /// mark instead.
+    pub fn deletion_requested_at(&self) -> Option<&Timestamp> {
+        self.deletion_requested_at.as_ref()
+    }
 }
 
 impl core::fmt::Debug for ResourceMetadata {

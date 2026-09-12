@@ -171,6 +171,10 @@ pub struct ResourceView {
     /// notified once per committed generation, so a status published before a
     /// spec change must not be read as observed state of the newer row.
     pub status_generation: Option<u64>,
+    /// The driver's wire-visible `status.resource` layer published with that
+    /// status (`None` when the driver published none, or when the status is
+    /// not current for the row).
+    pub status_projection: Option<serde_json::Value>,
 }
 
 impl ResourceView {
@@ -185,6 +189,15 @@ impl ResourceView {
     /// generation N pass as readiness of generation N+1.
     pub fn observed_status(&self) -> Option<ResourceStatus> {
         self.status.filter(|_| self.status_generation == Some(self.generation))
+    }
+
+    /// The `status.resource` layer published **for this exact row
+    /// generation**, mirroring [`Self::observed_status`]: a projection left
+    /// over from an older generation is not observed state of the row.
+    pub fn observed_status_projection(&self) -> Option<&serde_json::Value> {
+        self.status_projection
+            .as_ref()
+            .filter(|_| self.status_generation == Some(self.generation))
     }
 }
 
@@ -260,6 +273,10 @@ pub enum ResourceManagerMsg {
         key: ResourceKey,
         generation: u64,
         status: ResourceStatus,
+        /// The actor's wire-visible `status.resource` layer for this pass,
+        /// when the driver published one (R11: in-memory only, replaced or
+        /// dropped with the next status).
+        projection: Option<serde_json::Value>,
     },
     /// Bookkeeping from spawn flows (spec section 4).
     ActorStarted {
@@ -361,6 +378,9 @@ pub struct ResourceManagerState {
     /// The generation each published status belongs to (see
     /// [`ResourceView::status_generation`]).
     status_generations: HashMap<ResourceKey, u64>,
+    /// The driver-published `status.resource` layer of each row's current
+    /// status (see [`ResourceView::status_projection`]); in-memory only.
+    status_projections: HashMap<ResourceKey, serde_json::Value>,
     /// Rows whose cleanup completed at their actor while owned children were
     /// still retiring: the row holds (with its durable deleting mark) until
     /// the last child row retires, so no parent row disappears ahead of an
@@ -434,6 +454,7 @@ impl ResourceManagerState {
             owner_key: self.row_owner_key(key),
             status: self.statuses.get(key).copied(),
             status_generation: self.status_generations.get(key).copied(),
+            status_projection: self.status_projections.get(key).cloned(),
         })
     }
 
@@ -466,6 +487,7 @@ impl ResourceManagerState {
     fn unindex_row(&mut self, key: &ResourceKey) {
         self.statuses.remove(key);
         self.status_generations.remove(key);
+        self.status_projections.remove(key);
         if let Some(row) = self.rows.remove(key) {
             self.by_uid.remove(&row.uid);
             self.by_type
@@ -647,6 +669,7 @@ impl ResourceManagerState {
             // runtime view claims no observed state for the new row.
             self.statuses.remove(&committed.key);
             self.status_generations.remove(&committed.key);
+            self.status_projections.remove(&committed.key);
         }
         if changed {
             // Desired-state change publishes into the hub (F4); status stays
@@ -711,6 +734,7 @@ impl ResourceManagerState {
                 self.rows.insert(key.clone(), row);
                 self.statuses.insert(key.clone(), ResourceStatus::Deleting);
                 self.status_generations.insert(key.clone(), generation);
+                self.status_projections.remove(key);
                 self.hub.publish(ChangeNotice {
                     key: key.clone(),
                     kind: ChangeKind::Upsert,
@@ -809,6 +833,7 @@ impl Actor for ResourceManager {
             rows: HashMap::new(),
             statuses: HashMap::new(),
             status_generations: HashMap::new(),
+            status_projections: HashMap::new(),
             pending_retirement: HashSet::new(),
             actors: HashMap::new(),
             actors_by_id: HashMap::new(),
@@ -906,7 +931,7 @@ impl Actor for ResourceManager {
                 // within the epoch (F4, R23).
                 reply.send(Ok(state.hub.register(selector, after))).ok();
             }
-            ResourceManagerMsg::RuntimeChanged { key, generation, status } => {
+            ResourceManagerMsg::RuntimeChanged { key, generation, status, projection } => {
                 // Status is in-memory only (R11): update the view model and
                 // publish; no store write (AE6). The recorded generation is
                 // the one the actor published the status FOR, not whatever
@@ -917,6 +942,14 @@ impl Actor for ResourceManager {
                 if state.rows.contains_key(&key) {
                     state.statuses.insert(key.clone(), status);
                     state.status_generations.insert(key.clone(), generation);
+                    match projection {
+                        Some(projection) => {
+                            state.status_projections.insert(key.clone(), projection);
+                        }
+                        None => {
+                            state.status_projections.remove(&key);
+                        }
+                    }
                     state.hub.publish(ChangeNotice {
                         key,
                         kind: ChangeKind::Upsert,
@@ -2207,6 +2240,7 @@ mod tests {
                 key: k.clone(),
                 generation: published_generation,
                 status: ResourceStatus::Ready,
+                projection: None,
             })
             .expect("queued status delivery");
         for _ in 0..50 {
@@ -2227,6 +2261,86 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("stale status delivery was not recorded against its published generation");
+    }
+
+    /// The projection channel's contract: a pass that computed a status
+    /// projection publishes it, whatever its outcome. `InProgress` (a long
+    /// effect in flight) keeps the actor's `Reconciling` status but must not
+    /// swallow the evidence the pass just computed - dropping it left rows
+    /// serving the pre-pass (or no) `status.resource` layer while the driver
+    /// already knew better. Only invalidation (spec change, deletion) clears
+    /// the layer.
+    #[tokio::test]
+    async fn in_progress_pass_publishes_its_projection() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::InProgressWithProjectionOnce;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
+
+        // The pass is still in flight (its effect is gated): the manager
+        // already serves the projection that pass computed.
+        let view = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(view.status, Some(ResourceStatus::Reconciling));
+        assert_eq!(
+            view.observed_status_projection(),
+            Some(&serde_json::json!({ "phase": "Pending", "evidence": "first-pass" })),
+            "a pass that computed a projection publishes it while its effect runs"
+        );
+
+        // Completion republishes per pass; the second pass publishes none,
+        // so the layer clears rather than carrying the consumed projection.
+        shared.open_gate();
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let done = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(
+            done.observed_status_projection(),
+            None,
+            "the projection belongs to the pass that set it, never a later status"
+        );
+    }
+
+    /// Invalidation: a spec change is the projection channel's drop case. The
+    /// driver's evidence belongs to the generation it was computed for, so a
+    /// row that moved to a new spec generation must not keep serving the old
+    /// projection (the manager clears it at commit and the new pass
+    /// republishes only what it computed).
+    #[tokio::test]
+    async fn spec_change_drops_the_old_generations_projection() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionOnce;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let first = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(
+            first.observed_status_projection(),
+            Some(&serde_json::json!({ "phase": "Ready", "evidence": "generation-one" })),
+            "the first pass publishes the projection it computed"
+        );
+
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"two"))
+            .await
+            .expect("changed ensure");
+        for _ in 0..500 {
+            let view = h.client.get(k.clone()).await.expect("get").expect("view");
+            if view.generation == first.generation + 1
+                && view.status == Some(ResourceStatus::Ready)
+                && view.status_generation == Some(view.generation)
+            {
+                assert_eq!(
+                    view.observed_status_projection(),
+                    None,
+                    "a spec change drops the projection it invalidates"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the changed spec never reached Ready");
     }
 
     /// R14: two `Reconcile` messages on one resource while an effect is in
@@ -2522,6 +2636,51 @@ mod tests {
         assert!(
             shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1,
             "driver delete ran to completion"
+        );
+    }
+
+    /// R13/spec section 32: a long effect that reports a *retryable failure*
+    /// (the shape a Degraded/Pending Volume layout reports through the
+    /// driver) schedules exactly one backoff requeue. The actor never
+    /// re-enters the pass at effect-completion rate, which is what bounds a
+    /// degraded Volume's layout effect - and the broker `StoreSync` its source
+    /// resolution performs - to one run per backoff window.
+    #[tokio::test]
+    async fn retryable_effect_failure_backs_off_before_the_next_pass() {
+        let h = harness_with(&["Test"], Duration::from_millis(400)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::EffectFailsRetryableOnce;
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"one"))
+            .await
+            .expect("ensure");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile)),
+        )
+        .await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "the retryable effect failure must not immediately re-enter the pass"
+        );
+
+        // Well inside the backoff window: still exactly one pass.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "no pass runs before the backoff requeue fires"
+        );
+
+        // The single requeue delivers the next pass, which converges.
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            2,
+            "exactly one retry pass per backoff window"
         );
     }
 

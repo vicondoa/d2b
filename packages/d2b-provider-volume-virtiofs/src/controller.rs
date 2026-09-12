@@ -7,7 +7,7 @@
 //! every reconcile.
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::resource_status::{ResourcePhase, StatusCode};
+use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use d2b_contracts_resource::v3::volume::{AttachmentAccess, ViewSpec, VolumeSpec};
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
@@ -301,18 +301,16 @@ impl<P: VirtiofsBindingEffectPort> VirtiofsBindingController<P> {
     }
 
     /// Build the fenced public projection for one reconcile.
+    ///
+    /// The projection shape and its fence live in the binding contract
+    /// ([`StoredBinding::status_projection`]); the controller only supplies
+    /// the observation (its Ready phase and the frozen failure reason).
     fn projection(
         binding: &StoredBinding,
         ready: bool,
         reason: Option<VirtiofsBindingError>,
     ) -> VolumeBindingStatusResource {
-        VolumeBindingStatusResource {
-            ready,
-            fence: binding.fence(),
-            reason: reason.map(|reason| reason.code()).map(|code| {
-                StatusCode::parse(code).expect("frozen error codes are valid status codes")
-            }),
-        }
+        binding.status_projection(ready, reason)
     }
 
     /// Drain one binding before its finalizer is cleared.
