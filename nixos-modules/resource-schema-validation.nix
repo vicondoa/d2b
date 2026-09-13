@@ -20,10 +20,11 @@ let
     else if builtins.elem resourceType qualifiedResourceTypes
     then qualifiedSchemaFileName resourceType
     else null;
-  # Registered ResourceTypes without a committed schema (the controller
-  # family's policy types until their rows land) contribute no farm entry:
-  # `schemaFor` below already skips such a type at eval time, and the compiler
-  # refuses a ResourceType whose schema it cannot resolve.
+  # Every registered ResourceType has a committed schema, so every one
+  # contributes a farm entry; the existence filter keeps a tree that is
+  # mid-generation from naming a file it does not hold, and `schemaFor` below
+  # skips a type with no entry at eval time while the compiler refuses a
+  # ResourceType whose schema it cannot resolve.
   schemaFarm =
     if builtins.hasAttr "d2b-resource-schemas" pkgs
     then pkgs."d2b-resource-schemas"

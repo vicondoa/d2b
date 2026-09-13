@@ -23,13 +23,10 @@ let
   semanticSchemaFileName = resourceType:
     let parts = lib.splitString "." resourceType;
     in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
-  # A standard ResourceType can register before its committed schema lands:
-  # the controller family's policy types (Command, Operation, SeccompProfile)
-  # ship as declarations with their driver shells, and their rows and field
-  # model arrive with the committed policy rows. The compiler resolves one
-  # schema per ResourceType on demand and refuses a type it cannot resolve, so
-  # the farm carries the committed schemas that exist rather than naming files
-  # the repository does not hold.
+  # The farm carries the committed schemas that exist. Every standard type's
+  # schema is committed (the policy types' included), so a missing entry means
+  # a schema that was never generated; the compiler resolves one schema per
+  # ResourceType on demand and refuses a type it cannot resolve.
   schemaEntries =
     (map
       (resourceType: {

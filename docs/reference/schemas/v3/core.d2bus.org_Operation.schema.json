@@ -1,0 +1,588 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_Operation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "AuditJoin": {
+      "additionalProperties": false,
+      "description": "The audit-join facet: the payload fields one logical operation keys on.",
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/definitions/BoundedText"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "type": "object"
+    },
+    "AuditMode": {
+      "description": "Audit mode for one operation.",
+      "oneOf": [
+        {
+          "description": "Only denied invocations are audited.",
+          "enum": [
+            "deny-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Failures and denials are audited.",
+          "enum": [
+            "errors"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Every invocation is audited.",
+          "enum": [
+            "yes"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "BoundedText": {
+      "maxLength": 128,
+      "minLength": 0,
+      "type": "string"
+    },
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "BrokerRequirement": {
+      "description": "Broker-use class for one operation.",
+      "oneOf": [
+        {
+          "description": "No broker involvement.",
+          "enum": [
+            "no"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Broker involved, non-mutating only.",
+          "enum": [
+            "no-mutation"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Broker involvement depends on the invocation.",
+          "enum": [
+            "conditional"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The broker is required.",
+          "enum": [
+            "yes"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "FdContract": {
+      "additionalProperties": false,
+      "description": "One declared file-descriptor contract entry.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/FdKind"
+        },
+        "name": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "required"
+      ],
+      "type": "object"
+    },
+    "FdKind": {
+      "description": "The descriptor kind of one fd contract entry.",
+      "oneOf": [
+        {
+          "description": "A regular file.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A socket.",
+          "enum": [
+            "socket"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A pipe.",
+          "enum": [
+            "pipe"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A directory.",
+          "enum": [
+            "directory"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A pidfd.",
+          "enum": [
+            "pidfd"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An anonymous memory file.",
+          "enum": [
+            "memfd"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "OperationAudit": {
+      "additionalProperties": false,
+      "description": "The audit facet of one operation.",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/AuditMode"
+        },
+        "redactionKeys": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/BoundedText"
+          },
+          "type": "array"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "retainedFields": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/BoundedText"
+          },
+          "type": "array"
+        },
+        "targetLabel": {
+          "$ref": "#/definitions/BoundedToken"
+        }
+      },
+      "required": [
+        "mode",
+        "required",
+        "targetLabel"
+      ],
+      "type": "object"
+    },
+    "OperationAuthority": {
+      "additionalProperties": false,
+      "description": "The authority facet of one operation.",
+      "properties": {
+        "brokerRequirement": {
+          "$ref": "#/definitions/BrokerRequirement"
+        },
+        "callerAuthority": {
+          "$ref": "#/definitions/BoundedText"
+        },
+        "domain": {
+          "$ref": "#/definitions/OperationDomain"
+        },
+        "surface": {
+          "$ref": "#/definitions/OperationSurface"
+        }
+      },
+      "required": [
+        "brokerRequirement",
+        "callerAuthority",
+        "domain",
+        "surface"
+      ],
+      "type": "object"
+    },
+    "OperationBounds": {
+      "additionalProperties": false,
+      "description": "The per-operation limits.",
+      "properties": {
+        "maxBatchEntries": {
+          "default": 256,
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "maxPayloadBytes": {
+          "default": 1048576,
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "maxStreamCredits": {
+          "default": 64,
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "OperationDomain": {
+      "description": "The execution domain one operation runs in.",
+      "oneOf": [
+        {
+          "description": "Host-side execution.",
+          "enum": [
+            "host"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Guest-side execution.",
+          "enum": [
+            "guest"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "OperationFds": {
+      "additionalProperties": false,
+      "description": "The fd contract of one operation.",
+      "properties": {
+        "preopened": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/PreopenedFd"
+          },
+          "type": "array"
+        },
+        "request": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/FdContract"
+          },
+          "type": "array"
+        },
+        "response": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/FdContract"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "OperationSurface": {
+      "description": "The surface one operation is invoked from.",
+      "oneOf": [
+        {
+          "description": "A CLI invocation.",
+          "enum": [
+            "cli"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A broker session.",
+          "enum": [
+            "broker"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "PayloadProvenance": {
+      "description": "Where one operation's payload comes from.",
+      "oneOf": [
+        {
+          "description": "The caller supplies the payload.",
+          "enum": [
+            "request"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The bundle supplies the payload.",
+          "enum": [
+            "bundle"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The payload is derived from other committed rows.",
+          "enum": [
+            "derived"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "PayloadSchema": {
+      "description": "Closed payload JSON Schema: object-typed, additionalProperties=false, writeOnly properties carrying no default/enum/const/examples.",
+      "type": "object"
+    },
+    "PreopenedFd": {
+      "additionalProperties": false,
+      "description": "One descriptor the broker constructs before dispatch.",
+      "properties": {
+        "constructor": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "name": {
+          "$ref": "#/definitions/BoundedToken"
+        }
+      },
+      "required": [
+        "constructor",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport|Command|Operation|SeccompProfile)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    },
+    "SecretAccess": {
+      "description": "Secret exposure ceiling for one operation.\n\nThe closed seven-value class set the authorization rows already spell; an operation never widens it.",
+      "oneOf": [
+        {
+          "description": "No secret or key material is reachable.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Public key material only.",
+          "enum": [
+            "public-key-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Redacted secret renderings only.",
+          "enum": [
+            "redacted-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Secret metadata (existence, identity) only.",
+          "enum": [
+            "metadata-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Paths that may hold secrets, never their content.",
+          "enum": [
+            "possible-paths-only"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Host key metadata only.",
+          "enum": [
+            "host-key-metadata"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Secret material is read or written.",
+          "enum": [
+            "read-write"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Committed broker operation: payload schema, authority, audit, fd, bounds, and provenance facets.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The `Operation` desired spec.",
+      "properties": {
+        "audit": {
+          "$ref": "#/definitions/OperationAudit"
+        },
+        "auditJoin": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authority": {
+          "$ref": "#/definitions/OperationAuthority"
+        },
+        "bounds": {
+          "$ref": "#/definitions/OperationBounds"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "fds": {
+          "$ref": "#/definitions/OperationFds"
+        },
+        "ownerRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef",
+              "x-d2b-reference-kind": "ResourceRef",
+              "x-d2b-reference-scope": "same-zone"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "payloadProvenance": {
+          "$ref": "#/definitions/PayloadProvenance"
+        },
+        "payloadSchema": {
+          "$ref": "#/definitions/PayloadSchema"
+        },
+        "providerRef": {
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [
+            "Provider"
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "secretAccess": {
+          "$ref": "#/definitions/SecretAccess"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "wireTag": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "audit",
+        "authority",
+        "bounds",
+        "destructive",
+        "fds",
+        "payloadProvenance",
+        "payloadSchema",
+        "secretAccess"
+      ],
+      "title": "OperationSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Operation"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Operation",
+  "type": "object",
+  "x-d2b-resource-type": "Operation"
+}

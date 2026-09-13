@@ -1,0 +1,271 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_SeccompProfile.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "DeviceBind": {
+      "additionalProperties": false,
+      "description": "One device-node bind declared inside a profile.",
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/SeccompDeviceAccess"
+        },
+        "kind": {
+          "$ref": "#/definitions/DeviceNodeKind"
+        },
+        "major": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "path": {
+          "$ref": "#/definitions/DeviceNodePath"
+        }
+      },
+      "required": [
+        "access",
+        "kind",
+        "major",
+        "minor",
+        "path"
+      ],
+      "type": "object"
+    },
+    "DeviceNodeKind": {
+      "description": "The node kind of one device bind.",
+      "oneOf": [
+        {
+          "description": "A character device.",
+          "enum": [
+            "char"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A block device.",
+          "enum": [
+            "block"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "DeviceNodePath": {
+      "maxLength": 255,
+      "pattern": "^/dev/[^\\u0000]+$",
+      "type": "string"
+    },
+    "SeccompCgroups": {
+      "additionalProperties": false,
+      "description": "The cgroup set one profile admits.",
+      "properties": {
+        "controllers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/BoundedToken"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SeccompDeviceAccess": {
+      "description": "The access one device bind grants.",
+      "oneOf": [
+        {
+          "description": "Read access.",
+          "enum": [
+            "read"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Write access.",
+          "enum": [
+            "write"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Read and write access.",
+          "enum": [
+            "read-write"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Node creation access.",
+          "enum": [
+            "mknod"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "SeccompNamespaces": {
+      "additionalProperties": false,
+      "description": "The namespace set one profile isolates.",
+      "properties": {
+        "cgroup": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ipc": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "net": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pid": {
+          "default": false,
+          "type": "boolean"
+        },
+        "time": {
+          "default": false,
+          "type": "boolean"
+        },
+        "user": {
+          "default": false,
+          "type": "boolean"
+        },
+        "uts": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Posture row: syscall allowlist, namespace and cgroup sets, and inline device-node binds.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The `SeccompProfile` desired spec.",
+      "properties": {
+        "cgroups": {
+          "$ref": "#/definitions/SeccompCgroups"
+        },
+        "devices": {
+          "items": {
+            "$ref": "#/definitions/DeviceBind"
+          },
+          "type": "array"
+        },
+        "namespaces": {
+          "$ref": "#/definitions/SeccompNamespaces"
+        },
+        "providerRef": {
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [
+            "Provider"
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "syscalls": {
+          "items": {
+            "$ref": "#/definitions/BoundedToken"
+          },
+          "type": "array"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "cgroups",
+        "devices",
+        "namespaces",
+        "syscalls"
+      ],
+      "title": "SeccompProfileSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "SeccompProfile"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "SeccompProfile",
+  "type": "object",
+  "x-d2b-resource-type": "SeccompProfile"
+}
