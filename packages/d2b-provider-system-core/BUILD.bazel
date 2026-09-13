@@ -12,7 +12,6 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -64,7 +63,9 @@ rust_test(
     name = "d2b_provider_system_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_system_core",
-    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
