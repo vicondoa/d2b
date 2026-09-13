@@ -11,6 +11,8 @@ rust_library(
     name = "d2b_provider_supervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "//packages/d2b-broker:src/live_handlers.rs",  # keep
         "//packages/d2b-broker:src/runtime.rs",  # keep
         "Cargo.toml",
@@ -32,6 +34,8 @@ rust_library(
     name = "d2b_provider_supervisor_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "//packages/d2b-broker:src/live_handlers.rs",  # keep
         "//packages/d2b-broker:src/runtime.rs",  # keep
         "Cargo.toml",
@@ -53,7 +57,11 @@ rust_library(
 rust_test(
     name = "production_adapter",
     srcs = ["tests/production_adapter.rs"],
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "Cargo.toml",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -70,7 +78,11 @@ rust_test(
 
 rust_test(
     name = "d2b_provider_supervisor_test",
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "Cargo.toml",
+    ],
     crate = ":d2b_provider_supervisor",
     deps = ["//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

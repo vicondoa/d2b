@@ -6,7 +6,14 @@
 //! public operation shapes and wire envelopes while the backend and dispatch
 //! change to the single-writer manager:
 //!
-//! - reads (`get`/`list`/`resolve_ref`) resolve manager runtime views;
+//! - reads (`get`/`list`/`resolve_ref`) resolve manager runtime views, and
+//!   LIST pages over the manager's deterministic `(zone, type, name)` row
+//!   order with an opaque keyset cursor: `truncated` is true only when a
+//!   remainder exists, and a cursor that cannot be honoured is refused with
+//!   a typed error rather than ignored;
+//! - the closed list filters keep their durable-plane semantics, including
+//!   ownership (`owner.resourceUid` matches the row's resolved owner uid,
+//!   `owner.resourceRef` the owner reference the row renders);
 //! - mutations admit at the manager boundary under the caller's real
 //!   authenticated subject ([`api_subject`]) and persist through
 //!   `Ensure`/`Remove` with commit-before-return (F1/AE1);
@@ -14,9 +21,13 @@
 //!   semantics (KTD8): a stored resource's wire revision is its generation,
 //!   so an `Exact(rev)` precondition rejects a stale generation with the
 //!   existing resource-conflict wire error carrying the current generation;
-//! - external WATCH rides the existing named-stream handoff with the runtime
-//!   revision (epoch + sequence) mapped onto the wire revision
-//!   ([`wire_revision`]) and `RevisionExpired` for pre-epoch cursors (R24);
+//! - external WATCH is not served in this phase: the manager-plane handoff
+//!   has no delivery pump in the composition (nothing takes the registered
+//!   stream and writes it to the opened component stream), so [`watch`]
+//!   refuses with `UnsupportedCapability` instead of returning a stream name
+//!   no producer fills - a client that followed such a receipt would wait
+//!   forever. LIST is the enumeration surface until the composition wires
+//!   the pump;
 //! - status-shaped writes are rejected: the manager has no durable status
 //!   write path (R11/AE6), and this module must never grow one.
 //!
@@ -47,9 +58,6 @@ use d2b_resource_runtime::manager::{
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::{ResourceProvenance, StoredDesiredResource};
-use d2b_resource_runtime::watch::{
-    WatchRegistration as RuntimeWatchRegistration, WatchSelector as RuntimeWatchSelector,
-};
 use d2b_resource_runtime::{
     error::ResourceError,
     identity::ResourceKey as RuntimeResourceKey,
@@ -57,7 +65,7 @@ use d2b_resource_runtime::{
 use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
 use d2b_contracts_resource::v3::{
     AdmittedAuthorization, ExpectedRevision, MutationSealBody, ResourceMutationKind,
-    SealedMutation, StoreCommitResult, StoreError, StoreErrorKind, StoreFilter, StoreGetRequest,
+    SealedMutation, StoreCommitResult, StoreError, StoreErrorKind, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation, StoreProjection,
     StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest,
     StoredResource, StoredSchema,
@@ -68,26 +76,9 @@ use crate::ResourceStoreBackend;
 /// The runtime-revision to wire-revision mapping (U5 budget): the wire
 /// carries `(epoch_seconds << 32) | sequence`, where `epoch_seconds =
 /// epoch_nanos / 1_000_000_000` and the sequence occupies the low 32 bits.
-/// Order-preserving within an epoch; cursors from other epochs never decode
-/// (see [`decode_wire_revision`]).
+/// Order-preserving within an epoch.
 pub fn wire_revision(revision: RuntimeRevision) -> u64 {
     (revision.epoch / 1_000_000_000) << 32 | (revision.sequence & 0xffff_ffff)
-}
-
-/// Decode a wire watch cursor against the daemon's current epoch.
-///
-/// The wire carries only the epoch's second count, so a cursor is
-/// reconstructible only inside the current daemon epoch. A cursor whose
-/// epoch seconds differ from the live epoch - a previous daemon lifetime, a
-/// pre-cutover durable-store revision (whose numeric range has no epoch
-/// bits), or a future cursor - returns `None` and the registration fails
-/// with `RevisionExpired` (R24/AE4); the client relists.
-pub(crate) fn decode_wire_revision(wire: u64, live_epoch_nanos: u64) -> Option<RuntimeRevision> {
-    let seconds = wire >> 32;
-    if seconds == 0 || seconds != live_epoch_nanos / 1_000_000_000 {
-        return None;
-    }
-    Some(RuntimeRevision::new(live_epoch_nanos, wire & 0xffff_ffff))
 }
 
 /// Deterministic stable uid for a manager key. This replicates the runtime's
@@ -344,43 +335,190 @@ fn check_precondition(mutation: &StoreMutation, row: &StoredDesiredResource) -> 
     Ok(())
 }
 
-/// The owner reference string of a stored envelope, when one is present.
-fn owner_ref_of(spec: &[u8]) -> Option<String> {
-    let value = CanonicalJsonValue::parse(spec).ok()?;
-    value
-        .as_object()?
-        .get("metadata")?
-        .as_object()?
-        .get("ownerRef")?
-        .as_object()
-        .map(|_| ())?;
-    None
+/// The owner reference the row renders, when one is rendered: the authored
+/// `metadata.ownerRef` wins (exactly as [`render_envelope`] resolves it), and
+/// a row without one renders the resolved owner key. Evaluating the filter
+/// here keeps it on the same value the row's readers see.
+fn rendered_owner_ref(view: &ResourceView) -> Option<String> {
+    let authored = serde_json::from_slice::<serde_json::Value>(&view.metadata)
+        .ok()
+        .and_then(|metadata| metadata.get("ownerRef").cloned())
+        .filter(|value| !value.is_null())
+        .and_then(|value| value.as_str().map(str::to_owned));
+    authored.or_else(|| {
+        view.owner_key
+            .as_ref()
+            .map(|owner| format!("{}/{}", owner.type_name, owner.name))
+    })
 }
 
-/// The closed list-filter projection, evaluated against the authoritative
-/// row attributes (same closed filter set as the durable store plane).
-fn filters_match(filters: &[StoreFilter], stored: &StoredResource, spec: &[u8]) -> bool {
-    filters.iter().all(|filter| match filter.field.as_str() {
-        "metadata.name" => {
-            filter.values.iter().any(|value| value == stored.resource_ref.name().as_str())
-        }
-        "type" => filter
-            .values
+/// Whether one manager view is in the request's matching set: the type/name
+/// selectors first, then the closed filter set evaluated against the view's
+/// own attributes (including the row's real ownership - an owner-scoped LIST
+/// must match its children, not return an empty page).
+fn list_view_matches(request: &StoreListRequest, view: &ResourceView) -> bool {
+    if !request.resource_types.is_empty()
+        && !request
+            .resource_types
             .iter()
-            .any(|value| value == stored.resource_ref.resource_type().as_str()),
-        "assignment.resourceUid" => filter.values.iter().any(|value| value == stored.uid.as_str()),
-        "owner.resourceUid" => stored.owner_uid.as_ref().is_some_and(|owner| {
-            filter.values.iter().any(|value| value == owner.as_str())
-        }),
+            .any(|resource_type| resource_type.as_str() == view.key.type_name)
+    {
+        return false;
+    }
+    if !request.resource_names.is_empty()
+        && !request.resource_names.iter().any(|name| name.as_str() == view.key.name)
+    {
+        return false;
+    }
+    request.filters.iter().all(|filter| match filter.field.as_str() {
+        "metadata.name" => filter.values.iter().any(|value| value == &view.key.name),
+        "type" => filter.values.iter().any(|value| value == &view.key.type_name),
+        "assignment.resourceUid" => {
+            let uid = row_uid(&view.uid);
+            filter.values.iter().any(|value| value == uid.as_str())
+        }
+        "owner.resourceUid" => owner_wire_uid(view)
+            .as_ref()
+            .is_some_and(|owner| filter.values.iter().any(|value| value == owner.as_str())),
         "owner.resourceRef" => {
-            let owner = owner_ref_of(spec);
+            let owner = rendered_owner_ref(view);
             filter
                 .values
                 .iter()
-                .any(|value| owner.as_ref().is_some_and(|candidate| candidate == value))
+                .any(|value| owner.as_deref() == Some(value.as_str()))
         }
         _ => false,
     })
+}
+
+/// The LIST order key: `(zone, type, name)`, the same order the durable plane
+/// walked, so cursor positions are reproducible within a page sequence.
+fn key_order(key: &RuntimeResourceKey) -> (&str, &str, &str) {
+    (key.zone.as_str(), key.type_name.as_str(), key.name.as_str())
+}
+
+/// The selector binding of a LIST cursor: the request fields a page sequence
+/// depends on. A cursor replayed under different selectors addresses a
+/// different sequence, so it is refused instead of silently landing
+/// elsewhere.
+fn list_selector_digest(request: &StoreListRequest) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(request.zone.as_str().as_bytes());
+    digest.update([request.projection as u8]);
+    for resource_type in &request.resource_types {
+        digest.update(resource_type.as_str().as_bytes());
+        digest.update([0]);
+    }
+    for name in &request.resource_names {
+        digest.update(name.as_str().as_bytes());
+        digest.update([0]);
+    }
+    for filter in &request.filters {
+        digest.update(filter.field.as_bytes());
+        digest.update([0]);
+        for value in &filter.values {
+            digest.update(value.as_bytes());
+            digest.update([0]);
+        }
+    }
+    let hex = |bytes: &[u8]| {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
+            out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("nibble"));
+        }
+        out
+    };
+    hex(&digest.finalize())
+}
+
+fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return None;
+    }
+    let nibble = |byte: u8| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    };
+    value
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| Some((nibble(pair[0])? << 4) | nibble(pair[1])?))
+        .collect()
+}
+
+fn list_cursor_error(reason: &'static str) -> StoreError {
+    error(StoreErrorKind::ResourceSchemaInvalid, None, RetryClass::Never, reason)
+}
+
+/// Encode the continuation cursor: `v1.<revision>.<selector>.<hex of the
+/// last returned key>`. Opaque to clients; the next page resumes strictly
+/// after the key in [`key_order`]. The snapshot revision is carried for
+/// observability only: pages resume by key, so a concurrent change cannot
+/// make a live row unreachable mid-sequence.
+fn encode_list_cursor(
+    revision: u64,
+    request: &StoreListRequest,
+    after: &RuntimeResourceKey,
+) -> String {
+    let mut key = Vec::new();
+    for part in [after.zone.as_str(), after.type_name.as_str(), after.name.as_str()] {
+        key.extend_from_slice(part.as_bytes());
+        key.push(0);
+    }
+    let hex = key.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    format!("v1.{revision}.{}.{hex}", list_selector_digest(request))
+}
+
+/// Decode and validate a continuation cursor against the request it is
+/// replayed with. Malformed cursors and cursors from a different selector
+/// are refused with a typed error - never ignored, which would silently
+/// restart the sequence.
+fn decode_list_cursor(
+    cursor: &str,
+    request: &StoreListRequest,
+) -> Result<RuntimeResourceKey, StoreError> {
+    let mut parts = cursor.split('.');
+    if parts.next() != Some("v1") {
+        return Err(list_cursor_error("list-cursor-invalid"));
+    }
+    parts
+        .next()
+        .filter(|revision| !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    let selector = parts
+        .next()
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    if selector != list_selector_digest(request) {
+        return Err(list_cursor_error("list-cursor-selector-mismatch"));
+    }
+    let key = hex_decode(parts.next().ok_or_else(|| list_cursor_error("list-cursor-invalid"))?)
+        .ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    if parts.next().is_some() {
+        return Err(list_cursor_error("list-cursor-invalid"));
+    }
+    // The encoded key is `zone\0type\0name\0`: drop the terminator before
+    // splitting, so the three components are exactly the fields present.
+    let key = key
+        .strip_suffix(&[0u8])
+        .ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    let mut fields = key.split(|byte| *byte == 0).map(|part| {
+        std::str::from_utf8(part)
+            .map(str::to_owned)
+            .map_err(|_| list_cursor_error("list-cursor-invalid"))
+    });
+    let zone = fields.next().transpose()?.ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    let type_name =
+        fields.next().transpose()?.ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    let name = fields.next().transpose()?.ok_or_else(|| list_cursor_error("list-cursor-invalid"))?;
+    if zone.is_empty() || type_name.is_empty() || name.is_empty() || fields.next().is_some() {
+        return Err(list_cursor_error("list-cursor-invalid"));
+    }
+    Ok(RuntimeResourceKey::new(zone, type_name, name))
 }
 
 /// Mirror the durable store's read projections.
@@ -465,6 +603,20 @@ pub fn manager_row_stored(view: &ResourceView) -> Result<StoredResource, StoreEr
     stored_from_view(view)
 }
 
+/// The wire uid of the owner a manager view is bound to, when it is an owned
+/// child.
+///
+/// The manager links ownership by the owner's stable uid (KTD2) and resolves
+/// the owner *key* through its uid index ([`ResourceView::owner_key`]). Every
+/// manager row's uid is the deterministic derivation of its own key
+/// (`d2b_resource_runtime::manager::deterministic_uid`, which
+/// [`ManagerBackend::commit_verified`] cross-checks on every API commit), so
+/// the owner's wire uid follows from the resolved key without a second RPC -
+/// and the row carries the same ownership a durable row would.
+fn owner_wire_uid(view: &ResourceView) -> Option<ResourceUid> {
+    view.owner_key.as_ref().map(|owner| row_uid(&manager_uid(owner)))
+}
+
 fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
     let canonical = render_envelope(
         &view.key,
@@ -481,7 +633,7 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, StoreError> {
         &view.key.type_name,
         &view.key.name,
         &view.uid,
-        None,
+        owner_wire_uid(view),
         view.generation,
         &canonical,
     );
@@ -719,42 +871,6 @@ fn stamp_deletion_request(stored: &mut StoredResource) -> Result<(), StoreError>
     Ok(())
 }
 
-/// Watch selectors narrow by the closed metadata.name and type filters; the
-/// remaining durable-plane filters have no key-level equivalent on the hub
-/// (Phase A minimal external WATCH).
-fn watch_selector(request: &StoreWatchRequest) -> Result<RuntimeWatchSelector, StoreError> {
-    let mut types: BTreeSet<String> = request
-        .resource_types
-        .iter()
-        .map(|resource_type| resource_type.as_str().to_owned())
-        .collect();
-    let mut names: BTreeSet<String> = request
-        .resource_names
-        .iter()
-        .map(|name| name.as_str().to_owned())
-        .collect();
-    for filter in &request.filters {
-        match filter.field.as_str() {
-            "metadata.name" => names.extend(filter.values.iter().cloned()),
-            "type" => types.extend(filter.values.iter().cloned()),
-            _ => {
-                return Err(error(
-                    StoreErrorKind::ResourceSchemaInvalid,
-                    None,
-                    RetryClass::Never,
-                    "watch-filter-unavailable",
-                ));
-            }
-        }
-    }
-    let zone = request.zone.as_str().to_owned();
-    Ok(RuntimeWatchSelector::with_predicate(move |key| {
-        key.zone == zone
-            && (types.is_empty() || types.contains(key.type_name.as_str()))
-            && (names.is_empty() || names.contains(key.name.as_str()))
-    }))
-}
-
 /// The manager-backed resource-store backend (U8): one per Zone manager.
 ///
 /// The composition (U9) constructs it against the Zone's manager actor:
@@ -768,7 +884,6 @@ fn watch_selector(request: &StoreWatchRequest) -> Result<RuntimeWatchSelector, S
 pub struct ManagerBackend {
     manager: ResourceManagerClient,
     hub: Arc<d2b_resource_runtime::watch::WatchHub>,
-    streams: crate::watch::ManagerWatchStreams,
     acceptor: MutationSealAcceptor,
 }
 
@@ -787,19 +902,7 @@ impl ManagerBackend {
         hub: Arc<d2b_resource_runtime::watch::WatchHub>,
         acceptor: MutationSealAcceptor,
     ) -> Self {
-        Self {
-            manager,
-            hub,
-            streams: crate::watch::ManagerWatchStreams::default(),
-            acceptor,
-        }
-    }
-
-    /// The named-stream handoff: the authenticated bus adapter takes the
-    /// replay/live delivery for a registered watch by its receipt stream
-    /// name and pumps it through its sink.
-    pub fn watch_streams(&self) -> &crate::watch::ManagerWatchStreams {
-        &self.streams
+        Self { manager, hub, acceptor }
     }
 
     fn runtime_key(zone: &ZoneId, target: &ResourceRef) -> RuntimeResourceKey {
@@ -1004,75 +1107,62 @@ impl ResourceStoreBackend for ManagerBackend {
         if request.resource_types.len() == 1 {
             selector.type_name = Some(request.resource_types[0].as_str().to_owned());
         }
-        let views = self.manager.list(selector).await.map_err(map_manager_error)?;
+        let mut views = self.manager.list(selector).await.map_err(map_manager_error)?;
+        // The manager's row map is unordered; paging needs one stable order.
+        // `(zone, type, name)` is the durable plane's key order, so a cursor
+        // is a position in the same sequence a durable list would walk.
+        views.sort_by(|left, right| key_order(&left.key).cmp(&key_order(&right.key)));
+        let after = match request.cursor.as_deref() {
+            Some(cursor) => Some(decode_list_cursor(cursor, &request)?),
+            None => None,
+        };
+        let matched: Vec<&ResourceView> =
+            views.iter().filter(|view| list_view_matches(&request, view)).collect();
+        let start = match &after {
+            Some(after) => matched.partition_point(|view| key_order(&view.key) <= key_order(after)),
+            None => 0,
+        };
         let page_size = request.page_size.max(1) as usize;
-        let mut resources = Vec::new();
-        for view in &views {
-            if !request.resource_types.is_empty()
-                && !request
-                    .resource_types
-                    .iter()
-                    .any(|resource_type| resource_type.as_str() == view.key.type_name)
-            {
-                continue;
-            }
-            if !request.resource_names.is_empty()
-                && !request.resource_names.iter().any(|name| name.as_str() == view.key.name)
-            {
-                continue;
-            }
+        let end = matched.len().min(start.saturating_add(page_size));
+        let page = &matched[start..end];
+        let truncated = end < matched.len();
+        let mut resources = Vec::with_capacity(page.len());
+        for view in page {
             let mut stored = stored_from_view(view)?;
-            if !filters_match(&request.filters, &stored, &view.spec) {
-                continue;
-            }
             project_resource(&mut stored, request.projection)?;
             resources.push(stored);
-            if resources.len() == page_size {
-                break;
-            }
         }
-        let truncated = resources.len() == page_size;
+        let next_cursor = truncated.then(|| {
+            let last = page.last().expect("a non-empty truncated page has a last row");
+            encode_list_cursor(wire_revision(self.hub.snapshot_revision()), &request, &last.key)
+        });
         Ok(StoreListResult {
             resources,
             // The LIST snapshot anchors WATCH resume (F4/R23): the wire
             // revision of the hub's snapshot at listing time.
             snapshot_revision: ZoneRevision::new(wire_revision(self.hub.snapshot_revision())),
-            next_cursor: None,
+            next_cursor,
             truncated,
         })
     }
 
-    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
-        let selector = watch_selector(&request)?;
-        let live = self.hub.snapshot_revision();
-        let after = if request.after_revision.get() == 0 {
-            // The beginning of the epoch: replay everything still retained.
-            Some(RuntimeRevision::new(live.epoch, 0))
-        } else {
-            Some(decode_wire_revision(request.after_revision.get(), live.epoch).ok_or_else(|| {
-                error(
-                    StoreErrorKind::RevisionExpired,
-                    Some(wire_revision(live)),
-                    RetryClass::AfterDelay,
-                    "revision-expired",
-                )
-            })?)
-        };
-        match self.manager.watch(selector, after).await.map_err(map_manager_error)? {
-            RuntimeWatchRegistration::Live { snapshot, replay, stream } => {
-                let stream_name = self.streams.insert(replay, stream);
-                Ok(StoreWatchReceipt {
-                    stream_name,
-                    snapshot_revision: ZoneRevision::new(wire_revision(snapshot)),
-                })
-            }
-            RuntimeWatchRegistration::Expired(expired) => Err(error(
-                StoreErrorKind::RevisionExpired,
-                Some(wire_revision(expired.snapshot)),
-                RetryClass::AfterDelay,
-                "revision-expired",
-            )),
-        }
+    async fn watch(&self, _request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        // External WATCH is not served in this phase. The manager plane has
+        // the producer (`ResourceManagerClient::watch` registers replay +
+        // live delivery with the hub) but the composition has no consumer: no
+        // delivery task takes the registered stream and writes it to the
+        // component stream the bus opened, so a receipt would name a stream
+        // nothing fills and a client would wait on it forever. Refuse with
+        // the typed capability error instead of issuing that receipt; a
+        // client relists. Wiring the pump (take each registered stream from
+        // the manager backend and pump it into the opened component stream)
+        // is the composition's change, not this backend's.
+        Err(error(
+            StoreErrorKind::UnsupportedCapability,
+            None,
+            RetryClass::Never,
+            "watch-not-wired",
+        ))
     }
 
     async fn resolve_ref(
@@ -1103,8 +1193,10 @@ impl ResourceStoreBackend for ManagerBackend {
         &self,
         _request: StoreInspectSchemaRequest,
     ) -> Result<StoredSchema, StoreError> {
-        // The schema catalog stays attached to the redb plane in Phase A
-        // (KTD4): the manager-backed plane carries no schema table.
+        // The schema catalog has no manager-plane table: the manager persists
+        // desired rows only, and the per-type spec decoders are compile-time
+        // contracts. Nothing on this plane can answer a schema read, so the
+        // refusal is typed and terminal (Phase A scope, KTD4).
         Err(error(
             StoreErrorKind::UnsupportedCapability,
             None,

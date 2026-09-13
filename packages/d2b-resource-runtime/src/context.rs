@@ -949,6 +949,63 @@ pub(crate) mod test_support {
         }
     }
 
+    /// Manager endpoint holding a fixed owned-child set: `list_owned`
+    /// answers it, `delete` records the child keys it is asked to remove,
+    /// and every other call fails loudly. Used by the erased-boundary test
+    /// for the child-first finalize contract ([`super::ResourceContext::finalize_owned_resources`]).
+    #[derive(Clone, Default)]
+    pub(crate) struct OwnedChildrenManager {
+        children: Vec<StoredDesiredResource>,
+        deleted: Arc<Mutex<Vec<ResourceKey>>>,
+    }
+
+    impl OwnedChildrenManager {
+        pub(crate) fn with_children(children: Vec<StoredDesiredResource>) -> Self {
+            Self { children, deleted: Arc::new(Mutex::new(Vec::new())) }
+        }
+
+        /// Child keys the manager was asked to delete, in order.
+        pub(crate) fn deleted_keys(&self) -> Vec<ResourceKey> {
+            self.deleted.lock().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ManagerEndpoint for OwnedChildrenManager {
+        async fn ensure_child(&self, _parent: &ResourceKey, _child: ChildEnsure) -> Result<EnsureOutcome, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+        }
+
+        async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected get".into()))
+        }
+
+        async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected view".into()))
+        }
+
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            self.deleted.lock().push(key.clone());
+            Ok(())
+        }
+
+        async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(self.children.clone())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: WatchRegistration,
+        ) -> Result<WatchId, ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected register_watch".into()))
+        }
+
+        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+            Err(ResourceError::ManagerRpc("unexpected cancel_watch".into()))
+        }
+    }
+
     /// Contract-level requeue scheduler over tokio paused time: `schedule`
     /// starts exactly one timer per call, `cancel` aborts it. The production
     /// implementation is a ractor timer inside the resource actor (U3); this

@@ -332,12 +332,18 @@ impl PlaneChildMutations {
         )
     }
 
-    fn subject(&self) -> MutationSubject {
-        d2b_resource_api::manager_backend::resource_owner_subject(&ManagerKey::new(
+    /// The manager key of the owning resource every mutation and
+    /// owner-scoped read of this session is filed under.
+    fn owner_key(&self) -> ManagerKey {
+        ManagerKey::new(
             self.zone.as_str(),
             self.owner_ref.resource_type().as_str(),
             self.owner_ref.name().as_str(),
-        ))
+        )
+    }
+
+    fn subject(&self) -> MutationSubject {
+        d2b_resource_api::manager_backend::resource_owner_subject(&self.owner_key())
     }
 
     /// The committed row through the canonical manager-row rendering,
@@ -398,12 +404,35 @@ impl PlaneChildMutations {
         }
     }
 
-    /// Every manager row of the requested converted types (the relist and
-    /// finalization read). Unconverted types contribute nothing: their rows
-    /// stay on the durable store path.
+    /// The manager rows of the requested converted types owned by this
+    /// session's owner (the child relist read). The manager resolves the
+    /// owner scope itself, so the answer is exactly this owner's children -
+    /// never a row another owner holds, however many the Zone carries for
+    /// them. Unconverted types contribute nothing: their rows stay on the
+    /// durable store path.
     pub(crate) async fn rows_of_types(
         &self,
         resource_types: &[&str],
+    ) -> Result<Vec<StoredResource>, ChildMutationFailure> {
+        self.rows_of_types_scoped(resource_types, Some(self.owner_key()))
+            .await
+    }
+
+    /// Every manager row of the requested converted types in this Zone (the
+    /// finalization read, which must also see other owners' children).
+    /// Unconverted types contribute nothing: their rows stay on the durable
+    /// store path.
+    pub(crate) async fn zone_rows_of_types(
+        &self,
+        resource_types: &[&str],
+    ) -> Result<Vec<StoredResource>, ChildMutationFailure> {
+        self.rows_of_types_scoped(resource_types, None).await
+    }
+
+    async fn rows_of_types_scoped(
+        &self,
+        resource_types: &[&str],
+        owner: Option<ManagerKey>,
     ) -> Result<Vec<StoredResource>, ChildMutationFailure> {
         let mut rows = Vec::new();
         for resource_type in resource_types {
@@ -416,7 +445,7 @@ impl PlaneChildMutations {
                 .list(ResourceSelector {
                     zone: Some(self.zone.as_str().to_owned()),
                     type_name: Some((*resource_type).to_owned()),
-                    owner: None,
+                    owner: owner.clone(),
                 })
                 .await
                 .map_err(|error| {
@@ -555,11 +584,7 @@ impl PlaneChildMutations {
         // ownerless commit left the row's linkage empty, and the guest
         // session identity (which fences the VMM Process to its owning Guest)
         // then never matched.
-        let owner = ManagerKey::new(
-            self.zone.as_str(),
-            self.owner_ref.resource_type().as_str(),
-            self.owner_ref.name().as_str(),
-        );
+        let owner = self.owner_key();
         self.plane
             .client()
             .ensure(self.subject(), Some(owner), desired)

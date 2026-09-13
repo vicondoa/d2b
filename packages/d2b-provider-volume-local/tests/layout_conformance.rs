@@ -205,6 +205,65 @@ fn declared_acls_are_re_applied_on_every_repair_cycle() {
     );
 }
 
+/// Regression (U17 TPM state Volume): the production observer reports ACL
+/// drift on every pass for an entry that declares grants, because the ACLs are
+/// owned by the separate `apply_acl` pass. A present entry with declared ACL
+/// drift must therefore converge - the ACL pass applies the grants and the
+/// class is never counted as unrepaired.
+#[test]
+fn declared_acl_drift_reaches_ready_through_the_apply_acl_pass() {
+    let mut observed = ObservedEntry::conformant(OwnerProof::NotApplicable);
+    observed.drift = BTreeSet::from([DriftClass::Owner, DriftClass::Acl]);
+    let port = ScriptedPort::converged().with_observation("", observed);
+    let report = block_on(controller(&port).reconcile(
+        &fixtures::volume_uid(),
+        &fixtures::acl_volume("preserve"),
+        None,
+        None,
+    ))
+    .expect("reconcile succeeds");
+    assert_eq!(report.layout_phase, LayoutPhase::Ready);
+    assert!(report.layout_conditions.is_empty());
+    assert!(
+        port.calls()
+            .iter()
+            .any(|call| matches!(call, PortCall::Repair(_)))
+    );
+    assert!(
+        port.calls()
+            .iter()
+            .any(|call| matches!(call, PortCall::ApplyAcl(_)))
+    );
+}
+
+/// The exemption is exactly the ACL class: an ACL-declaring entry with a
+/// genuinely unrecoverable class still fails closed and mutates nothing.
+#[test]
+fn acl_declaring_entries_still_refuse_unrecoverable_classes() {
+    for drift in [DriftClass::EntryType, DriftClass::SameFilesystem] {
+        let mut observed = ObservedEntry::conformant(OwnerProof::NotApplicable);
+        observed.drift = BTreeSet::from([drift, DriftClass::Acl]);
+        let port = ScriptedPort::converged().with_observation("", observed);
+        let report = block_on(controller(&port).reconcile(
+            &fixtures::volume_uid(),
+            &fixtures::acl_volume("preserve"),
+            None,
+            None,
+        ))
+        .expect("reconcile reports");
+        assert_eq!(report.layout_phase, LayoutPhase::Failed, "{drift:?}");
+        assert_eq!(
+            report.layout_conditions[0].reason,
+            VolumeLocalError::InvariantViolated,
+            "{drift:?}"
+        );
+        assert!(!port.calls().iter().any(|call| matches!(
+            call,
+            PortCall::Provision(_) | PortCall::Repair(_) | PortCall::Cleanup(_)
+        )));
+    }
+}
+
 #[test]
 fn a_foreign_child_acl_is_preserved_or_reported_per_policy() {
     let foreign = |policy: &str| {

@@ -5,8 +5,15 @@
 //! TPM controller, the USBIP lifecycle over the broker authority ledger, the
 //! SecurityKey relay lifecycle, and the authority-fenced GPU lifecycle. The
 //! port is the dyn-erased [`SharedProviderDriverEffects`] boundary; the
-//! daemon owns every side effect behind it (broker dispatch, device grants,
-//! the pidfd table, authority leases) and the drivers own the child rows.
+//! daemon owns every side effect behind it (broker dispatch, authority
+//! leases, the child-row ensures and the phase gates their controllers
+//! publish) and the drivers own the child rows.
+//!
+//! U17 (KTD13): no effect here launches a process. The TPM and GPU effects
+//! realize their workers as the Device Providers' declared Process rows and
+//! read the phases their Process controllers publish; the launch, restart,
+//! adoption, drain and teardown of every one of them is the Process
+//! controller's.
 //!
 //! Live readiness is read through the manager view for converted rows (a
 //! converted row's actor status is the only status there is, R11) and through
@@ -14,7 +21,6 @@
 //! got from `/status/phase`. The driver never sees either.
 
 use std::collections::BTreeSet;
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -99,6 +105,29 @@ impl ProductionSharedProviderEffects {
         runtime
             .v3_plane()
             .map_err(|_| SharedProviderEffectError::Unavailable)
+    }
+
+    /// Re-register the plane's per-resource Volume anchors from the durable
+    /// rows after a Volume or VolumeBinding child commit.
+    ///
+    /// The volume root resolver reads the anchor cache synchronously, so a
+    /// row the manager committed after the plane's last durable load has to
+    /// be published here or its root never resolves.
+    async fn reload_volume_anchors(&self) {
+        let Ok(plane) = self.plane() else {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                "volume anchor reload after a child commit skipped: the Zone plane is unavailable",
+            );
+            return;
+        };
+        if let Err(error) = plane.reload_registry().await {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                error = ?error,
+                "volume anchor reload after a child commit failed; the child's root stays unresolved until the next reload",
+            );
+        }
     }
 
     /// The live phase of one resource from the manager view.
@@ -400,7 +429,10 @@ impl<'a> NetworkChildPort<'a> {
 /// status (issue #515). `ResourceStatus::wire_phase` owns the vocabulary
 /// (`Deleting` renders as the `Deleted` tombstone); an unpublished or stale
 /// status is not observed state of the current row and reads `Pending`.
-fn view_phase(view: &ResourceView) -> &'static str {
+///
+/// The U17 row-owned effect ports (`tpm_effect_port`) gate on this same
+/// projection, so a Provider effect and a driver read one phase vocabulary.
+pub(crate) fn view_phase(view: &ResourceView) -> &'static str {
     view.observed_status()
         .as_ref()
         .map(ResourceStatus::wire_phase)
@@ -968,38 +1000,6 @@ impl ProductionSharedProviderEffects {
 }
 
 // ---------------------------------------------------------------------------
-// TPM
-// ---------------------------------------------------------------------------
-
-fn tpm_opaque_bytes(domain: &str, value: &str) -> [u8; 32] {
-    let digest = Sha256::digest(format!("{domain}:{value}").as_bytes());
-    let mut bytes = [0; 32];
-    bytes.copy_from_slice(&digest);
-    bytes
-}
-
-fn tpm_state_intent(
-    device_uid: &ResourceUid,
-    vm_id: &str,
-) -> d2b_provider_device_tpm::StateDirIntent {
-    d2b_provider_device_tpm::StateDirIntent::new(
-        d2b_provider_device_tpm::StateDirectoryToken::from_core(tpm_opaque_bytes(
-            "d2b:tpm-state/v1",
-            vm_id,
-        )),
-        d2b_provider_device_tpm::TamperMarkerToken::from_core(tpm_opaque_bytes(
-            "d2b:tpm-marker/v1",
-            device_uid.as_str(),
-        )),
-        d2b_provider_device_tpm::StateOwnerToken::from_core(
-            tpm_opaque_bytes("d2b:tpm-owner/v1", vm_id)[..16]
-                .try_into()
-                .expect("fixed owner token length"),
-        ),
-    )
-}
-
-// ---------------------------------------------------------------------------
 // USBIP
 // ---------------------------------------------------------------------------
 
@@ -1009,8 +1009,23 @@ type SharedRunnerUsbipPort<'a> = d2b_provider_device_usbip::ProductionPort<
     crate::usbip_production::DaemonUsbipDispatcher<'a, SharedRunnerUsbipChildren>,
 >;
 
-/// Fail-closed child port for the USBIP dispatcher: production realizes the
-/// attach path through the broker, never through child rows.
+/// Fail-closed child port for the USBIP dispatcher.
+///
+/// The only production path that builds this dispatcher is the USBIP Service
+/// reconcile (`usbip_service_port` below), which drives
+/// `ServiceLifecycle::activate` and never calls the attach seams below. Those
+/// seams belong to `BindingLifecycle`, and no production path constructs a
+/// `BindingLifecycle`: it exists only in `d2b-provider-device-usbip`'s own
+/// tests. The v3 Binding realizes its attach through the declared child
+/// resources instead - `d2b_provider_device_usbip::binding_child_resources`
+/// yields the Guest `Process/...guest-proxy` and its `Endpoint`, which the
+/// shared provider driver commits as owner-scoped child rows of the Binding
+/// and the Process controller launches and owns.
+///
+/// So these legacy attach seams have no live consumer (U17 site 5) and stay
+/// fail-closed rather than pretending to realize a child: the attach Process
+/// row is the Binding-owned `Process/...guest-proxy` child above, never a
+/// spawn from this port.
 struct SharedRunnerUsbipChildren;
 
 impl UsbipChildResourcePort for SharedRunnerUsbipChildren {
@@ -1125,290 +1140,146 @@ impl ProductionSharedProviderEffects {
 // GPU
 // ---------------------------------------------------------------------------
 
+/// The declared Device-owned GPU worker rows, resolved through the manager
+/// child surface (U17, KTD13).
+///
+/// The worker rows are bundle-declared (`Process/gpu-<device>` with template
+/// `gpu-worker`/`gpu-render-node`, `Process/video-<device>` with
+/// `video-worker`), so the port reads them and gates on the phase their
+/// Process controller publishes: the spec stays the bundle's (re-authoring it
+/// here would differ byte-wise from the seeded row and mutate it on every
+/// pass), and exactly one component - the Process controller - decides when a
+/// worker lives, restarts, is adopted across daemon restarts, drains, and is
+/// torn down. The declared row is also the worker's durable identity: the
+/// opaque process token is derived from the row's durable uid and generation,
+/// so it is observable after a daemon restart (the retired pid/start-time
+/// digest was not).
 struct DaemonGpuLifecyclePort<'a> {
     /// Per-resource Provider state owned by the calling driver (old
     /// zone-wide maps, now per-resource).
     state_maps: &'a SharedProviderResourceState,
-    state: Arc<ServerState>,
     runtime: Arc<ZoneResourceRuntime>,
-    resolver: d2b_core::bundle_resolver::BundleResolver,
+    /// Manager-routed child surface of the requiring Device.
+    children: &'a dyn crate::shared_provider_driver::SharedProviderChildSurface,
+    zone: String,
     device_ref: ResourceRef,
     device_uid: ResourceUid,
     holder_ref: ResourceRef,
     generation: ResourceGeneration,
-    settings: d2b_provider_device_gpu::GpuSettings,
     operation_id: String,
-    opened_devices: Vec<OwnedFd>,
 }
 
 impl<'a> DaemonGpuLifecyclePort<'a> {
-    fn role_key(role: d2b_provider_device_gpu::GpuProcessRole) -> u8 {
+    /// The declared row prefix and template of one worker role.
+    fn role_row(role: d2b_provider_device_gpu::GpuProcessRole) -> (&'static str, &'static str) {
         match role {
-            d2b_provider_device_gpu::GpuProcessRole::FullGpu => 0,
-            d2b_provider_device_gpu::GpuProcessRole::RenderNode => 1,
-            d2b_provider_device_gpu::GpuProcessRole::Video => 2,
+            d2b_provider_device_gpu::GpuProcessRole::FullGpu => ("gpu", "gpu-worker"),
+            d2b_provider_device_gpu::GpuProcessRole::RenderNode => ("gpu", "gpu-render-node"),
+            d2b_provider_device_gpu::GpuProcessRole::Video => ("video", "video-worker"),
         }
     }
 
-    fn intent(
+    /// The declared reference of one worker role
+    /// (`Process/gpu-<device>` / `Process/video-<device>`).
+    fn worker_ref(
         &self,
-        template: &str,
-    ) -> Result<d2b_core::bundle_resolver::ResolvedRunnerIntent, d2b_provider_device_gpu::GpuEffectError>
-    {
-        let vm = self.holder_ref.name().as_str();
-        self.resolver
-            .find_runner_intent_for_process_in_vm(
-                Some(vm),
-                "Host/host-system",
-                d2b_core::processes::ProcessExecutionDomain::System,
-                None,
-                template,
-            )
-            .cloned()
-            .ok_or(d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> Result<ResourceRef, d2b_provider_device_gpu::GpuEffectError> {
+        let (prefix, _) = Self::role_row(role);
+        ResourceRef::parse(&format!("Process/{prefix}-{}", self.device_ref.name().as_str()))
+            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
     }
 
-    fn open_device_classes(
-        &mut self,
-        role_id: &str,
-        classes: &[&str],
-    ) -> Result<(), d2b_provider_device_gpu::GpuEffectError> {
-        for device_class in classes {
-            let request = d2b_contracts_broker::broker_wire::BrokerRequest::OpenDevice(
-                d2b_contracts_broker::broker_wire::OpenDeviceRequest {
-                    role_id: d2b_contracts::types::RoleId::new(role_id.to_owned()),
-                    device_class: (*device_class).to_owned(),
-                    tracing_span_id: None,
-                },
-            );
-            let (response, fds) = crate::dispatch_broker_request_with_fds_timeout_as(
-                &self.state,
-                request,
-                BrokerCallerRole::AdminUid {
-                    uid: self.state.daemon_uid,
-                },
-                std::time::Duration::from_secs(10),
-            )
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::OpenRejected)?;
-            let accepted = matches!(
-                response,
-                d2b_contracts_broker::broker_wire::BrokerResponse::Ack(response)
-                    if response.accepted
-            );
-            if !accepted || fds.len() != 1 {
-                crate::close_received_fds(&fds);
-                return Err(d2b_provider_device_gpu::GpuEffectError::OpenRejected);
-            }
-            let fd = crate::duplicate_received_fd(&fds, 0, "GPU device grant")
-                .map_err(|_| d2b_provider_device_gpu::GpuEffectError::OpenRejected)?;
-            crate::close_received_fds(&fds);
-            self.opened_devices.push(fd);
+    /// The manager key of one declared worker row.
+    fn worker_key(
+        &self,
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> Result<ResourceKey, d2b_provider_device_gpu::GpuEffectError> {
+        Ok(ResourceKey::new(
+            self.zone.as_str(),
+            "Process",
+            self.worker_ref(role)?.name().as_str(),
+        ))
+    }
+
+    /// The requiring Device's own key (the row owner fence).
+    fn device_key(&self) -> ResourceKey {
+        ResourceKey::new(
+            self.zone.as_str(),
+            "Device",
+            self.device_ref.name().as_str(),
+        )
+    }
+
+    /// The live view of one declared worker row. A row of another Device, or
+    /// one whose declared template is not the role's, is refused rather than
+    /// read as this worker's evidence.
+    fn worker_view(
+        &self,
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> Result<Option<ResourceView>, d2b_provider_device_gpu::GpuEffectError> {
+        let key = self.worker_key(role)?;
+        let view = crate::block_on_future(self.children.view(&key))
+            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
+        let Some(view) = view else {
+            return Ok(None);
+        };
+        if view.owner_key.as_ref() != Some(&self.device_key()) {
+            return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
         }
-        Ok(())
+        let (_, template) = Self::role_row(role);
+        let spec: Value = serde_json::from_slice(&view.spec)
+            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
+        if spec.get("template").and_then(Value::as_str) != Some(template) {
+            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
+        }
+        Ok(Some(view))
     }
 
-    fn spawn_worker(
-        &mut self,
-        template: &str,
-        process_name: &str,
+    /// The opaque process token of one declared row: deterministic in the
+    /// row's durable uid and generation, so the same identity is observed
+    /// after a daemon restart and never restarts on a pid reuse.
+    fn row_process_token(view: &ResourceView) -> [u8; 16] {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b:gpu-process-row/v1");
+        digest.update(view.uid);
+        digest.update(view.generation.to_be_bytes());
+        let digest: [u8; 32] = digest.finalize().into();
+        digest[..16].try_into().expect("fixed process token length")
+    }
+
+    /// Mint (or re-derive) one worker identity from its declared row.
+    fn row_identity(
+        view: &ResourceView,
+        role: d2b_provider_device_gpu::GpuProcessRole,
         principal: &d2b_provider_device_gpu::GpuPrincipalToken,
         platform: &d2b_provider_device_gpu::GpuPlatformToken,
         generation: ResourceGeneration,
-        role: d2b_contracts_broker::broker_wire::RunnerRole,
-    ) -> Result<
-        d2b_provider_device_gpu::GpuProcessIdentity,
-        d2b_provider_device_gpu::GpuEffectError,
-    > {
-        let intent = self.intent(template)?;
-        let execution_ref = ResourceRef::parse(&intent.execution_ref)
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
-        let owner_uid = crate::block_on_future(self.runtime.committed_resource_value(
-            &self.holder_ref,
-            &self.operation_id,
-        ))
-        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
-        .and_then(|value| {
-            value
-                .pointer("/metadata/uid")
-                .and_then(Value::as_str)
-                .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
-                .ok_or(d2b_provider_device_gpu::GpuEffectError::SpawnRejected)
-        })?;
-        let resource_ref = ResourceRef::parse(&format!("Process/{process_name}"))
-        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
-        let request = d2b_contracts_broker::broker_wire::BrokerRequest::SpawnRunner(
-            d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
-                vm_id: VmId::new(self.holder_ref.name().as_str()),
-                role_id: d2b_contracts::types::RoleId::new(intent.role_id.clone()),
-                resource_ref: Some(resource_ref.clone()),
-                resource_uid: None,
-                zone_uid: self.runtime.authority_zone_uid().cloned(),
-                owner_ref: Some(self.holder_ref.clone()),
-                owner_uid: Some(owner_uid),
-                provider_ref: Some(
-                    ResourceRef::parse("Provider/system-minijail")
-                        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?,
-                ),
-                bundle_content_identity: self
-                    .runtime
-                    .authority_bundle_generation()
-                    .map(|value| value.as_str().to_owned()),
-                provider_identity: None,
-                template_identity: None,
-                generation: Some(generation.get()),
-                runtime_scope: Some(Self::scope_digest(
-                    &self.device_uid,
-                    &self.operation_id,
-                )),
-                activation_input: None,
-                sandbox_plan: None,
-                role,
-                bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
-                execution_ref: Some(execution_ref),
-                execution_domain: Some(match intent.execution_domain {
-                    d2b_core::processes::ProcessExecutionDomain::System => {
-                        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System
-                    }
-                    d2b_core::processes::ProcessExecutionDomain::User => {
-                        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User
-                    }
-                }),
-                user_ref: intent
-                    .user_ref
-                    .as_deref()
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-                guest_execution: None,
-                runtime_allocations: Vec::new(),
-                tracing_span_id: None,
-                workload_identity: None,
-                inherited_fd_count: u16::try_from(self.opened_devices.len())
-                    .map_err(|_| d2b_provider_device_gpu::GpuEffectError::OpenRejected)?,
-                network_tap_context: None,
-                            launch_args: None,
-            },
-        );
-        let request_fds = self
-            .opened_devices
-            .iter()
-            .map(AsRawFd::as_raw_fd)
-            .collect::<Vec<_>>();
-        let (response, received_fds) = crate::dispatch_broker_request_with_optional_request_fds(
-            &self.state,
-            request,
-            BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
-            &request_fds,
-            std::time::Duration::from_secs(30),
-        )
-        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
-        let response = match response {
-            d2b_contracts_broker::broker_wire::BrokerResponse::SpawnRunner(response) => response,
-            _ => {
-                crate::close_received_fds(&received_fds);
-                return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
-            }
-        };
-        if response.vm_id != VmId::new(self.holder_ref.name().as_str())
-            || response.role != role
-            || response.role_id.as_str() != intent.role_id
-            || response.zone_uid != self.runtime.authority_zone_uid().cloned()
-            || response.owner_ref.as_ref() != Some(&self.holder_ref)
-            || response.generation != Some(generation.get())
-            || response.resource_ref.as_ref() != Some(&resource_ref)
-            || response.pid <= 0
-        {
-            crate::close_received_fds(&received_fds);
-            return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
-        }
-        let pidfd = crate::duplicate_received_fd(
-            &received_fds,
-            response.pidfd_index,
-            "GPU SpawnRunner pidfd",
-        )
-        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
-        crate::close_received_fds(&received_fds);
-        let vm = self.holder_ref.name().as_str().to_owned();
-        if self
-            .state
-            .pidfd_table
-            .register(
-                vm.clone(),
-                intent.role_id.clone(),
-                crate::PidfdEntry {
-                    pidfd,
-                    pid: response.pid,
-                    start_time_ticks: response.start_time_ticks,
-                },
-            )
-            .is_err()
-        {
-            tracing::debug!(
-                vm = %vm,
-                role = %intent.role_id,
-                "GPU pidfd registration failed; rejecting spawn and stopping VM",
-            );
-            let _ = crate::stop_vm_pidfd_role(
-                &self.state,
-                BrokerCallerRole::AdminUid {
-                    uid: self.state.daemon_uid,
-                },
-                "device-gpu",
-                &vm,
-                &intent.role_id,
-                std::time::Duration::from_secs(5),
-                std::time::Duration::from_secs(5),
-            );
-            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
-        }
-        if self.state.pidfd_table.snapshot().is_err() {
-            self.state.pidfd_table.deregister_if_matches(
-                &vm,
-                &intent.role_id,
-                response.pid,
-                response.start_time_ticks,
-            );
-            tracing::debug!(
-                vm = %vm,
-                role = %intent.role_id,
-                "GPU pidfd snapshot failed; rejecting spawn and stopping VM",
-            );
-            let _ = crate::stop_vm_pidfd_role(
-                &self.state,
-                BrokerCallerRole::AdminUid {
-                    uid: self.state.daemon_uid,
-                },
-                "device-gpu",
-                &vm,
-                &intent.role_id,
-                std::time::Duration::from_secs(5),
-                std::time::Duration::from_secs(5),
-            );
-            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
-        }
-        let identity = d2b_provider_device_gpu::GpuProcessIdentity::from_core(
-            Self::process_digest(&intent.intent_id, response.pid, response.start_time_ticks),
-            match role {
-                d2b_contracts_broker::broker_wire::RunnerRole::Video => {
-                    d2b_provider_device_gpu::GpuProcessRole::Video
-                }
-                _ if self.settings.render_node_only => {
-                    d2b_provider_device_gpu::GpuProcessRole::RenderNode
-                }
-                _ => d2b_provider_device_gpu::GpuProcessRole::FullGpu,
-            },
+    ) -> d2b_provider_device_gpu::GpuProcessIdentity {
+        d2b_provider_device_gpu::GpuProcessIdentity::from_core(
+            Self::row_process_token(view),
+            role,
             principal.clone(),
             platform.clone(),
             generation,
-        );
-        self.state_maps.gpu_processes
-            .lock()
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?
-            .insert(
-                (self.device_uid.clone(), Self::role_key(identity.role())),
-                identity.clone(),
-            );
-        Ok(identity)
+        )
+    }
+
+    /// Observe one declared worker row as the launch/observation evidence for
+    /// one role: `Ready` is a live worker, `Pending` is retryable, and a
+    /// failed row is a refusal.
+    fn declared_worker(
+        &self,
+        role: d2b_provider_device_gpu::GpuProcessRole,
+    ) -> Result<ResourceView, d2b_provider_device_gpu::GpuEffectError> {
+        let view = self
+            .worker_view(role)?
+            .ok_or(d2b_provider_device_gpu::GpuEffectError::SpawnRejected)?;
+        match crate::shared_provider_effects::view_phase(&view) {
+            "Ready" => Ok(view),
+            "Failed" => Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected),
+            _ => Err(d2b_provider_device_gpu::GpuEffectError::Transient),
+        }
     }
 
     fn scope_digest(device_uid: &ResourceUid, operation_id: &str) -> [u8; 32] {
@@ -1417,16 +1288,6 @@ impl<'a> DaemonGpuLifecyclePort<'a> {
         digest.update(device_uid.as_str().as_bytes());
         digest.update(operation_id.as_bytes());
         digest.finalize().into()
-    }
-
-    fn process_digest(intent_id: &str, pid: i32, start_time_ticks: u64) -> [u8; 16] {
-        let mut digest = Sha256::new();
-        digest.update(b"d2b:gpu-process/v1");
-        digest.update(intent_id.as_bytes());
-        digest.update(pid.to_be_bytes());
-        digest.update(start_time_ticks.to_be_bytes());
-        let digest: [u8; 32] = digest.finalize().into();
-        digest[..16].try_into().expect("fixed process token length")
     }
 }
 
@@ -1483,26 +1344,11 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         if tokens.is_empty() {
             return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
         }
-        let gpu_intent = self.intent(if self.settings.render_node_only {
-            "render-node-worker"
-        } else {
-            "gpu-worker"
-        })?;
-        let mut classes = if self.settings.render_node_only {
-            vec!["dri"]
-        } else {
-            vec!["kvm", "dri", "udmabuf"]
-        };
-        self.open_device_classes(&gpu_intent.role_id, &classes)?;
-        if self.settings.video_sidecar {
-            let video_intent = self.intent("video-worker")?;
-            classes.clear();
-            classes.push("dri");
-            if self.settings.video_nvidia_decode {
-                classes.extend(["nvidia-ctl", "nvidia-device", "nvidia-uvm"]);
-            }
-            self.open_device_classes(&video_intent.role_id, &classes)?;
-        }
+        // The device grants travel in the launch intent's declared posture
+        // (the closed `device_worker_posture` binds, plus the broker's own
+        // render-node pre-open), so the ticket carries only the authority
+        // scope the Device's generation is bound to; the launch itself is the
+        // Process controller's.
         Ok(d2b_provider_device_gpu::GpuLaunchTicket::from_core(
             Self::scope_digest(&self.device_uid, &self.operation_id)[..16]
                 .try_into()
@@ -1521,14 +1367,14 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuProcessIdentity,
         d2b_provider_device_gpu::GpuEffectError,
     > {
-        self.spawn_worker(
-            spec.template(),
-            &format!("gpu-{}", self.device_ref.name().as_str()),
-            principal,
-            platform,
-            generation,
-            d2b_contracts_broker::broker_wire::RunnerRole::Gpu,
-        )
+        let role = spec.process().role();
+        if Self::role_row(role).1 != spec.template() {
+            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
+        }
+        let view = self.declared_worker(role)?;
+        Ok(Self::row_identity(
+            &view, role, principal, platform, generation,
+        ))
     }
 
     fn start_video_worker(
@@ -1542,14 +1388,17 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuProcessIdentity,
         d2b_provider_device_gpu::GpuEffectError,
     > {
-        self.spawn_worker(
-            spec.template(),
-            &format!("video-{}", self.device_ref.name().as_str()),
+        if Self::role_row(d2b_provider_device_gpu::GpuProcessRole::Video).1 != spec.template() {
+            return Err(d2b_provider_device_gpu::GpuEffectError::SpawnRejected);
+        }
+        let view = self.declared_worker(d2b_provider_device_gpu::GpuProcessRole::Video)?;
+        Ok(Self::row_identity(
+            &view,
+            d2b_provider_device_gpu::GpuProcessRole::Video,
             principal,
             platform,
             generation,
-            d2b_contracts_broker::broker_wire::RunnerRole::Video,
-        )
+        ))
     }
 
     fn observe_worker(
@@ -1559,31 +1408,24 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuProcessObservation,
         d2b_provider_device_gpu::GpuEffectError,
     > {
-        let known = self.state_maps
-            .gpu_processes
-            .lock()
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::ProcessObservationUnavailable)?
-            .get(&(self.device_uid.clone(), Self::role_key(identity.role())))
-            .is_some_and(|current| current == identity);
-        if !known {
+        let Some(view) = self.worker_view(identity.role())? else {
             return Ok(d2b_provider_device_gpu::GpuProcessObservation::Missing);
+        };
+        let observed = Self::row_identity(
+            &view,
+            identity.role(),
+            identity.principal(),
+            identity.platform(),
+            identity.generation(),
+        );
+        if &observed != identity {
+            // The declared row was replaced under a new uid or generation:
+            // the identity this actor holds is stale, not ambiguous.
+            return Ok(d2b_provider_device_gpu::GpuProcessObservation::StaleIdentity);
         }
-        let intent = self.intent(match identity.role() {
-            d2b_provider_device_gpu::GpuProcessRole::Video => "video-worker",
-            d2b_provider_device_gpu::GpuProcessRole::RenderNode => "render-node-worker",
-            d2b_provider_device_gpu::GpuProcessRole::FullGpu => "gpu-worker",
-        })?;
-        if self
-            .state
-            .pidfd_table
-            .contains(self.holder_ref.name().as_str(), &intent.role_id)
-        {
-            Ok(d2b_provider_device_gpu::GpuProcessObservation::Matching(
-                identity.clone(),
-            ))
-        } else {
-            Ok(d2b_provider_device_gpu::GpuProcessObservation::Missing)
-        }
+        Ok(d2b_provider_device_gpu::GpuProcessObservation::Matching(
+            observed,
+        ))
     }
 
     fn stop_worker(
@@ -1593,36 +1435,27 @@ impl d2b_provider_device_gpu::GpuLifecycleEffectPort for DaemonGpuLifecyclePort<
         d2b_provider_device_gpu::GpuClosureProof,
         d2b_provider_device_gpu::GpuEffectError,
     > {
-        let intent = self.intent(match identity.role() {
-            d2b_provider_device_gpu::GpuProcessRole::Video => "video-worker",
-            d2b_provider_device_gpu::GpuProcessRole::RenderNode => "render-node-worker",
-            d2b_provider_device_gpu::GpuProcessRole::FullGpu => "gpu-worker",
-        })?;
-        let known = self.state_maps
-            .gpu_processes
-            .lock()
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed)?
-            .get(&(self.device_uid.clone(), Self::role_key(identity.role())))
-            .is_some_and(|current| current == identity);
-        if !known {
-            return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
+        if let Some(view) = self.worker_view(identity.role())? {
+            let observed = Self::row_identity(
+                &view,
+                identity.role(),
+                identity.principal(),
+                identity.platform(),
+                identity.generation(),
+            );
+            if &observed != identity {
+                return Err(d2b_provider_device_gpu::GpuEffectError::StaleDeviceIdentity);
+            }
+            let key = self.worker_key(identity.role())?;
+            crate::block_on_future(self.children.delete(&key))
+                .map_err(|_| d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed)?;
         }
-        crate::stop_vm_pidfd_role(
-            &self.state,
-            BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
-            "device-gpu",
-            self.holder_ref.name().as_str(),
-            &intent.role_id,
-            std::time::Duration::from_secs(10),
-            std::time::Duration::from_secs(10),
-        )
-        .map_err(|_| d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed)?;
-        self.state_maps.gpu_processes
-            .lock()
-            .map_err(|_| d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed)?
-            .remove(&(self.device_uid.clone(), Self::role_key(identity.role())));
+        // The closure proof is the row's absence: the manager's delete runs
+        // the Process controller's stop/finalize (drain, then teardown) before
+        // the row is removed, so a still-present row is not proof.
+        if self.worker_view(identity.role())?.is_some() {
+            return Err(d2b_provider_device_gpu::GpuEffectError::CloseUnconfirmed);
+        }
         Ok(d2b_provider_device_gpu::GpuClosureProof::from_core(
             identity.clone(),
         ))
@@ -1807,35 +1640,6 @@ impl ProductionSharedProviderEffects {
     }
 }
 
-/// Take the GPU device grants one driver is holding (old
-/// `take_gpu_opened_devices`).
-fn take_gpu_opened_devices(
-    state: &SharedProviderResourceState,
-    device_uid: &ResourceUid,
-) -> Result<Vec<OwnedFd>, SharedProviderEffectError> {
-    Ok(state
-        .gpu_opened_devices
-        .lock()
-        .map_err(|_| SharedProviderEffectError::Unavailable)?
-        .remove(device_uid)
-        .unwrap_or_default())
-}
-
-/// Retain the GPU device grants one driver keeps across reconciles (old
-/// `retain_gpu_opened_devices`).
-fn retain_gpu_opened_devices(
-    state: &SharedProviderResourceState,
-    device_uid: &ResourceUid,
-    opened_devices: Vec<OwnedFd>,
-) -> Result<(), SharedProviderEffectError> {
-    state
-        .gpu_opened_devices
-        .lock()
-        .map_err(|_| SharedProviderEffectError::Unavailable)?
-        .insert(device_uid.clone(), opened_devices);
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Effects
 // ---------------------------------------------------------------------------
@@ -1903,6 +1707,10 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         }
     }
 
+    async fn refresh_volume_anchors(&self) {
+        self.reload_volume_anchors().await;
+    }
+
     async fn reconcile_tpm(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -1915,45 +1723,39 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             .unwrap_or_else(|| ResourceRef::parse(HOST_REF).expect("Host ref"));
         let holder = request.owner_ref()?;
         if holder.resource_type().as_str() != "Guest" {
+            tracing::warn!(
+                device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
+                owner = %holder.to_canonical_string(),
+                "TPM device reconcile refused: the Device is not owned by a Guest",
+            );
             return Err(SharedProviderEffectError::InvalidResource);
         }
-        let runtime = self.runtime()?;
+        let device_ref = crate::shared_provider_driver::key_ref(&request.target).clone();
+        let runtime = self.runtime().inspect_err(|_| {
+            tracing::warn!(
+                device = %device_ref.to_canonical_string(),
+                "TPM device reconcile refused: the Zone resource runtime is not attached",
+            );
+        })?;
         let vm_id = VmId::new(holder.name().as_str());
         let migration_intent = BundleOpId::new(format!("legacy-swtpm:vm:{}", vm_id.as_str()));
         let decision = runtime
             .tpm_device_is_admitted(
                 &request.uid,
-                &crate::shared_provider_driver::key_ref(&request.target),
+                &device_ref,
                 vm_id.as_str(),
                 &request.operation_id,
                 None,
             )
             .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let lifecycle = runtime
-            .admit_internal_guest_lifecycle(holder.clone(), &request.operation_id)
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let lifecycle_authorization = crate::provider_effects::LifecycleAuthorization::from_lease(
-            lifecycle.lease,
-            holder.clone(),
-            lifecycle.guest_uid,
-            lifecycle.guest_generation,
-            lifecycle.provider_assignment_generation,
-        )
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let log_level = request
-            .spec
-            .pointer("/provider/settings/logLevel")
-            .and_then(Value::as_u64)
-            .and_then(|value| u8::try_from(value).ok())
-            .unwrap_or(20);
-        let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
-            d2b_provider_device_tpm::BinaryKind::Swtpm,
-            tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id.as_str()),
-        );
+            .map_err(|error| {
+                tracing::warn!(
+                    device = %device_ref.to_canonical_string(),
+                    error = %error,
+                    "TPM device admission refused",
+                );
+                SharedProviderEffectError::Unavailable
+            })?;
         let mut controllers = request
             .state
             .tpm_controllers
@@ -1970,27 +1772,24 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
         };
         let result = crate::tpm_effect_port::reconcile_device_tpm_controller(
             &self.state,
-            &resolver,
             vm_id.clone(),
             migration_intent,
             decision,
-            crate::tpm_effect_port::AdmittedTpmDevice::new(
+            crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
                 crate::shared_provider_driver::key_ref(&request.target).clone(),
                 self.zone.as_str(),
                 execution_ref,
-                lifecycle_authorization,
+                request.operation_id.clone(),
             ),
-            tpm_state_intent(&request.uid, vm_id.as_str()),
-            d2b_provider_device_tpm::SwtpmSettings { log_level },
-            binary,
             BrokerCallerRole::AdminUid {
                 uid: self.state.daemon_uid,
             },
+            request.children,
             &mut controller,
         )
         .map_err(|error| {
-            tracing::debug!(
+            tracing::warn!(
                 error = ?error,
                 device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
                 "TPM device controller reconcile failed",
@@ -2422,8 +2221,6 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             ));
         }
         let (runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
-        let resolver = crate::load_bundle_resolver(&self.state)
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controllers = request
             .state
             .gpu_controllers
@@ -2445,19 +2242,16 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
             controllers.insert(request.uid.clone(), controller);
             return Err(SharedProviderEffectError::InvalidResource);
         }
-        let opened_devices = take_gpu_opened_devices(request.state, &request.uid)?;
         let mut port = DaemonGpuLifecyclePort {
-            state: Arc::clone(&self.state),
             runtime,
-            resolver,
+            children: request.children,
+            zone: self.zone.as_str().to_owned(),
             device_ref: crate::shared_provider_driver::key_ref(&request.target).clone(),
             device_uid: request.uid.clone(),
             holder_ref,
             generation: request.generation,
-            settings,
             operation_id: request.operation_id.clone(),
             state_maps: request.state,
-            opened_devices,
         };
         let result = controller
             .reconcile_lifecycle(&mut port)
@@ -2470,8 +2264,6 @@ impl SharedProviderDriverEffects for ProductionSharedProviderEffects {
                     SharedProviderEffectPhase::Pending
                 }
             });
-        let opened_devices = std::mem::take(&mut port.opened_devices);
-        retain_gpu_opened_devices(request.state, &request.uid, opened_devices)?;
         controllers.insert(request.uid.clone(), controller);
         result.map(SharedProviderEffectOutcome::phase)
     }
@@ -2737,26 +2529,6 @@ impl ProductionSharedProviderEffects {
             )
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let lifecycle = runtime
-            .admit_internal_guest_lifecycle(holder.clone(), &request.operation_id)
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let authorization = crate::provider_effects::LifecycleAuthorization::from_lease(
-            lifecycle.lease,
-            holder,
-            lifecycle.guest_uid,
-            lifecycle.guest_generation,
-            lifecycle.provider_assignment_generation,
-        )
-        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let log_level = request
-            .spec
-            .pointer("/provider/settings/logLevel")
-            .and_then(Value::as_u64)
-            .and_then(|value| u8::try_from(value).ok())
-            .unwrap_or(20);
         let mut controllers = request
             .state
             .tpm_controllers
@@ -2767,33 +2539,27 @@ impl ProductionSharedProviderEffects {
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let result = crate::tpm_effect_port::finalize_device_tpm_controller(
             &self.state,
-            &resolver,
             vm_id.clone(),
             migration_intent,
             decision,
-            crate::tpm_effect_port::AdmittedTpmDevice::new(
+            crate::tpm_effect_port::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
                 crate::shared_provider_driver::key_ref(&request.target).clone(),
                 self.zone.as_str(),
                 execution_ref,
-                authorization,
-            ),
-            tpm_state_intent(&request.uid, vm_id.as_str()),
-            d2b_provider_device_tpm::SwtpmSettings { log_level },
-            d2b_provider_device_tpm::SignedBinaryRef::from_core(
-                d2b_provider_device_tpm::BinaryKind::Swtpm,
-                tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id.as_str()),
+                request.operation_id.clone(),
             ),
             BrokerCallerRole::AdminUid {
                 uid: self.state.daemon_uid,
             },
+            request.children,
             &mut controller,
         );
         match result {
             Ok(_) => Ok(SharedProviderFinalize::Complete),
             Err(error) => {
                 controllers.insert(request.uid.clone(), controller);
-                tracing::debug!(
+                tracing::warn!(
                     error = ?error,
                     device = %crate::shared_provider_driver::key_ref(&request.target).to_canonical_string(),
                     "TPM device controller finalize failed",
@@ -2854,25 +2620,20 @@ impl ProductionSharedProviderEffects {
             .get(&request.uid)
             .and_then(|controller| controller.admission().cloned())
             .ok_or(SharedProviderEffectError::Unavailable)?;
-        let resolver = crate::load_bundle_resolver(&self.state)
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
-        let opened_devices = take_gpu_opened_devices(request.state, &request.uid)?;
         let mut controller = controllers
             .remove(&request.uid)
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let mut port = DaemonGpuLifecyclePort {
-            state: Arc::clone(&self.state),
             runtime,
-            resolver,
+            children: request.children,
+            zone: self.zone.as_str().to_owned(),
             device_ref: crate::shared_provider_driver::key_ref(&request.target).clone(),
             device_uid: request.uid.clone(),
             holder_ref: admission.owner().holder_ref().clone(),
             generation: admission.owner().generation(),
-            settings: controller.settings().clone(),
             operation_id: request.operation_id.clone(),
             state_maps: request.state,
-            opened_devices,
         };
         let result = controller.finalize_lifecycle(&mut port).map_err(|error| {
             tracing::debug!(
@@ -2885,8 +2646,6 @@ impl ProductionSharedProviderEffects {
         match result {
             Ok(()) => Ok(SharedProviderFinalize::Complete),
             Err(error) => {
-                let opened_devices = std::mem::take(&mut port.opened_devices);
-                retain_gpu_opened_devices(request.state, &request.uid, opened_devices)?;
                 controllers.insert(request.uid.clone(), controller);
                 Err(error)
             }

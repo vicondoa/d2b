@@ -2048,26 +2048,234 @@ authored owner reference and reaches the Process driver's launch effect;
 for the slice). That slice did not run `make check` or the VM lane itself;
 the whole-tree runs recorded under U11/U12 cover the tree it landed on.
 
-**Remaining, and why the grep gate is not clean.** Direct broker
-`SpawnRunner` sites outside the sanctioned Process funnel still live in
-converted launchers: the TPM effect spawns swtpm/swtpm-flush
-(`tpm_effect_port.rs:184-199`, `RunnerRole::Swtpm` / `SwtpmFlush`); the
-GPU effect spawns its worker (`shared_provider_effects.rs:1281-1310`,
-`launch_args: None`, `RunnerRole::Gpu` / `Video`); the VM bring-up
-launcher (`composition.rs:17098-17179`, `VmStartRunner::spawn_runner`)
-still falls through to a raw broker spawn for the roles `supports_node`
-does not cover (guest-owned and durable wayland nodes), while
-provider-supported nodes already route to
-`ProductionProcessProviders::launch_node`; the per-env usbipd spawner
-(`composition.rs:5479-5492`) is currently dead
-(`run_usbipd_perenv_autostart` has no callers) but is still a spawn site;
-and the USBIP attach child port is a fail-closed stub where the attach
-Process row should be (`shared_provider_effects.rs:1085-1124`). The
-sanctioned funnel stays: the Process family reaches the broker through
-`BrokerProcessBackend::request_with_fds` behind `impl
-ProcessLaunchEffectPort for ProviderSupervisor`, and the display/audio/
-shell composition's durable Process path (`interaction_composition.rs`)
-already launches through Process rows.
+**Status (2026-09-12): sweep landed - the reachable launcher sites are
+converted or deleted, and the two remaining spawn sites are documented
+exceptions.** The 2026-09-11 launch-path slice is unchanged:
+`PlaneChildMutations` (`resource_runtime/plane_controller_bridge.rs:257`)
+routes converted child types through the manager (`child_mutation_route`),
+`CloudHypervisorResourceSession` commits its converted children (VMM
+Process, both Endpoints, setup Volume) through owner-scoped create-absent
+manager ensures and exact-fenced spec updates, the daemon's converted
+reads (`committed_resource_optional` / `committed_resource_stored`) are
+manager-first, and the controller-committed Process regression
+`controller_committed_process_child_reaches_the_process_driver`
+(`resource_plane_v3.rs:2931`) pins the child row's authored owner reference
+reaching the Process driver's launch effect.
+
+Landed by this sweep (`packages/d2bd`):
+
+- The dead per-env usbipd spawner is deleted (`run_usbipd_perenv_autostart`
+  plus `BrokerPerEnvUsbipdSpawner`, formerly `composition.rs:5293-5500`; no
+  callers, per-env usbipd runners are attach-owned, not startup-owned). The
+  `d2bd-runtime` spec module (`usbipd_perenv_autostart`) stays with its own
+  tests; the daemon no longer references it.
+- The VM bring-up launcher no longer falls through to a raw broker spawn.
+  `VmStartRunner::spawn_runner` (`composition.rs:16794`) now has exactly two
+  outcomes: the controller-owned Cloud Hypervisor runner, and
+  provider-managed nodes through
+  `ProductionProcessProviders::launch_node`; anything else is refused with
+  `vm-start-node-not-provider-managed:<node>`. The removed fallthrough was
+  unreachable by live nodes: both `NodeRunner` entry points pre-filter the
+  node classes `supports_node` declines
+  (`spawn_and_wait_ready:17001-17008`,
+  `spawn_and_check_process_alive:17083`), so a guest-owned node is launched
+  by its Guest and a durable-wayland node stays readiness-only, while every
+  remaining long-lived role is provider-managed or the VMM above.
+  `VmRunnerLaunch::Legacy`, `register_node_pidfd`,
+  `cleanup_vm_start_registration`, and the now test-only
+  `write_runner_snapshot` went with it, as did the runner fields
+  (`lifecycle_authorization`, `workload_identity`, `network_tap_context`)
+  that only the raw request read.
+- The USBIP attach child port (`shared_provider_effects.rs:1012-1054`) is
+  documented, not implemented: its attach seams belong to
+  `BindingLifecycle`, and no production path constructs a `BindingLifecycle`
+  (`BindingLifecycle::new` appears only in `d2b-provider-device-usbip`'s own
+  tests). The v3 Binding realizes its attach through
+  `d2b_provider_device_usbip::binding_child_resources` - the Guest
+  `Process/...guest-proxy` plus its Endpoint - committed as owner-scoped
+  child rows of the Binding and launched by the Process controller, so the
+  stub stays fail-closed with that evidence instead of fabricating a child.
+
+**Port conversions landed (slice 2, 2026-09-12).** Both reported exceptions
+are converted; no direct broker `SpawnRunner` site remains in the daemon.
+
+- TPM swtpm/swtpm-flush (`tpm_effect_port.rs`). The provider's
+  `Process/swtpm-<device>` and `EphemeralProcess/swtpm-flush-<device>` rows
+  are read through the Device's manager child surface and gated on their
+  published phase; `stop_swtpm_process`/`delete_flush_process` retire them
+  through the manager, and the controller-owned
+  `Volume/device-<32hex>-tpm-state` row is ensured as an owner-scoped child.
+  The direct executor (`LiveTpmEffectExecutor`, the
+  `BrokerRequest::SpawnRunner` request, the pidfd/durable-snapshot adoption
+  machinery) is deleted with the tickets it existed for; the two broker calls
+  that remain are the one-time legacy state migration and the broker-owned
+  state-directory preparation, neither of which launches a process.
+- The GPU worker (`shared_provider_effects.rs`). The declared
+  `Process/gpu-<device>` / `Process/video-<device>` rows are the worker's
+  identity: the opaque process token is derived from the row's durable uid
+  and generation (observable across daemon restarts, unlike the retired
+  pid/start-time digest), `open_authorized_devices` no longer opens device
+  classes over the broker, and `stop_worker` deletes the row and reports the
+  closure proof only once the row is gone. The device grants travel in the
+  launch intent's declared posture (the closed `device_worker_posture` binds
+  plus the broker's render-node pre-open), so the fd-inheritance channel and
+  the `gpu_opened_devices`/`gpu_processes` state maps are deleted.
+
+**Remaining gap (reported, not worked around): launch parameterization.**
+Both converted families launch with the trusted template's pinned argv -
+`argv[0]` only - because the parameters their generators need are host paths
+that no typed row carries: `generate_swtpm_argv` wants the state directory
+and the ctrl/server socket paths (`d2b-provider-device-tpm/src/swtpm_argv.rs:40-105`),
+and `generate_gpu_argv`/`generate_video_argv` want the crosvm socket and the
+Wayland socket (`d2b-provider-device-gpu/src/gpu_argv.rs:77-96`). The
+sanctioned `launch_args` channel exists end to end
+(`d2b-process-conformance/src/ticket.rs:916` -> supervisor
+`broker.rs:1010-1017` -> broker `runtime.rs:4266-4273`), but its only
+composition point is the daemon's provider runtime
+(`process_provider_runtime.rs:1255-1265`, fed by the Process driver's
+`serving_worker_launch`), and the Process spec is argv-free by contract while
+the declared rows are path-free by contract
+(`resources.rs:29-37`), so the values have no typed carrier. Closing it needs
+a typed device-worker launch parameterization (the driver deriving the
+parameters from the owning Device row plus the daemon's runtime paths and the
+provider composing the argv), which is not a `packages/d2bd/src`-local
+change. Until then the declared rows launch bare and fail closed on their own
+readiness/endpoint gates; no side channel is invented.
+
+**Grep gate (2026-09-12).** Sanctioned funnel: the Process family reaches the
+broker through `BrokerProcessBackend::request_with_fds` behind
+`impl ProcessLaunchEffectPort for ProviderSupervisor`
+(`d2b-provider-supervisor`, outside the daemon). Gate greps over
+`packages/d2bd/src`:
+`grep -rn 'BrokerRequest::SpawnRunner'` -> no hits outside the retained
+legacy dispatch simulation in `composition.rs`, which carries the fail-closed
+`NoManagerChildSurface` and no longer reaches a spawn;
+`grep -rn 'SpawnRunnerRequest {'` -> no hits; `grep -rn
+'minijail\.launch\|systemd\.launch'` -> only `process_provider_runtime.rs`
+(the sanctioned provider composition) plus the supervisor's `ProcessEffect`
+calls; `grep -rn 'BrokerPerEnvUsbipdSpawner\|VmRunnerLaunch::Legacy'` -> no
+hits, and the only `vm-start-node-not-provider-managed` hit is the refusal
+itself.
+
+**Validation (2026-09-12):** `cargo check -p d2bd --all-targets` clean
+(the `-D warnings` build also proves no dead residue from the deletions);
+`cargo test -p d2bd --lib` -> 589 passed / 0 failed / 5 ignored (run against
+the shared working tree, which also carries sibling edits under
+`d2b-resource-runtime`). `nix develop --command make check` -> 452/453
+passed with one failure: `//bazel/checks/meta:tier0_first_pass` reports a
+non-ASCII dash at `.cursor/rules/caveman.mdc:2`, a file unmodified at HEAD
+(`git diff HEAD` for it is empty) and untouched by this sweep; the sweep's
+added lines contain none of the gate's banned dash codepoints (U+2010-U+2015,
+U+2212, U+FE58, U+FF0D), so that red is pre-existing at HEAD rather than
+introduced here. The VM lane
+(`D2B_VM_CHECK="resource-operator-activation
+runtime-cloud-hypervisor-guest-preflight" make test-host-integration`) was
+NOT run for this sweep - the agent's run budget ran out first. It is the one
+owed U17 measurement: the sweep touched no Bazel/BUILD files and deletes only
+a provably unreachable path, so the lane is expected to behave exactly as on
+`6c857f23e`, but that is an expectation, not a measurement.
+
+**Device-worker slice 1 (2026-09-12): the Device-owned worker rows resolve.**
+The extension the two reported exceptions needed is landed, in four layers,
+so slice 2 (the port conversions) is a mechanical port change with no bundle
+decision left open.
+
+*Identity, settled.* The Nix-declared rows are the authority and their names
+are what a converted port returns: `Process/swtpm-<device>`,
+`EphemeralProcess/swtpm-flush-<device>`, `Process/gpu-<device>`,
+`Process/video-<device>` (plus the declared `Endpoint/tpm-<device>` and
+`Endpoint/tpm-ctrl-<device>`), all derived from the Device resource name. The
+two live derivations that disagreed are retired: the Rust
+`render-node-worker` template name is superseded by the declared
+`gpu-render-node` (the ADR's `render-node-worker` predates the landed Nix
+projection), and the two UID-hex child derivations collapse into one: the
+port's synthetic refs (`Process/device-<12hex>-swtpm` and friends,
+`d2bd/src/tpm_effect_port.rs:1074-1088`) are retired because the port returns
+the declared rows, so the provider's `device_short`
+(`d2b-provider-device-tpm/src/resources.rs:29-36`) is the single remaining
+derivation and stays at its full 32 hex digits - the state Volume and the
+swtpm principal must stay distinct per Device incarnation, which the
+provider's `state_child_names_preserve_the_full_device_incarnation` pins.
+
+*Posture, one closed table.* `d2b_core::bundle_resolver::device_worker_posture`
+carries, per `(Device Provider, template)`, the broker runner role, the
+packaged executable, the seccomp class, the namespace classes, the
+user-namespace requirement, the device binds, and the umask (`0007` for all
+five: every one of them binds a shared Unix socket a peer connects to as a
+different uid). The shapes are exactly what the privileged broker enforces -
+`w1-gpu` binds `kvm`/`dri`/`udmabuf`, `w1-gpu-render-node` requires the user
+namespace and takes no bind (the broker pre-opens the render node fd),
+`w1-video` requires the pid namespace, no user namespace and the DRI bind
+(`d2b-broker/src/ops/gpu.rs:282-320`), and `w1-swtpm` gates the swtpm-dir
+hardening (`live_handlers.rs:3352-3374`). `build_device_worker_intents` mints
+one intent per declared row and `find_device_worker_intent` resolves by exact
+row name plus template, so two Devices in one Zone cannot cross-resolve.
+
+*Projection.* `d2b-resource-compiler` gained
+`append_device_tpm_worker_templates` / `append_device_gpu_worker_templates`
+(same seam as the virtiofsd and managed-identity arms): one non-dynamic
+`ProcessTemplateBinding` per declared row, `launch_args: true`, executable
+digest-pinned from the Device Provider artifact. The
+`ProcessTemplateBinding`/validator contract gained what the declared rows
+need: `new_with_launch_args`, `EphemeralProcess` row refs, and a declared-row
+arm that admits a Device-owned `worker` row whose Device's `providerRef` is
+the binding's owner. A declared row whose sandbox disagrees with its
+template's posture is refused at compile time
+(`provider-device-worker-posture-mismatch`); a template the artifact does not
+package yields no binding.
+
+*Launch fences.* The supervisor's resolver takes the Device branch
+(`d2b-provider-supervisor/src/broker.rs`), the broker's typed metadata fence
+requires a Device worker to carry its `Device` owner and binds its template
+identity to the declared template, and the TPM/GPU Nix projections now
+declare the sandbox block the broker fences the launch plan against.
+
+*Validation (2026-09-12):* `cargo check -p d2b-core -p d2b-contracts-zone-session
+-p d2b-resource-compiler -p d2b-provider-supervisor -p d2b-broker --all-targets`
+clean; `cargo test -p d2b-resource-compiler --test phase2` 18 passed;
+`cargo test -p d2b-core --lib` 96 passed; `cargo test -p
+d2b-contracts-zone-session` and `cargo test -p d2b-provider-supervisor`
+green; the provider Nix unit tests pin the declared sandbox of both families.
+
+*Validation (2026-09-12, slice 2):* `cargo check -p d2bd --all-targets` clean
+under `-D warnings`; `cargo test -p d2bd --lib` -> 596 passed / 0 failed / 5
+ignored (six new: the five TPM port row tests plus the Process-driver
+`NeverAdopt` regression, which was proven to fail before its fix - the
+pre-fix run recorded `InProgress` on the second pass, i.e. a stop/relaunch of
+the row's own process); `cargo test -p d2b-provider-device-tpm -p
+d2b-provider-device-gpu` green (including the extended
+`generated_process_specs_round_trip_through_v3_contracts`, which pins the
+declared flush posture and the `0007` umask). Not run: `make check`, the VM
+lane (slice 3), and the workspace-wide check (sibling crates mid-flight).
+
+*Slice 2 landed (2026-09-12), slice 3 remains.* Slice 2 converted both ports
+onto the declared rows (see the port-conversion block above): the TPM effect
+port reads/retires the declared `Process/swtpm-<device>` /
+`EphemeralProcess/swtpm-flush-<device>` / `Endpoint/tpm-<device>` rows and
+ensures the controller-owned state Volume child, the GPU lifecycle port reads
+`Process/gpu-<device>` / `Process/video-<device>` and derives the worker
+identity from the row's durable uid + generation, and both observe the phases
+their Process controllers publish. Two pieces did NOT land in slice 2 and are
+recorded as gaps rather than worked around:
+
+- the launch parameterization (argv). Both families launch with the trusted
+  template's pinned `argv[0]` only: the parameters their generators need are
+  host paths (`generate_swtpm_argv`: state dir + ctrl/server sockets;
+  `generate_gpu_argv`/`generate_video_argv`: crosvm socket + Wayland socket)
+  that no typed row carries, and the Process spec is argv-free while the
+  declared rows are path-free by contract, so the `launch_args` channel has no
+  typed source at its composition point (the daemon's provider runtime). It
+  needs a typed device-worker launch parameterization;
+- the ticket builder does not need a Device branch of its own: the supervisor
+  already resolves a Device-owned ticket through the declared row
+  (`BundleBackedLaunchResolver::resolve_intent`), which is where slice 1 put
+  the branch. The `render-node-worker` name and the 32-hex alignment landed in
+  slice 1 with the identity decision.
+
+Slice 3 is the VM proof: no TPM/GPU fixture exists in
+`tests/host-integration/**`, so a new fixture (and an artifact that packages
+`swtpm`, `swtpm-ioctl`, and `crosvm` in `bin/`) is the only end-to-end
+evidence for either conversion.
 
 ---
 

@@ -23,6 +23,7 @@ pub mod processes;
 pub mod provider_artifact;
 pub mod provider_capabilities;
 pub mod runtime;
+pub mod site;
 pub mod static_invariants;
 pub mod storage;
 pub mod storage_lifecycle;

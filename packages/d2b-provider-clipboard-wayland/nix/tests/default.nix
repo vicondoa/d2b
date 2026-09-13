@@ -105,10 +105,16 @@ in
           .providerProjectionClipboardWayland.processesByZone.dev);
         endpoint = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionClipboardWayland.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purpose = (projected.config.d2b._resourceCompiler
+          .providerProjectionClipboardWayland.resourcesByZone.dev)
+          ."clipboard-bridge".spec.purpose;
       };
       expected = {
         processes = [ "clipboard-guest-guest" "clipboard-host" ];
         endpoint = [ "clipboard-bridge" ];
+        purpose = "clipboard-wayland-bridge";
       };
     };
     "provider-clipboard-wayland/rejects-unknown-provider-field" = {

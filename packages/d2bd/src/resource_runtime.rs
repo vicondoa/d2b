@@ -37,7 +37,7 @@ use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, ReconnectGeneration,
+    AuthenticatedSubjectContext, EvidenceClass, ReconnectGeneration,
 };
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, DesiredLifecycle,
@@ -54,7 +54,7 @@ use d2b_core_controller::authority::{
     ExternalNicReservation, HostGlobalAuthorityIndex,
 };
 use d2b_core_controller::authority_persistence::{
-    AuthorityPersistence, AuthorityRecoveryCoordinator,
+    AuthorityFuture, AuthorityPersistence, AuthorityPersistenceError, AuthorityRecoveryCoordinator,
 };
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest, AssignmentTarget,
@@ -111,7 +111,9 @@ use d2b_session_unix::{
     VerifiedUnixPeer, controller_bootstrap_attachment_policy, controller_credit_scopes,
     controller_resource_endpoint_policy, credential_provider_endpoint_policy,
 };
-use d2bd_runtime::authority_persistence::ZoneAuthorityLedger;
+use d2bd_runtime::authority_persistence::{
+    AuthorityOwnerProvenance, ZoneAuthorityLedger,
+};
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
 use d2bd_runtime::resource_operator_activation::{
@@ -1445,6 +1447,24 @@ fn stored_resource_from_wire(resource: &wire::ResourceEnvelopeBytes) -> Option<S
     })
 }
 
+/// Fold the manager's rendered rows over the durable leg: where both planes
+/// hold a reference the manager rendering wins (the session's own child
+/// commits land only there). The manager answers its list completely - an
+/// owner-scoped child relist sees exactly this owner's rows - so unlike the
+/// durable leg this merge is not bound by the durable page cap: an owned
+/// child the manager holds is never dropped as an overflow of the union.
+fn merge_manager_rows(resources: &mut Vec<StoredResource>, manager_rows: Vec<StoredResource>) {
+    for row in manager_rows {
+        match resources
+            .iter_mut()
+            .find(|existing| existing.resource_ref == row.resource_ref)
+        {
+            Some(existing) => *existing = row,
+            None => resources.push(row),
+        }
+    }
+}
+
 /// Whether one registered session table entry is a live session of the given
 /// Guest identity.
 fn is_live_guest_identity_session(
@@ -1503,9 +1523,12 @@ impl CloudHypervisorResourceSession {
             .map_err(child_mutation_failure)
     }
 
-    /// The manager rows of the requested converted types, rendered through
-    /// the same canonical projection the manager-backed API serves.
-    async fn plane_rows(
+    /// The manager rows of the requested converted types owned by this
+    /// session's owner (the child relist read), rendered through the same
+    /// canonical projection the manager-backed API serves. The manager
+    /// resolves the owner scope itself, so the answer is exactly this
+    /// owner's children.
+    async fn plane_owned_rows(
         &self,
         resource_types: &[&str],
     ) -> Result<Vec<StoredResource>, CloudHypervisorResourceApiError> {
@@ -1514,6 +1537,23 @@ impl CloudHypervisorResourceSession {
         };
         children
             .rows_of_types(resource_types)
+            .await
+            .map_err(child_mutation_failure)
+    }
+
+    /// Every manager row of the requested converted types in this Zone (the
+    /// finalization read, which must also see other owners' children),
+    /// rendered through the same canonical projection the manager-backed API
+    /// serves.
+    async fn plane_rows(
+        &self,
+        resource_types: &[&str],
+    ) -> Result<Vec<StoredResource>, CloudHypervisorResourceApiError> {
+        let Some(children) = &self.plane_children else {
+            return Ok(Vec::new());
+        };
+        children
+            .zone_rows_of_types(resource_types)
             .await
             .map_err(child_mutation_failure)
     }
@@ -1638,19 +1678,16 @@ impl CloudHypervisorResourceSession {
         }
         // U17 child bridge: converted rows the session itself committed exist
         // only in the manager; the manager-rendered row wins where both
-        // planes hold the reference.
-        for row in self.plane_rows(resource_types).await? {
-            if resources.len() >= 256 && !resources.iter().any(|existing| existing.resource_ref == row.resource_ref) {
-                return Err(CloudHypervisorResourceApiError::Truncated);
-            }
-            match resources
-                .iter_mut()
-                .find(|existing| existing.resource_ref == row.resource_ref)
-            {
-                Some(existing) => *existing = row,
-                None => resources.push(row),
-            }
-        }
+        // planes hold the reference. An owner-scoped read asks the manager
+        // for exactly this owner's children, so the answer never depends on
+        // how many rows the Zone holds for other owners, and the manager's
+        // complete list is folded in past the durable leg's page bound.
+        let manager_rows = if owner_uid.is_some() {
+            self.plane_owned_rows(resource_types).await?
+        } else {
+            self.plane_rows(resource_types).await?
+        };
+        merge_manager_rows(&mut resources, manager_rows);
         Ok(resources)
     }
 
@@ -4052,13 +4089,27 @@ impl ZoneResourceRuntime {
         target: ResourceRef,
         operation_id: &str,
     ) -> Result<d2b_resource_api::service::GuestLifecycleAdmission, ResourceRuntimeError> {
-        let client = self
-            .process_resource_client()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let client = self.process_resource_client().ok_or_else(|| {
+            tracing::warn!(
+                zone = %self.zone.as_str(),
+                guest = %target.to_canonical_string(),
+                reason = "the internal system-core session holds no Resource API client",
+                "internal Guest lifecycle admission refused",
+            );
+            ResourceRuntimeError::AuthenticationUnavailable
+        })?;
         client
-            .admit_guest_lifecycle(target, operation_id.to_owned())
+            .admit_guest_lifecycle(target.clone(), operation_id.to_owned())
             .await
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+            .map_err(|error| {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    error_kind = error.kind().as_str(),
+                    reason = error.reason().as_str(),
+                    "internal Guest lifecycle admission refused",
+                );
+                ResourceRuntimeError::AuthorizationUnavailable
+            })
     }
 
     /// Read the immutable Guest and Provider identities needed by the
@@ -4295,6 +4346,23 @@ impl ZoneResourceRuntime {
         let mut rows = self.manager_stored_rows("Process").await?;
         rows.extend(self.manager_stored_rows("EphemeralProcess").await?);
         Ok(rows)
+    }
+
+    /// The manager's authoritative identity for one committed ref, when the
+    /// manager holds the row. A manager read failure is an error, never
+    /// absence.
+    pub(crate) async fn committed_manager_identity(
+        &self,
+        target: &ResourceRef,
+    ) -> Result<Option<(ResourceUid, ResourceGeneration)>, ResourceRuntimeError> {
+        let plane = self.manager_plane_view()?;
+        let Some(row) = bridge_manager_row(plane.as_ref(), target).await? else {
+            return Ok(None);
+        };
+        if row.zone != self.zone || row.generation.get() == 0 {
+            return Err(ResourceRuntimeError::StoreReadFailed);
+        }
+        Ok(Some((row.uid, row.generation)))
     }
 
     /// The plane-view seam over the published per-zone plane. A missing
@@ -7884,6 +7952,11 @@ impl ControllerSessionCoordinator {
         let acceptor = registrar
             .component_session_acceptor(policy.clone(), verified_peer)
             .map_err(|_| authentication_error("session-acceptor"))?;
+        let evidence = TransportEvidence::new(
+            EvidenceClass::UnixPeer,
+            crate::interaction_composition::policy_channel_binding_digest(&policy)
+                .ok_or_else(|| authentication_error("binding-digest"))?,
+        );
         let transport = unix_transport(resource_socket, &policy)?;
         let mut responder = SessionEngine::establish_responder(
             transport,
@@ -7905,15 +7978,7 @@ impl ControllerSessionCoordinator {
                 .map_err(|_| authentication_error("provider-session-stream-open"))?;
         }
         let candidate = acceptor
-            .admit(
-                responder,
-                TransportEvidence::new(
-                    EvidenceClass::UnixPeer,
-                    BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
-                        .map_err(|_| authentication_error("binding-digest"))?,
-                ),
-                1,
-            )
+            .admit(responder, evidence, 1)
             .await
             .map_err(|_| authentication_error("session-admission"))?;
         let session_generation = candidate.route_binding().reconnect_generation();
@@ -8218,6 +8283,12 @@ impl ZoneResourceRuntime {
 
     /// Reserve an external physical-NIC claim through the same durable
     /// startup-barrier owner as generic Host-global claims.
+    ///
+    /// The ledger re-proves every claim against the manager rows and the
+    /// trusted live external-NIC inventory; the store-era bundle inventory
+    /// that used to answer the latter is gone (U14), so until a live
+    /// inventory is installed an `ExternalNic` claim is refused rather than
+    /// assumed.
     pub async fn reserve_external_nic(
         &self,
         operation_id: impl Into<String>,
@@ -11325,6 +11396,34 @@ fn parse_network_marker(marker: &str) -> Option<(NetworkAdmissionKey, String)> {
     ))
 }
 
+/// Owner re-proof for one Zone's authority ledger.
+///
+/// The manager rows are the only authority (U14), so a claim whose owner does
+/// not resolve to the manager's current row is refused rather than assumed. A
+/// manager read failure is an error, never absence. The runtime is held
+/// weakly because the ledger is one of the runtime's own fields.
+struct ManagerAuthorityOwnerProvenance {
+    runtime: std::sync::Weak<ZoneResourceRuntime>,
+}
+
+impl AuthorityOwnerProvenance for ManagerAuthorityOwnerProvenance {
+    fn owner_identity<'a>(
+        &'a self,
+        owner_ref: &'a ResourceRef,
+    ) -> AuthorityFuture<'a, Option<(ResourceUid, ResourceGeneration)>> {
+        Box::pin(async move {
+            let runtime = self
+                .runtime
+                .upgrade()
+                .ok_or(AuthorityPersistenceError::StoreUnavailable)?;
+            runtime
+                .committed_manager_identity(owner_ref)
+                .await
+                .map_err(|_| AuthorityPersistenceError::StoreUnavailable)
+        })
+    }
+}
+
 /// All Zone runtimes owned by one daemon.
 #[derive(Default)]
 pub struct ResourcePlane {
@@ -11390,6 +11489,13 @@ impl ResourcePlane {
             return Err(ResourceRuntimeError::DuplicateZone);
         }
         let runtime = Arc::new(runtime);
+        // The authority ledger's owner re-proof reads the manager rows this
+        // daemon publishes; the runtime cannot hold a strong handle to itself.
+        runtime
+            .authority_ledger
+            .install_owner_provenance(Arc::new(ManagerAuthorityOwnerProvenance {
+                runtime: Arc::downgrade(&runtime),
+            }));
         self.zones.insert(zone, Arc::clone(&runtime));
         Ok(runtime)
     }
@@ -12187,6 +12293,153 @@ mod tests {
             receive_controller_bootstrap(&receiver).await,
             Err(ResourceRuntimeError::AuthenticationUnavailable)
         ));
+    }
+
+    struct PolicyEvidenceAdmission;
+
+    impl d2b_session::SessionRegistrationCapability<()> for PolicyEvidenceAdmission {
+        type Error = std::convert::Infallible;
+
+        fn consume(self, _registrar: &()) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    /// A registrar-free acceptor over one policy. `SessionAcceptor` validates
+    /// the transport evidence before either authority callback runs, so the
+    /// stubbed callbacks only need to be well-formed.
+    fn policy_evidence_acceptor(
+        policy: &d2b_contracts_zone_session::v3::component_session::EndpointPolicy,
+    ) -> d2b_session::SessionAcceptor<PolicyEvidenceAdmission> {
+        use d2b_contracts_resource::v3::identity::SessionBinding;
+        use d2b_contracts_zone_session::v3::component_session::{
+            AuthorizationLease, SessionErrorCode,
+        };
+        use d2b_session::{SessionAuthenticationBinding, SessionError};
+
+        let zone = ZoneId::parse("work").unwrap();
+        let subject_ref = ResourceRef::parse("Host/policy-evidence").unwrap();
+        let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let zone_ref = ResourceRef::parse("Zone/work").unwrap();
+        d2b_session::SessionAcceptor::from_verified_adapter(
+            policy.clone(),
+            zone,
+            move |_evidence: TransportEvidence,
+                  binding: &SessionAuthenticationBinding,
+                  _expected_zone: &ZoneId,
+                  now_tick: u64| {
+                let subject = AuthenticatedSubjectContext::new(
+                    subject_ref.clone(),
+                    subject_uid.clone(),
+                    zone_ref.clone(),
+                    binding.evidence_class(),
+                    binding.purpose().clone(),
+                    binding.service().clone(),
+                    SessionBinding::new(
+                        binding.schema_fingerprint().clone(),
+                        binding.transport_binding().clone(),
+                        binding.reconnect_generation(),
+                        binding.transcript_hash().clone(),
+                    ),
+                );
+                let lease = AuthorizationLease::new(1, now_tick.saturating_add(10))
+                    .map_err(SessionError::from)?;
+                Ok((subject, lease))
+            },
+            move |_subject: &AuthenticatedSubjectContext,
+                  _request: &d2b_session::SessionAuthorizationRequest,
+                  previous: AuthorizationLease,
+                  now_tick: u64| {
+                if previous.policy_revision() != 1 {
+                    return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+                }
+                AuthorizationLease::new(1, now_tick.saturating_add(10))
+                    .map_err(SessionError::from)
+            },
+            PolicyEvidenceAdmission,
+        )
+        .expect("a policy acceptor")
+    }
+
+    /// Regression (security review finding 2): the SessionAcceptor evidence
+    /// is derived from the policy the acceptor admits. The credential
+    /// Provider lane binds `[0x34; 32]`, so the constant `[0x22; 32]` the
+    /// daemon used before admitted no credential session at all, and the
+    /// controller lane keeps admitting exactly its own policy binding.
+    #[tokio::test(flavor = "current_thread")]
+    async fn credential_provider_evidence_comes_from_the_admitted_policy() {
+        use d2b_contracts_resource::v3::identity::BindingDigest;
+        use d2b_contracts_zone_session::v3::component_session::SessionErrorCode;
+        use d2b_session_unix::UnixSeqpacketTransport;
+
+        async fn engines(
+            policy: &d2b_contracts_zone_session::v3::component_session::EndpointPolicy,
+        ) -> (
+            SessionEngine<UnixSeqpacketTransport>,
+            SessionEngine<UnixSeqpacketTransport>,
+        ) {
+            let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
+            let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
+            let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).unwrap();
+            let (initiator, responder) = tokio::join!(
+                SessionEngine::establish_initiator(
+                    unix_transport(initiator_socket, policy).unwrap(),
+                    policy.clone(),
+                    HandshakeCredentials::Nn,
+                    std::time::Instant::now(),
+                ),
+                SessionEngine::establish_responder(
+                    unix_transport(responder_socket, policy).unwrap(),
+                    policy.clone(),
+                    HandshakeCredentials::Nn,
+                    std::time::Instant::now(),
+                ),
+            );
+            (initiator.unwrap(), responder.unwrap())
+        }
+
+        // Both lanes admit the binding of the policy they accept on.
+        for policy in [
+            credential_provider_endpoint_policy(),
+            controller_resource_endpoint_policy(),
+        ] {
+            let (_initiator, responder) = engines(&policy).await;
+            let evidence = TransportEvidence::new(
+                EvidenceClass::UnixPeer,
+                crate::interaction_composition::policy_channel_binding_digest(&policy)
+                    .expect("a policy channel binding"),
+            );
+            let admitted = policy_evidence_acceptor(&policy)
+                .admit(responder, evidence, 1)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.code());
+            assert_eq!(
+                admitted,
+                Ok(()),
+                "the daemon must admit the binding of the policy it accepted on",
+            );
+        }
+
+        // The credential Provider lane binds `[0x34; 32]`, so the `[0x22; 32]`
+        // constant the daemon used before admits no credential session at all.
+        let credential = credential_provider_endpoint_policy();
+        let (initiator, _responder) = engines(&credential).await;
+        let legacy = TransportEvidence::new(
+            EvidenceClass::UnixPeer,
+            BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
+                .expect("a binding digest"),
+        );
+        let refused = policy_evidence_acceptor(&credential)
+            .admit(initiator, legacy, 1)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            refused,
+            Err(SessionErrorCode::ChannelBindingMismatch),
+            "the constant that admitted no credential session is still refused",
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -13200,5 +13453,53 @@ mod tests {
             1,
             "with no installed projection the rows dictate the revision",
         );
+    }
+
+    /// Regression (P2): the manager leg is the manager's complete answer, so
+    /// folding it over the durable leg must not be truncated by the durable
+    /// page bound. The pre-fix merge refused the union as `Truncated` as soon
+    /// as an unseen manager row crossed 256 - a Zone holding 85 guests' worth
+    /// of converted children failed every child relist - and the manager's
+    /// rendering must keep winning where both planes hold a reference.
+    #[test]
+    fn manager_rows_merge_over_the_durable_page_bound() {
+        let merge_row =
+            |index: u64, revision: u64| merge_test_row(&format!("Process/owned-{index}"), revision);
+        let mut merged = (0..256u64)
+            .map(|index| merge_row(index, 1))
+            .collect::<Vec<_>>();
+        let manager_rows = (0..300u64)
+            .map(|index| merge_row(index, 2))
+            .collect::<Vec<_>>();
+
+        merge_manager_rows(&mut merged, manager_rows);
+
+        assert_eq!(
+            merged.len(),
+            300,
+            "every manager row must survive the merge, past the 256-row page cap",
+        );
+        assert!(
+            merged
+                .iter()
+                .all(|row| row.revision == ZoneRevision::new(2)),
+            "the manager rendering must win where both planes hold the reference",
+        );
+    }
+
+    /// One stored row for the manager/durable merge: identity and revision
+    /// are all the merge reads.
+    fn merge_test_row(resource_ref: &str, revision: u64) -> StoredResource {
+        StoredResource {
+            resource_ref: ResourceRef::parse(resource_ref).expect("ref"),
+            zone: ZoneId::parse("work").expect("zone"),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").expect("uid"),
+            owner_uid: None,
+            owner_generation: None,
+            generation: ResourceGeneration::new(1).expect("generation"),
+            revision: ZoneRevision::new(revision),
+            canonical_json: Vec::new(),
+            payload_digest: String::new(),
+        }
     }
 }

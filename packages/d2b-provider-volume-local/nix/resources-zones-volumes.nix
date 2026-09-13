@@ -110,7 +110,7 @@ let
             message = "${path}.principal.ref must resolve to a User in the same Zone.";
           }
           {
-            assertion = builtins.match "^[rwx-]{1,3}$" (grant.permissions or "") != null;
+            assertion = builtins.match "^[rwx]{1,3}$" (grant.permissions or "") != null;
             message = "${path}.permissions must be a POSIX rwx string.";
           }
         ])

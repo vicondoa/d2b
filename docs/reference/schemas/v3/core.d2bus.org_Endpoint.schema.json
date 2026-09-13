@@ -181,8 +181,7 @@
           "x-d2b-reference-scope": "same-zone"
         },
         "purpose": {
-          "maxLength": 63,
-          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
           "type": "string"
         },
         "serviceFingerprint": {

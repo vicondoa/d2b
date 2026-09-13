@@ -10,9 +10,11 @@
 //!
 //! `effect_running` / `reconcile_pending` serialize the same resource: while
 //! an effect is in flight, further reconcile triggers coalesce into one
-//! pending flag instead of entering the driver again. Different resources
-//! reconcile concurrently - they are independent actors with independent
-//! mailboxes.
+//! pending flag instead of entering the driver again. The flag is a real
+//! hand-off, not a hint: a pass that ends in a terminal failure re-sends
+//! `Reconcile` when it is set, so a trigger that arrived mid-flight is never
+//! lost with the failure. Different resources reconcile concurrently - they
+//! are independent actors with independent mailboxes.
 //!
 //! ## Requeue (R13, spec section 32)
 //!
@@ -375,7 +377,14 @@ impl ResourceActorState {
     /// #508): the structured failure publishes into status, the operator log
     /// line prints the same detail, and the actor defers with a requeue for
     /// every `NotYet` verdict and every retryable `Error`.
-    fn handle_driver_failure(&mut self, failure: DriverFailure) {
+    ///
+    /// A terminal verdict has no requeue, so a trigger that coalesced into
+    /// [`Self::reconcile_pending`] while the failed pass or effect was in
+    /// flight would be lost with it: the failure assesses the row the pass
+    /// read, and the committed newer generation still needs a pass. The flag
+    /// therefore re-sends the trigger itself on the non-deferring path
+    /// (the deferring path already requeues).
+    fn handle_driver_failure(&mut self, failure: DriverFailure, myself: &ActorRef<ResourceMsg>) {
         let report = failure.report();
         tracing::warn!(
             zone = %self.row.key.zone,
@@ -398,6 +407,11 @@ impl ResourceActorState {
         self.transition(ResourceStatus::Failed(failure));
         if defer {
             self.schedule_requeue();
+            return;
+        }
+        if self.reconcile_pending && !self.deleting {
+            self.reconcile_pending = false;
+            let _ = myself.send_message(ResourceMsg::Reconcile);
         }
     }
 
@@ -412,7 +426,7 @@ impl ResourceActorState {
         self.transition(ResourceStatus::Recovering);
         // Spec section 13: `validate_spec()` folds in before recovery.
         if let Err(failure) = self.driver.validate(&mut self.ctx).await {
-            self.handle_driver_failure(failure);
+            self.handle_driver_failure(failure, &myself);
             return Ok(());
         }
         // Recovery reconstructs observed state from reality (R15); the
@@ -420,9 +434,9 @@ impl ResourceActorState {
         match self.driver.recover(&mut self.ctx).await {
             Ok(_recovered) => {
                 self.transition(ResourceStatus::Reconciling);
-                self.reconcile_pass().await;
+                self.reconcile_pass(&myself).await;
             }
-            Err(failure) => self.handle_driver_failure(failure),
+            Err(failure) => self.handle_driver_failure(failure, &myself),
         }
         Ok(())
     }
@@ -440,18 +454,21 @@ impl ResourceActorState {
             return Ok(());
         }
         self.transition(ResourceStatus::Reconciling);
-        self.reconcile_pass().await;
+        self.reconcile_pass(&myself).await;
         Ok(())
     }
 
     /// Dependency change or satisfaction (spec sections 15-16): reconcile.
-    async fn dependency_triggered(&mut self) -> Result<(), ActorProcessingErr> {
+    async fn dependency_triggered(
+        &mut self,
+        myself: &ActorRef<ResourceMsg>,
+    ) -> Result<(), ActorProcessingErr> {
         if self.deleting || self.effect_running {
             self.reconcile_pending = true;
             return Ok(());
         }
         self.transition(ResourceStatus::Reconciling);
-        self.reconcile_pass().await;
+        self.reconcile_pass(myself).await;
         Ok(())
     }
 
@@ -460,6 +477,7 @@ impl ResourceActorState {
         generation: u64,
         spec: Vec<u8>,
         metadata: Vec<u8>,
+        myself: &ActorRef<ResourceMsg>,
     ) -> Result<(), ActorProcessingErr> {
         if self.deleting {
             // Deletion in progress: spec churn does not resurrect the
@@ -476,7 +494,7 @@ impl ResourceActorState {
             return Ok(());
         }
         self.transition(ResourceStatus::Reconciling);
-        self.reconcile_pass().await;
+        self.reconcile_pass(myself).await;
         Ok(())
     }
 
@@ -500,7 +518,7 @@ impl ResourceActorState {
 
     /// One reconcile pass. Callers guarantee `!effect_running` (R14: the
     /// same resource never reconciles concurrently).
-    async fn reconcile_pass(&mut self) {
+    async fn reconcile_pass(&mut self, myself: &ActorRef<ResourceMsg>) {
         self.effect_running = true;
         self.reconcile_pending = false;
         match self.driver.reconcile(&mut self.ctx).await {
@@ -508,6 +526,16 @@ impl ResourceActorState {
                 self.effect_running = false;
                 let projection = self.ctx.take_status_projection();
                 self.transition_published(ResourceStatus::Ready, projection);
+            }
+            Ok(crate::driver::ReconcileOutcome::RetryScheduled) => {
+                // The driver scheduled its own retry and nothing is live yet:
+                // publish the honest not-ready classification (issue: a row
+                // awaiting a restart must never read `Ready` over a process
+                // that does not exist). Any projection this pass computed
+                // still rides the status as the driver's current evidence.
+                self.effect_running = false;
+                let projection = self.ctx.take_status_projection();
+                self.transition_published(ResourceStatus::Pending, projection);
             }
             Ok(crate::driver::ReconcileOutcome::InProgress { operation }) => {
                 // Long effect in flight (R5): the mailbox stays responsive;
@@ -524,7 +552,7 @@ impl ResourceActorState {
             Err(failure) => {
                 self.effect_running = false;
                 let _ = self.ctx.take_status_projection();
-                self.handle_driver_failure(failure);
+                self.handle_driver_failure(failure, myself);
             }
         }
     }
@@ -546,7 +574,7 @@ impl ResourceActorState {
     /// (which removes the row and stops this actor).
     async fn delete_pass(&mut self, myself: ActorRef<ResourceMsg>) {
         if let Err(failure) = self.driver.finalize(&mut self.ctx).await {
-            self.handle_driver_failure(failure);
+            self.handle_driver_failure(failure, &myself);
             return;
         }
         match self.driver.delete(&mut self.ctx).await {
@@ -556,7 +584,7 @@ impl ResourceActorState {
                 });
                 myself.get_cell().stop(None);
             }
-            Err(failure) => self.handle_driver_failure(failure),
+            Err(failure) => self.handle_driver_failure(failure, &myself),
         }
     }
 
@@ -580,7 +608,7 @@ impl ResourceActorState {
             }
             crate::context::EffectResult::Failed(failure) => {
                 self.effect_running = false;
-                self.handle_driver_failure(failure);
+                self.handle_driver_failure(failure, &myself);
             }
         }
         Ok(())
@@ -700,11 +728,11 @@ impl Actor for ResourceActor {
         match message {
             ResourceMsg::Start => state.start_pass(myself).await,
             ResourceMsg::SpecChanged { generation, spec, metadata } => {
-                state.apply_spec_changed(generation, spec, metadata).await
+                state.apply_spec_changed(generation, spec, metadata, &myself).await
             }
             ResourceMsg::Reconcile => state.reconcile_msg(myself).await,
             ResourceMsg::DependencyChanged { .. } | ResourceMsg::DependencySatisfied { .. } => {
-                state.dependency_triggered().await
+                state.dependency_triggered(&myself).await
             }
             ResourceMsg::Watch { id, condition, subscriber } => {
                 // ATOMICITY INVARIANT (AE2, R12): evaluate and register in
@@ -745,7 +773,7 @@ impl Actor for ResourceActor {
                 if state.deleting {
                     Ok(())
                 } else {
-                    state.dependency_triggered().await
+                    state.dependency_triggered(&myself).await
                 }
             }
         }
@@ -801,6 +829,8 @@ pub(crate) mod test_support {
         Failed,
         #[error("fake driver deferral")]
         NotYet,
+        #[error("fake driver refusal")]
+        Refused,
     }
 
     /// The structured `NotYet` the fake driver reports in
@@ -817,6 +847,21 @@ pub(crate) mod test_support {
             .with_note("fake provider reports a pending layout")
     }
 
+    /// The structured refusal the fake driver reports in
+    /// [`ReconcileMode::RefusedWithEvidence`]. A terminal decision carries
+    /// the committed row's own evidence (the registered kind and the
+    /// compared values), never a bare class.
+    pub(crate) fn fake_refused_failure() -> DriverFailure {
+        DriverFailure::refused(DriverOp::Reconcile, crate::error::FailureKinds::VOLUME_SPEC_INVALID)
+            .at("reconcile/decode")
+            .with_comparison(crate::error::FailureComparison::new(
+                "spec.schema",
+                "Volume/v1",
+                "unknown",
+            ))
+            .with_note("stored bytes are not canonical Volume")
+    }
+
     /// How the fake driver's `reconcile` behaves.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum ReconcileMode {
@@ -831,6 +876,12 @@ pub(crate) mod test_support {
         /// serialization through the mailbox without looping on an open
         /// gate.
         GatedEffectOnce,
+        /// First pass spawns a gated long effect whose completion carries the
+        /// terminal [`fake_refused_failure`]; every later pass is satisfied.
+        /// Proves a trigger that coalesced while the effect was in flight is
+        /// still reconciled after the terminal failure, instead of dying
+        /// with the coalesced flag.
+        GatedRefusedEffectOnce,
         /// Panic on the first invocation, then `Satisfied` (actor crash).
         PanicOnce,
         /// Fail retryably (requeue path, R13).
@@ -856,6 +907,21 @@ pub(crate) mod test_support {
         /// Proves a spec change invalidates the old generation's projection
         /// instead of carrying it onto the new row.
         ProjectionOnce,
+        /// First pass publishes a status projection, then fails retryably;
+        /// every later pass is satisfied without a projection. Proves a
+        /// failed pass drops the projection it computed - the failure is
+        /// the row's evidence, and a stale success layer must not shadow it.
+        ProjectionThenFailOnce,
+        /// Every pass refuses with the structured terminal
+        /// [`fake_refused_failure`] (a committed row that cannot decode).
+        /// Proves a `Refused` verdict never requeues and that its evidence
+        /// reaches the wire layer.
+        RefusedWithEvidence,
+        /// First pass reports a scheduled retry
+        /// ([`ReconcileOutcome::RetryScheduled`]); every later pass is
+        /// satisfied. Proves a retry-backoff pass publishes the honest
+        /// `Pending` - never `Ready` over a realization that does not exist.
+        RetryScheduledOnce,
     }
 
     /// One live read a fake driver performed through its context
@@ -881,6 +947,9 @@ pub(crate) mod test_support {
         pub(crate) active_reconcile: AtomicU64,
         pub(crate) max_concurrent_reconcile: AtomicU64,
         pub(crate) reconcile_mode: Mutex<ReconcileMode>,
+        /// What `recover` reports (default `Adopted`): `Missing` models a
+        /// target with no matching realization - absence, never a failure.
+        pub(crate) recover_outcome: Mutex<RecoveryOutcome>,
         pub(crate) gate_open: AtomicBool,
         pub(crate) gate: tokio::sync::Notify,
         pub(crate) delete_blocked: AtomicBool,
@@ -909,6 +978,7 @@ pub(crate) mod test_support {
                 active_reconcile: AtomicU64::new(0),
                 max_concurrent_reconcile: AtomicU64::new(0),
                 reconcile_mode: Mutex::new(ReconcileMode::Satisfied),
+                recover_outcome: Mutex::new(RecoveryOutcome::Adopted),
                 gate_open: AtomicBool::new(false),
                 gate: tokio::sync::Notify::new(),
                 delete_blocked: AtomicBool::new(false),
@@ -960,6 +1030,7 @@ pub(crate) mod test_support {
             match error {
                 FakeDriverError::Failed => DriverFailure::retryable(DriverOp::Reconcile),
                 FakeDriverError::NotYet => fake_not_yet_failure(),
+                FakeDriverError::Refused => fake_refused_failure(),
             }
         }
 
@@ -973,7 +1044,7 @@ pub(crate) mod test_support {
             _ctx: &mut ResourceContext,
         ) -> Result<RecoveryOutcome, Self::Error> {
             self.shared.recover_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(RecoveryOutcome::Adopted)
+            Ok(*self.shared.recover_outcome.lock())
         }
 
         async fn reconcile(
@@ -1014,6 +1085,17 @@ pub(crate) mod test_support {
                     panic!("fake reconcile crash");
                 }
                 ReconcileMode::FailRetryable => Err(FakeDriverError::Failed),
+                ReconcileMode::ProjectionThenFailOnce => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) == 1 {
+                        ctx.set_status_projection(serde_json::json!({
+                            "phase": "Ready",
+                            "evidence": "doomed-pass",
+                        }));
+                        return Err(FakeDriverError::Failed);
+                    }
+                    Ok(ReconcileOutcome::Satisfied)
+                }
+                ReconcileMode::RefusedWithEvidence => Err(FakeDriverError::Refused),
                 ReconcileMode::NotYetOnceWithDetail => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
                         // The requeued pass converges.
@@ -1066,6 +1148,26 @@ pub(crate) mod test_support {
                     });
                     Ok(ReconcileOutcome::InProgress { operation })
                 }
+                ReconcileMode::GatedRefusedEffectOnce => {
+                    self.shared.enter_reconcile();
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
+                        // The follow-up pass over the newer row succeeds.
+                        self.shared.exit_reconcile();
+                        return Ok(ReconcileOutcome::Satisfied);
+                    }
+                    let operation = ctx.begin_operation();
+                    let sender = ctx.effect_sender();
+                    let shared = self.shared.clone();
+                    tokio::spawn(async move {
+                        shared.wait_gate().await;
+                        shared.exit_reconcile();
+                        let _ = sender.send(EffectCompleted {
+                            operation,
+                            result: EffectResult::Failed(fake_refused_failure()),
+                        });
+                    });
+                    Ok(ReconcileOutcome::InProgress { operation })
+                }
                 ReconcileMode::InProgressWithProjectionOnce => {
                     self.shared.enter_reconcile();
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
@@ -1088,6 +1190,12 @@ pub(crate) mod test_support {
                         });
                     });
                     Ok(ReconcileOutcome::InProgress { operation })
+                }
+                ReconcileMode::RetryScheduledOnce => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) == 1 {
+                        return Ok(ReconcileOutcome::RetryScheduled);
+                    }
+                    Ok(ReconcileOutcome::Satisfied)
                 }
             }
         }

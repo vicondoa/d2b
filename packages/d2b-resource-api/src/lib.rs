@@ -32,7 +32,7 @@ pub use d2b_contracts_resource::v3::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
 pub use store::{ResourceStoreBackend, StoreBindingError};
 pub use service::{GuestLifecycleAdmission, ResourceService};
-pub use watch::{ManagerWatch, ManagerWatchStreams};
+pub use watch::{WatchFrame, WatchSink, WatchSinkError};
 
 pub use zone_service::{
     StrictWireMessage, ZoneCallContext, ZoneMethod, ZoneService, ZoneServiceError,

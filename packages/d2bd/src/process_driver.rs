@@ -8,8 +8,13 @@
 //! `ProviderAdoption` classification (same Adopt/Quarantine/Missing shape as
 //! the `d2bd-runtime` supervisor precedent), reconcile launches through the
 //! preserved signed provider-ticket path (the ticket machinery stays inside
-//! `ProductionProcessProviders`), and delete reuses the exact term-then-kill
-//! escalation with pidfd retry.
+//! `ProductionProcessProviders`), observes a live row through the liveness
+//! probe so an exit leaves `Ready` and the restart policy runs (old
+//! `observe_liveness`, on the preserved 5s descriptor resync), refuses an
+//! identity the probe can no longer verify terminally (the row never reads
+//! `Ready` over a process the daemon cannot identify, and the ambiguous
+//! candidate is never adopted or signalled), and delete reuses the exact
+//! term-then-kill escalation with pidfd retry.
 //!
 //! The ephemeral arm preserves the one-shot lifecycle (KTD13): the launch
 //! goes through the Process Provider's ephemeral ticket (never a direct
@@ -99,12 +104,13 @@ const KILL_TIMEOUT: Duration = Duration::from_secs(30);
 /// `KILL_TIMEOUT`).
 const EPHEMERAL_TERM_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Preserved one-shot observation cadence: the old descriptor's 5s resync
+/// Preserved observation cadence: the old descriptor's 5s resync
 /// (`process_controller_descriptor`, both Process types), now this driver's
-/// self-requeue while an ephemeral row has not reached its terminal state.
-/// Without it an exit would only be noticed when something else woke the
-/// actor.
-const EPHEMERAL_PROCESS_RESYNC: Duration = Duration::from_secs(5);
+/// self-requeue while a Process row is live - the durable row's liveness
+/// observation (so an exit is noticed and the restart policy runs) and the
+/// one-shot's bounded-runtime and exit observation. Without it an exit would
+/// only be noticed when something else woke the actor.
+const PROCESS_RESYNC: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -155,6 +161,24 @@ impl ProcessDriverErrorKind {
             | Self::IdentityAmbiguous
             | Self::StartExhausted => FailureClass::Terminal,
         }
+    }
+
+    /// Whether this kind names a launch refusal no retry can reverse: the
+    /// trusted bundle holds no template binding for the row, refuses to
+    /// resolve its launch ticket, or owns the row outside the guest VMM
+    /// chain. These are the closed provider spellings `template-not-found`,
+    /// `resolution-failed` and `guest-process-not-vmm`; the in-memory restart
+    /// budget cannot make any of them launchable, so a durable launch reports
+    /// them terminally instead of retrying forever. Every other kind stays
+    /// with the budget: a provider effect may succeed on the next attempt, and
+    /// an identity the ticket path could not bind (for example
+    /// `provider-controller-provider-identity-missing`) is evidence the next
+    /// pass can re-observe.
+    const fn is_unresolvable_launch(self) -> bool {
+        matches!(
+            self,
+            Self::TemplateUnavailable | Self::ResolutionRefused | Self::GuestProcessNotVmm
+        )
     }
 
     /// The registered failure kind this classification reports (issue #508).
@@ -229,8 +253,9 @@ pub(crate) enum ProcessDriverStatus {
     AwaitingRestart { restart_count: u32 },
     /// The process reached a state that satisfies its desired lifecycle.
     Succeeded { code: &'static str },
-    /// A one-shot process reached a terminal failure that never restarts
-    /// (old ephemeral `runtime-deadline`).
+    /// A process reached a terminal failure that never restarts: the one-shot
+    /// `runtime-deadline`, or a durable identity the liveness probe can no
+    /// longer verify.
     Failed { code: &'static str },
     /// The realization target carried a drifted/ambiguous identity (R15).
     Quarantined { code: &'static str },
@@ -381,6 +406,10 @@ pub(crate) struct ProcessResourceIdentity {
     /// Binding-declared serving-worker launch inputs (VolumeBinding-owned
     /// virtiofsd workers only).
     pub(crate) worker_launch: Option<crate::process_provider_runtime::ServingWorkerLaunch>,
+    /// Device-declared worker launch parameters (the four declared
+    /// Device-owned worker rows only; `U17` gap closure).
+    pub(crate) device_worker_launch:
+        Option<crate::process_provider_runtime::DeviceWorkerLaunch>,
 }
 
 impl ProcessResourceIdentity {
@@ -416,8 +445,118 @@ impl ProcessResourceIdentity {
             self.controller_provider_generation,
         )
         .with_worker_launch(self.worker_launch.clone())
+        .with_device_worker_launch(self.device_worker_launch.clone())
         .with_launch_identity(self.launch.clone())
     }
+}
+
+/// The four declared Device-owned worker template families (`U17`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceWorkerFamily {
+    Swtpm,
+    SwtpmFlush,
+    Gpu,
+    Video,
+}
+
+/// The VM scope of one declared Device-owned worker row: the owning Device's
+/// declared Guest owner (`Device.metadata.ownerRef == Guest/<vm>`).
+///
+/// A Device-owned worker row runs on the Host (`executionRef
+/// Host/host-system`) and names no Guest target, so the row's own launch
+/// identity carries no VM. The owning Device's Guest owner is the one
+/// coherent VM identity - the same derivation `tpm_device_targets_vm` fences
+/// the TPM admission on and the TPM shared-provider effects mint their
+/// `VmId` from - and it is what the worker's state dir and sockets are scoped
+/// to. A Device with no Guest owner is the genuinely unresolvable case and
+/// refuses by name instead of launching against a path no trusted row names.
+async fn device_worker_vm(
+    ctx: &mut ResourceContext,
+    device_key: &ResourceKey,
+) -> Result<String, &'static str> {
+    let Some(row) = ctx
+        .get(device_key)
+        .await
+        .map_err(|_| "device-worker-device-row-unreadable")?
+    else {
+        return Err("device-worker-device-row-missing");
+    };
+    serde_json::from_slice::<serde_json::Value>(&row.metadata)
+        .ok()
+        .and_then(|metadata| {
+            metadata
+                .get("ownerRef")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|owner| ResourceRef::parse(&owner).ok())
+        .filter(|owner| owner.resource_type().as_str() == "Guest")
+        .map(|owner| owner.name().as_str().to_owned())
+        .ok_or("device-worker-vm-unresolved")
+}
+
+/// The Device-worker family a template name declares, if any.
+///
+/// The name alone is not the authority - [`d2b_core::bundle_resolver::device_worker_posture`]
+/// still fences the owning Device Provider - but the daemon composes only
+/// these four argv shapes, so no other template ever receives arguments.
+fn device_worker_family(template: &str) -> Option<DeviceWorkerFamily> {
+    match template {
+        "swtpm-socket" => Some(DeviceWorkerFamily::Swtpm),
+        "swtpm-init-flush" => Some(DeviceWorkerFamily::SwtpmFlush),
+        "gpu-worker" | "gpu-render-node" => Some(DeviceWorkerFamily::Gpu),
+        "video-worker" => Some(DeviceWorkerFamily::Video),
+        _ => None,
+    }
+}
+
+/// The host Wayland socket the GPU sidecar renders into.
+///
+/// The trusted bundle projects it (`site.json`, emitted from the site's own
+/// `d2b.site.waylandUser` / `waylandDisplay`), so the daemon never derives
+/// `/run/user/<uid>/...` itself: the daemon's own `/run/user` is its runtime
+/// directory, not the session user's. `None` - a bundle that predates the
+/// artifact, or a site without a Wayland session - keeps the slot unbound so
+/// the GPU launch refuses with its own closed code instead of running
+/// against a path no trusted artifact names.
+fn device_worker_wayland_sock(
+    site: Option<&d2b_core::site::SiteJson>,
+) -> Option<std::path::PathBuf> {
+    site.and_then(|site| site.wayland_socket())
+        .map(std::path::PathBuf::from)
+}
+
+/// The GPU worker's Wayland input, refused by name when the bundle does not
+/// project one.
+fn gpu_worker_wayland_sock(
+    site: Option<&d2b_core::site::SiteJson>,
+) -> Result<std::path::PathBuf, &'static str> {
+    device_worker_wayland_sock(site).ok_or("device-worker-wayland-sock-unbound")
+}
+
+/// One per-VM device socket under the daemon runtime root
+/// (`/run/d2b/vms/<vm>/<name>`), the convention the guest VMM's
+/// `--tpm socket=` / `--gpu socket=` / `--vhost-user-media socket=`
+/// arguments name (see `nixos-modules/vm-options.nix` and
+/// `packages/d2b-provider-device-tpm/nix/guest.nix`).
+fn device_runtime_socket(
+    socket_runtime_dir: &std::path::Path,
+    vm_name: &str,
+    file_name: &str,
+) -> std::path::PathBuf {
+    socket_runtime_dir.join("vms").join(vm_name).join(file_name)
+}
+
+/// The per-VM video-decoder socket (`/run/d2b-video/<vm>/video.sock`): the
+/// video module's own `RuntimeDirectory` and the guest's
+/// `--vhost-user-media socket=` argument name it, so the video runtime root is
+/// a sibling of the daemon's runtime root.
+fn video_runtime_socket(
+    socket_runtime_dir: &std::path::Path,
+    vm_name: &str,
+) -> Option<std::path::PathBuf> {
+    let root = socket_runtime_dir.parent()?.join("d2b-video");
+    Some(root.join(vm_name).join("video.sock"))
 }
 
 /// Map the new store's 16-byte deterministic uid onto the contracts crate's
@@ -472,6 +611,16 @@ pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
         spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String>;
 
+    /// Probe one already-started durable process (old `probe_record`): the
+    /// Alive/Exited/Unknown liveness classification drives the steady-state
+    /// observation of a process this actor adopted or launched, and the
+    /// provider clears its exact local authority when the process is gone.
+    async fn probe(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderLiveness, String>;
+
     /// Probe-and-adopt one one-shot process (old
     /// `adopt_ephemeral_resource`): `Absent` is also the observed exit of a
     /// process this driver launched, because the provider clears its local
@@ -501,6 +650,21 @@ pub(crate) trait ProcessDriverEffects: Send + Sync + 'static {
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String>;
+
+    /// Derive the typed launch parameters of one declared Device-owned worker
+    /// row (`U17` gap closure). The production effects hold the trusted bundle
+    /// and the daemon runtime paths the derivation needs, so the derivation
+    /// lives behind this seam; a row no Device worker template declares yields
+    /// `Ok(None)`, and a declared template whose trusted inputs cannot be
+    /// resolved yields the named refusal code.
+    async fn device_worker_launch(
+        &self,
+        _ctx: &mut ResourceContext,
+        _identity: &ProcessResourceIdentity,
+        _spec: &ProcessFamilySpec,
+    ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
+        Ok(None)
+    }
 
     /// Stop one exact one-shot identity (old `stop_ephemeral_resource`).
     async fn stop_ephemeral(
@@ -618,6 +782,66 @@ impl ProductionProcessDriverEffects {
             guest_owner_uid.as_ref(),
             |zone, guest| self.providers.guest_setup_descriptor_digest(zone, guest),
         )
+    }
+
+    /// The state directory backing the Device's controller-created TPM state
+    /// Volume: the controller-created Volume's name under the trusted per-VM
+    /// `path:swtpm-state:<vm>` storage row
+    /// (`packages/d2b-provider-volume-local/nix/storage-json.nix`). Both the
+    /// name and the root come from trusted artifacts - the Volume body is the
+    /// TPM Provider's own builder, and the root is the bundle's storage row -
+    /// so a worker can never be pointed at a path no trusted artifact names.
+    fn device_state_dir(
+        &self,
+        zone: &ZoneId,
+        device_uid: &ResourceUid,
+        device_ref: &ResourceRef,
+        execution_ref: &str,
+        vm_name: &str,
+    ) -> Result<std::path::PathBuf, &'static str> {
+        let execution_ref =
+            ResourceRef::parse(execution_ref).map_err(|_| "device-worker-execution-ref-invalid")?;
+        let document = d2b_provider_device_tpm::build_tpm_state_volume_resource(
+            device_uid,
+            device_ref,
+            zone.as_str(),
+            &execution_ref,
+        )
+        .map_err(|_| "device-worker-state-volume-unresolved")?;
+        let volume_name = document
+            .pointer("/metadata/name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("device-worker-state-volume-unresolved")?;
+        let storage_path_id = format!("path:swtpm-state:{vm_name}");
+        self.providers
+            .bundle()
+            .resolve_volume_view_root(&storage_path_id, volume_name, "")
+            .ok_or("device-worker-state-dir-unresolved")
+    }
+
+    /// The owning Device's declared GPU settings (the closed
+    /// `device-gpu.d2bus.org` Device extension); a Device that declares none
+    /// keeps the Provider's own bounded default.
+    async fn device_gpu_settings(
+        &self,
+        ctx: &mut ResourceContext,
+        owner_key: &ResourceKey,
+    ) -> Result<d2b_provider_device_gpu::GpuSettings, &'static str> {
+        let Some(row) = ctx
+            .get(owner_key)
+            .await
+            .map_err(|_| "device-worker-device-row-unreadable")?
+        else {
+            return Err("device-worker-device-row-missing");
+        };
+        let settings = serde_json::from_slice::<ResourceSpec>(&row.spec)
+            .ok()
+            .and_then(|envelope| {
+                let provider = envelope.provider()?;
+                let bytes = provider.settings().to_canonical_bytes();
+                serde_json::from_slice::<d2b_provider_device_gpu::GpuSettings>(&bytes).ok()
+            });
+        Ok(settings.unwrap_or_default())
     }
 }
 
@@ -746,6 +970,16 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
             .await
     }
 
+    async fn probe(
+        &self,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.providers
+            .probe_resource(self.resource_context(identity).await, spec)
+            .await
+    }
+
     async fn adopt_ephemeral(
         &self,
         identity: &ProcessResourceIdentity,
@@ -825,6 +1059,218 @@ impl ProcessDriverEffects for ProductionProcessDriverEffects {
         self.providers
             .has_active_resource_in_zone(zone, zone_uid, resource_ref)
     }
+
+    /// Derive the typed launch parameters of one declared Device-owned worker
+    /// row (`U17` gap closure).
+    ///
+    /// The Device Providers declare their worker rows path-free and the
+    /// Process spec is argv-free by contract, so the inputs the device argv
+    /// generators need come from the three sources the Process controller
+    /// owns:
+    ///
+    /// - the owned `Device` row: its uid keys the controller-created state
+    ///   Volume, and its declared Provider settings carry the GPU context
+    ///   classes, displays, and EGL/Vulkan flags;
+    /// - the trusted declared template: the bundle's Device-worker intent for
+    ///   this exact declared row pins the worker binary and the principal the
+    ///   sockets belong to, and `device_worker_posture` pins the template's
+    ///   closed role posture;
+    /// - the daemon's runtime paths: the swtpm state directory backing the
+    ///   controller-created state Volume, and the per-VM socket roots under
+    ///   the daemon runtime root (the same conventions the guest VMM's
+    ///   `--tpm socket=` / `--gpu socket=` / `--vhost-user-media socket=`
+    ///   arguments name) - plus the bundle's `site.json`, which projects the
+    ///   host Wayland socket the GPU worker renders into.
+    ///
+    /// Returns `None` for every row that is not one of the declared Device
+    /// worker templates. A declared template whose trusted inputs cannot be
+    /// resolved refuses the launch (the named code is the diagnosis) instead
+    /// of launching bare.
+    async fn device_worker_launch(
+        &self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessFamilySpec,
+    ) -> Result<Option<crate::process_provider_runtime::DeviceWorkerLaunch>, &'static str> {
+        use crate::process_provider_runtime::{
+            DeviceWorkerLaunch, GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams,
+            VideoWorkerParams,
+        };
+        let execution = spec.execution();
+        let template = execution.template().as_str();
+        let family = device_worker_family(template);
+        let Some(family) = family else {
+            return Ok(None);
+        };
+        let launch = &identity.launch;
+        // Owner fence: these rows are Device-declared children of the Device
+        // that owns the physical function, and every path below is derived
+        // from that Device.
+        let owner_key = ctx
+            .owner_key()
+            .cloned()
+            .ok_or("device-worker-owner-unresolved")?;
+        if owner_key.type_name != "Device" {
+            return Err("device-worker-owner-not-device");
+        }
+        let device_ref = launch
+            .owner_ref()
+            .filter(|owner| owner.resource_type().as_str() == "Device")
+            .cloned()
+            .ok_or("device-worker-owner-not-device")?;
+        let device_uid = ctx
+            .owner()
+            .and_then(resource_uid_from_bytes_bytes)
+            .ok_or("device-worker-owner-uid-unresolved")?;
+        // A Device-owned worker row declares `executionRef Host/host-system`
+        // and no Guest target, so the row's own launch identity names no VM
+        // by construction. The coherent VM scope is the owning Device's
+        // Guest owner - the same derivation `tpm_device_targets_vm` requires
+        // (`Device.metadata.ownerRef == Guest/<vm>`) and the TPM
+        // shared-provider effects mint their `VmId` from. A Device with no
+        // Guest owner is the genuinely unresolvable case.
+        let vm_name = match launch.vm() {
+            Some(vm) => vm.to_owned(),
+            None => device_worker_vm(ctx, &owner_key).await?,
+        };
+        // Template fence: the trusted intent must exist for this exact
+        // declared row name + template, and the template must belong to a
+        // Device Provider's closed posture table.
+        let execution_ref = execution.execution_ref().to_canonical_string();
+        let user_ref = execution.user_ref().map(ResourceRef::to_canonical_string);
+        let domain = match execution
+            .domain()
+            .unwrap_or(d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System)
+        {
+            d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System => {
+                d2b_core::processes::ProcessExecutionDomain::System
+            }
+            d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User => {
+                d2b_core::processes::ProcessExecutionDomain::User
+            }
+        };
+        let intent = self
+            .providers
+            .bundle()
+            .find_device_worker_intent(
+                &identity.resource_ref,
+                &execution_ref,
+                domain,
+                user_ref.as_deref(),
+                template,
+            )
+            .ok_or("device-worker-intent-unresolved")?;
+        let Some(posture) = d2b_core::bundle_resolver::device_worker_posture(
+            intent.owner_ref.as_deref().unwrap_or_default(),
+            template,
+        ) else {
+            return Err("device-worker-template-refused");
+        };
+        if !intent.accepts_launch_args {
+            return Err("device-worker-template-refused");
+        }
+        // The socket owner ids the worker asks swtpm for, in the namespace
+        // the launch actually runs in: a posture with the ADR 0021
+        // single-entry user namespace names the in-namespace identity (`0`,
+        // the only id the mapping declares), a posture without one keeps the
+        // host principal. Naming the host principal inside its own namespace
+        // made swtpm's socket chown fail with EINVAL and the worker exit 1
+        // before it bound anything.
+        let (socket_uid, socket_gid) = posture.launch_ids(intent.uid, intent.gid);
+        let socket_runtime_dir = self.providers.socket_runtime_dir().to_path_buf();
+        let params = match family {
+            DeviceWorkerFamily::Swtpm => {
+                let state_dir = self.device_state_dir(
+                    &identity.zone,
+                    &device_uid,
+                    &device_ref,
+                    &execution_ref,
+                    &vm_name,
+                )?;
+                DeviceWorkerLaunch::Swtpm(Box::new(SwtpmWorkerParams {
+                    binary_path: intent.binary_path.clone(),
+                    vm_name: vm_name.clone(),
+                    ctrl_socket_path: state_dir.join("ctrl.sock"),
+                    server_socket_path: device_runtime_socket(
+                        &socket_runtime_dir,
+                        &vm_name,
+                        "tpm.sock",
+                    ),
+                    state_dir,
+                    uid: socket_uid,
+                    gid: socket_gid,
+                    log_level: d2b_provider_device_tpm::SwtpmSettings::default().log_level,
+                }))
+            }
+            DeviceWorkerFamily::SwtpmFlush => {
+                let state_dir = self.device_state_dir(
+                    &identity.zone,
+                    &device_uid,
+                    &device_ref,
+                    &execution_ref,
+                    &vm_name,
+                )?;
+                DeviceWorkerLaunch::SwtpmFlush(Box::new(SwtpmFlushParams {
+                    ioctl_binary_path: intent.binary_path.clone(),
+                    vm_name: vm_name.clone(),
+                    ctrl_socket_path: state_dir.join("ctrl.sock"),
+                }))
+            }
+            DeviceWorkerFamily::Gpu => {
+                let settings = self.device_gpu_settings(ctx, &owner_key).await?;
+                // The Wayland socket the sidecar renders into is projected by
+                // the trusted bundle from the site's own Wayland session
+                // (`d2b.site.waylandUser` / `waylandDisplay`, see
+                // `nixos-modules/site-json.nix`). A bundle without the
+                // artifact, or a headless site, leaves the slot unbound and
+                // the launch refuses with its own code instead of naming a
+                // path no trusted artifact names.
+                let wayland_sock =
+                    gpu_worker_wayland_sock(self.providers.bundle().site.as_ref())?;
+                DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+                    binary_path: intent.binary_path.clone(),
+                    vm_name: vm_name.clone(),
+                    socket_path: device_runtime_socket(&socket_runtime_dir, &vm_name, "gpu.sock"),
+                    wayland_sock,
+                    params: d2b_provider_device_gpu::GpuParams {
+                        context_types: settings
+                            .context_types
+                            .iter()
+                            .map(|context| match context {
+                                d2b_provider_device_gpu::ContextType::Virgl => {
+                                    d2b_provider_device_gpu::GpuContextType::Virgl
+                                }
+                                d2b_provider_device_gpu::ContextType::Virgl2 => {
+                                    d2b_provider_device_gpu::GpuContextType::Virgl2
+                                }
+                                d2b_provider_device_gpu::ContextType::CrossDomain => {
+                                    d2b_provider_device_gpu::GpuContextType::CrossDomain
+                                }
+                            })
+                            .collect(),
+                        displays: settings
+                            .displays
+                            .iter()
+                            .map(|display| d2b_provider_device_gpu::GpuDisplayConfig {
+                                hidden: display.hidden,
+                            })
+                            .collect(),
+                        egl: settings.egl,
+                        vulkan: settings.vulkan,
+                    },
+                }))
+            }
+            DeviceWorkerFamily::Video => DeviceWorkerLaunch::Video(Box::new(VideoWorkerParams {
+                binary_path: intent.binary_path.clone(),
+                vm_name: vm_name.clone(),
+                socket_path: video_runtime_socket(&socket_runtime_dir, &vm_name)
+                    .ok_or("device-worker-video-socket-unresolved")?,
+            })),
+        };
+        Ok(Some(params))
+    }
+
+
 }
 
 // ---------------------------------------------------------------------------
@@ -853,10 +1299,17 @@ impl RestartBudget {
             && policy.max_restarts().is_none_or(|max| self.count() < max)
     }
 
+    /// Consume one restart from the budget without arming the next pass's
+    /// policy backoff: the exit-driven path schedules its own backoff in the
+    /// pass that observed the exit.
+    fn consume_restart(&self) {
+        self.count.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Record one consumed restart; the next reconcile pass schedules the
     /// policy backoff exactly once.
     fn record_restart(&self) {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        self.consume_restart();
         self.restart_scheduled.store(true, Ordering::SeqCst);
     }
 
@@ -976,6 +1429,7 @@ pub(crate) struct ProcessDriver {
     effects: Arc<dyn ProcessDriverEffects>,
     budget: Arc<RestartBudget>,
     ephemeral: Arc<EphemeralRuntime>,
+    durable: Arc<DurableRuntime>,
 }
 
 /// Runtime-only one-shot lifecycle memory (R11: nothing here is persisted;
@@ -1055,6 +1509,38 @@ impl EphemeralRuntime {
     }
 }
 
+/// Runtime-only durable lifecycle memory (R11: nothing here is persisted).
+/// The steady-state pass observes the process this actor adopted or launched
+/// through the liveness probe (old `observe_liveness`) instead of re-running
+/// the adoption classification, so an exit moves the row out of `Ready` and
+/// the restart policy decides what happens next. Across a daemon restart the
+/// memory starts empty again and the manager-served row re-enters the
+/// adoption path exactly like a first sight.
+#[derive(Default)]
+struct DurableRuntime {
+    /// Set once this actor observed a live durable identity (an `Adopted`
+    /// classification at recovery or reconcile, an `Alive` probe, or - for a
+    /// `never-adopt` row - the launch this actor completed itself).
+    watching: AtomicBool,
+}
+
+impl DurableRuntime {
+    fn watching(&self) -> bool {
+        self.watching.load(Ordering::SeqCst)
+    }
+
+    fn mark_watching(&self) {
+        self.watching.store(true, Ordering::SeqCst);
+    }
+
+    /// The observed process is gone and the pass that saw the exit hands the
+    /// relaunch back to the adoption path, so the next pass launches instead
+    /// of probing an identity the provider has already released.
+    fn mark_exited(&self) {
+        self.watching.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Zone-authority inputs folded into every derived identity (KTD7).
 #[derive(Clone)]
 struct ProcessZoneAuthority {
@@ -1091,6 +1577,7 @@ impl ProcessDriver {
             effects,
             budget: Arc::new(RestartBudget::default()),
             ephemeral: Arc::new(EphemeralRuntime::default()),
+            durable: Arc::new(DurableRuntime::default()),
         }
     }
 
@@ -1130,6 +1617,14 @@ impl ProcessDriver {
                 .comparison(FailureComparison::new(field, "a valid contract value", "invalid"))
                 .with_note(detail),
         )
+    }
+
+    /// The terminal failure for a declared Device-worker launch whose typed
+    /// parameters the trusted inputs cannot resolve (`U17` gap closure): the
+    /// row launches with its derived parameters or it refuses, never bare.
+    fn resolution_refused(&self, op: DriverOp, code: &'static str) -> ProcessDriverError {
+        self.error(ProcessDriverErrorKind::ResolutionRefused, op)
+            .with_detail(FailureDetail::at("identity/device-worker-parameters").with_note(code))
     }
 
     /// Decode the stored envelope and the typed family spec in one step. The
@@ -1314,9 +1809,10 @@ impl ProcessDriver {
                 .with_note(error.code()),
             )
         })?;
-        Ok(ProcessResourceIdentity {
+        let resource_ref = ResourceRef::new(resource_type, name);
+        let mut identity = ProcessResourceIdentity {
             zone,
-            resource_ref: ResourceRef::new(resource_type, name),
+            resource_ref,
             resource_uid,
             resource_generation,
             process_class,
@@ -1330,7 +1826,18 @@ impl ProcessDriver {
             controller_provider_generation: None,
             guest_execution: self.authority.guest_execution.clone(),
             worker_launch,
-        })
+            device_worker_launch: None,
+        };
+        // The declared Device-owned worker rows carry their typed launch
+        // parameters into the launch: the derivation needs the trusted bundle
+        // and the daemon runtime paths, so it stays behind the provider seam
+        // and this pass attaches what it derived.
+        identity.device_worker_launch = self
+            .effects
+            .device_worker_launch(ctx, &identity, &spec)
+            .await
+            .map_err(|code| self.resolution_refused(op, code))?;
+        Ok(identity)
     }
 
     /// Derive the binding-declared serving-worker launch inputs.
@@ -1441,7 +1948,9 @@ impl ProcessDriver {
     /// [`EffectCompleted`] with the operation id. Retryable failures count
     /// against the in-memory restart budget (spec section 32) and classify
     /// retryable; the actor schedules the requeue from the closed class (R13)
-    /// and the next pass applies the policy backoff.
+    /// and the next pass applies the policy backoff. A launch ticket the
+    /// trusted bundle can never mint, and an exhausted budget, are terminal
+    /// instead - no requeue ever follows them.
     fn spawn_launch(
         &mut self,
         ctx: &mut ResourceContext,
@@ -1456,9 +1965,20 @@ impl ProcessDriver {
         let effect_sender = ctx.effect_sender();
         let budget = Arc::clone(&self.budget);
         let task_spec = spec.clone();
+        // A `never-adopt` row never enters the adoption classification, so the
+        // launch itself arms the observation flag for the identity it just
+        // recorded; the `adopt-on-restart` arm arms the same flag through
+        // `adopt` on the pass that follows.
+        let arm_observation = task_spec.adoption_policy() == AdoptionPolicy::NeverAdopt;
+        let durable = Arc::clone(&self.durable);
         tokio::spawn(async move {
             let effect_result = match effects.launch(&identity, &task_spec, LAUNCH_TIMEOUT).await {
-                Ok(_) => EffectResult::Completed,
+                Ok(_) => {
+                    if arm_observation {
+                        durable.mark_watching();
+                    }
+                    EffectResult::Completed
+                }
                 Err(error) => {
                     // The closed classification is what reaches status, and
                     // status is memory-only (R11), so the journal is the only
@@ -1473,7 +1993,25 @@ impl ProcessDriver {
                         error = %error,
                         "process launch failed"
                     );
-                    if budget.allows(&task_spec) {
+                    let kind = provider_error_kind(&error);
+                    if kind.is_unresolvable_launch() {
+                        // The closed spellings no retry can reverse
+                        // (`template-not-found`, `resolution-failed`,
+                        // `guest-process-not-vmm`): the in-memory budget
+                        // cannot mint the missing ticket, so the row fails
+                        // instead of relaunching (and warning) forever. The
+                        // ephemeral arm classifies its launch the same way.
+                        EffectResult::Failed(
+                            DriverFailure::refused(DriverOp::Reconcile, kind.failure_kind())
+                                .at("reconcile/launch")
+                                .with_comparison(FailureComparison::new(
+                                    "launch.attempt",
+                                    "accepted",
+                                    "failed",
+                                ))
+                                .with_note(error),
+                        )
+                    } else if budget.allows(&task_spec) {
                         budget.record_restart();
                         EffectResult::Failed(
                             DriverFailure::error(
@@ -1557,16 +2095,24 @@ impl ProcessDriver {
 
         // A retryable launch failure from the previous pass: schedule exactly
         // one runtime-only requeue with the policy restart delay (R13; spec
-        // section 32 - nothing is persisted).
+        // section 32 - nothing is persisted). The row is NOT ready (no
+        // process exists): the pass reports the scheduled retry, never a
+        // readiness claim.
         if self.budget.take_restart_scheduled() {
             let restart_count = self.budget.count();
             let delay = restart_delay(spec, restart_count);
             let _ = ctx.requeue_after(delay);
             ctx.set_status(ProcessDriverStatus::AwaitingRestart { restart_count });
-            return Ok(ReconcileOutcome::Satisfied);
+            return Ok(ReconcileOutcome::RetryScheduled);
         }
 
-        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt {
+        if spec.adoption_policy() == AdoptionPolicy::NeverAdopt && !self.durable.watching() {
+            // The unexpected live identity (if any) is stopped and the row is
+            // launched fresh (preserved behavior). Once this actor has
+            // launched - the line below - the identity is its own, the flag
+            // is armed by the launch effect, and the observation branch above
+            // takes over; without that gate the next pass would read its own
+            // process as unexpected and stop it on every completion.
             if self
                 .effects
                 .has_active(&identity.zone, identity.zone_uid.as_ref(), &identity.resource_ref)
@@ -1577,9 +2123,53 @@ impl ProcessDriver {
             return self.spawn_launch(ctx, identity, spec);
         }
 
+        // Steady state: a row this actor saw live is observed through the
+        // liveness probe (old `observe_liveness`), so an exit leaves `Ready`
+        // and the restart policy decides what happens next. The self-requeue
+        // is the preserved 5s descriptor resync: without it nothing would ever
+        // re-enter the pass and the row would report `Ready` over a process
+        // that is gone.
+        if self.durable.watching() {
+            return match self.effects.probe(&identity, spec).await {
+                Ok(ProviderLiveness::Alive) => {
+                    ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                    let _ = ctx.requeue_after(PROCESS_RESYNC);
+                    Ok(ReconcileOutcome::Satisfied)
+                }
+                Ok(ProviderLiveness::Exited) => self.durable_exit(ctx, &identity, spec),
+                // An identity no longer verifies (old `observe_liveness`
+                // Unknown): the same terminal `process-identity-ambiguous`
+                // refusal the adoption classification reports, so the row
+                // publishes `Failed` - a `Satisfied` pass here would publish
+                // wire `Ready` over a process this daemon cannot identify.
+                // Nothing re-enters the pass, no relaunch happens, and no
+                // signal ever reaches the unverifiable candidate.
+                Ok(ProviderLiveness::Unknown) => {
+                    ctx.set_status(ProcessDriverStatus::Failed { code: "identity-ambiguous" });
+                    Err(self
+                        .error(ProcessDriverErrorKind::IdentityAmbiguous, DriverOp::Reconcile)
+                        .with_detail(
+                            FailureDetail::at("observe/liveness")
+                                .comparison(FailureComparison::new(
+                                    "observed.liveness",
+                                    "exactly one verifiable identity",
+                                    "Unknown",
+                                ))
+                                .with_note("provider identity could not be verified safely"),
+                        ))
+                }
+                Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
+            };
+        }
+
         match self.effects.adopt(&identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
+                // The live identity is observed from here on: this pass arms
+                // the observation cadence and every later pass probes liveness
+                // instead of re-adopting.
+                self.durable.mark_watching();
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
                 Ok(ReconcileOutcome::Satisfied)
             }
             Ok(ProviderAdoption::Absent) => {
@@ -1607,6 +2197,41 @@ impl ProcessDriver {
             }
             Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
         }
+    }
+
+    /// The observed durable exit (old `observe_liveness` `Exited` plus
+    /// `process_restart_allowed`): the restart policy decides between one
+    /// budgeted restart, requeued at the policy backoff so the next pass
+    /// re-enters the adoption path and relaunches, and the terminal
+    /// `process-exited` the row reports from then on.
+    fn durable_exit(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessSpec,
+    ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        if !self.budget.allows(spec) {
+            // No restart is available (policy class `never`, or the ceiling
+            // is reached): the exit is the row's terminal reading. The row
+            // stays under observation, so a later trigger re-reports the exit
+            // instead of reading the row as a first sight and launching a
+            // process the policy forbade.
+            ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-exited" });
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+        self.budget.consume_restart();
+        let restart_count = self.budget.count();
+        tracing::warn!(
+            resource = %identity.resource_ref.to_canonical_string(),
+            restart_count,
+            "managed process exited; restarting under its restart policy"
+        );
+        self.durable.mark_exited();
+        ctx.set_status(ProcessDriverStatus::AwaitingRestart { restart_count });
+        let _ = ctx.requeue_after(restart_delay(spec, restart_count));
+        // The row is not ready while the restart waits out its backoff: the
+        // process this row claims is gone until the next pass relaunches it.
+        Ok(ReconcileOutcome::RetryScheduled)
     }
 
     /// The one-shot arm (old `DesiredProcess::Ephemeral` per-record block).
@@ -1650,6 +2275,7 @@ impl ProcessDriver {
                     .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
             }
             let completion = self.ephemeral.finish(true, "runtime-deadline");
+            Self::publish_ephemeral_outcome(ctx, completion);
             ctx.set_status(ProcessDriverStatus::Failed { code: "runtime-deadline" });
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
@@ -1666,16 +2292,18 @@ impl ProcessDriver {
                     // Observe the bounded runtime and the exit while the row
                     // is live: the old descriptor resynced both Process types
                     // at 5s.
-                    let _ = ctx.requeue_after(EPHEMERAL_PROCESS_RESYNC);
+                    let _ = ctx.requeue_after(PROCESS_RESYNC);
                     Ok(ReconcileOutcome::Satisfied)
                 }
                 Ok(ProviderLiveness::Exited) => {
                     let completion = self.ephemeral.finish(false, "process-exited");
+                    Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Succeeded { code: "process-exited" });
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
                 Ok(ProviderLiveness::Unknown) => {
                     let completion = self.ephemeral.finish(true, "identity-ambiguous");
+                    Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Failed { code: "identity-ambiguous" });
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
@@ -1691,7 +2319,7 @@ impl ProcessDriver {
             Ok(ProviderAdoption::Adopted(_)) => {
                 self.ephemeral.mark_started();
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
-                let _ = ctx.requeue_after(EPHEMERAL_PROCESS_RESYNC);
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
                 Ok(ReconcileOutcome::Satisfied)
             }
             Ok(ProviderAdoption::Absent) => {
@@ -1732,6 +2360,11 @@ impl ProcessDriver {
         spec: &EphemeralProcessSpec,
         completion: EphemeralCompletion,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        // The terminal outcome rides the projection for the whole retention
+        // window: every pass in the window republishes it, so a Device port
+        // gating on the row reads the same outcome the terminal pass
+        // published.
+        Self::publish_ephemeral_outcome(ctx, completion);
         ctx.set_status(if completion.failed {
             ProcessDriverStatus::Failed { code: completion.code }
         } else {
@@ -1755,6 +2388,25 @@ impl ProcessDriver {
             .await
             .map_err(|_| self.error(ProcessDriverErrorKind::ProviderEffect, DriverOp::Reconcile))?;
         Ok(ReconcileOutcome::Satisfied)
+    }
+
+    /// Publish one one-shot terminal outcome as the row's wire-visible status
+    /// projection (R11: in-memory, dropped with the next status).
+    ///
+    /// A driver pass that concluded publishes the runtime's ready
+    /// classification, and the closed wire vocabulary has no "succeeded"
+    /// phase, so the terminal outcome a Device port must gate on is only
+    /// observable as this projection layer:
+    /// `{"ephemeral": {"state": "succeeded" | "failed", "code": "<closed>"}}`.
+    /// A reader that needs a completed one-shot reads that layer, never the
+    /// phase alone.
+    fn publish_ephemeral_outcome(ctx: &mut ResourceContext, completion: EphemeralCompletion) {
+        ctx.set_status_projection(serde_json::json!({
+            "ephemeral": {
+                "state": if completion.failed { "failed" } else { "succeeded" },
+                "code": completion.code,
+            },
+        }));
     }
 
     /// Preserved one-shot stop: the fixed 30s term, the 30s kill budget, then
@@ -2009,6 +2661,10 @@ impl ResourceDriver for ProcessDriver {
 
                 match self.effects.adopt(&identity, process).await {
                     Ok(ProviderAdoption::Adopted(_)) => {
+                        // The first reconcile pass right after recovery probes
+                        // this identity: mark it so that pass observes
+                        // liveness and arms the cadence instead of re-adopting.
+                        self.durable.mark_watching();
                         ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
                         Ok(RecoveryOutcome::Adopted)
                     }
@@ -2255,6 +2911,13 @@ mod tests {
             self.config.lock().launch = result;
         }
 
+        /// Flip the retained-identity report (the Provider records one on a
+        /// successful launch, so a row can be launched first and then read as
+        /// live).
+        fn set_active(&self, active: bool) {
+            self.config.lock().active = active;
+        }
+
         fn launch_calls(&self) -> Vec<RecordedLaunch> {
             self.launches.lock().clone()
         }
@@ -2340,6 +3003,16 @@ mod tests {
             self.calls.lock().push("adopt");
             let mut config = self.config.lock();
             Ok(config.adoption.pop_front().unwrap_or(ProviderAdoption::Absent))
+        }
+
+        async fn probe(
+            &self,
+            _identity: &super::ProcessResourceIdentity,
+            _spec: &ProcessSpec,
+        ) -> Result<ProviderLiveness, String> {
+            self.calls.lock().push("probe");
+            let mut config = self.config.lock();
+            Ok(config.liveness.pop_front().unwrap_or(ProviderLiveness::Alive))
         }
 
         async fn adopt_ephemeral(
@@ -2449,6 +3122,15 @@ mod tests {
             metadata: Vec::new(),
             created_at: 0,
         }
+    }
+
+    /// One durable row that refuses adoption: a live identity this actor did
+    /// not launch must be stopped and replaced.
+    fn never_adopt_row() -> StoredDesiredResource {
+        let mut row = test_row();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"reaction","drainTimeout":"250ms","adoptionPolicy":"never-adopt"}"#
+            .to_vec();
+        row
     }
 
     /// One one-shot row: the activation-runner shape the NixosGeneration
@@ -3122,6 +3804,71 @@ mod tests {
         assert_eq!(identity.launch.launch_vm(), "host-system");
     }
 
+    /// A Device-owned worker row names no VM of its own (`executionRef
+    /// Host/host-system`, no Guest target), so the Process controller derives
+    /// the worker's VM scope from the owning Device's declared Guest owner -
+    /// the same `Device.metadata.ownerRef == Guest/<vm>` derivation the TPM
+    /// admission fence requires and the TPM shared-provider effects mint
+    /// their `VmId` from. A Device with no Guest owner is the genuinely
+    /// unresolvable case and refuses by name; absence and an unanswerable
+    /// plane keep their own names instead of collapsing into it.
+    #[tokio::test]
+    async fn device_worker_vm_resolves_from_the_owning_devices_guest_owner() {
+        use super::device_worker_vm;
+
+        let device_key = ResourceKey::new("work", "Device", "tpm0");
+        let device_row = |owner: Option<&str>| StoredDesiredResource {
+            key: device_key.clone(),
+            uid: [0x43; 16],
+            generation: 1,
+            owner_uid: None,
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: br#"{"providerRef":"Provider/device-tpm"}"#.to_vec(),
+            metadata: owner
+                .map(|owner| serde_json::json!({ "ownerRef": owner }).to_string().into_bytes())
+                .unwrap_or_default(),
+            created_at: 0,
+        };
+
+        let manager =
+            OwnershipManager::empty().with_row(device_row(Some("Guest/acceptance-guest")));
+        let mut f = fixture_with(test_row(), manager);
+        assert_eq!(
+            device_worker_vm(&mut f.ctx, &device_key).await,
+            Ok("acceptance-guest".to_owned()),
+            "the owning Guest is the worker's VM scope"
+        );
+
+        let manager = OwnershipManager::empty().with_row(device_row(Some("Provider/device-tpm")));
+        let mut f = fixture_with(test_row(), manager);
+        assert_eq!(
+            device_worker_vm(&mut f.ctx, &device_key).await,
+            Err("device-worker-vm-unresolved"),
+            "a non-Guest owner names no VM"
+        );
+
+        let manager = OwnershipManager::empty().with_row(device_row(None));
+        let mut f = fixture_with(test_row(), manager);
+        assert_eq!(
+            device_worker_vm(&mut f.ctx, &device_key).await,
+            Err("device-worker-vm-unresolved"),
+            "a Device with no Guest owner is the named unresolvable case"
+        );
+
+        let mut f = fixture_with(test_row(), OwnershipManager::empty());
+        assert_eq!(
+            device_worker_vm(&mut f.ctx, &device_key).await,
+            Err("device-worker-device-row-missing")
+        );
+        let mut f = fixture(test_row());
+        assert_eq!(
+            device_worker_vm(&mut f.ctx, &device_key).await,
+            Err("device-worker-device-row-unreadable"),
+            "an unanswerable plane is never read as absence"
+        );
+    }
+
     /// A binding-owned worker whose owning binding row cannot be read is an
     /// incomplete identity: it fails once, at construction, instead of
     /// reaching the fence without the attachment target the serving intent
@@ -3452,6 +4199,13 @@ mod tests {
             ProcessDriverStatus::Succeeded { code: "process-exited" }
         );
         assert_eq!(
+            f.ctx.take_status_projection(),
+            Some(serde_json::json!({
+                "ephemeral": {"state": "succeeded", "code": "process-exited"},
+            })),
+            "the terminal outcome is the row's observable one-shot evidence"
+        );
+        assert_eq!(
             f.requeue_calls(),
             [Duration::from_secs(3600)],
             "successfulTtl is the retention delay"
@@ -3501,6 +4255,14 @@ mod tests {
         assert_eq!(
             *f.ctx.status::<ProcessDriverStatus>().expect("status"),
             ProcessDriverStatus::Failed { code: "runtime-deadline" }
+        );
+        assert_eq!(
+            f.ctx.take_status_projection(),
+            Some(serde_json::json!({
+                "ephemeral": {"state": "failed", "code": "runtime-deadline"},
+            })),
+            "a failed one-shot is observable: the row's phase is Ready whatever \
+             the outcome was, so only the projection carries the failure"
         );
         assert_eq!(
             f.requeue_calls(),
@@ -3771,6 +4533,45 @@ mod tests {
         assert_eq!(fake.launch_calls().len(), 1, "no second launch");
     }
 
+    /// A `never-adopt` row must not read the process it launched itself as an
+    /// unexpected live identity: the reconcile arm used to stop and relaunch
+    /// its own process on every effect completion (a stop/launch loop).
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn never_adopt_row_observes_the_identity_it_launched_instead_of_stopping_it() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            active: false,
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(never_adopt_row());
+        let mut driver = driver(fake.clone()).await;
+
+        driver.validate(&mut f.ctx).await.expect("validate");
+        let operation = expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        let completed = f.effects.recv().await.expect("typed completion");
+        assert_eq!(completed.operation, operation);
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Completed
+        ));
+
+        // The Provider retains the identity that launch recorded; the next
+        // pass must observe its own process instead of replacing it.
+        fake.set_active(true);
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(fake.launch_calls().len(), 1, "the launched identity is not relaunched");
+        assert!(
+            fake.stop_calls().is_empty(),
+            "a live identity this row launched is not an unexpected one"
+        );
+        let status = f.ctx.status::<ProcessDriverStatus>().expect("status");
+        assert_eq!(*status, ProcessDriverStatus::Ready { adopted: true });
+    }
+
     // -- recover: adoption / quarantine / missing ----------------------------
 
     #[tokio::test]
@@ -3926,7 +4727,7 @@ mod tests {
         // policy restart delay (in-memory restart budget, spec section 32).
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
+            ReconcileOutcome::RetryScheduled
         );
         let requeue = f.requeue_calls();
         assert_eq!(requeue.len(), 1, "exactly one requeue schedule");
@@ -3978,7 +4779,12 @@ mod tests {
         // policy restart delay (spec section 32: in-memory, never persisted).
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
+            ReconcileOutcome::RetryScheduled
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::AwaitingRestart { restart_count: 1 },
+            "a row awaiting its relaunch reports the awaiting classification, never Ready"
         );
         let requeue = f.requeue_calls();
         assert_eq!(requeue.len(), 1, "exactly one requeue schedule");
@@ -4009,6 +4815,280 @@ mod tests {
         assert_eq!(f.requeue_calls().len(), 1, "no requeue past the budget");
     }
 
+    // -- durable observation: an exit leaves Ready and the policy runs ------
+
+    /// The durable steady state: a row this actor adopted is observed through
+    /// the liveness probe at the preserved 5s cadence (before this the pass
+    /// returned without requeueing, so nothing ever re-entered and the row
+    /// reported `Ready` over a process that was gone), and an exit consumes
+    /// one budgeted restart and requeues the relaunch at the policy backoff.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn durable_exit_is_observed_and_restarts_under_the_policy() {
+        let policy = r#"{"class":"on-failure","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":2,"resetAfter":"300s"}"#;
+        let mut row = test_row();
+        row.spec = spec_bytes(Some(policy));
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(row);
+        let mut driver = driver(fake.clone()).await;
+
+        // First pass: the retained identity is adopted, the row reports Ready,
+        // and the observation cadence is armed.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Ready { adopted: true }
+        );
+        assert_eq!(
+            f.requeue_calls(),
+            [super::PROCESS_RESYNC],
+            "a live durable row observes itself"
+        );
+
+        // Second pass: the steady state re-reads the identity through the
+        // liveness probe (never a second adoption) and re-arms the cadence.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(fake.call_order(), ["adopt", "probe"]);
+        assert_eq!(
+            f.requeue_calls(),
+            [super::PROCESS_RESYNC, super::PROCESS_RESYNC]
+        );
+
+        // The process exits: the probe reports it, the row leaves Ready, and
+        // the restart policy consumes one restart and requeues the relaunch at
+        // the policy backoff. The pass reports a scheduled retry, not a
+        // satisfied pass: the row has no live process until the relaunch.
+        fake.push_liveness(ProviderLiveness::Exited);
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::RetryScheduled
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::AwaitingRestart { restart_count: 1 }
+        );
+        assert_eq!(
+            f.requeue_calls(),
+            [
+                super::PROCESS_RESYNC,
+                super::PROCESS_RESYNC,
+                Duration::from_secs(1)
+            ],
+            "the relaunch waits out the policy restart backoff"
+        );
+        assert_eq!(driver.restart_count(), 1, "the exit consumed one restart");
+
+        // Past the backoff the adoption path runs again: absent -> relaunch.
+        expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        let completed = f.effects.recv().await.expect("completion");
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Completed
+        ));
+        assert_eq!(fake.launch_calls().len(), 1, "the exited process was relaunched");
+    }
+
+    /// The same observation edge never laundered the exit into a first sight:
+    /// when the restart policy forbids a restart, the exit is the row's
+    /// terminal reading, and a later trigger reports the exit again instead of
+    /// launching a process the policy forbade.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn durable_exit_under_a_never_policy_is_terminal_and_never_relaunches() {
+        let policy = r#"{"class":"never","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"resetAfter":"300s"}"#;
+        let mut row = test_row();
+        row.spec = spec_bytes(Some(policy));
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            liveness: VecDeque::from([ProviderLiveness::Exited, ProviderLiveness::Exited]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(row);
+        let mut driver = driver(fake.clone()).await;
+
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Ready { adopted: true }
+        );
+
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Succeeded { code: "process-exited" }
+        );
+        assert_eq!(driver.restart_count(), 0, "a refused restart consumes nothing");
+        assert_eq!(
+            f.requeue_calls(),
+            [super::PROCESS_RESYNC],
+            "a terminal exit arms no observation cadence"
+        );
+
+        // A later trigger re-observes the exit; it never becomes a launch.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Succeeded { code: "process-exited" }
+        );
+        assert!(fake.launch_calls().is_empty(), "no relaunch past the policy");
+    }
+
+    /// An identity the liveness probe can no longer verify (old
+    /// `observe_liveness` Unknown) is the same ambiguity the adoption
+    /// classification refuses: the row reports the terminal
+    /// `process-identity-ambiguous` refusal, so the actor publishes wire
+    /// `Failed` and never `Ready`. Before this the arm returned `Satisfied`
+    /// and the runtime mapped that to wire `Ready` over a process this daemon
+    /// could not identify.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn durable_liveness_ambiguity_refuses_terminally_and_never_reads_ready() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+            liveness: VecDeque::from([ProviderLiveness::Unknown]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(test_row());
+        let mut driver = driver(fake.clone()).await;
+
+        // The retained identity is adopted: `Ready` only while the probe
+        // verifies it.
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+
+        // The probe no longer verifies the identity: the pass refuses.
+        let failure = driver.reconcile(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(failure.kind().code(), "process-identity-ambiguous");
+        assert_eq!(failure.stage(), "observe/liveness");
+        assert!(!failure.defers(), "a refusal schedules no retry");
+
+        // The driver's classification and the runtime phase it publishes
+        // agree: `Failed`, never `Ready`.
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Failed { code: "identity-ambiguous" }
+        );
+        assert_eq!(
+            d2b_resource_runtime::ResourceStatus::Failed(failure).wire_phase(),
+            "Failed",
+            "an ambiguous liveness observation is never a readiness claim"
+        );
+
+        // Nothing re-enters the pass and the ambiguity stays untouched: no
+        // second observation cadence, no relaunch, no signal to the candidate.
+        assert_eq!(fake.call_order(), ["adopt", "probe"]);
+        assert_eq!(
+            f.requeue_calls(),
+            [super::PROCESS_RESYNC],
+            "the refusal arms no observation cadence"
+        );
+        assert!(fake.launch_calls().is_empty(), "an ambiguous identity is never launched");
+        assert!(fake.stop_calls().is_empty(), "no signal reaches the ambiguous candidate");
+    }
+
+    // -- a durable launch no retry can resolve fails terminally --------------
+
+    /// A durable launch ticket the trusted bundle can never mint refuses
+    /// terminally: the in-memory budget cannot make any of these launchable, so
+    /// the row fails instead of relaunching (and warning) forever under the
+    /// default policy with no bounded `maxRestarts`. Before this the driver
+    /// classified from the budget alone, consumed a restart, and requeued.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn durable_unresolvable_launch_ticket_refuses_terminally() {
+        for (error, kind) in [
+            (
+                "provider-ticket:template-not-found",
+                FailureKinds::PROCESS_TEMPLATE_UNAVAILABLE,
+            ),
+            ("resolution-failed", FailureKinds::PROCESS_RESOLUTION_REFUSED),
+            (
+                "provider-ticket:guest-process-not-vmm",
+                FailureKinds::PROCESS_GUEST_PROCESS_NOT_VMM,
+            ),
+        ] {
+            let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Absent]),
+                launch: Err(error.to_owned()),
+                ..FakeEffectsConfig::default()
+            }));
+            let mut f = fixture(test_row());
+            let mut driver = driver(fake.clone()).await;
+
+            expect_in_progress(driver.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            let completed = f.effects.recv().await.expect("completion");
+            let d2b_resource_runtime::context::EffectResult::Failed(failure) = completed.result
+            else {
+                panic!("{error} must refuse the launch");
+            };
+            assert_eq!(
+                failure.class(),
+                FailureClass::Terminal,
+                "{error} never becomes launchable"
+            );
+            assert_eq!(failure.op(), DriverOp::Reconcile);
+            assert_eq!(failure.report().code(), kind.code());
+            assert_eq!(driver.restart_count(), 0, "{error} consumes no restart");
+            assert!(
+                f.requeue_calls().is_empty(),
+                "{error} arms no restart backoff"
+            );
+        }
+    }
+
+    /// The terminal set is the closed unresolvable-ticket spellings, not every
+    /// launch error: a genuine provider-effect refusal - the identity the
+    /// ticket path could not bind yet is the case the seeding exists for -
+    /// still drains the restart budget and retries at the policy backoff.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn durable_provider_effect_launch_failure_still_retries_under_the_budget() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            adoption: VecDeque::from([ProviderAdoption::Absent]),
+            launch: Err("provider-controller-provider-identity-missing".to_owned()),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(test_row());
+        let mut driver = driver(fake.clone()).await;
+
+        expect_in_progress(driver.reconcile(&mut f.ctx).await);
+        yield_until_effects_settled().await;
+        let completed = f.effects.recv().await.expect("completion");
+        assert!(matches!(
+            completed.result,
+            d2b_resource_runtime::context::EffectResult::Failed(failure)
+                if failure.class() == FailureClass::Retryable
+        ));
+        assert_eq!(driver.restart_count(), 1);
+
+        // The next pass schedules exactly one policy-backoff requeue, and it
+        // reports the scheduled retry (never Ready: no process exists yet).
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::RetryScheduled
+        );
+        assert_eq!(f.requeue_calls(), [Duration::from_secs(1)]);
+    }
+
     // -- validate ------------------------------------------------------------
 
     #[tokio::test]
@@ -4036,5 +5116,40 @@ mod tests {
         let failure = driver.validate(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Validate);
+    }
+
+    // -- Device-worker Wayland projection ------------------------------------
+    //
+    // The host Wayland socket is trusted bundle data (`site.json`), never a
+    // daemon-derived path: the reader resolves the projected value and refuses
+    // by name when the bundle carries none, so a bundle that predates the
+    // artifact - or a site without a Wayland session - cannot launch the GPU
+    // worker against an invented socket.
+
+    #[test]
+    fn gpu_worker_wayland_sock_reads_the_projected_site_and_refuses_without_it() {
+        let site = d2b_core::site::SiteJson {
+            schema_version: "v1".to_owned(),
+            wayland_socket: Some("/run/user/1001/wayland-7".to_owned()),
+        };
+        assert_eq!(
+            super::gpu_worker_wayland_sock(Some(&site)),
+            Ok(std::path::PathBuf::from("/run/user/1001/wayland-7")),
+            "the socket is exactly the bundle-projected value"
+        );
+
+        let headless = d2b_core::site::SiteJson {
+            schema_version: "v1".to_owned(),
+            wayland_socket: None,
+        };
+        assert_eq!(
+            super::gpu_worker_wayland_sock(Some(&headless)),
+            Err("device-worker-wayland-sock-unbound")
+        );
+        assert_eq!(
+            super::gpu_worker_wayland_sock(None),
+            Err("device-worker-wayland-sock-unbound"),
+            "a bundle that predates site.json keeps the GPU launch refused by name"
+        );
     }
 }

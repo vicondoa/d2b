@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SiteJson",
+  "description": "Private site-runtime contract emitted by the NixOS site module.",
+  "type": "object",
+  "required": [
+    "schemaVersion"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "Artifact schema version (currently `\"v1\"`).",
+      "type": "string"
+    },
+    "waylandSocket": {
+      "description": "Absolute host Wayland socket (`/run/user/<uid>/<display>`), or `null` when the site declares no Wayland session (`d2b.site.waylandUser` is unset). Optional so bundles that predate the field still parse.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

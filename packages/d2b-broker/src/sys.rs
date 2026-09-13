@@ -2318,6 +2318,25 @@ pub mod pidfd_sys {
         Ok(out)
     }
 
+    /// The closed vocabulary for a device bind the host cannot provide.
+    ///
+    /// `device-bind-missing: <path>` is the refusal for an absent node (or an
+    /// absent parent); any other errno stays distinct
+    /// (`device-bind-unusable`) so a symlink, ACL, or shape problem is never
+    /// misreported as a missing device. Both errors keep the original
+    /// [`io::ErrorKind`] so callers classifying retryability still see
+    /// `NotFound` / the original class.
+    fn device_bind_error(path: &str, err: io::Error) -> io::Error {
+        if err.kind() == io::ErrorKind::NotFound {
+            io::Error::new(io::ErrorKind::NotFound, format!("device-bind-missing: {path}"))
+        } else {
+            io::Error::new(
+                err.kind(),
+                format!("device-bind-unusable: {path}: {err}"),
+            )
+        }
+    }
+
     fn prepare_device_binds(
         policy: &MountPolicy,
     ) -> io::Result<(Vec<OwnedFd>, Vec<PreparedDeviceBind>)> {
@@ -2331,7 +2350,16 @@ pub mod pidfd_sys {
                     format!("device_binds path {path:?} is not absolute"),
                 ));
             }
-            let metadata = std::fs::metadata(path_ref)?;
+            // A declared device bind the host does not provide is a named
+            // refusal, not an anonymous errno: the GPU/video worker postures
+            // declare `/dev/kvm`, `/dev/dri/renderD128` and `/dev/udmabuf`,
+            // and on a host without them the launch must say WHICH grant it
+            // could not open. Before this, the parent returned a bare
+            // `ENOENT` from here and the broker journal read
+            // `clone3/spawn failed: No such file or directory (os error 2)`
+            // (no path, no kind), so the refusal was indistinguishable from
+            // any other spawn failure.
+            let metadata = std::fs::metadata(path_ref).map_err(|err| device_bind_error(path, err))?;
             let file_type = metadata.file_type();
             let kind = if file_type.is_dir() {
                 PreparedDeviceBindKind::Directory
@@ -2364,7 +2392,9 @@ pub mod pidfd_sys {
                 rustix::fs::Mode::empty(),
                 rustix::fs::ResolveFlags::NO_SYMLINKS,
             )
-            .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+            .map_err(|err| {
+                device_bind_error(path, io::Error::from_raw_os_error(err.raw_os_error()))
+            })?;
             let source = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "procfd contains NUL"))?;
             let destination = CString::new(path.as_bytes()).map_err(|_| {
@@ -3570,6 +3600,68 @@ mod tests {
         assert!(
             !super::pidfd_sys::device_mask_required(&policy, &test_namespaces(false)),
             "device masking installs a private /proc and therefore requires the role to request a pid namespace"
+        );
+    }
+
+    /// A declared device bind the host does not provide refuses by name,
+    /// before any clone/fork: the broker journal and audit must read
+    /// `device-bind-missing: <path>` (the grant the launch needed) instead of
+    /// a bare `No such file or directory (os error 2)`.
+    ///
+    /// The refusal happens in the PARENT while preparing the device binds
+    /// (`prepare_device_binds`), so no child is created: the nonexistent
+    /// binary below must never be reached and no pid is reported.
+    #[test]
+    fn missing_device_bind_refuses_by_name_before_spawn() {
+        let dir = tempdir().expect("tempdir");
+        let absent = dir.path().join("absent-device-node");
+        let absent_str = absent.to_str().expect("utf-8 temp path");
+        assert!(!absent.exists(), "the test path must not exist");
+
+        let isolation = RunnerIsolationSpec {
+            capabilities: vec![],
+            // pid namespace: the device-bind preparation runs under the
+            // `hide_device_nodes_by_default` mask exactly as a GPU worker's
+            // plan does.
+            namespaces: test_namespaces(true),
+            seccomp_program: None,
+            mount_policy: MountPolicy {
+                read_only_paths: vec![],
+                writable_paths: vec![],
+                nix_store_read_only: false,
+                hide_device_nodes_by_default: true,
+                device_binds: vec![absent_str.to_owned()],
+                bind_mounts: vec![],
+            },
+            cgroup_dir_fd: None,
+            cgroup_procs_fd: None,
+            user_namespace: None,
+            umask: None,
+            pre_opened_device_fds: Vec::new(),
+            memlock_limit_bytes: None,
+            activation_stdin: None,
+        };
+
+        let error = clone3_spawn_runner(
+            CString::new("/nonexistent-binary-must-not-run").unwrap(),
+            Vec::new(),
+            Vec::new(),
+            0,
+            0,
+            Vec::new(),
+            isolation,
+        )
+        .expect_err("an absent device bind must refuse the spawn");
+
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "the refusal must keep its NotFound class: {error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("device-bind-missing: {absent_str}"),
+            "the refusal must name the missing grant"
         );
     }
 

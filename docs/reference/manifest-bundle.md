@@ -16,6 +16,7 @@ Providers, and `d2b-broker`. It is not a public lifecycle API.
 | `processes.json` | private compatibility artifact | Legacy runner intent input; it is not a public Guest resource field, and the current Guest controller owns the VMM child lifecycle. |
 | `artifact-catalog.json` | private | Signed Provider metadata and evaluated Zone/Guest closure commitments used by StoreSync. |
 | `storage.json` | private | Anchored managed paths, restart adoption, cleanup, repair, and degraded states. |
+| `site.json` | private | Site-runtime facts the daemon must not guess, resolved from the site's own options; today the host Wayland socket the GPU worker renders into (`waylandSocket`, `null` on a site without a Wayland session). |
 | `sync.json` | private | OFD lock and fd-transfer policy, acquisition order, and stale-owner handling. |
 | `allocator.json` | private | Zone-scoped resource allocation metadata and opaque host-resource leases. |
 | `realm-controllers.json` | private compatibility artifact | Transitional metadata read by the current daemon bridge; it is not a product hierarchy or lifecycle owner. |
@@ -73,5 +74,6 @@ Zone-specific resource schemas live under [`schemas/v3/`](./schemas/v3/).
 - [`schemas/v2/bundle.md`](./schemas/v2/bundle.md) - bundle DTO details.
 - [`schemas/v2/host.md`](./schemas/v2/host.md) - host DTO details.
 - [`schemas/v2/processes.md`](./schemas/v2/processes.md) - process intent.
+- [`schemas/v2/site.md`](./schemas/v2/site.md) - site-runtime contract.
 - [`schemas/v2/storage.md`](./schemas/v2/storage.md) - storage lifecycle.
 - [`schemas/v2/sync.md`](./schemas/v2/sync.md) - synchronization.

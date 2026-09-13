@@ -21,6 +21,69 @@ let
 
   processProviderRef = "Provider/system-minijail";
 
+  # Declared worker sandbox posture. The private template binding pins the
+  # crosvm executable and the seccomp profile; this block is the public half
+  # the broker fences the launch plan against before it clones the worker,
+  # and the resource compiler refuses a row whose sandbox disagrees with the
+  # template's closed posture.
+  #
+  # umask 0007: every GPU worker binds a shared Unix socket its peer connects
+  # to as a different uid, so the created socket must keep its group bits
+  # (see RoleProfile::umask). The render-node worker declares no device bind:
+  # the broker pre-opens the render node and passes it as an fd.
+  gpuWorkerSandbox = {
+    namespaceClasses = [ "mount" "pid" "ipc" "uts" "user" ];
+    capabilityClasses = [ ];
+    seccompClass = "strict";
+    noNewPrivileges = true;
+    startRoot = false;
+    readOnlyRoot = true;
+    environmentClass = "minimal";
+    umask = "0007";
+    oomScoreAdj = 0;
+    userNamespace = { mappingClass = "process-principal-root"; };
+  };
+
+  # The video sidecar decodes into the GPU worker's DRI. It fences a pid
+  # namespace and a DRI device bind, and never a user namespace: it is the
+  # one Device worker whose grant is a bind rather than an fd.
+  videoSandbox = {
+    namespaceClasses = [ "mount" "pid" "ipc" "uts" ];
+    capabilityClasses = [ ];
+    seccompClass = "strict";
+    noNewPrivileges = true;
+    startRoot = false;
+    readOnlyRoot = true;
+    environmentClass = "minimal";
+    umask = "0007";
+    oomScoreAdj = 0;
+    userNamespace = null;
+  };
+
+  # Declared worker restart ceiling. The launch of a Device worker names the
+  # host-device grants the Provider resolved and the Wayland session facts the
+  # site projected; the broker refuses a grant the host does not provide
+  # (`device-bind-missing: <path>`). That refusal is not transient, so the
+  # canonical unbounded `on-failure` policy would retry it forever and the row
+  # would oscillate between the refusal and the runtime's `awaiting-restart`
+  # pass - which the runtime projects as `Ready`
+  # (`packages/d2bd/src/process_driver.rs`, the `AwaitingRestart` arm returning
+  # `ReconcileOutcome::Satisfied`), i.e. a readiness claim no process backs.
+  # The ceiling makes a persistent launch refusal terminal in the closed
+  # vocabulary (`process-start-budget-exhausted`, refused, at
+  # `reconcile/launch`), while `resetAfter` keeps crash-restart semantics for a
+  # worker that has been healthy. The numeric defaults mirror
+  # `nixos-modules/resources-zones-processes.nix` processDefaults; only
+  # `maxRestarts` differs (canonical default: null, unbounded).
+  workerRestartPolicy = {
+    class = "on-failure";
+    backoffBase = "1s";
+    backoffMax = "60s";
+    backoffMultiplierMilli = 2000;
+    maxRestarts = 2;
+    resetAfter = "300s";
+  };
+
   ownerGuest = device:
     let owner = (device.metadata or { }).ownerRef or null;
     in if builtins.isString owner && lib.hasPrefix "Guest/" owner then owner else null;
@@ -44,6 +107,8 @@ let
         domain = "system";
         processClass = "worker";
         template = if renderNodeOnly then "gpu-render-node" else "gpu-worker";
+        sandbox = gpuWorkerSandbox;
+        restartPolicy = workerRestartPolicy;
         desiredLifecycle = "running";
         deviceUsage = [{
           deviceRef = "Device/${deviceName}";
@@ -78,6 +143,8 @@ let
         domain = "system";
         processClass = "worker";
         template = "video-worker";
+        sandbox = videoSandbox;
+        restartPolicy = workerRestartPolicy;
         desiredLifecycle = "running";
         deviceUsage = [{
           deviceRef = "Device/${deviceName}";

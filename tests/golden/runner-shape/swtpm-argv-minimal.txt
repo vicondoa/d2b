@@ -2,6 +2,8 @@
 # Format: argv joined by '\n', one argument per line. Update via cargo test --lib swtpm_argv
 # (the audit_swtpm_input_parity_golden test panics with the observed vs expected diff).
 # Plan: ph1-p1-swtpm-persistence - the long-lived swtpm sidecar argv shape is locked here.
+# No `--daemon` entry: swtpm socket is foreground by default and `--daemon` takes no
+# argument, so the pre-0.10 `--daemon=false` spelling the installed swtpm rejects is gone.
 /nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm
 socket
 --tpm2
@@ -17,4 +19,3 @@ startup-clear
 file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.log,level=20
 --pid
 file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid
---daemon=false

@@ -38,6 +38,13 @@ pub enum ReconcileOutcome {
     /// A long effect was spawned with the operation id from
     /// [`crate::context::ResourceContext::begin_operation`].
     InProgress { operation: OperationId },
+    /// Desired state is NOT realized and no effect is in flight: the driver
+    /// scheduled its own retry through
+    /// [`crate::context::ResourceContext::requeue_after`] (a restart
+    /// backoff, a readiness re-poll). The runtime publishes the honest
+    /// `Pending` phase - never `Ready`, which would be a readiness claim no
+    /// process backs while the row waits for its retry.
+    RetryScheduled,
 }
 
 /// Provider-facing driver contract (KTD3, R3; spec section 11).
@@ -224,14 +231,20 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
  mod tests {
     use std::convert::Infallible;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver,
+        ResourceDriverFactory,
     };
-    use crate::context::test_support::{fixture, test_row, DeadManager, FailingDecoder, NullRequeue};
+    use crate::context::test_support::{
+        fixture, test_row, DeadManager, FailingDecoder, NullRequeue, OwnedChildrenManager,
+    };
     use crate::context::{EffectCompleted, EffectResult, ResourceContext};
-    use crate::error::{DriverFailure, DriverOp, FailureClass};
+    use crate::error::{DriverFailure, DriverOp, FailureClass, FailureOutcome};
+    use crate::identity::ResourceKey;
+    use crate::resource::test_support::FakeFactory;
 
     // -- Erased boundary classification ---------------------------------------
 
@@ -312,6 +325,66 @@ pub trait ResourceDriverFactory: Send + Sync + 'static {
         assert_eq!(ok.recover(&mut ctx).await.unwrap(), RecoveryOutcome::Missing);
         ok.validate(&mut ctx).await.unwrap();
         ok.delete(&mut ctx).await.unwrap();
+    }
+
+    // -- Child-first finalize at the erased boundary (F3) ---------------------
+
+    /// The erased boundary runs `finalize_owned_resources` before the
+    /// driver's own drain, so no implementation can skip it (owner directive
+    /// 2026-09-11): with a live owned child the boundary refuses with the
+    /// registered `children-draining` `NotYet` - defer and requeue - the
+    /// driver's own `finalize` never runs, and the child's deletion is
+    /// (re)requested first; with no owned children the driver's `finalize`
+    /// runs exactly once.
+    #[tokio::test]
+    async fn erased_finalize_gates_the_drivers_own_drain_on_owned_children() {
+        let factory = FakeFactory::new(&["Test"]);
+        let key = ResourceKey::new("z", "Test", "parent");
+        let shared = factory.shared(&key);
+
+        // A live owned child: the boundary defers before the driver's drain.
+        let child = test_row("z", "Test", "child");
+        let manager = OwnedChildrenManager::with_children(vec![child.clone()]);
+        let mut ctx = fixture(
+            test_row("z", "Test", "parent"),
+            manager.clone(),
+            NullRequeue,
+            Arc::new(FailingDecoder),
+        )
+        .ctx;
+        let mut driver: Box<dyn DynResourceDriver> = factory.create(&key).await;
+        let failure = driver.finalize(&mut ctx).await.expect_err("owned children are draining");
+        assert_eq!(failure.kind().code(), "children-draining");
+        assert_eq!(failure.op(), DriverOp::Delete);
+        assert_eq!(failure.outcome(), FailureOutcome::NotYet);
+        assert!(failure.defers(), "children-draining defers and requeues");
+        assert_eq!(
+            shared.finalize_calls.load(Ordering::SeqCst),
+            0,
+            "the driver's own drain is gated behind its owned children"
+        );
+        assert_eq!(shared.delete_calls.load(Ordering::SeqCst), 0, "delete is never reached");
+        assert_eq!(
+            manager.deleted_keys(),
+            vec![child.key.clone()],
+            "the child's own deletion was (re)requested before the refusal"
+        );
+
+        // No owned children: the boundary proceeds to the driver's drain.
+        let mut solo_ctx = fixture(
+            test_row("z", "Test", "solo"),
+            OwnedChildrenManager::default(),
+            NullRequeue,
+            Arc::new(FailingDecoder),
+        )
+        .ctx;
+        driver.finalize(&mut solo_ctx).await.expect("nothing owned to drain");
+        assert_eq!(shared.finalize_calls.load(Ordering::SeqCst), 1);
+
+        // The trait default: a driver that implements no `finalize` at all
+        // still drains through the erased boundary (the default is a no-op).
+        let mut plain: Box<dyn DynResourceDriver> = Box::new(ClassifyingDriver { failure: None });
+        plain.finalize(&mut solo_ctx).await.expect("the default finalize is a no-op");
     }
 
     // -- Long effects (R5; spec section 14) -----------------------------------

@@ -182,9 +182,6 @@ impl<S, U> core::fmt::Debug for ResourceService<S, U> {
     }
 }
 
-impl<S, U> ResourceService<S, U> {
-}
-
 impl<S> ResourceService<S, UnavailableUpgradeDispatcher>
 where
     S: ResourceStoreBackend,

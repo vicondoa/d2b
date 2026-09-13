@@ -151,20 +151,21 @@ impl ProductionInteractionDriverEffects {
             .collect()
     }
 
-    /// One authoritative audio dependency read (old `fresh_audio_dependency`):
-    /// a missing row fails closed. The row itself is the fence: the persisted
-    /// assignment-fence re-check the old runner-era path did has no durable
-    /// fence to compare against since U14 retired the store, so the row
-    /// identity is what validates.
+    /// One authoritative audio dependency read (old `fresh_audio_dependency`).
+    ///
+    /// The row itself is the fence: the persisted assignment-fence re-check
+    /// the old runner-era path did has no durable fence to compare against
+    /// since U14 retired the store, so the row identity is what validates. A
+    /// dependency the manager does not hold *yet* reads `None` and the caller
+    /// defers instead of failing the binding terminally: canonical bundle
+    /// order commits an `AudioBinding` before the `AudioService` it names
+    /// (bundle order is (type, name) and `AudioBinding` sorts first), and an
+    /// API-created binding can precede its service entirely.
     async fn fresh_audio_dependency(
         &self,
         target: &ResourceRef,
-    ) -> Result<StoredResource, InteractionEffectError> {
-        let Some(authoritative) = self.live_stored(target).await? else {
-            return Err(InteractionEffectError::InvalidResource);
-        };
-        validate_audio_dependency_identity(&authoritative, target, &self.zone)?;
-        Ok(authoritative)
+    ) -> Result<Option<StoredResource>, InteractionEffectError> {
+        audio_dependency_row(self.live_stored(target).await?, target, &self.zone)
     }
 
     async fn reconcile_display_session(
@@ -254,8 +255,16 @@ impl ProductionInteractionDriverEffects {
         let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
-        let service = self.fresh_audio_dependency(&spec.service_ref).await?;
-        let guest = self.fresh_audio_dependency(&spec.target_ref).await?;
+        let Some(service) = self.fresh_audio_dependency(&spec.service_ref).await? else {
+            return Ok(InteractionEffectOutcome::phase(
+                InteractionEffectPhase::Pending,
+            ));
+        };
+        let Some(guest) = self.fresh_audio_dependency(&spec.target_ref).await? else {
+            return Ok(InteractionEffectOutcome::phase(
+                InteractionEffectPhase::Pending,
+            ));
+        };
         let service_value =
             serde_json::from_slice::<Value>(&service.canonical_json).unwrap_or_default();
         let guest_value =
@@ -538,6 +547,24 @@ fn stored_from_view(view: &ResourceView) -> Result<StoredResource, InteractionEf
         .map_err(|_| InteractionEffectError::InvalidResource)
 }
 
+/// Classify one fresh audio dependency read: a row the manager does not hold
+/// yet reads `None` - the caller defers with `Pending`, because the
+/// dependency may legitimately land after the binding - while a committed row
+/// is returned once its identity validates. A committed row that is not the
+/// named dependency stays `InvalidResource`: retrying cannot make a foreign
+/// row this binding's dependency.
+fn audio_dependency_row(
+    live: Option<StoredResource>,
+    target: &ResourceRef,
+    zone: &ZoneId,
+) -> Result<Option<StoredResource>, InteractionEffectError> {
+    let Some(authoritative) = live else {
+        return Ok(None);
+    };
+    validate_audio_dependency_identity(&authoritative, target, zone)?;
+    Ok(Some(authoritative))
+}
+
 /// Whether one dependency row is authentic and still owned by this Zone
 /// (old `validate_audio_dependency_identity`).
 fn validate_audio_dependency_identity(
@@ -619,12 +646,80 @@ fn display_projection(
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_resource::v3::{ResourceRef, StoredResource, ZoneId};
     use d2b_resource_runtime::error::{DriverFailure, DriverOp};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
 
-    use super::view_phase;
+    use super::{audio_dependency_row, stored_from_view, view_phase, InteractionEffectError};
+
+    /// Regression (P2): an absent audio dependency must defer, not fail the
+    /// binding terminally. Canonical bundle order commits an `AudioBinding`
+    /// before the `AudioService` it names (bundle order is (type, name)), and
+    /// an API-created binding can precede its service entirely; the pre-fix
+    /// read answered `InvalidResource` for absence, which the driver maps to
+    /// the terminal `SpecInvalid` refusal - a refusal schedules no requeue,
+    /// so the binding stayed `Failed` forever. The read now defers while the
+    /// row is missing, progresses once the row appears, and keeps the
+    /// terminal identity refusal for a committed row that is not the named
+    /// dependency.
+    #[test]
+    fn absent_audio_dependency_defers_until_the_row_appears() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let service_ref =
+            ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").expect("service ref");
+
+        // Absent: `None`, and `reconcile_audio_binding` returns the Pending
+        // phase (a requeued pass), never an error.
+        assert_eq!(
+            audio_dependency_row(None, &service_ref, &zone),
+            Ok(None),
+            "an uncommitted dependency must defer, not refuse",
+        );
+
+        // The row appearing is progress: the validated row is handed to the
+        // phase checks.
+        let service = dependency_row("work", "audio.d2bus.org.AudioService", "host-audio");
+        assert_eq!(
+            audio_dependency_row(Some(service.clone()), &service_ref, &zone),
+            Ok(Some(service.clone())),
+            "a committed dependency must progress the binding",
+        );
+
+        // A committed row that is not the named dependency stays terminal:
+        // another name, another Zone, and another type each refuse.
+        let other_name = dependency_row("work", "audio.d2bus.org.AudioService", "other-service");
+        let other_zone = dependency_row("other", "audio.d2bus.org.AudioService", "host-audio");
+        let other_type = dependency_row("work", "Guest", "host-audio");
+        for foreign in [other_name, other_zone, other_type] {
+            assert_eq!(
+                audio_dependency_row(Some(foreign), &service_ref, &zone),
+                Err(InteractionEffectError::InvalidResource),
+                "a committed row that is not the named dependency stays terminal",
+            );
+        }
+    }
+
+    /// One manager dependency view rendered through the canonical projection:
+    /// the row shape `live_stored` hands the audio dependency read.
+    fn dependency_row(zone: &str, resource_type: &str, name: &str) -> StoredResource {
+        stored_from_view(&ResourceView {
+            key: ResourceKey::new(zone, resource_type, name),
+            uid: [0x51; 16],
+            generation: 3,
+            deleting: false,
+            provenance: ResourceProvenance::Nix,
+            spec: serde_json::to_vec(&serde_json::json!({"providerRef": "Provider/audio-pipewire"}))
+                .expect("dependency spec"),
+            metadata: Vec::new(),
+            owner_key: None,
+            status: Some(ResourceStatus::Ready),
+            status_generation: Some(3),
+            status_projection: None,
+        })
+        .expect("dependency row")
+    }
 
     /// One manager view carrying the given status classification, published
     /// generation, and durable deleting mark.

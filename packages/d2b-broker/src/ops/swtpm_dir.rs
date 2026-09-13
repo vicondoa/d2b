@@ -38,6 +38,10 @@ use std::path::{Path, PathBuf};
 
 use nix::libc;
 
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::storage::StoragePathSpec;
+
 use crate::ops::audit_op::{SwtpmDirAudit, SwtpmDirResult, SwtpmMarkerResult};
 use crate::ops::hosts::stable_hash_str;
 use crate::ops::spawn_runner::SpawnRunnerPlan;
@@ -63,6 +67,9 @@ const MARKER_VERSION: u32 = 1;
 /// Closed-set, path-free reason slugs for swtpm-dir hardening failures.
 pub mod reasons {
     pub const DERIVATION_FAILED: &str = "swtpm-dir-derivation-failed";
+    /// A resource-backed launch's declared paths or argv disagree with the
+    /// trusted identity resolved from the verified bundle.
+    pub const IDENTITY_MISMATCH: &str = "swtpm-dir-identity-mismatch";
     pub const PARENT_OPEN_FAILED: &str = "swtpm-dir-parent-open-failed";
     pub const IS_SYMLINK: &str = "swtpm-dir-is-symlink";
     pub const NOT_A_DIRECTORY: &str = "swtpm-dir-not-a-directory";
@@ -214,13 +221,334 @@ fn production_swtpm_path(p: &Path) -> bool {
     p.starts_with("/var/lib/d2b/vms")
 }
 
+/// The placement identity a spawn plan's cgroup subtree names.
+///
+/// A legacy VM-scoped placement (`d2b.slice/<vm>[/<role>...]`) carries the VM
+/// name in its first segment. A resource-backed (typed) launch is rewritten by
+/// `private_cgroup_placement` into `d2b.slice/process-<64hex>[/<role>...]`, a
+/// commitment to the private runtime scope that deliberately carries no VM
+/// identity: for those launches the VM is resolved from the verified bundle,
+/// never from the cgroup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PlacementSegment {
+    /// `d2b.slice/<vm>[/...]` - the segment after `d2b.slice/` is the VM id.
+    Vm(String),
+    /// `d2b.slice/process-<64hex>[/...]` - a private resource-backed scope.
+    RuntimeScope(String),
+}
+
+pub(crate) fn parse_placement_segment(subtree: &str) -> Option<PlacementSegment> {
+    let normalized = subtree
+        .strip_prefix("d2b.slice/")
+        .or_else(|| subtree.strip_prefix("d2b/"))?;
+    let segment = normalized.split('/').find(|s| !s.is_empty())?;
+    if segment.contains('\0') {
+        return None;
+    }
+    let name = segment.trim_end_matches(".scope");
+    if name.is_empty() {
+        return None;
+    }
+    if let Some(hex) = name.strip_prefix("process-")
+        && hex.len() == 64
+        && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Some(PlacementSegment::RuntimeScope(name.to_owned()));
+    }
+    Some(PlacementSegment::Vm(name.to_owned()))
+}
+
+/// The trusted identity of one resource-backed (typed) `w1-swtpm` launch.
+///
+/// Every field is resolved from verified bundle artifacts - the Zone resource
+/// bundle's `Device` row and the host storage contract - never from the
+/// request's caller-supplied fields or from the launch arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceBackedSwtpm {
+    /// The Guest whose owning Device declares the worker row
+    /// (`Device.metadata.ownerRef == Guest/<guest>`, the same derivation the
+    /// daemon's Device-worker ticket uses).
+    pub guest: String,
+    /// The trusted TPM state policy root the `path:swtpm-state:<guest>` row
+    /// names, which must be the same directory as the Provider policy root
+    /// `path:tpm-state` the state Volume resolves under.
+    pub state_root: PathBuf,
+    /// The state Volume name the worker must open under that root
+    /// (`device-<32hex>-tpm-state`, the TPM Provider's own naming from the
+    /// owning Device's durable uid), when that uid is available.
+    pub state_volume: Option<String>,
+}
+
+/// Resolve the trusted identity of a resource-backed `w1-swtpm` launch from
+/// the verified bundle.
+///
+/// Returns `None` when any trusted input is missing or the two trusted rows
+/// disagree; the caller then leaves the launch to the hardening's fail-closed
+/// derivation refusal instead of inventing a path.
+pub fn resource_backed_identity(
+    resolver: &BundleResolver,
+    zone_uid: &ResourceUid,
+    device_ref: &ResourceRef,
+    device_uid: Option<&ResourceUid>,
+) -> Option<ResourceBackedSwtpm> {
+    if device_ref.resource_type().as_str() != "Device" {
+        return None;
+    }
+    let zone = resolver
+        .zone_resource_bundle_zones()
+        .ok()?
+        .into_iter()
+        .find(|zone| resolver.zone_uid(zone).as_ref() == Some(zone_uid))?;
+    let guest = device_guest_owner(
+        resolver.zone_resource_bundle_bytes(zone.as_str())?,
+        device_ref.name().as_str(),
+    )?;
+    let state_root = storage_root(resolver, &format!("path:swtpm-state:{guest}"))?;
+    // The Provider's opaque `sourcePolicyId: "tpm-state"` resolves through the
+    // storage contract's `path:tpm-state` row. If the two rows disagree, the
+    // directory the worker opens is not the directory the Volume controller
+    // provisions, so the launch must not proceed.
+    if storage_root(resolver, "path:tpm-state")? != state_root {
+        return None;
+    }
+    Some(ResourceBackedSwtpm {
+        guest,
+        state_root,
+        state_volume: device_uid.map(state_volume_name),
+    })
+}
+
+/// `Device.metadata.ownerRef == Guest/<guest>` for one Device row of a
+/// verified Zone resource bundle.
+fn device_guest_owner(bundle_bytes: &[u8], device: &str) -> Option<String> {
+    let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
+    for resource in bundle.get("resources")?.as_array()? {
+        if resource.get("type").and_then(serde_json::Value::as_str) != Some("Device") {
+            continue;
+        }
+        let Some(metadata) = resource.get("metadata") else {
+            continue;
+        };
+        if metadata.get("name").and_then(serde_json::Value::as_str) != Some(device) {
+            continue;
+        }
+        let owner = metadata
+            .get("ownerRef")
+            .and_then(serde_json::Value::as_str)?;
+        return owner
+            .strip_prefix("Guest/")
+            .map(str::to_owned)
+            .filter(|guest| !guest.is_empty());
+    }
+    None
+}
+
+/// The trusted TPM state row of one zone-native Guest, when the verified
+/// storage contract carries that Guest's `path:swtpm-state:<guest>` row: the
+/// row itself plus the state root it names.
+///
+/// `None` for a subject no trusted artifact names: the caller keeps failing
+/// closed rather than inventing a directory.
+pub fn zone_native_swtpm_state_row<'a>(
+    resolver: &'a BundleResolver,
+    guest: &str,
+) -> Option<(&'a StoragePathSpec, PathBuf)> {
+    let spec = resolver.find_storage_path_spec(&format!("path:swtpm-state:{guest}"))?;
+    let root = storage_path(spec)?;
+    Some((spec, root))
+}
+
+fn storage_root(resolver: &BundleResolver, id: &str) -> Option<PathBuf> {
+    storage_path(resolver.find_storage_path_spec(id)?)
+}
+
+/// The directory one trusted storage row names, refusing any row whose
+/// template is not an anchored absolute path.
+fn storage_path(spec: &StoragePathSpec) -> Option<PathBuf> {
+    let path = PathBuf::from(spec.path_template.as_str());
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
+/// The TPM Provider's own state Volume naming for one Device
+/// (`device_<32hex>-tpm-state`), so an argv can be bound to the exact
+/// directory the controller provisions.
+fn state_volume_name(device_uid: &ResourceUid) -> String {
+    let short: String = device_uid
+        .as_str()
+        .bytes()
+        .filter(|byte| byte.is_ascii_hexdigit())
+        .take(32)
+        .map(char::from)
+        .collect();
+    format!("device-{short}-tpm-state")
+}
+
+/// Derive + fence the swtpm-dir path set of one resource-backed (typed)
+/// launch.
+///
+/// A resource-backed placement carries no VM name in its cgroup subtree and
+/// the Device-worker intent ships no writable paths, so the identity is the
+/// trusted [`ResourceBackedSwtpm`] instead of the placement. The launch must
+/// agree with it:
+///
+/// - any plan-declared writable path that names a persistent `swtpm` dir or a
+///   `/run/d2b/vms` runtime dir must be exactly the trusted one;
+/// - the composed argv must name the trusted state volume directory
+///   (`--tpmstate dir=<state root>/<volume name>` with `--ctrl
+///   ...path=<that>/ctrl.sock`) and the trusted per-Guest runtime socket
+///   (`--server`/`--unix` `...path=/run/d2b/vms/<guest>/tpm.sock`).
+///
+/// A launch that disagrees fails closed with [`reasons::IDENTITY_MISMATCH`].
+pub fn derive_resource_backed_paths(
+    plan: &SpawnRunnerPlan,
+    identity: &ResourceBackedSwtpm,
+) -> Result<SwtpmDirPaths, &'static str> {
+    if !matches!(
+        parse_placement_segment(&plan.cgroup_placement.subtree),
+        Some(PlacementSegment::RuntimeScope(_))
+    ) {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    let guest = identity.guest.as_str();
+    if guest.is_empty() || guest.contains('/') || guest.contains('\0') {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    let runtime_dir = PathBuf::from(format!("/run/d2b/vms/{guest}"));
+    let swtpm_dir = identity.state_root.clone();
+    let per_vm_root = swtpm_dir
+        .parent()
+        .ok_or(reasons::DERIVATION_FAILED)?
+        .to_path_buf();
+
+    for writable in &plan.mount_policy.writable_paths {
+        let path = Path::new(&writable.path);
+        if !path.is_absolute() {
+            return Err(reasons::DERIVATION_FAILED);
+        }
+        if path.file_name().and_then(|name| name.to_str()) == Some("swtpm") {
+            if path != swtpm_dir {
+                return Err(reasons::IDENTITY_MISMATCH);
+            }
+        } else if path.starts_with("/run/d2b/vms") && path != runtime_dir {
+            return Err(reasons::IDENTITY_MISMATCH);
+        }
+    }
+
+    verify_resource_backed_argv(plan, identity, &runtime_dir)?;
+    Ok(SwtpmDirPaths {
+        vm_id: guest.to_owned(),
+        swtpm_dir,
+        per_vm_root,
+        runtime_dir,
+        marker_dir: PathBuf::from(MARKER_TREE),
+        marker_name: guest.to_owned(),
+    })
+}
+
+/// Fence one resource-backed swtpm argv against the trusted identity. The
+/// long-lived `swtpm` worker carries `--tpmstate`/`--ctrl`/`--server`; the
+/// one-shot flush carries `--unix <ctrl>`.
+fn verify_resource_backed_argv(
+    plan: &SpawnRunnerPlan,
+    identity: &ResourceBackedSwtpm,
+    runtime_dir: &Path,
+) -> Result<(), &'static str> {
+    let argv = &plan.argv;
+    if let Some(raw) = flag_value(argv, "--tpmstate") {
+        let state_dir = PathBuf::from(key_value(raw, "dir").ok_or(reasons::IDENTITY_MISMATCH)?);
+        check_resource_backed_state_dir(&state_dir, identity)?;
+        let ctrl = key_value(
+            flag_value(argv, "--ctrl").ok_or(reasons::IDENTITY_MISMATCH)?,
+            "path",
+        )
+        .ok_or(reasons::IDENTITY_MISMATCH)?;
+        if Path::new(ctrl) != state_dir.join("ctrl.sock") {
+            return Err(reasons::IDENTITY_MISMATCH);
+        }
+        let server = key_value(
+            flag_value(argv, "--server").ok_or(reasons::IDENTITY_MISMATCH)?,
+            "path",
+        )
+        .ok_or(reasons::IDENTITY_MISMATCH)?;
+        if Path::new(server) != runtime_dir.join("tpm.sock") {
+            return Err(reasons::IDENTITY_MISMATCH);
+        }
+        return Ok(());
+    }
+    let ctrl = PathBuf::from(flag_value(argv, "--unix").ok_or(reasons::IDENTITY_MISMATCH)?);
+    if ctrl.file_name().and_then(|name| name.to_str()) != Some("ctrl.sock") {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    let state_dir = ctrl.parent().ok_or(reasons::IDENTITY_MISMATCH)?;
+    check_resource_backed_state_dir(state_dir, identity)
+}
+
+/// The trusted state directory of one Device worker: exactly one component
+/// under the trusted state root, named by the Device's own state Volume when
+/// that uid is available.
+fn check_resource_backed_state_dir(
+    state_dir: &Path,
+    identity: &ResourceBackedSwtpm,
+) -> Result<(), &'static str> {
+    if !state_dir.is_absolute()
+        || state_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        || state_dir.parent() != Some(identity.state_root.as_path())
+    {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    let leaf = state_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(reasons::IDENTITY_MISMATCH)?;
+    if leaf.is_empty() || leaf == "." || leaf == ".." {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    if let Some(expected) = identity.state_volume.as_deref()
+        && leaf != expected
+    {
+        return Err(reasons::IDENTITY_MISMATCH);
+    }
+    Ok(())
+}
+
+/// The value following one exact argv flag.
+fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+    let mut args = argv.iter();
+    while let Some(arg) = args.next() {
+        if arg == flag {
+            return args.next().map(String::as_str);
+        }
+    }
+    None
+}
+
+/// One `key=value` field of a comma-separated swtpm option value.
+fn key_value<'a>(value: &'a str, key: &str) -> Option<&'a str> {
+    value
+        .split(',')
+        .find_map(|field| field.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))
+}
+
 /// Derive + validate the path set from a resolved spawn plan. Refuses
 /// any plan whose writable paths don't contain exactly the persistent
 /// swtpm dir (ending `/swtpm`, NOT under `/run`) and the runtime dir
-/// (under `/run/d2b/vms`).
+/// (under `/run/d2b/vms`). Resource-backed placements are refused here: their
+/// identity is never in the cgroup (`private_cgroup_placement`) and must come
+/// from the verified bundle through [`derive_resource_backed_paths`].
 pub fn derive_paths(plan: &SpawnRunnerPlan) -> Result<SwtpmDirPaths, &'static str> {
-    let vm_id =
-        parse_vm_from_subtree(&plan.cgroup_placement.subtree).ok_or(reasons::DERIVATION_FAILED)?;
+    let vm_id = match parse_placement_segment(&plan.cgroup_placement.subtree) {
+        Some(PlacementSegment::Vm(vm)) => vm,
+        _ => return Err(reasons::DERIVATION_FAILED),
+    };
 
     let mut swtpm_dir: Option<PathBuf> = None;
     let mut runtime_dir: Option<PathBuf> = None;
@@ -1466,6 +1794,275 @@ mod tests {
         assert_eq!(paths.runtime_dir, PathBuf::from("/run/d2b/vms/work"));
         assert_eq!(paths.marker_dir, PathBuf::from(MARKER_TREE));
         assert_eq!(paths.marker_name, "work");
+    }
+
+    /// The trusted identity a resource-backed launch resolves from the
+    /// bundle for the fixture-shaped Device (`device-<32hex>-tpm-state`).
+    fn resource_backed_identity() -> ResourceBackedSwtpm {
+        ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: PathBuf::from("/var/lib/d2b/tpm-state"),
+            state_volume: Some(
+                "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned(),
+            ),
+        }
+    }
+
+    fn resource_backed_state_dir(identity: &ResourceBackedSwtpm) -> PathBuf {
+        identity
+            .state_root
+            .join(identity.state_volume.as_deref().expect("volume name"))
+    }
+
+    fn resource_backed_plan(
+        argv: Vec<String>,
+        writable_paths: Vec<PathBuf>,
+    ) -> SpawnRunnerPlan {
+        use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
+        SpawnRunnerPlan {
+            binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
+            argv,
+            uid: 61_000,
+            gid: 61_000,
+            supplementary_groups: vec![],
+            env: vec![],
+            capabilities: vec![],
+            namespaces: d2b_core::minijail_profile::NamespaceSet {
+                mount: true,
+                pid: true,
+                net: false,
+                ipc: true,
+                uts: true,
+                user: true,
+            },
+            seccomp_policy_ref: Some("w1-swtpm".into()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec![],
+                writable_paths: writable_paths
+                    .into_iter()
+                    .map(|path| WritablePath {
+                        path: path.display().to_string(),
+                        purpose: "device worker".into(),
+                    })
+                    .collect(),
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds: vec![],
+                bind_mounts: vec![],
+            },
+            cgroup_placement: CgroupPlacement {
+                // What `private_cgroup_placement` writes for a typed launch:
+                // `d2b.slice/process-<64hex>/<role>`.
+                subtree: format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"a".repeat(64)),
+                controllers: vec![],
+                delegated: true,
+            },
+            user_namespace: None,
+            umask: None,
+        }
+    }
+
+    /// The swtpm argv tail `d2b-provider-device-tpm` renders for one Device
+    /// worker (argv[0] dropped by the ticket).
+    fn resource_backed_worker_argv(
+        identity: &ResourceBackedSwtpm,
+        state_dir: &Path,
+    ) -> Vec<String> {
+        vec![
+            "swtpm".to_owned(),
+            "socket".to_owned(),
+            "--tpm2".to_owned(),
+            "--tpmstate".to_owned(),
+            format!("dir={}", state_dir.display()),
+            "--ctrl".to_owned(),
+            format!(
+                "type=unixio,path={},mode=0660,uid=61000,gid=61000",
+                state_dir.join("ctrl.sock").display()
+            ),
+            "--server".to_owned(),
+            format!(
+                "type=unixio,path=/run/d2b/vms/{}/tpm.sock,mode=0660,uid=61000,gid=61000",
+                identity.guest
+            ),
+            "--flags".to_owned(),
+            "startup-clear".to_owned(),
+            "--log".to_owned(),
+            format!("file={},level=20", state_dir.join("swtpm.log").display()),
+            "--pid".to_owned(),
+            format!("file={}", state_dir.join("swtpm.pid").display()),
+        ]
+    }
+
+    #[test]
+    fn resource_backed_paths_accept_the_trusted_state_dir_and_runtime_socket() {
+        let identity = resource_backed_identity();
+        let state_dir = resource_backed_state_dir(&identity);
+        let argv = resource_backed_worker_argv(&identity, &state_dir);
+        let plan = resource_backed_plan(
+            argv,
+            vec![
+                identity.state_root.clone(),
+                PathBuf::from("/run/d2b/vms/acceptance-guest"),
+            ],
+        );
+        let paths = derive_resource_backed_paths(&plan, &identity).expect("trusted launch");
+        assert_eq!(paths.vm_id, "acceptance-guest");
+        assert_eq!(paths.swtpm_dir, identity.state_root);
+        assert_eq!(paths.runtime_dir, PathBuf::from("/run/d2b/vms/acceptance-guest"));
+        assert_eq!(paths.marker_name, "acceptance-guest");
+    }
+
+    #[test]
+    fn resource_backed_paths_refuse_a_state_dir_outside_the_trusted_root() {
+        let identity = resource_backed_identity();
+        let foreign = PathBuf::from("/var/lib/d2b/tpm-state/device-other-tpm-state");
+        let argv = resource_backed_worker_argv(&identity, &foreign);
+        let plan = resource_backed_plan(argv, vec![]);
+        assert_eq!(
+            derive_resource_backed_paths(&plan, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn resource_backed_paths_refuse_a_foreign_state_volume_leaf() {
+        let identity = resource_backed_identity();
+        let sibling = identity
+            .state_root
+            .join("device-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-tpm-state");
+        let argv = resource_backed_worker_argv(&identity, &sibling);
+        let plan = resource_backed_plan(argv, vec![]);
+        assert_eq!(
+            derive_resource_backed_paths(&plan, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn resource_backed_paths_refuse_a_runtime_socket_of_another_guest() {
+        let identity = resource_backed_identity();
+        let state_dir = resource_backed_state_dir(&identity);
+        let mut argv = resource_backed_worker_argv(&identity, &state_dir);
+        let server = argv
+            .iter_mut()
+            .find(|arg| arg.starts_with("type=unixio,path=/run/d2b/vms/"))
+            .expect("server socket arg");
+        *server = server.replace("acceptance-guest", "other-guest");
+        let plan = resource_backed_plan(argv, vec![]);
+        assert_eq!(
+            derive_resource_backed_paths(&plan, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn resource_backed_paths_refuse_plan_paths_that_contradict_the_identity() {
+        let identity = resource_backed_identity();
+        let state_dir = resource_backed_state_dir(&identity);
+        let argv = resource_backed_worker_argv(&identity, &state_dir);
+        let plan = resource_backed_plan(
+            argv,
+            vec![PathBuf::from("/var/lib/d2b/vms/other/swtpm")],
+        );
+        assert_eq!(
+            derive_resource_backed_paths(&plan, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn resource_backed_paths_accept_the_flush_ctrl_socket_shape() {
+        let identity = resource_backed_identity();
+        let state_dir = resource_backed_state_dir(&identity);
+        let plan = resource_backed_plan(
+            vec![
+                "swtpm_ioctl".to_owned(),
+                "-i".to_owned(),
+                "--unix".to_owned(),
+                state_dir.join("ctrl.sock").display().to_string(),
+            ],
+            vec![],
+        );
+        derive_resource_backed_paths(&plan, &identity).expect("flush shape accepted");
+
+        let foreign = resource_backed_plan(
+            vec![
+                "swtpm_ioctl".to_owned(),
+                "-i".to_owned(),
+                "--unix".to_owned(),
+                "/var/lib/d2b/tpm-state/device-foreign/ctrl.sock".to_owned(),
+            ],
+            vec![],
+        );
+        assert_eq!(
+            derive_resource_backed_paths(&foreign, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn resource_backed_paths_refuse_a_vm_scoped_placement() {
+        let identity = resource_backed_identity();
+        let state_dir = resource_backed_state_dir(&identity);
+        let argv = resource_backed_worker_argv(&identity, &state_dir);
+        let mut plan = resource_backed_plan(argv, vec![]);
+        plan.cgroup_placement.subtree = "d2b.slice/acceptance-guest/swtpm".to_owned();
+        assert_eq!(
+            derive_resource_backed_paths(&plan, &identity),
+            Err(reasons::IDENTITY_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn parse_placement_segment_separates_vm_names_from_runtime_scopes() {
+        assert_eq!(
+            parse_placement_segment("d2b.slice/work/swtpm"),
+            Some(PlacementSegment::Vm("work".to_owned()))
+        );
+        assert_eq!(
+            parse_placement_segment("d2b.slice/process-abcdef.scope/swtpm"),
+            Some(PlacementSegment::Vm("process-abcdef".to_owned()))
+        );
+        let scope = "process-".to_owned() + &"0f".repeat(32);
+        assert_eq!(
+            parse_placement_segment(&format!("d2b.slice/{scope}/swtpm")),
+            Some(PlacementSegment::RuntimeScope(scope.clone()))
+        );
+        assert_eq!(
+            parse_placement_segment(&format!("d2b.slice/{scope}")),
+            Some(PlacementSegment::RuntimeScope(scope))
+        );
+        assert_eq!(parse_placement_segment("/elsewhere/work"), None);
+        assert_eq!(parse_placement_segment("d2b.slice/"), None);
+    }
+
+    #[test]
+    fn device_guest_owner_reads_only_the_named_devices_guest_owner() {
+        let bundle = serde_json::json!({
+            "resources": [
+                { "type": "Device", "metadata": { "name": "tpm0", "ownerRef": "Guest/acceptance-guest" } },
+                { "type": "Device", "metadata": { "name": "gpu0", "ownerRef": "Guest/other-guest" } },
+                { "type": "Process", "metadata": { "name": "swtpm-tpm0", "ownerRef": "Device/tpm0" } },
+                { "type": "Device", "metadata": { "name": "gpu1", "ownerRef": "Provider/device-gpu" } },
+            ]
+        });
+        let bytes = serde_json::to_vec(&bundle).unwrap();
+        assert_eq!(
+            device_guest_owner(&bytes, "tpm0").as_deref(),
+            Some("acceptance-guest")
+        );
+        assert_eq!(device_guest_owner(&bytes, "gpu1"), None);
+        assert_eq!(device_guest_owner(&bytes, "missing"), None);
+        assert_eq!(device_guest_owner(b"not json", "tpm0"), None);
+    }
+
+    #[test]
+    fn state_volume_name_matches_the_provider_naming() {
+        let uid = ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").unwrap();
+        assert_eq!(
+            state_volume_name(&uid),
+            "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state"
+        );
     }
 
     #[test]

@@ -320,6 +320,39 @@ impl ProcessTemplateBinding {
         )
     }
 
+    /// Construct one *declared-row* template whose Processes the owning
+    /// Provider's Device controllers may launch with bounded arguments.
+    ///
+    /// This is [`Self::new`] plus the launch-argument admission: the row is
+    /// declared in the bundle (the declared-row arm of
+    /// [`ResourceBundle::verify_process_templates`] proves it), and the
+    /// controller that owns the row - not the Provider that signed the
+    /// executable - composes the arguments at launch time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_launch_args(
+        process_ref: ResourceRef,
+        owner_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        template: BoundedToken,
+        artifact_id: ArtifactId,
+        binary_ref: BinaryRef,
+        artifact_digest: ArtifactDigest,
+        binary_path: impl Into<String>,
+    ) -> Result<Self, ResourceBundleError> {
+        Self::new_inner(
+            process_ref,
+            owner_ref,
+            execution_ref,
+            template,
+            artifact_id,
+            binary_ref,
+            artifact_digest,
+            binary_path,
+            false,
+            true,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
         process_ref: ResourceRef,
@@ -334,8 +367,10 @@ impl ProcessTemplateBinding {
         launch_args: bool,
     ) -> Result<Self, ResourceBundleError> {
         let binary_path = binary_path.into();
-        if process_ref.resource_type().as_str() != "Process"
-            || owner_ref.resource_type().as_str() != "Provider"
+        if !matches!(
+            process_ref.resource_type().as_str(),
+            "Process" | "EphemeralProcess"
+        ) || owner_ref.resource_type().as_str() != "Provider"
             || !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
             || binary_path.is_empty()
             || binary_path.len() > 4096
@@ -701,11 +736,36 @@ impl ResourceBundle {
             let Some(resource) = resources.get(binding.process_ref()) else {
                 return Err(ResourceBundleError::ProcessTemplateMismatch);
             };
-            if resource.resource_type().as_str() != "Process"
-                || resource.metadata().owner_ref() != Some(binding.owner_ref())
-            {
+            // Two declared-row classes are bound this way:
+            //
+            // * a Provider-owned controller row, whose `ownerRef` is the
+            //   binding's owner Provider itself, and
+            // * a Device-owned worker row: the Device Provider projects the
+            //   worker's Process under the Device that claims it
+            //   (`ownerRef: Device/<name>`, `processClass: worker`), and the
+            //   binding names the Device Provider whose signed artifact pins
+            //   the executable. The Device's own `providerRef` must be that
+            //   same Provider, so a Device can never bind another Provider's
+            //   worker template.
+            let Some(row_owner) = resource.metadata().owner_ref() else {
                 return Err(ResourceBundleError::ProcessTemplateMismatch);
-            }
+            };
+            let device_owner = if row_owner == binding.owner_ref() {
+                if resource.resource_type().as_str() != "Process" {
+                    return Err(ResourceBundleError::ProcessTemplateMismatch);
+                }
+                None
+            } else {
+                if row_owner.resource_type().as_str() != "Device"
+                    || !matches!(
+                        resource.resource_type().as_str(),
+                        "Process" | "EphemeralProcess"
+                    )
+                {
+                    return Err(ResourceBundleError::ProcessTemplateMismatch);
+                }
+                Some(row_owner)
+            };
             let CanonicalJsonValue::String(execution_ref) = resource
                 .spec()
                 .get("executionRef")
@@ -742,7 +802,29 @@ impl ResourceBundle {
             else {
                 return Err(ResourceBundleError::ProcessTemplateMismatch);
             };
-            if process_class != "controller" {
+            let Some(device_ref) = device_owner else {
+                if process_class != "controller" {
+                    return Err(ResourceBundleError::ProcessTemplateMismatch);
+                }
+                continue;
+            };
+            if process_class != "worker" {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let Some(device) = resources.get(device_ref) else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if device.resource_type().as_str() != "Device" {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            }
+            let CanonicalJsonValue::String(device_provider) = device
+                .spec()
+                .get("providerRef")
+                .ok_or(ResourceBundleError::ProcessTemplateMismatch)?
+            else {
+                return Err(ResourceBundleError::ProcessTemplateMismatch);
+            };
+            if device_provider != &binding.owner_ref().to_canonical_string() {
                 return Err(ResourceBundleError::ProcessTemplateMismatch);
             }
         }

@@ -2917,7 +2917,7 @@ fn refresh_spawn_runner_acls(
             .ok_or_else(|| LiveHandlerError::SpawnFailed {
                 detail: "cloud-hypervisor api socket has no state-directory parent".to_owned(),
             })?;
-        grant_runner_state_dir_acls(state_dir, broker_state_dir, plan.uid).map_err(|detail| {
+        grant_runner_tree_acls(state_dir, broker_state_dir, plan.uid).map_err(|detail| {
             LiveHandlerError::SpawnFailed {
                 detail: format!(
                     "refresh cloud-hypervisor state-directory ACL for runner uid {}: {detail}",
@@ -2941,17 +2941,29 @@ fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
         .find_map(|pair| (pair[0] == "--api-socket").then(|| PathBuf::from(&pair[1])))
 }
 
-fn runner_state_dir_acl_targets(
-    state_dir: &Path,
-    broker_state_dir: &Path,
+/// Per-runner ACL targets for one runner path tree the broker must open to
+/// a runner principal: search (`u:<uid>:--x`) on every ancestor that no
+/// unprivileged principal can already search, and full `u:<uid>:rwx` on the
+/// tree leaf.
+///
+/// `leaf` must be `bound` or strictly inside it, and both must be absolute
+/// and normalized: the bound is the broker-owned root the grant may never
+/// reach above (the broker state directory for a runner's state tree, the
+/// broker runtime directory for a runner's private socket tree). Ancestors
+/// already world-searchable need no entry - every principal can already
+/// reach them. A missing ancestor is refused instead of skipped, so a
+/// partially-open chain can never be granted silently.
+fn runner_tree_acl_targets(
+    leaf: &Path,
+    bound: &Path,
     uid: u32,
 ) -> Result<Vec<(PathBuf, String)>, String> {
-    if !state_dir.is_absolute() || !broker_state_dir.is_absolute() {
-        return Err("state-directory ACL paths must be absolute".to_owned());
+    if !leaf.is_absolute() || !bound.is_absolute() {
+        return Err("runner ACL paths must be absolute".to_owned());
     }
-    if state_dir
+    if leaf
         .components()
-        .chain(broker_state_dir.components())
+        .chain(bound.components())
         .any(|component| {
             matches!(
                 component,
@@ -2959,22 +2971,26 @@ fn runner_state_dir_acl_targets(
             )
         })
     {
-        return Err("state-directory ACL paths must be normalized".to_owned());
+        return Err("runner ACL paths must be normalized".to_owned());
     }
-    if state_dir.strip_prefix(broker_state_dir).is_err() {
-        return Err("runner state directory is outside the broker state directory".to_owned());
+    if leaf.strip_prefix(bound).is_err() {
+        return Err(format!(
+            "runner path {} is outside the broker-owned root {}",
+            leaf.display(),
+            bound.display()
+        ));
     }
 
     let mut chain = Vec::new();
-    let mut directory = state_dir;
+    let mut directory = leaf;
     loop {
         chain.push(directory.to_path_buf());
-        if directory == broker_state_dir {
+        if directory == bound {
             break;
         }
         directory = directory
             .parent()
-            .ok_or_else(|| "runner state directory has no broker-owned ancestor".to_owned())?;
+            .ok_or_else(|| "runner path has no broker-owned ancestor".to_owned())?;
     }
     chain.reverse();
 
@@ -2982,12 +2998,12 @@ fn runner_state_dir_acl_targets(
     let mut targets = Vec::with_capacity(chain.len());
     for (index, directory) in chain.into_iter().enumerate() {
         if index != last {
-            match dir_needs_daemon_traverse(&directory).map_err(|failure| failure.legacy_detail)? {
+            match dir_needs_traverse_grant(&directory).map_err(|failure| failure.legacy_detail)? {
                 Some(true) => targets.push((directory, format!("u:{uid}:--x"))),
                 Some(false) => {}
                 None => {
                     return Err(format!(
-                        "runner state directory ancestor is absent: {}",
+                        "runner path ancestor is absent: {}",
                         directory.display()
                     ));
                 }
@@ -2999,13 +3015,287 @@ fn runner_state_dir_acl_targets(
     Ok(targets)
 }
 
-fn grant_runner_state_dir_acls(
-    state_dir: &Path,
-    broker_state_dir: &Path,
-    uid: u32,
-) -> Result<(), String> {
-    for (directory, acl) in runner_state_dir_acl_targets(state_dir, broker_state_dir, uid)? {
+fn grant_runner_tree_acls(leaf: &Path, bound: &Path, uid: u32) -> Result<(), String> {
+    for (directory, acl) in runner_tree_acl_targets(leaf, bound, uid)? {
         setfacl_fd_safe(&directory, &acl, AclPathKind::Directory)?;
+    }
+    Ok(())
+}
+
+/// The two path trees one binding-owned serving worker's launch ticket
+/// names, parsed from the trusted argv the broker composed.
+#[derive(Debug, PartialEq, Eq)]
+struct ServingWorkerLaunchPaths {
+    /// Directory the worker binds its private socket in.
+    socket_dir: PathBuf,
+    /// View root the worker serves.
+    shared_dir: PathBuf,
+    /// Whether the attachment is served read-only (`--readonly`).
+    read_only: bool,
+}
+
+/// Whether `path` is absolute and carries no `.`/`..` component.
+///
+/// A `.`/`..` component is refused outright wherever the broker fences a
+/// caller-named path with a `starts_with` comparison: `/run/d2b/../etc` is
+/// a component prefix of `/run/d2b` while resolving outside it.
+fn is_anchored_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+}
+
+/// The absolute, normalized spelling of one argv path value.
+fn anchored_absolute_path(raw: &str) -> Option<PathBuf> {
+    if raw.is_empty() || raw.contains('\0') {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    is_anchored_absolute(&path).then_some(path)
+}
+
+/// Parse `--socket-path=`, `--shared-dir=` and `--readonly` out of a
+/// binding-owned serving worker's argv.
+///
+/// Both path flags are mandatory: the signed launch ticket always carries
+/// the frozen virtiofsd spelling (`serving_worker_launch_args` renders
+/// `--socket-path=<p>` / `--shared-dir=<p>`), so a serving-posture launch
+/// that names neither is refused rather than left with a partially-open
+/// tree the worker would silently fail to use.
+fn serving_worker_launch_paths(argv: &[String]) -> Result<ServingWorkerLaunchPaths, String> {
+    let mut socket_path = None;
+    let mut shared_dir = None;
+    let mut read_only = false;
+    for argument in argv {
+        if let Some(value) = argument.strip_prefix("--socket-path=") {
+            socket_path = Some(value);
+        } else if let Some(value) = argument.strip_prefix("--shared-dir=") {
+            shared_dir = Some(value);
+        } else if argument == "--readonly" {
+            read_only = true;
+        }
+    }
+    let socket_path = anchored_absolute_path(
+        socket_path.ok_or_else(|| "serving worker argv names no --socket-path".to_owned())?,
+    )
+    .ok_or_else(|| "serving worker --socket-path is not an absolute anchored path".to_owned())?;
+    let shared_dir = anchored_absolute_path(
+        shared_dir.ok_or_else(|| "serving worker argv names no --shared-dir".to_owned())?,
+    )
+    .ok_or_else(|| "serving worker --shared-dir is not an absolute anchored path".to_owned())?;
+    let socket_dir = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "serving worker --socket-path has no parent directory".to_owned())?
+        .to_path_buf();
+    Ok(ServingWorkerLaunchPaths {
+        socket_dir,
+        shared_dir,
+        read_only,
+    })
+}
+
+/// Per-runner ACL targets for one served view root: search
+/// (`u:<uid>:--x`) on every ancestor no unprivileged principal can already
+/// search, and read/traverse (`u:<uid>:r-x`) - or read/write/traverse for a
+/// read-write attachment - on the served root itself.
+///
+/// Unlike [`runner_tree_acl_targets`] there is no broker-owned bound to
+/// stop at: a served root is a bundle-declared storage path, so the walk
+/// stops at the first ancestor every principal can already search. That
+/// level (and every level above it) already grants search to everyone, so
+/// nothing outside the served tree is ever opened.
+fn served_view_root_acl_targets(
+    root: &Path,
+    uid: u32,
+    read_only: bool,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    if !is_anchored_absolute(root) {
+        return Err("served view root must be an absolute normalized path".to_owned());
+    }
+    let mut targets = Vec::new();
+    for directory in root.ancestors().skip(1) {
+        if directory.as_os_str().is_empty() {
+            break;
+        }
+        match dir_needs_traverse_grant(directory).map_err(|failure| failure.legacy_detail)? {
+            Some(true) => targets.push((directory.to_path_buf(), format!("u:{uid}:--x"))),
+            Some(false) => break,
+            None => {
+                return Err(format!(
+                    "served view root ancestor is absent: {}",
+                    directory.display()
+                ));
+            }
+        }
+    }
+    targets.push((
+        root.to_path_buf(),
+        format!("u:{uid}:{}", if read_only { "r-x" } else { "rwx" }),
+    ));
+    Ok(targets)
+}
+
+/// Whether `root` is an existing directory the worker can be granted a
+/// served view on (symlinks refused: `open_o_path_metadata` resolves with
+/// `RESOLVE_NO_SYMLINKS`).
+fn validate_served_view_root(root: &Path) -> Result<(), String> {
+    match open_o_path_metadata(root).map_err(|failure| failure.legacy_detail)? {
+        Some((_file, metadata)) if metadata.file_type().is_dir() => Ok(()),
+        Some(_) => Err(format!(
+            "serving worker view root {} is not a directory",
+            root.display()
+        )),
+        None => Err(format!(
+            "serving worker view root {} does not exist",
+            root.display()
+        )),
+    }
+}
+
+/// Open the two path trees a binding-owned serving worker's trusted launch
+/// ticket names to the runner principal with per-runner ACLs.
+///
+/// The worker runs as the trusted intent's principal, never as the daemon:
+/// the broker's only authentication factor is peer identity
+/// (`peer_matches_instance` admits exactly the daemon uid/gid on
+/// `/run/d2b/priv.sock`), so a worker launched with the daemon identity
+/// would be able to call the whole daemon API after a guest -> worker
+/// compromise. The daemon-provisioned trees the worker legitimately needs
+/// are therefore opened to its own principal instead:
+///
+/// - its private socket directory (strictly inside `runtime_root`, the
+///   directory the broker's own socket lives in) gets `rwx` plus search on
+///   the chain up to `runtime_root`, the same shape the cloud-hypervisor
+///   runner's per-VM socket directory already uses;
+/// - its served view root gets `r-x` (`rwx` for a read-write attachment)
+///   plus search on the non-world-searchable chain above it.
+///
+/// Every failure is fail-closed: a path that is absent, not a directory, a
+/// symlink, outside `runtime_root`, or unopenable for setfacl refuses the
+/// launch instead of spawning a worker that cannot serve.
+pub(crate) fn grant_serving_worker_launch_acls(
+    argv: &[String],
+    uid: u32,
+    runtime_root: &Path,
+) -> Result<(), LiveHandlerError> {
+    let paths = serving_worker_launch_paths(argv)
+        .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
+    // The private socket is broker-runtime state: it must live strictly
+    // below the broker's own runtime directory, so this grant can never
+    // reach above a tree the broker owns.
+    if paths.socket_dir == runtime_root || !paths.socket_dir.starts_with(runtime_root) {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: format!(
+                "serving worker private socket directory {} is outside the broker runtime directory {}",
+                paths.socket_dir.display(),
+                runtime_root.display()
+            ),
+        });
+    }
+    // All path validation happens before any mutation: a launch whose view
+    // root is unusable must not leave a half-opened socket tree behind.
+    validate_served_view_root(&paths.shared_dir)
+        .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?;
+    grant_runner_tree_acls(&paths.socket_dir, runtime_root, uid).map_err(|detail| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("serving worker private socket directory ACL: {detail}"),
+        }
+    })?;
+    for (directory, acl) in served_view_root_acl_targets(&paths.shared_dir, uid, paths.read_only)
+        .map_err(|detail| LiveHandlerError::SpawnFailed { detail })?
+    {
+        setfacl_fd_safe(&directory, &acl, AclPathKind::Directory).map_err(|detail| {
+            LiveHandlerError::SpawnFailed {
+                detail: format!("serving worker view root ACL: {detail}"),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// The socket paths one Device-owned worker's trusted launch ticket asks the
+/// worker to bind itself.
+///
+/// Two composed shapes live inside the broker runtime root: the long-lived
+/// swtpm worker's `--server` entry value's `path=` field, and the GPU
+/// sidecar's `--socket` value. Both are rendered by the daemon's own argv
+/// generators from the declared template and the daemon's runtime paths,
+/// never by the caller. The one-shot flush (`--unix <ctrl>`) binds nothing,
+/// and the video sidecar's `--socket-path` lives under the video module's own
+/// `/run/d2b-video` runtime dir, so neither is a grant target here; the
+/// swtpm `--ctrl` socket lives in the state Volume, whose own layout grants
+/// the worker principal `rwx` already.
+fn device_worker_socket_paths(argv: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(value) = argv_flag_value(argv, "--server")
+        && let Some(path) = value
+            .split(',')
+            .find_map(|field| field.strip_prefix("path="))
+    {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(path) = argv_flag_value(argv, "--socket") {
+        paths.push(PathBuf::from(path));
+    }
+    paths
+}
+
+/// The value following one exact argv flag.
+fn argv_flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+    argv.windows(2)
+        .find_map(|pair| (pair[0] == flag).then(|| pair[1].as_str()))
+}
+
+/// Open a Device-owned worker's socket directory to the launched principal
+/// with the same per-runner ACL shape the binding-owned serving worker's
+/// socket directory gets ([`grant_serving_worker_launch_acls`]).
+///
+/// The worker runs as the trusted intent's principal, never as the daemon:
+/// the per-VM device socket directory under the broker runtime root is owned
+/// by the daemon (`d2bd:d2bd 0770`) and carries no grant for that principal,
+/// so the worker cannot bind its socket there without this. The gate is the
+/// trusted resolved intent's role (`d2b_core::bundle_resolver::is_device_worker_role`),
+/// never a request field.
+///
+/// Only the directory the ticket's socket strictly lives in is opened, and
+/// only inside the broker's own runtime root; a ticket naming a device socket
+/// outside it is refused (fail-closed) rather than launched against a
+/// directory the broker does not own. A device-worker ticket that binds no
+/// such socket (the one-shot flush) grants nothing.
+pub(crate) fn grant_device_worker_launch_acls(
+    argv: &[String],
+    uid: u32,
+    runtime_root: &Path,
+) -> Result<(), LiveHandlerError> {
+    for socket in device_worker_socket_paths(argv) {
+        let directory = socket
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "device worker socket {} has no directory to grant",
+                    socket.display()
+                ),
+            })?;
+        if directory == runtime_root || !directory.starts_with(runtime_root) {
+            return Err(LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "device worker socket directory {} is outside the broker runtime directory {}",
+                    directory.display(),
+                    runtime_root.display()
+                ),
+            });
+        }
+        grant_runner_tree_acls(directory, runtime_root, uid).map_err(|detail| {
+            LiveHandlerError::SpawnFailed {
+                detail: format!("device worker socket directory ACL: {detail}"),
+            }
+        })?;
     }
     Ok(())
 }
@@ -3114,13 +3404,14 @@ fn setfacl_component_session(
         .map_err(|failure| failure.component_session_detail(op_label, target_class))
 }
 
-/// Whether the daemon needs an explicit `--x` grant to traverse `path`.
+/// Whether a runner principal needs an explicit `--x` grant to traverse
+/// `path`.
 ///
-/// `Ok(Some(true))` if `path` is a directory the daemon cannot already
-/// search (world execute bit clear). `Ok(Some(false))` if it is a
+/// `Ok(Some(true))` if `path` is a directory no unprivileged principal can
+/// already search (world execute bit clear). `Ok(Some(false))` if it is a
 /// world-traversable directory (no grant needed) or not a directory.
 /// `Ok(None)` if the path is absent.
-fn dir_needs_daemon_traverse(path: &Path) -> Result<Option<bool>, SetfaclFailure> {
+fn dir_needs_traverse_grant(path: &Path) -> Result<Option<bool>, SetfaclFailure> {
     let Some((_file, metadata)) = open_o_path_metadata(path)? else {
         return Ok(None);
     };
@@ -3159,7 +3450,7 @@ fn grant_component_session_traversal_acls(leaf: &Path) -> Result<(), String> {
         } else {
             "ancestor"
         };
-        let needs = dir_needs_daemon_traverse(dir)
+        let needs = dir_needs_traverse_grant(dir)
             .map_err(|failure| failure.component_session_detail("grant", target_class))?;
         if needs == Some(true)
             && let Some((dev, ino)) = setfacl_component_session(
@@ -3323,6 +3614,10 @@ pub fn live_spawn_runner(
     request_fds: Vec<std::os::fd::OwnedFd>,
     activation_input: Option<&ActivationRunnerInput>,
     broker_state_dir: &Path,
+    // Trusted identity of a resource-backed `w1-swtpm` launch, resolved from
+    // the verified bundle by the dispatch layer (`None` for every other
+    // launch); the swtpm-dir fence uses it instead of the cgroup placement.
+    swtpm_identity: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -3360,7 +3655,7 @@ pub fn live_spawn_runner(
     // before swtpm - which opens the NVRAM by pathname under its user
     // namespace - is ever spawned. ONLY the persistent state dir is
     // touched; the `/run` runtime-socket-dir posture is left intact.
-    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan)?;
+    let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan, swtpm_identity)?;
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
 
     // Pre-open /dev/dri/renderD128 for gpu-render-node broker-pre-NS
@@ -3500,31 +3795,43 @@ pub fn live_spawn_runner(
 /// on success, and a path-free [`LiveHandlerError::SwtpmDirHardening`]
 /// on fail-closed so the dispatch layer can emit the terminal
 /// `PrepareSwtpmDir` record from the carried audit.
+///
+/// Two placements exist:
+///
+/// - a **VM-scoped** placement (`d2b.slice/<vm>/...`, the legacy VM DAG) is
+///   provisioned and identity-bound here, exactly as before;
+/// - a **resource-backed** placement (`d2b.slice/process-<64hex>/...`,
+///   `private_cgroup_placement`) carries no VM identity in the cgroup and the
+///   typed Device-worker intent ships no writable paths, so the identity comes
+///   from the verified bundle (`resource_backed`) and the launch is fenced
+///   against it. Provisioning is NOT done here: in the v3 model the TPM state
+///   Volume owns that lifecycle (`createPolicy: create-if-never-provisioned`,
+///   `repairPolicy: fail-closed`, `packages/d2b-provider-volume-local`), and
+///   the trusted root is shared by every Device of the host, so a per-launch
+///   ownership stamp would be wrong. The hook's job for those launches is to
+///   refuse any launch whose declared paths or argv do not name the trusted
+///   directory.
 fn maybe_harden_swtpm_dir(
     plan: &SpawnRunnerPlan,
+    resource_backed: Option<&crate::ops::swtpm_dir::ResourceBackedSwtpm>,
 ) -> Result<Option<crate::ops::audit_op::SwtpmDirAudit>, LiveHandlerError> {
     if plan.seccomp_policy_ref.as_deref() != Some("w1-swtpm") {
         return Ok(None);
     }
-    let paths = crate::ops::swtpm_dir::derive_paths(plan).map_err(|reason| {
-        LiveHandlerError::SwtpmDirHardening {
-            audit: crate::ops::swtpm_dir::SwtpmHardenError {
-                reason,
-                audit: crate::ops::audit_op::SwtpmDirAudit {
-                    vm_id: String::new(),
-                    base_dir_hash: String::new(),
-                    result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
-                    mode: 0o700,
-                    owner_uid: plan.uid,
-                    owner_gid: plan.gid,
-                    marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
-                    fail_reason: Some(reason.to_owned()),
-                },
-            }
-            .audit,
-            reason,
-        }
-    })?;
+    let placement = crate::ops::swtpm_dir::parse_placement_segment(&plan.cgroup_placement.subtree);
+    if let Some(crate::ops::swtpm_dir::PlacementSegment::RuntimeScope(_)) = placement {
+        // Fail closed when no trusted identity resolved: an unidentifiable
+        // resource-backed swtpm launch must not run against a directory no
+        // trusted artifact names.
+        let identity = resource_backed.ok_or_else(|| {
+            hardening_refusal(plan, crate::ops::swtpm_dir::reasons::DERIVATION_FAILED)
+        })?;
+        crate::ops::swtpm_dir::derive_resource_backed_paths(plan, identity)
+            .map_err(|reason| hardening_refusal(plan, reason))?;
+        return Ok(None);
+    }
+    let paths = crate::ops::swtpm_dir::derive_paths(plan)
+        .map_err(|reason| hardening_refusal(plan, reason))?;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -3543,6 +3850,23 @@ fn maybe_harden_swtpm_dir(
             audit: err.audit,
             reason: err.reason,
         }),
+    }
+}
+
+/// The path-free fail-closed envelope for one swtpm-dir derivation refusal.
+fn hardening_refusal(plan: &SpawnRunnerPlan, reason: &'static str) -> LiveHandlerError {
+    LiveHandlerError::SwtpmDirHardening {
+        audit: crate::ops::audit_op::SwtpmDirAudit {
+            vm_id: String::new(),
+            base_dir_hash: String::new(),
+            result: crate::ops::audit_op::SwtpmDirResult::FailedClosed,
+            mode: 0o700,
+            owner_uid: plan.uid,
+            owner_gid: plan.gid,
+            marker_result: crate::ops::audit_op::SwtpmMarkerResult::FailedClosed,
+            fail_reason: Some(reason.to_owned()),
+        },
+        reason,
     }
 }
 
@@ -4830,6 +5154,96 @@ mod tests {
         }
     }
 
+    /// A resource-backed (`private_cgroup_placement`) swtpm plan whose argv
+    /// names `state_dir` and `runtime_dir`.
+    fn resource_backed_swtpm_plan(
+        state_dir: &Path,
+        runtime_dir: &Path,
+    ) -> SpawnRunnerPlan {
+        let mut plan = test_spawn_plan_with_argv(
+            vec![
+                "swtpm".to_owned(),
+                "socket".to_owned(),
+                "--tpm2".to_owned(),
+                "--tpmstate".to_owned(),
+                format!("dir={}", state_dir.display()),
+                "--ctrl".to_owned(),
+                format!(
+                    "type=unixio,path={},mode=0660,uid=61000,gid=61000",
+                    state_dir.join("ctrl.sock").display()
+                ),
+                "--server".to_owned(),
+                format!(
+                    "type=unixio,path={},mode=0660,uid=61000,gid=61000",
+                    runtime_dir.join("tpm.sock").display()
+                ),
+            ],
+            "w1-swtpm",
+        );
+        plan.cgroup_placement.subtree =
+            format!("d2b.slice/{}/swtpm", "process-".to_owned() + &"b".repeat(64));
+        plan
+    }
+
+    #[test]
+    fn resource_backed_swtpm_launch_is_fenced_against_the_trusted_identity() {
+        use crate::ops::swtpm_dir::{ResourceBackedSwtpm, reasons};
+        let identity = ResourceBackedSwtpm {
+            guest: "acceptance-guest".to_owned(),
+            state_root: PathBuf::from("/var/lib/d2b/tpm-state"),
+            state_volume: Some(
+                "device-6f9619ff8b864d01b42d00cf4fc964ff-tpm-state".to_owned(),
+            ),
+        };
+        let state_dir = identity
+            .state_root
+            .join(identity.state_volume.as_deref().expect("volume name"));
+        let runtime_dir = PathBuf::from("/run/d2b/vms/acceptance-guest");
+
+        // A launch naming exactly the trusted directories passes the fence
+        // and gets no provisioning disposition: in v3 the TPM state Volume's
+        // `create-if-never-provisioned`/`fail-closed` lifecycle owns the
+        // directory, so the spawn hook only fences identity.
+        let plan = resource_backed_swtpm_plan(&state_dir, &runtime_dir);
+        assert!(
+            maybe_harden_swtpm_dir(&plan, Some(&identity))
+                .expect("trusted launch passes")
+                .is_none()
+        );
+
+        // Without a trusted identity the launch fails closed by derivation.
+        let refusal = maybe_harden_swtpm_dir(&plan, None).expect_err("missing identity refuses");
+        assert!(matches!(
+            refusal,
+            LiveHandlerError::SwtpmDirHardening { reason, .. }
+                if reason == reasons::DERIVATION_FAILED
+        ));
+
+        // A launch opening another directory fails closed with the named
+        // identity-mismatch reason and a matching path-free audit.
+        let foreign = resource_backed_swtpm_plan(
+            Path::new("/var/lib/d2b/tpm-state/device-foreign-tpm-state"),
+            &runtime_dir,
+        );
+        let refusal =
+            maybe_harden_swtpm_dir(&foreign, Some(&identity)).expect_err("mismatch refuses");
+        assert!(matches!(
+            refusal,
+            LiveHandlerError::SwtpmDirHardening { reason, audit }
+                if reason == reasons::IDENTITY_MISMATCH
+                    && audit.fail_reason.as_deref() == Some(reasons::IDENTITY_MISMATCH)
+        ));
+
+        // Roles other than w1-swtpm are a no-op.
+        let mut other = plan.clone();
+        other.seccomp_policy_ref = Some("w1-gpu".to_owned());
+        assert!(
+            maybe_harden_swtpm_dir(&other, Some(&identity))
+                .expect("other roles no-op")
+                .is_none()
+        );
+    }
+
     #[test]
     fn ensure_runner_cgroup_leaf_uses_delegated_parent_slice() {
         let backend = FakeCgroupBackend::new(1000);
@@ -4938,6 +5352,7 @@ mod tests {
             Vec::new(),
             None,
             Path::new("/var/lib/d2b"),
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
@@ -5292,14 +5707,14 @@ mod tests {
         let file = dir.join("file");
         std::fs::write(&file, b"x").expect("write file");
 
-        assert_eq!(dir_needs_daemon_traverse(&world_x), Ok(Some(false)));
-        assert_eq!(dir_needs_daemon_traverse(&private), Ok(Some(true)));
-        assert_eq!(dir_needs_daemon_traverse(&file), Ok(Some(false)));
-        assert_eq!(dir_needs_daemon_traverse(&dir.join("absent")), Ok(None));
+        assert_eq!(dir_needs_traverse_grant(&world_x), Ok(Some(false)));
+        assert_eq!(dir_needs_traverse_grant(&private), Ok(Some(true)));
+        assert_eq!(dir_needs_traverse_grant(&file), Ok(Some(false)));
+        assert_eq!(dir_needs_traverse_grant(&dir.join("absent")), Ok(None));
     }
 
     #[test]
-    fn runner_state_acl_targets_stop_at_owned_root_and_skip_world_x_ancestors() {
+    fn runner_tree_acl_targets_stop_at_owned_root_and_skip_world_x_ancestors() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = TestDir::new("runner-state-acl");
@@ -5316,7 +5731,7 @@ mod tests {
         std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
             .expect("make ancestor world traversable");
 
-        let targets = runner_state_dir_acl_targets(&state_dir, &owned_root, 4242)
+        let targets = runner_tree_acl_targets(&state_dir, &owned_root, 4242)
             .expect("derive bounded runner ACL targets");
         assert_eq!(
             targets,
@@ -5338,14 +5753,401 @@ mod tests {
     }
 
     #[test]
-    fn runner_state_acl_targets_reject_paths_outside_owned_root() {
+    fn runner_tree_acl_targets_reject_paths_outside_owned_root() {
         let root = TestDir::new("runner-state-acl-boundary");
         let owned_root = root.join("d2b");
         let outside = root.join("other").join("desktop");
         assert!(
-            runner_state_dir_acl_targets(&outside, &owned_root, 4242).is_err(),
+            runner_tree_acl_targets(&outside, &owned_root, 4242).is_err(),
             "runner ACL planning must fail closed outside the configured state root"
         );
+    }
+
+    /// The serving worker's launch ticket must name both paths. A
+    /// serving-posture launch is refused rather than spawned with a
+    /// partially-open tree, and a path that is not absolute/anchored is
+    /// refused because the socket directory is fenced with `starts_with`.
+    #[test]
+    fn serving_worker_launch_paths_require_both_ticket_flags() {
+        let paths = serving_worker_launch_paths(&[
+            "virtiofsd".to_owned(),
+            "--socket-path=/run/d2b/vms/guest/vol-abcd.vfd.sock".to_owned(),
+            "--shared-dir=/var/lib/d2b/store-view/live/system".to_owned(),
+            "--readonly".to_owned(),
+        ])
+        .expect("the frozen ticket shape parses");
+        assert_eq!(paths.socket_dir, Path::new("/run/d2b/vms/guest"));
+        assert_eq!(
+            paths.shared_dir,
+            Path::new("/var/lib/d2b/store-view/live/system")
+        );
+        assert!(paths.read_only);
+        assert!(
+            serving_worker_launch_paths(&[
+                "virtiofsd".to_owned(),
+                "--socket-path=/run/d2b/vms/guest/vol-abcd.vfd.sock".to_owned(),
+            ])
+            .is_err(),
+            "--shared-dir is mandatory"
+        );
+        for argv in [
+            vec!["virtiofsd".to_owned(), "--shared-dir=/srv/view".to_owned()],
+            vec![
+                "virtiofsd".to_owned(),
+                "--socket-path=/run/d2b/../etc/vol.vfd.sock".to_owned(),
+                "--shared-dir=/srv/view".to_owned(),
+            ],
+            vec![
+                "virtiofsd".to_owned(),
+                "--socket-path=relative/vol.vfd.sock".to_owned(),
+                "--shared-dir=/srv/view".to_owned(),
+            ],
+            vec![
+                "virtiofsd".to_owned(),
+                "--socket-path=/vol.vfd.sock".to_owned(),
+                "--shared-dir=relative/view".to_owned(),
+            ],
+        ] {
+            assert!(
+                serving_worker_launch_paths(&argv).is_err(),
+                "must refuse a launch without two anchored absolute ticket paths: {argv:?}"
+            );
+        }
+    }
+
+    /// The private socket directory is broker-runtime state: a ticket that
+    /// points it outside the broker's own runtime directory (or at the
+    /// runtime directory itself) is refused before any ACL is applied.
+    #[test]
+    fn serving_worker_socket_directory_must_live_inside_the_broker_runtime_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("serving-worker-socket-fence");
+        let runtime_root = root.join("run");
+        std::fs::create_dir_all(&runtime_root).expect("create runtime root");
+        std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod runtime root");
+        let shared = root.join("view");
+        std::fs::create_dir_all(&shared).expect("create view root");
+
+        for socket in [
+            root.join("elsewhere").join("vol.vfd.sock"),
+            runtime_root.clone().join("..").join("elsewhere").join("vol.vfd.sock"),
+        ] {
+            let argv = vec![
+                "virtiofsd".to_owned(),
+                format!("--socket-path={}", socket.display()),
+                format!("--shared-dir={}", shared.display()),
+            ];
+            assert!(
+                grant_serving_worker_launch_acls(&argv, 4242, &runtime_root).is_err(),
+                "a socket directory outside the runtime root must be refused: {}",
+                socket.display()
+            );
+        }
+        // The refusal names the fence it crossed.
+        let outside = root.join("elsewhere").join("vol.vfd.sock");
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!("--socket-path={}", outside.display()),
+            format!("--shared-dir={}", shared.display()),
+        ];
+        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root)
+            .expect_err("a socket outside the runtime root must be refused");
+        assert!(
+            error.to_string().contains("outside the broker runtime"),
+            "unexpected refusal: {error}"
+        );
+        // The runtime root itself is not a worker-writable tree either.
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!("--socket-path={}", runtime_root.join("vol.vfd.sock").display()),
+            format!("--shared-dir={}", shared.display()),
+        ];
+        let error = grant_serving_worker_launch_acls(&argv, 4242, &runtime_root)
+            .expect_err("the runtime root itself must not be opened");
+        assert!(
+            error.to_string().contains("outside the broker runtime"),
+            "unexpected refusal: {error}"
+        );
+    }
+
+    /// An unusable view root refuses the launch before anything is mutated:
+    /// neither the socket tree nor the root gets an ACL entry.
+    #[test]
+    fn serving_worker_refuses_an_unusable_view_root_before_mutating() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("serving-worker-view-root");
+        let runtime_root = root.join("run");
+        let socket_dir = runtime_root.join("vms").join("guest");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+        let absent = root.join("absent-view");
+
+        let argv = |shared: &Path| {
+            vec![
+                "virtiofsd".to_owned(),
+                format!("--socket-path={}", socket_dir.join("vol.vfd.sock").display()),
+                format!("--shared-dir={}", shared.display()),
+            ]
+        };
+        let error = grant_serving_worker_launch_acls(&argv(&absent), 4242, &runtime_root)
+            .expect_err("an absent view root must be refused");
+        assert!(error.to_string().contains("does not exist"), "{error}");
+
+        // A regular file is not a servable root either.
+        let file = root.join("view-is-a-file");
+        std::fs::write(&file, b"x").expect("write file");
+        let error = grant_serving_worker_launch_acls(&argv(&file), 4242, &runtime_root)
+            .expect_err("a non-directory view root must be refused");
+        assert!(error.to_string().contains("not a directory"), "{error}");
+
+        // A symlinked view root is refused by the NOFOLLOW open.
+        let real = root.join("real-view");
+        std::fs::create_dir_all(&real).expect("create real view");
+        let link = root.join("linked-view");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink view root");
+        grant_serving_worker_launch_acls(&argv(&link), 4242, &runtime_root)
+            .expect_err("a symlinked view root must be refused");
+
+        // Nothing was opened on the worker's behalf.
+        let socket_fd = crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open dir");
+        assert_eq!(
+            crate::sys::path_safe::fd_extended_acl_present(socket_fd.as_fd())
+                .expect("inspect socket dir ACL"),
+            (false, false),
+            "a refused launch must not leave the socket tree opened"
+        );
+    }
+
+    /// The served view root is opened with read/traverse (read-write for a
+    /// read-write attachment) to the runner principal, plus search on the
+    /// non-world-searchable chain above it - and never above the first
+    /// ancestor every principal can already search.
+    #[test]
+    fn served_view_root_acl_targets_cover_the_root_and_stop_at_world_search() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = TestDir::new("served-view-acl");
+        let world_x = root.join("world");
+        let private = world_x.join("private");
+        let served = private.join("served");
+        std::fs::create_dir_all(&served).expect("create served root");
+        for path in [&world_x, &private, &served] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+                .expect("make chain private");
+        }
+        std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
+            .expect("make outer ancestor world traversable");
+
+        assert_eq!(
+            served_view_root_acl_targets(&served, 4242, true).expect("read-only targets"),
+            vec![
+                (private.clone(), "u:4242:--x".to_owned()),
+                (served.clone(), "u:4242:r-x".to_owned()),
+            ]
+        );
+        assert_eq!(
+            served_view_root_acl_targets(&served, 4242, false).expect("read-write targets"),
+            vec![
+                (private.clone(), "u:4242:--x".to_owned()),
+                (served.clone(), "u:4242:rwx".to_owned()),
+            ]
+        );
+        assert!(
+            served_view_root_acl_targets(&served, 4242, true)
+                .expect("targets")
+                .iter()
+                .all(|(path, _)| path != Path::new("/")),
+            "the grant must never include the filesystem root"
+        );
+        assert!(
+            served_view_root_acl_targets(Path::new("relative/view"), 4242, true).is_err(),
+            "a relative view root must be refused"
+        );
+    }
+
+    /// The daemon-provisioned socket directory and served view root both end
+    /// up with a per-runner access ACL for the runner principal, so the
+    /// worker reaches them as itself rather than as the daemon.
+    #[test]
+    fn serving_worker_launch_acls_open_the_ticket_paths_to_the_principal() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
+            .iter()
+            .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping serving-worker ACL application test: no setfacl binary");
+            return;
+        }
+
+        let root = TestDir::new("serving-worker-acl-apply");
+        let runtime_root = root.join("run");
+        let socket_dir = runtime_root.join("vms").join("guest");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod runtime root");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+        let shared = root.join("view");
+        std::fs::create_dir_all(&shared).expect("create view root");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750))
+            .expect("chmod view root");
+
+        let argv = vec![
+            "virtiofsd".to_owned(),
+            format!("--socket-path={}", socket_dir.join("vol-abcd.vfd.sock").display()),
+            format!("--shared-dir={}", shared.display()),
+        ];
+        // The principal the resolver mints for the binding template.
+        let uid = 50_123;
+        grant_serving_worker_launch_acls(&argv, uid, &runtime_root).expect("grant ACLs");
+
+        for (path, label) in [(&socket_dir, "socket dir"), (&shared, "view root")] {
+            let fd = crate::sys::path_safe::open_dir_path_safe(path).expect("open dir");
+            assert_eq!(
+                crate::sys::path_safe::fd_extended_acl_present(fd.as_fd())
+                    .expect("inspect ACL"),
+                (true, false),
+                "{label} must carry an access ACL entry for the runner principal"
+            );
+        }
+        // The mask carries the granted permissions - without it a named-user
+        // entry on a `0700` directory would be masked away and the worker
+        // could not bind or serve at all.
+        let socket_mode = std::fs::metadata(&socket_dir)
+            .expect("stat socket dir")
+            .permissions()
+            .mode();
+        assert_eq!(
+            socket_mode & 0o070,
+            0o070,
+            "the socket-directory mask must carry `rwx`"
+        );
+        let view_mode = std::fs::metadata(&shared)
+            .expect("stat view root")
+            .permissions()
+            .mode();
+        assert_eq!(
+            view_mode & 0o050,
+            0o050,
+            "the view-root mask must carry `r-x`"
+        );
+    }
+
+    /// The per-VM device socket directory is opened to the launched worker
+    /// principal (the swtpm/GPU rows run as their own intent principal, never
+    /// as the daemon) with the same access-ACL shape the serving worker's
+    /// socket directory gets.
+    #[test]
+    fn device_worker_launch_acls_open_the_socket_directory_to_the_principal() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if !["/run/current-system/sw/bin/setfacl", "/usr/bin/setfacl", "/bin/setfacl"]
+            .iter()
+            .any(|candidate| Path::new(candidate).exists())
+        {
+            eprintln!("skipping device-worker ACL application test: no setfacl binary");
+            return;
+        }
+
+        let root = TestDir::new("device-worker-acl-apply");
+        let runtime_root = root.join("run").join("d2b");
+        let socket_dir = runtime_root.join("vms").join("acceptance-guest");
+        std::fs::create_dir_all(&socket_dir).expect("create socket dir");
+        std::fs::set_permissions(&runtime_root, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod runtime root");
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod socket dir");
+
+        let argv = vec![
+            "/nix/store/swtpm/bin/swtpm".to_owned(),
+            "socket".to_owned(),
+            "--tpm2".to_owned(),
+            "--server".to_owned(),
+            format!(
+                "type=unixio,path={},mode=0660,uid=0,gid=0",
+                socket_dir.join("tpm.sock").display()
+            ),
+        ];
+        let uid = 50_123;
+        grant_device_worker_launch_acls(&argv, uid, &runtime_root).expect("grant ACLs");
+
+        let fd = crate::sys::path_safe::open_dir_path_safe(&socket_dir).expect("open dir");
+        assert_eq!(
+            crate::sys::path_safe::fd_extended_acl_present(fd.as_fd()).expect("inspect ACL"),
+            (true, false),
+            "the device socket directory must carry an access ACL entry for the worker principal"
+        );
+        let mode = std::fs::metadata(&socket_dir)
+            .expect("stat socket dir")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o070,
+            0o070,
+            "the socket-directory mask must carry `rwx`"
+        );
+    }
+
+    /// The grant may only ever reach the broker's own runtime root, and only
+    /// the directory the ticket's socket strictly lives in: a socket outside
+    /// it - or the root itself - refuses the launch instead of widening.
+    #[test]
+    fn device_worker_launch_acls_refuse_a_socket_outside_the_runtime_root() {
+        let runtime_root = PathBuf::from("/run/d2b");
+        let outside = vec![
+            "swtpm".to_owned(),
+            "--server".to_owned(),
+            "type=unixio,path=/run/foreign/tpm.sock,mode=0660,uid=0,gid=0".to_owned(),
+        ];
+        let error = grant_device_worker_launch_acls(&outside, 4242, &runtime_root)
+            .expect_err("a foreign socket directory must be refused");
+        assert!(
+            error.to_string().contains("outside the broker runtime directory"),
+            "{error}"
+        );
+
+        let at_root = vec![
+            "swtpm".to_owned(),
+            "--server".to_owned(),
+            "type=unixio,path=/run/d2b/tpm.sock,mode=0660,uid=0,gid=0".to_owned(),
+        ];
+        let error = grant_device_worker_launch_acls(&at_root, 4242, &runtime_root)
+            .expect_err("the runtime root itself must not be opened");
+        assert!(
+            error.to_string().contains("outside the broker runtime directory"),
+            "{error}"
+        );
+    }
+
+    /// The one-shot flush (`--unix`) and the video sidecar (`--socket-path`,
+    /// outside the broker runtime root) bind nothing the broker owns; the
+    /// grant is a no-op for them rather than a refusal.
+    #[test]
+    fn device_worker_launch_acls_ignore_tickets_that_bind_no_broker_socket() {
+        let runtime_root = PathBuf::from("/run/d2b");
+        let flush = vec![
+            "/nix/store/swtpm/bin/swtpm_ioctl".to_owned(),
+            "-i".to_owned(),
+            "--unix".to_owned(),
+            "/var/lib/d2b/vms/guest/swtpm/device-abc-tpm-state/ctrl.sock".to_owned(),
+        ];
+        grant_device_worker_launch_acls(&flush, 4242, &runtime_root)
+            .expect("the one-shot flush binds no socket the broker owns");
+
+        let video = vec![
+            "/nix/store/crosvm/bin/crosvm".to_owned(),
+            "device".to_owned(),
+            "video-decoder".to_owned(),
+            "--socket-path".to_owned(),
+            "/run/d2b-video/guest/video.sock".to_owned(),
+        ];
+        grant_device_worker_launch_acls(&video, 4242, &runtime_root)
+            .expect("the video sidecar's socket lives in its own runtime dir");
     }
 
     #[test]
@@ -5485,6 +6287,7 @@ mod tests {
             Vec::new(),
             None,
             Path::new("/var/lib/d2b"),
+            None,
         )
         .expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)

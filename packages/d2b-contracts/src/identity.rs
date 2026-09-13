@@ -51,8 +51,7 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 20] = [
 ];
 
 /// The resource types the v3 resource runtime owns end to end (R35/F1
-/// exclusive per-type partition): served only by the per-zone manager plane,
-/// never by the pre-v3 durable store.
+/// exclusive per-type partition): served only by the per-zone manager plane.
 pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "Process",
     // U12: the one-shot Process family member, served by the same Process
@@ -94,16 +93,17 @@ pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 33] = [
     "ResourceImport",
 ];
 
-/// The storage plane that owns one resource type during the v3 conversion
-/// (R35/F1: an exclusive per-type partition, no dual authority).
+/// The storage plane that owns one resource type (R35/F1: an exclusive
+/// per-type partition, no dual authority).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResourcePlane {
     /// The per-zone v3 manager plane: the type's spec store and resource
-    /// actors. A converted type is served only here; the pre-v3 durable store
-    /// is never its authority and must neither serve nor be consulted for it.
+    /// actors. A converted type is served only here, and nothing else (no
+    /// in-process store, no bridge) may serve it.
     Manager,
-    /// The pre-v3 durable store plane: the type has no manager actor and the
-    /// durable store is its only authority.
+    /// Every other resource type: it has no manager actor, so a
+    /// manager-only bridge must refuse it instead of writing it into a plane
+    /// that cannot realize it.
     Legacy,
 }
 
@@ -112,8 +112,8 @@ pub enum ResourcePlane {
 /// This is the single plane authority every storage entry point resolves
 /// before touching storage (issue #507): [`V3_CONVERTED_RESOURCE_TYPES`] above
 /// is the only mapping, so a converted type cannot silently be served by (or
-/// silently missed through) the legacy store, and adding a converted type
-/// cannot leave a read or write path behind.
+/// silently missed through) a manager-only bridge, and adding a converted
+/// type cannot leave a read or write path behind.
 pub const fn resource_plane(resource_type: &str) -> ResourcePlane {
     if is_converted_resource_type(resource_type) {
         ResourcePlane::Manager
@@ -150,11 +150,15 @@ const fn str_eq(left: &str, right: &str) -> bool {
     true
 }
 
-/// Refuse a legacy-store access whose subject resolves to the manager plane.
+/// Refuse a non-manager access whose subject resolves to the manager plane.
 ///
-/// `Ok(())` means the legacy store owns the type and may serve the access;
-/// `Err(WrongPlane)` is the named, non-retryable refusal. Callers MUST NOT
-/// translate the refusal into absence, `NotFound`, or a retryable class.
+/// The manager-only bridges resolve the plane directly through
+/// [`resource_plane`]/[`WrongPlane::manager_access`] (the live fence in
+/// `d2bd`'s child-mutation bridge); this convenience wrapper survives only as
+/// the exercised contract of that refusal shape, pinned by
+/// `wrong_plane_refusal_names_type_and_caller_and_is_terminal` and
+/// `converted_registry_resolves_to_the_manager_plane` in this file's tests.
+#[cfg(test)]
 pub fn refuse_wrong_plane(resource_type: &str, caller: &'static str) -> Result<(), WrongPlane> {
     match resource_plane(resource_type) {
         ResourcePlane::Manager => Err(WrongPlane::new(resource_type, caller)),
@@ -162,10 +166,12 @@ pub fn refuse_wrong_plane(resource_type: &str, caller: &'static str) -> Result<(
     }
 }
 
-/// Refuse a manager-plane access whose subject resolves to the legacy store:
-/// the symmetric fence for a bridge that may only touch manager-owned types
-/// (the child-mutation path, issue #507). The refusal names the type and the
-/// caller and is never absent or retryable, exactly like [`WrongPlane::new`].
+/// Refuse a manager-plane access whose subject resolves to a legacy type:
+/// the mirror of [`refuse_wrong_plane`], with the same test-only standing
+/// (the live mirror is [`WrongPlane::manager_access`] as `child_plane_refusal`
+/// calls it). The refusal names the type and the caller and is never absent or
+/// retryable, exactly like [`WrongPlane::new`].
+#[cfg(test)]
 pub fn refuse_legacy_subject(resource_type: &str, caller: &'static str) -> Result<(), WrongPlane> {
     match resource_plane(resource_type) {
         ResourcePlane::Legacy => Err(WrongPlane::manager_access(resource_type, caller)),
@@ -187,7 +193,7 @@ pub struct WrongPlane {
 }
 
 impl WrongPlane {
-    /// One legacy-store access refused for a manager-owned type: the canonical
+    /// One non-manager access refused for a manager-owned type: the canonical
     /// #507 refusal.
     pub fn new(resource_type: impl Into<String>, caller: &'static str) -> Self {
         Self {

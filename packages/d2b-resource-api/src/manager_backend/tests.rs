@@ -1419,11 +1419,11 @@ async fn admission_subjects_are_constructed_for_all_three_surfaces() {
 }
 
 // ---------------------------------------------------------------------------
-// LIST snapshot revision + WATCH resume (unit-scale F4, R23/R24)
+// LIST snapshot revision, paging, and WATCH refusal (unit-scale F4, R23/R24)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_returns_snapshot_revision_and_watch_resumes_from_it() {
+async fn list_returns_snapshot_revision_and_watch_refuses_until_wired() {
     let fixture = manager_fixture().await;
     let service = wired_service(&fixture, authorizer(&[ResourceVerb::Create, ResourceVerb::List, ResourceVerb::Watch, ResourceVerb::Get, ResourceVerb::UpdateSpec, ResourceVerb::Delete]));
 
@@ -1453,42 +1453,221 @@ async fn list_returns_snapshot_revision_and_watch_resumes_from_it() {
     assert_eq!(listed.resources.len(), 1);
     assert!(listed.snapshot_revision > snapshot, "desired changes bump the snapshot");
 
-    // WATCH resumes from the snapshot revision: the registration is served
-    // by the manager's hub, and the receipt carries the mapped revision.
+    // WATCH has no delivery pump in the composition: the backend must
+    // answer a typed capability refusal, never a receipt naming a stream
+    // nothing fills.
     let request = watch_request(listed.snapshot_revision);
     let watched = service.watch(trusted(request)).await;
-    assert!(
-        watched.error.is_none(),
-        "watch from the list snapshot failed: kind={:?} reason={}",
-        error_kind(&watched),
-        error_reason(&watched)
-    );
-    assert_eq!(watched.snapshot_revision, listed.snapshot_revision);
-}
-
-#[tokio::test]
-async fn watch_rejects_a_pre_epoch_cursor_with_revision_expired() {
-    let fixture = manager_fixture().await;
-    let service = wired_service(&fixture, authorizer(&[ResourceVerb::Watch, ResourceVerb::List]));
-
-    // A cursor whose epoch seconds predate the daemon epoch (any prior
-    // lifetime, or a pre-cutover durable revision) must fail with the
-    // RevisionExpired wire error and carry the relist snapshot.
-    let stale_epoch_cursor =
-        (1_700_000_000u64 << 32) | 5; // seconds before this test epoch
-    let request = watch_request(stale_epoch_cursor);
-    let response = service.watch(trusted(request)).await;
-    let error = response.error.unwrap();
+    let error = watched.error.as_ref().expect("an unfillable watch must be refused");
     assert_eq!(
         error.kind.enum_value().unwrap(),
-        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_REVISION_EXPIRED
+        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_UNSUPPORTED_CAPABILITY
     );
-    assert!(
-        error.current_revision.is_some(),
-        "the failure carries the snapshot to relist from"
-    );
+    assert_eq!(error.reason, "watch-not-wired");
+    assert!(watched.stream_name.is_empty(), "no stream name may be handed out");
+}
 
-    fixture.manager_actor.get_cell().stop(None);
+/// A continuation cursor drives the next page: the request cursor selects
+/// the rows after the last one returned, `truncated` is true only while a
+/// remainder exists, and the final page carries no cursor.
+#[tokio::test]
+async fn list_pages_with_a_continuation_cursor() {
+    let fixture = manager_fixture().await;
+    let service = wired_service(&fixture, authorizer(&[ResourceVerb::List, ResourceVerb::Get]));
+    for name in ["host-a", "host-b", "host-c"] {
+        fixture
+            .client
+            .ensure(
+                d2b_resource_runtime::manager::MutationSubject {
+                    principal: "nix:test-bundle".to_owned(),
+                    origin: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+                None,
+                d2b_resource_runtime::manager::DesiredResource {
+                    key: d2b_resource_runtime::spec_store::ResourceKey::new(TEST_ZONE, "Host", name),
+                    spec: host_spec(),
+                    metadata: serde_json::to_vec(&serde_json::json!({"ownerRef": null})).unwrap(),
+                    provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                },
+            )
+            .await
+            .expect("commit row");
+    }
+
+    let mut request = list_request();
+    request.page_size = 2;
+    let first = service.list(trusted(request.clone())).await;
+    assert!(first.error.is_none(), "first page failed: {}", error_reason(&first));
+    assert_eq!(first.resources.len(), 2, "a full page");
+    assert!(first.truncated, "a remainder exists past this page");
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("a truncated page carries the continuation cursor")
+        .value
+        .clone();
+
+    let second = service
+        .list(trusted({
+            let mut next = request.clone();
+            next.cursor = MessageField::some(wire::PageCursor { value: cursor, ..Default::default() });
+            next
+        }))
+        .await;
+    assert!(second.error.is_none(), "second page failed: {}", error_reason(&second));
+    assert_eq!(second.resources.len(), 1, "the remainder");
+    assert!(!second.truncated, "the last page is complete");
+    assert!(second.next_cursor.is_none(), "no cursor past the last page");
+    // The pages partition the sequence: no row repeats across them.
+    let names = |page: &wire::ListResponse| {
+        page.resources
+            .iter()
+            .filter_map(|resource| {
+                resource.identity.as_ref().map(|identity| identity.name.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_names = names(&first);
+    let second_names = names(&second);
+    assert!(first_names.iter().all(|name| !second_names.contains(name)));
+}
+
+/// A cursor that cannot be honoured is refused with a typed error - a
+/// foreign-selector cursor must not silently restart the sequence at page 1.
+#[tokio::test]
+async fn list_refuses_a_cursor_it_cannot_honour() {
+    let fixture = manager_fixture().await;
+    let service = wired_service(&fixture, authorizer(&[ResourceVerb::List]));
+    let request = list_request();
+
+    let mut malformed = list_request();
+    malformed.cursor = MessageField::some(wire::PageCursor {
+        value: "not-a-cursor".to_owned(),
+        ..Default::default()
+    });
+    let refused = service.list(trusted(malformed)).await;
+    assert_eq!(
+        error_kind(&refused),
+        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+    );
+    assert_eq!(error_reason(&refused), "list-cursor-invalid");
+
+    // A cursor minted under different selectors addresses a different page
+    // sequence; replaying it here is refused, never ignored.
+    let foreign = super::encode_list_cursor(
+        7,
+        &d2b_contracts_resource::v3::StoreListRequest {
+            operation: d2b_contracts_resource::v3::StoreOperationContext {
+                operation_id: "cursor-fixture".to_owned(),
+                idempotency_key: None,
+                correlation_id: "cursor-fixture".to_owned(),
+                trace_id: None,
+                deadline_ms: 1_000,
+            },
+            zone: ZoneId::parse(TEST_ZONE).unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: vec![ResourceName::parse("host-system").unwrap()],
+            filters: Vec::new(),
+            page_size: 2,
+            cursor: None,
+            projection: d2b_contracts_resource::v3::StoreProjection::Full,
+        },
+        &d2b_resource_runtime::identity::ResourceKey::new(TEST_ZONE, "Host", "host-a"),
+    );
+    let mut replay = request.clone();
+    replay.cursor = MessageField::some(wire::PageCursor { value: foreign, ..Default::default() });
+    let refused = service.list(trusted(replay)).await;
+    assert_eq!(
+        error_kind(&refused),
+        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+    );
+    assert_eq!(error_reason(&refused), "list-cursor-selector-mismatch");
+}
+
+/// An owner-scoped LIST matches the manager's owned children: the row's real
+/// ownership is projected into the store shape, so `owner.resourceUid` and
+/// `owner.resourceRef` return the owner's rows instead of an empty page.
+#[tokio::test]
+async fn list_owner_filters_match_manager_owned_children() {
+    let fixture = manager_fixture().await;
+    let service = wired_service(&fixture, authorizer(&[ResourceVerb::List, ResourceVerb::Get]));
+    let subject = d2b_resource_runtime::manager::MutationSubject {
+        principal: "nix:test-bundle".to_owned(),
+        origin: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+    };
+    let parent_key =
+        d2b_resource_runtime::spec_store::ResourceKey::new(TEST_ZONE, "Host", "host-system");
+    let desired = |name: &str| d2b_resource_runtime::manager::DesiredResource {
+        key: d2b_resource_runtime::spec_store::ResourceKey::new(TEST_ZONE, "Host", name),
+        spec: host_spec(),
+        metadata: serde_json::to_vec(&serde_json::json!({"ownerRef": null})).unwrap(),
+        provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+    };
+    let parent = fixture
+        .client
+        .ensure(subject.clone(), None, desired("host-system"))
+        .await
+        .expect("parent row");
+    let parent_uid = super::row_uid(&parent.uid);
+    fixture
+        .client
+        .ensure(subject, Some(parent_key.clone()), desired("child-1"))
+        .await
+        .expect("child row");
+
+    let unfiltered = service.list(trusted(list_request())).await;
+    assert!(unfiltered.error.is_none(), "list failed: {}", error_reason(&unfiltered));
+    assert_eq!(unfiltered.resources.len(), 2, "parent plus child");
+
+    let by_uid = service
+        .list(trusted(list_request_with_filter("owner.resourceUid", parent_uid.as_str())))
+        .await;
+    assert!(by_uid.error.is_none(), "owner uid list failed: {}", error_reason(&by_uid));
+    let names = |page: &wire::ListResponse| {
+        page.resources
+            .iter()
+            .filter_map(|resource| resource.identity.as_ref().map(|identity| identity.name.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&by_uid), vec!["child-1".to_owned()], "the owner's children");
+
+    let by_ref = service
+        .list(trusted(list_request_with_filter("owner.resourceRef", "Host/host-system")))
+        .await;
+    assert!(by_ref.error.is_none(), "owner ref list failed: {}", error_reason(&by_ref));
+    assert_eq!(names(&by_ref), vec!["child-1".to_owned()], "the rendered owner reference");
+
+    // A filter for an owner with no children stays an honest empty page.
+    let stranger = service
+        .list(trusted(list_request_with_filter(
+            "owner.resourceUid",
+            "99999999-9999-4999-8999-999999999999",
+        )))
+        .await;
+    assert!(stranger.error.is_none());
+    assert!(stranger.resources.is_empty());
+}
+
+fn list_request_with_filter(field: &str, value: &str) -> wire::ListRequest {
+    let mut request = list_request();
+    let mut filter = wire::ListFilter::new();
+    filter.field = field.to_owned();
+    filter.values = vec![value.to_owned()];
+    request.filters.push(filter);
+    request
+}
+
+/// The minimal Host spec the strict envelope decoder accepts for a
+/// manager-rendered row (the `GOLDEN_HOST` spec shape).
+fn host_spec() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "providerRef": "Provider/system-core",
+        "updatePolicy": {
+            "disruptive": "manual",
+            "nonDisruptive": "automatic",
+        },
+    }))
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------

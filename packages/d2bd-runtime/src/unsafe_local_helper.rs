@@ -1373,8 +1373,8 @@ mod tests {
         ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneResourceIdentity, ZoneRevision,
     };
     use d2b_core::configured_argv::ConfiguredArgv;
-    use nix::sys::socket::{AddressFamily, SockFlag, socketpair};
-    use std::os::fd::OwnedFd;
+    use nix::sys::socket::{AddressFamily, SockFlag, recv, socketpair};
+    use std::os::fd::{IntoRawFd, OwnedFd};
 
     fn launch(request_id: u64, operation_id: &str, arg: &str) -> HelperLaunchRequest {
         HelperLaunchRequest {
@@ -1975,15 +1975,7 @@ mod tests {
         drop(receiver);
         connection.abandon_pending(request.request_id(), request.operation_id().as_str());
 
-        let (stream, peer): (OwnedFd, OwnedFd) = socketpair(
-            AddressFamily::Unix,
-            nix::sys::socket::SockType::Stream,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let raw = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
-        fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
+        let (raw, peer) = close_observable_fd(SockFlag::SOCK_CLOEXEC);
         let ready = HelperTerminalReady {
             request_id: request.request_id(),
             operation_id: request.operation_id().clone(),
@@ -2008,9 +2000,11 @@ mod tests {
                 vec![ReceivedFd(raw)],
             )
             .unwrap();
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert!(
+            peer_observed_close(&peer),
+            "the abandoned terminal fd was leaked"
+        );
         assert!(!registry.operations.lock().by_uid.contains_key(&uid));
-        drop(peer);
     }
 
     #[test]
@@ -2072,14 +2066,10 @@ mod tests {
                 sender,
             },
         );
-        let (stream, _peer): (OwnedFd, OwnedFd) = socketpair(
-            AddressFamily::Unix,
-            nix::sys::socket::SockType::Stream,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        // The helper must close the fd it rejects. The peer end of the socket
+        // reports EOF once the handed-over fd - its only reference - is gone,
+        // so the check does not depend on the fd number staying free.
+        let (raw, peer) = close_observable_fd(SockFlag::SOCK_CLOEXEC);
         assert_eq!(
             HelperRegistry::new(42, [1000]).handle_incoming(
                 1000,
@@ -2089,7 +2079,10 @@ mod tests {
             ),
             Err(HelperRegistryError::InvalidTerminalFd)
         );
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert!(
+            peer_observed_close(&peer),
+            "the helper leaked the fd it rejected"
+        );
     }
 
     #[test]
@@ -2268,14 +2261,7 @@ mod tests {
 
     #[test]
     fn terminal_fd_validation_checks_received_cloexec_and_closes_errors() {
-        let (stream, _peer): (OwnedFd, OwnedFd) = socketpair(
-            AddressFamily::Unix,
-            nix::sys::socket::SockType::Stream,
-            None,
-            SockFlag::empty(),
-        )
-        .unwrap();
-        let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let (raw, peer) = close_observable_fd(SockFlag::empty());
         let ready = HelperTerminalReady {
             request_id: 1,
             operation_id: OperationId::parse("op-terminal-flags").unwrap(),
@@ -2297,21 +2283,24 @@ mod tests {
             validate_terminal_fd(&ready, vec![ReceivedFd(raw)]),
             Err(HelperRegistryError::InvalidTerminalFd)
         ));
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert!(
+            peer_observed_close(&peer),
+            "the fd rejected for a missing CLOEXEC was leaked"
+        );
 
-        let first = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
-        let second = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
+        let (first, first_peer) = close_observable_fd(SockFlag::SOCK_CLOEXEC);
+        let (second, second_peer) = close_observable_fd(SockFlag::SOCK_CLOEXEC);
         assert!(matches!(
             validate_terminal_fd(&ready, vec![ReceivedFd(first), ReceivedFd(second)]),
             Err(HelperRegistryError::InvalidTerminalFd)
         ));
-        assert_eq!(
-            fcntl(first, FcntlArg::F_GETFD),
-            Err(nix::errno::Errno::EBADF)
+        assert!(
+            peer_observed_close(&first_peer),
+            "the first excess fd was leaked"
         );
-        assert_eq!(
-            fcntl(second, FcntlArg::F_GETFD),
-            Err(nix::errno::Errno::EBADF)
+        assert!(
+            peer_observed_close(&second_peer),
+            "the second excess fd was leaked"
         );
     }
 
@@ -2377,5 +2366,44 @@ mod tests {
     fn host_supports_helper_socket_buffers() -> bool {
         let (left, right) = seqpacket_pair();
         configure_socket_buffers(&left).is_ok() && configure_socket_buffers(&right).is_ok()
+    }
+
+    /// Hands out one end of a fresh stream `socketpair` as a raw fd that is the
+    /// only reference to that end, together with the peer end that observes it
+    /// being closed.
+    ///
+    /// Closing the fd is then visible as EOF on the peer, which - unlike
+    /// `fcntl(F_GETFD) == EBADF` - cannot be defeated by another thread in this
+    /// test process recycling the fd number between the close and the check.
+    fn close_observable_fd(flags: SockFlag) -> (RawFd, OwnedFd) {
+        let (end, peer): (OwnedFd, OwnedFd) = socketpair(
+            AddressFamily::Unix,
+            nix::sys::socket::SockType::Stream,
+            None,
+            flags,
+        )
+        .unwrap();
+        assert!(
+            !peer_observed_close(&peer),
+            "peer must still be open while the fd it observes is held"
+        );
+        (end.into_raw_fd(), peer)
+    }
+
+    /// Whether the peer end of a `close_observable_fd` hand-off saw EOF, i.e.
+    /// the handed-out fd - the only reference to the other socket end - was
+    /// closed. Probes without blocking so a leaked fd fails the assertion
+    /// instead of hanging the suite.
+    fn peer_observed_close(peer: &OwnedFd) -> bool {
+        let mut probe = [0u8; 1];
+        loop {
+            match recv(peer.as_raw_fd(), &mut probe, MsgFlags::MSG_DONTWAIT) {
+                Ok(0) => return true,
+                Ok(_) => panic!("socket peer received unexpected data"),
+                Err(nix::errno::Errno::EAGAIN) => return false,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => panic!("unexpected probe result on the socket peer: {error}"),
+            }
+        }
     }
 }

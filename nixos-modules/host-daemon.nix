@@ -3,6 +3,11 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
+  posture = import ./state-posture-contract.nix { inherit lib; };
+  # The per-Device TPM principals the state-directory access lines below are
+  # granted to, derived from the same trusted rows the runtime derives them
+  # from (`d2bLib.deviceTpmPrincipals`).
+  tpmPrincipals = d2bLib.deviceTpmPrincipals cfg;
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
@@ -131,22 +136,43 @@ in
       group = "d2bd";
     };
 
-    systemd.tmpfiles.rules = [
-      "d /run/d2b 1770 root d2b -"
-      "z /run/d2b 1770 root d2b -"
-      "a+ /run/d2b - - - - g::r-x"
-      "a+ /run/d2b - - - - u:d2bd:rwx"
-      "a+ /run/d2b - - - - m::rwx"
-      "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
-      "d /run/d2b/locks 0700 d2bd d2bd -"
-      "d /run/d2b/locks/usbip 0750 root d2bd -"
-      "d /run/d2b/state 0700 d2bd d2bd -"
-      "d /var/lib/d2b 0750 root d2bd -"
-      "d /var/lib/d2b/volume-local-markers 0700 d2bd d2bd -"
-      "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
-      "d /var/cache/d2b 0750 root d2bd -"
-      "d /etc/d2b 0750 root d2bd -"
-    ];
+    # The shared runtime root and host state root are declared in
+    # `state-posture-contract.json` (`shared-run-dir`, `state-root`); derive
+    # their lines instead of restating the posture here. The undeclared
+    # children stay literal until they become contract levels.
+    systemd.tmpfiles.rules =
+      posture.tmpfilesRule "shared-run-dir" "."
+      ++ [
+        "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
+        "d /run/d2b/locks 0700 d2bd d2bd -"
+        "d /run/d2b/locks/usbip 0750 root d2bd -"
+        "d /run/d2b/state 0700 d2bd d2bd -"
+      ]
+      ++ posture.tmpfilesRule "state-root" "."
+      ++ [
+        "d /var/lib/d2b/volume-local-markers 0700 d2bd d2bd -"
+        "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
+        # The TPM state policy root the trusted `path:tpm-state` /
+        # `path:swtpm-state:<guest>` storage rows name (the TPM Provider's
+        # state Volume resolves `<root>/<volume-name>` under it). The daemon
+        # owns it and the volume-local controller creates each Device's
+        # subdirectory inside.
+        "d ${toString cfg.site.stateDir}/tpm-state 0700 d2bd d2bd -"
+        "d /var/cache/d2b 0750 root d2bd -"
+        "d /etc/d2b 0750 root d2bd -"
+      ]
+      # Each Device's TPM worker traverses the daemon-owned root into the
+      # state directory the controller creates for it (0700, owned by the
+      # Device's TPM principal): the long-lived swtpm worker writes its NVRAM,
+      # log, and ctrl socket there, and the one-shot flush connects to that
+      # ctrl socket. `d2bLib.deviceTpmPrincipals` derives both principals from
+      # the same trusted rows the runtime uses.
+      ++ lib.concatMap
+        (row: [
+          "a+ ${toString cfg.site.stateDir}/tpm-state - - - - u:${row.account}:--x"
+          "a+ ${toString cfg.site.stateDir}/tpm-state - - - - u:${row.flushAccount}:--x"
+        ])
+        tpmPrincipals;
 
     systemd.services.d2bd = {
       description = "d2b daemon";

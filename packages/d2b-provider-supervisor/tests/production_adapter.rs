@@ -686,11 +686,24 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
     const CALLS: usize = 200;
     const BLOCKING_DELAY: Duration = Duration::from_millis(50);
     const HEARTBEAT_PERIOD: Duration = Duration::from_millis(10);
-    // Leave hosted runners scheduling headroom while remaining below the
-    // backend delay that would prove the blocking call ran on this executor.
-    const MAX_HEARTBEAT_GAP: Duration = Duration::from_millis(40);
+    // Documented cadence tolerance for the async EffectPort: the heartbeat
+    // period with 50% scheduling headroom. A blocking call that reached the
+    // executor holds it for BLOCKING_DELAY on every call, which moves the
+    // run's whole gap distribution to ~BLOCKING_DELAY; host scheduling noise
+    // delays isolated ticks instead (a no-workload control heartbeat on the
+    // same runtime recorded 58-91 ms gaps at host load ~60 with an unchanged
+    // 10 ms median). The bound therefore applies to the median gap, and the
+    // historical 40 ms bound to the 90th percentile, so a stall that reaches
+    // a tenth of the calls still fails.
+    const MAX_CADENCE_GAP: Duration = Duration::from_millis(15);
+    const MAX_SUSTAINED_HEARTBEAT_GAP: Duration = Duration::from_millis(40);
 
-    let (backend, started, max_active) = ParallelLaunchBackend::new(BLOCKING_DELAY);
+    // The current-thread runtime runs this test body, the launch tasks, and
+    // the heartbeat on one OS thread; blocking backend calls must never run
+    // there.
+    let executor_thread = std::thread::current().id();
+
+    let (backend, launch_threads, max_active) = ParallelLaunchBackend::new(BLOCKING_DELAY);
     let supervisor = Arc::new(ProviderSupervisor::with_limits(
         backend,
         16,
@@ -727,27 +740,42 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
         }
     }
 
-    let max_gap = ticks
-        .windows(2)
-        .map(|pair| pair[1].duration_since(pair[0]))
-        .max()
-        .unwrap_or_default();
     assert!(
         ticks.len() >= 20,
         "heartbeat must run throughout the 200-call blocking workload; recorded {} ticks",
         ticks.len()
     );
+    let mut gaps: Vec<Duration> = ticks
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]))
+        .collect();
+    gaps.sort_unstable();
+    let percentile = |tenths: usize| gaps[(gaps.len() * tenths / 10).min(gaps.len() - 1)];
     assert!(
-        max_gap <= MAX_HEARTBEAT_GAP,
-        "blocking backend stalled the async executor: maximum heartbeat gap was {max_gap:?}"
+        percentile(5) <= MAX_CADENCE_GAP,
+        "blocking backend stalled the async executor: median heartbeat gap was {:?}",
+        percentile(5)
     );
+    assert!(
+        percentile(9) <= MAX_SUSTAINED_HEARTBEAT_GAP,
+        "blocking backend stalled the async executor: 90th-percentile heartbeat gap was {:?}",
+        percentile(9)
+    );
+    let launch_threads = launch_threads
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(
-        started
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len(),
+        launch_threads.len(),
         CALLS,
         "every production EffectPort call must reach the blocking adapter"
+    );
+    assert_eq!(
+        launch_threads
+            .iter()
+            .filter(|thread| **thread == executor_thread)
+            .count(),
+        0,
+        "blocking backend calls executed on the async executor thread"
     );
     assert!(
         max_active.load(Ordering::SeqCst) >= 2,
@@ -760,7 +788,7 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
 }
 
 struct ParallelLaunchBackend {
-    started: Arc<Mutex<Vec<Instant>>>,
+    launch_threads: Arc<Mutex<Vec<std::thread::ThreadId>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
     next_identity: AtomicUsize,
@@ -768,18 +796,24 @@ struct ParallelLaunchBackend {
 }
 
 impl ParallelLaunchBackend {
-    fn new(delay: Duration) -> (Self, Arc<Mutex<Vec<Instant>>>, Arc<AtomicUsize>) {
-        let started = Arc::new(Mutex::new(Vec::new()));
+    fn new(
+        delay: Duration,
+    ) -> (
+        Self,
+        Arc<Mutex<Vec<std::thread::ThreadId>>>,
+        Arc<AtomicUsize>,
+    ) {
+        let launch_threads = Arc::new(Mutex::new(Vec::new()));
         let max_active = Arc::new(AtomicUsize::new(0));
         (
             Self {
-                started: Arc::clone(&started),
+                launch_threads: Arc::clone(&launch_threads),
                 active: Arc::new(AtomicUsize::new(0)),
                 max_active: Arc::clone(&max_active),
                 next_identity: AtomicUsize::new(1),
                 delay,
             },
-            started,
+            launch_threads,
             max_active,
         )
     }
@@ -794,10 +828,10 @@ impl ProcessEffectBackend for ParallelLaunchBackend {
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(active, Ordering::SeqCst);
-        self.started
+        self.launch_threads
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(Instant::now());
+            .push(std::thread::current().id());
         std::thread::sleep(self.delay);
         self.active.fetch_sub(1, Ordering::SeqCst);
 
@@ -868,7 +902,8 @@ async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
     use tokio::sync::Semaphore;
 
     for count in [1_usize, 10, 100] {
-        let (backend, started, max_active) = ParallelLaunchBackend::new(Duration::from_millis(25));
+        let (backend, launch_threads, max_active) =
+            ParallelLaunchBackend::new(Duration::from_millis(25));
         let supervisor = ProviderSupervisor::with_limits(backend, 16, Duration::from_secs(2));
         let provider = Arc::new(MinijailProcessProvider::new(supervisor));
         let admission = Arc::new(Semaphore::new(16));
@@ -889,7 +924,7 @@ async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
             launch.await.unwrap().unwrap();
         }
         assert_eq!(
-            started
+            launch_threads
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .len(),

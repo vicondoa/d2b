@@ -487,6 +487,28 @@ impl BundleBackedLaunchResolver {
         } else {
             None
         };
+        // A Device-owned worker row (`Process/swtpm-<device>`,
+        // `Process/gpu-<device>`, `Process/video-<device>`, and the
+        // `EphemeralProcess/swtpm-flush-<device>` flush) is declared by the
+        // Device's own Provider and carries that Device as its semantic
+        // owner. It resolves through the exact declared row: the row name is
+        // the role id, and the declared template pins the closed Device
+        // worker posture the broker enforces at spawn. The generic lookup
+        // below deliberately never sees these intents (it filters Provider
+        // controller roles and matches by template name, which two Devices
+        // in one Zone share).
+        let device_worker_intent = ticket
+            .owner_ref()
+            .filter(|owner| owner.resource_type().as_str() == "Device")
+            .and_then(|_| {
+                self.bundle.find_device_worker_intent(
+                    ticket.process_ref(),
+                    &expected_execution_ref,
+                    expected_execution_domain,
+                    expected_user_ref.as_deref(),
+                    ticket.template().as_str(),
+                )
+            });
         let generic_intent = if let Some(owner) = ticket
             .owner_ref()
             .filter(|owner| owner.resource_type().as_str() == "Guest")
@@ -533,6 +555,7 @@ impl BundleBackedLaunchResolver {
                 static_controller_intent
                     .or(provider_component_intent)
                     .or(binding_worker_intent)
+                    .or(device_worker_intent)
                     .or(generic_intent)
                     .ok_or_else(|| {
                         warn!(
@@ -1064,13 +1087,12 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             .controller_bootstrap_fd_index
             .map(|index| frame.take_fd(index))
             .transpose()?;
-        if read_proc_start_time(response.pid)? != Some(response.start_time_ticks) {
-            warn!(
-                provider = "supervisor",
-                pid = response.pid,
-                "spawned process start time does not match the broker response"
-            );
-            return Err(ProcessEffectError::IdentityChanged);
+        if let Some(error) = launch_adoption_error(
+            response.pid,
+            read_proc_start_time(response.pid)?,
+            response.start_time_ticks,
+        ) {
+            return Err(error);
         }
         let observed = BrokerObservedProcess {
             intent,
@@ -1406,6 +1428,50 @@ enum BrokerOperation<'a> {
     Other,
 }
 
+/// Classify the start time observed for a freshly spawned child against the
+/// value the broker reported for it, and report the adoption refusal when the
+/// child cannot be adopted.
+///
+/// The comparison is the fence against identifier reuse: a *different* live
+/// process now owning the reported pid must never be adopted, so a
+/// mismatching value stays [`ProcessEffectError::IdentityChanged`] - the
+/// Process driver reports that as `adoption-ambiguous`.
+///
+/// A child that is already *gone* is not a drift claim. A broker-spawned
+/// process that exits before this read leaves a zombie (or is reaped), and
+/// [`read_proc_start_time`] yields `None` for both: there is no observed
+/// identity to compare, and nothing to adopt. Reporting that as an identity
+/// ambiguity would quarantine a launch that never produced a running process
+/// (`d2bd::process_driver` classifies every `identity` / `ambiguous` provider
+/// code as terminal), so the definite outcome is reported instead: the child
+/// vanished, which the conformance port projects as the `pidfd-unavailable`
+/// conformance code and the daemon reads as a retryable launch effect.
+fn launch_adoption_error(
+    pid: i32,
+    observed_start_time: Option<u64>,
+    reported_start_time_ticks: u64,
+) -> Option<ProcessEffectError> {
+    match observed_start_time {
+        Some(observed) if observed == reported_start_time_ticks => None,
+        Some(_) => {
+            warn!(
+                provider = "supervisor",
+                pid = pid,
+                "spawned process start time does not match the broker response"
+            );
+            Some(ProcessEffectError::IdentityChanged)
+        }
+        None => {
+            warn!(
+                provider = "supervisor",
+                pid = pid,
+                "spawned process is gone before adoption"
+            );
+            Some(ProcessEffectError::Vanished)
+        }
+    }
+}
+
 fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> ProcessEffectError {
     match response {
         BrokerResponse::Error(error)
@@ -1650,6 +1716,25 @@ mod tests {
         );
     }
 
+    /// The launch fence classifies the spawned child's observed start time:
+    /// a *different* live process owning the reported pid is a genuine drift
+    /// and stays refused (`adoption-ambiguous`), while a child that is already
+    /// gone (exited before adoption: absent or zombie, `None`) is the definite
+    /// launch failure - it must never be reported as an ambiguous identity,
+    /// which `d2bd::process_driver` would classify as terminal and quarantine.
+    #[test]
+    fn launch_fence_separates_start_time_drift_from_a_gone_process() {
+        assert_eq!(launch_adoption_error(1234, Some(77), 77), None);
+        assert_eq!(
+            launch_adoption_error(1234, Some(78), 77),
+            Some(ProcessEffectError::IdentityChanged)
+        );
+        assert_eq!(
+            launch_adoption_error(1234, None, 77),
+            Some(ProcessEffectError::Vanished)
+        );
+    }
+
     #[test]
     fn generic_process_roles_map_only_to_closed_broker_roles() {
         assert_eq!(
@@ -1667,6 +1752,272 @@ mod tests {
         assert_eq!(
             runner_role_for_process_role(&ProcessRole::SecurityKeyFrontend),
             None
+        );
+    }
+
+    /// A Zone bundle whose Device Provider signs one declared swtpm worker
+    /// row - the shape `d2b-resource-compiler` emits for a Device-owned worker
+    /// template.
+    fn device_worker_resolver() -> BundleBackedLaunchResolver {
+        use d2b_contracts_resource::v3::{
+            CanonicalJsonObject, ResourceName, ResourceTypeName, Timestamp, ZoneId,
+        };
+        use d2b_contracts_zone_session::v3::resource_bundle::{
+            BundleResource, BundleResourceMetadata, ResourceBundle,
+        };
+        use d2b_core::bundle::{Bundle, BundleGeneration};
+        use d2b_core::bundle_resolver::BundleResolver;
+        use d2b_core::host::HostJson;
+        use d2b_core::manifest_v04::ManifestV04;
+        use d2b_core::processes::ProcessesJson;
+
+        let zone = ZoneId::parse("dev").expect("zone");
+        let provider_ref =
+            ResourceRef::parse("Provider/device-tpm").expect("provider ref");
+        let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
+        let host_ref = ResourceRef::parse("Host/host-system").expect("host ref");
+        let rows = [
+            (
+                "Process",
+                "swtpm-tpm",
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
+            ),
+            (
+                "EphemeralProcess",
+                "swtpm-flush-tpm",
+                r#"{"domain":"system","executionRef":"Host/host-system","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-init-flush"}"#,
+            ),
+        ];
+        let mut resources = vec![
+            BundleResource::new(
+                ResourceTypeName::parse("Host").expect("host type"),
+                BundleResourceMetadata::new(
+                    host_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{}"#).expect("host spec"),
+            )
+            .expect("host resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Provider").expect("provider type"),
+                BundleResourceMetadata::new(
+                    provider_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(
+                    br#"{"artifactId":"device-tpm","config":{"controllerExecutionRef":"Host/host-system"}}"#,
+                )
+                .expect("provider spec"),
+            )
+            .expect("provider resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Device").expect("device type"),
+                BundleResourceMetadata::new(
+                    device_ref.name().clone(),
+                    zone.clone(),
+                    Some(ResourceRef::parse("Guest/dev").expect("guest ref")),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                    .expect("device spec"),
+            )
+            .expect("device resource"),
+        ];
+        for (row_type, row_name, spec) in rows {
+            resources.push(
+                BundleResource::new(
+                    ResourceTypeName::parse(row_type).expect("row type"),
+                    BundleResourceMetadata::new(
+                        ResourceName::parse(row_name).expect("row name"),
+                        zone.clone(),
+                        Some(device_ref.clone()),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    ),
+                    CanonicalJsonObject::parse(spec.as_bytes()).expect("row spec"),
+                )
+                .expect("row resource"),
+            );
+        }
+        let resource_bundle = ResourceBundle::new(
+            zone,
+            resources,
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle");
+        let mut value = serde_json::to_value(&resource_bundle).expect("resource bundle value");
+        value["processTemplates"] = serde_json::json!([
+            {
+                "processRef": "Process/swtpm-tpm",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-socket",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm",
+                "launchArgs": true
+            },
+            {
+                "processRef": "EphemeralProcess/swtpm-flush-tpm",
+                "ownerRef": "Provider/device-tpm",
+                "executionRef": "Host/host-system",
+                "template": "swtpm-init-flush",
+                "artifactId": "device-tpm",
+                "binaryRef": "swtpm-ioctl",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/device-tpm/bin/swtpm-ioctl",
+                "launchArgs": true
+            }
+        ]);
+        let bytes = serde_json::to_vec(&value).expect("resource bundle bytes");
+        let host = serde_json::from_str::<HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleBackedLaunchResolver::new(BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([("dev".to_owned(), bytes)]),
+        ))
+    }
+
+    /// Build one typed Device-owned worker ticket against the declared row.
+    fn device_worker_request(template: &str) -> ProcessRequest {
+        use d2b_contracts_resource::v3::{
+            ControllerGeneration, ResourceGeneration, execution_policy::BoundedToken,
+        };
+        use d2b_process_conformance::testing::fixtures::{compiled_digests, operation_uid};
+        use d2b_process_conformance::{
+            LaunchIdentity, LaunchTicket, OperationBinding, runtime_scope_commitment,
+        };
+
+        let process_ref = ResourceRef::parse("Process/swtpm-tpm").expect("process ref");
+        let execution_ref = ResourceRef::parse("Host/host-system").expect("execution ref");
+        let device_ref = ResourceRef::parse("Device/tpm").expect("device ref");
+        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
+            "223e4567-e89b-42d3-a456-426614174001",
+        )
+        .expect("zone uid");
+        let process_uid = operation_uid();
+        let ticket = LaunchTicket::new(
+            process_ref.clone(),
+            process_uid.clone(),
+            ResourceGeneration::new(1).expect("generation"),
+            ControllerGeneration::new(1).expect("controller generation"),
+            BoundedToken::parse("system-minijail").expect("owner provider"),
+            BoundedToken::parse("process-controller").expect("component"),
+            BoundedToken::parse(template).expect("template"),
+            execution_ref.clone(),
+            ExecutionDomain::System,
+            None,
+            BoundedToken::parse("system-minijail").expect("selected provider"),
+            compiled_digests(),
+            OperationBinding::new(operation_uid(), 30_000).expect("operation"),
+            std::collections::BTreeSet::from([IdentityBinding::Cgroup]),
+        )
+        .expect("device worker ticket")
+        .with_launch_identity(
+            LaunchIdentity::new(
+                Some(device_ref.clone()),
+                None,
+                execution_ref,
+                None,
+                "swtpm-tpm",
+                false,
+            )
+            .expect("launch identity"),
+        )
+        .expect("launch identity binding")
+        .with_runtime_identity(
+            zone_uid.clone(),
+            Some(device_ref),
+            runtime_scope_commitment(
+                &zone_uid,
+                None,
+                &process_ref,
+                &process_uid,
+                "swtpm-tpm",
+                1,
+            ),
+        )
+        .expect("runtime identity");
+        ProcessRequest::new(ticket)
+    }
+
+    #[test]
+    fn device_owned_worker_row_resolves_through_its_declared_row() {
+        let resolver = device_worker_resolver();
+        let intent = resolver
+            .resolve(&device_worker_request("swtpm-socket"))
+            .expect("swtpm worker intent");
+        assert_eq!(intent.role, RunnerRole::Swtpm);
+        assert_eq!(intent.role_id.as_str(), "swtpm-tpm");
+        assert_eq!(intent.vm_id.as_str(), "host-system");
+        assert_eq!(
+            intent
+                .owner_ref
+                .as_ref()
+                .map(ResourceRef::to_canonical_string)
+                .as_deref(),
+            Some("Device/tpm")
+        );
+        assert!(intent.accepts_launch_args);
+        assert_eq!(
+            intent.template_identity,
+            BundleBackedLaunchResolver::identity_digest(
+                "swtpm-socket",
+                b"d2b-process-template-v1"
+            )
+        );
+        // The declared template is an exact fence: the same row never
+        // resolves through another template's posture.
+        assert_eq!(
+            resolver.resolve(&device_worker_request("gpu-worker")),
+            Err(ProcessEffectError::UnsupportedProvider)
         );
     }
 
@@ -1727,6 +2078,13 @@ fn read_pidfd_process_id(pidfd: &OwnedFd) -> Result<Option<i32>, ProcessEffectEr
     Ok(observed)
 }
 
+/// Read `/proc/<pid>/stat` field 22 (process start time in clock ticks).
+///
+/// `None` means the pid carries no observable start time: the process is
+/// absent (never existed here, or already reaped) or is a zombie (`Z`/`X`).
+/// A dying child is therefore indistinguishable from an absent one by design
+/// - both are *gone*, never a start-time *drift* - and callers must classify
+/// it as such (`launch_adoption_error`).
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
     let content = match fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(content) => content,

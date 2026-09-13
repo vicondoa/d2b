@@ -27,8 +27,6 @@
 //! itself, so no broker handover is needed; U14 retired the redb store and
 //! its handover.
 
-#![allow(dead_code)]
-
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -781,35 +779,113 @@ impl GuestControlEndpointProbe {
     }
 }
 
+/// Presence evidence for the Device-owning worker endpoints
+/// (`swtpm-tpm-socket`, `swtpm-control-socket`).
+///
+/// One swtpm launch composes both sockets (`--server` and `--ctrl` of the same
+/// argv) and the declaring Device TPM Provider's worker Process row reports
+/// `Ready` exactly while that launch is live, so the producer row is the
+/// evidence row - read the same way the guest-runtime control family reads its
+/// VMM row. The daemon owns nothing here: the worker creates the sockets and a
+/// Device delete retires them with the row.
+struct DeviceWorkerEndpointProbe {
+    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+    zone: ZoneId,
+}
+
+impl DeviceWorkerEndpointProbe {
+    fn new(
+        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+        zone: ZoneId,
+    ) -> Self {
+        Self { planes, zone }
+    }
+
+    /// Whether the producer worker row reports `Ready` at its current
+    /// generation.
+    async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
+        if !crate::endpoint_driver::device_worker_purpose(purpose)
+            || producer_ref.resource_type().as_str() != "Process"
+        {
+            return false;
+        }
+        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+            return false;
+        };
+        let key = ResourceKey::new(
+            self.zone.as_str(),
+            producer_ref.resource_type().as_str(),
+            producer_ref.name().as_str(),
+        );
+        match plane.client().get(key).await {
+            Ok(Some(view)) => view.observed_status() == Some(ResourceStatus::Ready),
+            Ok(None) => false,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %self.zone.as_str(),
+                    producer = %producer_ref.to_canonical_string(),
+                    purpose,
+                    error = %error,
+                    "device worker endpoint probe: producer row read failed",
+                );
+                false
+            }
+        }
+    }
+}
+
 /// Dispatches each admitted Endpoint purpose onto the realization the plane
 /// owns: `virtiofsd` onto the host socket effect, the guest-runtime control
-/// purposes onto the guest's VMM evidence. The driver refuses every other
-/// purpose at validate, so anything else is a retryable failure (R13).
+/// purposes onto the guest's VMM evidence, the device-worker purposes onto the
+/// producer worker row's evidence. The driver refuses every other purpose at
+/// validate, so anything else is a retryable failure (R13).
 struct EndpointEnsureEffect {
     socket: Arc<SocketWaitEffect>,
     control: Arc<GuestControlEndpointProbe>,
+    device_worker: Arc<DeviceWorkerEndpointProbe>,
 }
 
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointEnsureEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose) {
+        if crate::endpoint_driver::guest_control_purpose(purpose)
+            || crate::endpoint_driver::device_worker_purpose(purpose)
+        {
+            let probe = if crate::endpoint_driver::guest_control_purpose(purpose) {
+                EndpointEvidence::Control(&self.control)
+            } else {
+                EndpointEvidence::DeviceWorker(&self.device_worker)
+            };
             let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
             loop {
-                if self.control.present(producer_ref, purpose).await {
-                    return Ok(());
+                match probe {
+                    EndpointEvidence::Control(probe) => {
+                        if probe.present(producer_ref, purpose).await {
+                            return Ok(());
+                        }
+                    }
+                    EndpointEvidence::DeviceWorker(probe) => {
+                        if probe.present(producer_ref, purpose).await {
+                            return Ok(());
+                        }
+                    }
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    return Err(
-                        "guest control endpoint is not realized within its realize budget"
-                            .to_owned(),
-                    );
+                    return Err(format!(
+                        "endpoint {purpose:?} is not realized within its realize budget"
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
         self.socket.run(producer_ref, purpose).await
     }
+}
+
+/// The row-evidenced probe one admitted non-socket family resolves to.
+enum EndpointEvidence<'a> {
+    Control(&'a GuestControlEndpointProbe),
+    DeviceWorker(&'a DeviceWorkerEndpointProbe),
 }
 
 /// Removal for the same dispatch: the guest-runtime control endpoints are
@@ -823,7 +899,9 @@ struct EndpointRemoveEffect {
 #[async_trait::async_trait]
 impl AsyncSocketEffect for EndpointRemoveEffect {
     async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if crate::endpoint_driver::guest_control_purpose(purpose) {
+        if crate::endpoint_driver::guest_control_purpose(purpose)
+            || crate::endpoint_driver::device_worker_purpose(purpose)
+        {
             return Ok(());
         }
         self.socket.run(producer_ref, purpose).await
@@ -1252,6 +1330,12 @@ pub struct ConstructionInputs {
     /// Absolute runtime root the virtiofs worker-template exports resolve
     /// under (`PrivateSocketPath::derive` input); production derives it
     /// from the broker socket's parent directory.
+    ///
+    /// Unwired: [`ConstructionInputs::production`] derives the same root from
+    /// `ServerState` directly and the endpoint/binding socket resolvers read
+    /// the registry's own copy, so no reader consults this field yet. The
+    /// plane's endpoint-socket derivation owns moving onto it.
+    #[allow(dead_code)]
     pub socket_runtime_dir: PathBuf,
     pub authority: ZoneAuthorityInputs,
     /// Committed `Provider` identities (KTD7) keyed by canonical reference,
@@ -1422,13 +1506,21 @@ impl ConstructionInputs {
                     zone.clone(),
                 ));
                 let ensure_control = Arc::clone(&control);
+                let device_worker = Arc::new(DeviceWorkerEndpointProbe::new(
+                    Arc::clone(&state.v3_planes),
+                    zone.clone(),
+                ));
+                let ensure_device_worker = Arc::clone(&device_worker);
                 Arc::new(crate::endpoint_driver::ProductionEndpointDriverEffects::new(
                     Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
                         let present = Arc::clone(&present);
                         let control = Arc::clone(&control);
+                        let device_worker = Arc::clone(&device_worker);
                         Box::pin(async move {
                             if crate::endpoint_driver::guest_control_purpose(purpose) {
                                 control.present(producer_ref, purpose).await
+                            } else if crate::endpoint_driver::device_worker_purpose(purpose) {
+                                device_worker.present(producer_ref, purpose).await
                             } else {
                                 present.present(producer_ref, purpose).await
                             }
@@ -1437,6 +1529,7 @@ impl ConstructionInputs {
                     Arc::new(EndpointEnsureEffect {
                         socket: Arc::clone(&wait),
                         control: ensure_control,
+                        device_worker: ensure_device_worker,
                     }),
                     Arc::new(EndpointRemoveEffect {
                         socket: Arc::new(SocketRemoveEffect {
@@ -1578,7 +1671,6 @@ impl TargetResolver for DeclaredExecutionRef {
 pub struct ResourcePlaneV3 {
     zone: ZoneId,
     zone_token: BoundedToken,
-    store_path: PathBuf,
     store: Arc<SpecStore>,
     hub: Arc<WatchHub>,
     /// The per-Zone target directory (U13): every resource's assignment and
@@ -1801,7 +1893,6 @@ impl ResourcePlaneV3 {
         Ok(Self {
             zone: inputs.zone.clone(),
             zone_token: inputs.zone_token,
-            store_path,
             store,
             hub,
             targets,
@@ -1842,8 +1933,14 @@ impl ResourcePlaneV3 {
         Ok(plane)
     }
 
-    pub fn zone(&self) -> &ZoneId {
-        &self.zone
+    /// The plane's public surface: the U9 readiness checklist and the
+    /// spec-store handle. Both are read by this module's tests; the daemon
+    /// composition reads `client`/`hub`/`registry`/`targets`/
+    /// `ready_zone_count` today, and the readiness reporting the checklist was
+    /// sized for is the composition's outstanding wiring.
+    #[allow(dead_code)]
+    pub fn readiness(&self) -> d2bd_runtime::resource_runtime_support::NewPlaneReadiness {
+        self.readiness.snapshot()
     }
 
     /// The per-Zone target directory (U13).
@@ -1899,16 +1996,6 @@ impl ResourcePlaneV3 {
         Ok(())
     }
 
-    pub fn readiness(&self) -> d2bd_runtime::resource_runtime_support::NewPlaneReadiness {
-        self.readiness.snapshot()
-    }
-
-    /// The readiness checklist handle (U9): shared state the composition
-    /// can observe while the plane opens.
-    pub fn readiness_state(&self) -> Arc<NewPlaneReadinessState> {
-        Arc::clone(&self.readiness)
-    }
-
     /// The manager caller facade (U8 wires the Resource API onto this
     /// through `ManagerBackend::new`).
     pub fn client(&self) -> &ResourceManagerClient {
@@ -1922,6 +2009,8 @@ impl ResourcePlaneV3 {
         &self.hub
     }
 
+    /// See [`Self::readiness`]: read by this module's tests.
+    #[allow(dead_code)]
     pub fn store(&self) -> &Arc<SpecStore> {
         &self.store
     }
@@ -1942,6 +2031,9 @@ impl ResourcePlaneV3 {
         &self.registry
     }
 
+    /// Stop the manager actor. Read by this module's tests; the daemon
+    /// composition stops the manager through the runtime it owns.
+    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         let _ = self.client.actor().get_cell().stop(None);
     }
@@ -2232,6 +2324,14 @@ mod tests {
             _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
         ) -> Result<crate::process_provider_runtime::ProviderAdoption, String> {
             Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
+        }
+
+        async fn probe(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
@@ -2954,6 +3054,80 @@ mod tests {
         plane.shutdown().await;
     }
 
+    /// Regression (P2): the child relist read is owner-scoped. A Zone whose
+    /// converted rows exceed the relist's page bound - the 85-guest case,
+    /// where the union of every guest's Process/Endpoint/Volume rows crossed
+    /// 256 - must still answer exactly this session owner's children, and
+    /// another owner's rows must never appear in (or bound) the answer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn session_child_rows_are_owner_scoped() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        plane
+            .ingest_nix_bundle(&test_bundle(vec![
+                bundle_row(
+                    "Guest",
+                    "acceptance-guest",
+                    serde_json::json!({"systemArtifactId": "acceptance-system"}),
+                ),
+                bundle_row(
+                    "Guest",
+                    "other-guest",
+                    serde_json::json!({"systemArtifactId": "other-system"}),
+                ),
+            ]))
+            .await
+            .expect("owner ingest");
+        let zone = ZoneId::parse("test").expect("zone");
+        let owned = ResourceRef::parse("Process/acceptance-guest-vmm").expect("owned child");
+        let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
+            Arc::clone(&plane),
+            zone.clone(),
+            ResourceRef::parse("Guest/acceptance-guest").expect("owner"),
+        );
+        port.ensure(&owned, &controller_child_envelope("running"))
+            .await
+            .expect("owned child commit");
+
+        let foreign = ResourceRef::parse("Process/other-guest-vmm").expect("foreign child");
+        crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
+            Arc::clone(&plane),
+            zone.clone(),
+            ResourceRef::parse("Guest/other-guest").expect("foreign owner"),
+        )
+        .ensure(
+            &foreign,
+            &controller_child_envelope_for("Guest/other-guest", "other-guest-vmm", "running"),
+        )
+        .await
+        .expect("foreign child commit");
+
+        // Both owners' rows really are committed in the Zone ...
+        let zone_rows = plane
+            .client()
+            .list(d2b_resource_runtime::manager::ResourceSelector {
+                zone: Some(zone.as_str().to_owned()),
+                type_name: Some("Process".to_owned()),
+                owner: None,
+            })
+            .await
+            .expect("zone rows");
+        assert_eq!(zone_rows.len(), 2, "both owners' rows are committed");
+
+        // ... and the session-scoped relist read answers only its own child.
+        let rows = port
+            .rows_of_types(&["Process", "Endpoint", "Volume"])
+            .await
+            .expect("owned rows");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.resource_ref.to_canonical_string())
+                .collect::<Vec<_>>(),
+            vec![owned.to_canonical_string()],
+            "the relist read must return exactly this owner's children",
+        );
+    }
+
     /// Process effects double that adopts after the first launch: the driver's
     /// `Ready` (and only `Ready`) publishes the committed child row, exactly
     /// as the production provider's retained identity does.
@@ -3000,6 +3174,14 @@ mod tests {
             } else {
                 Ok(crate::process_provider_runtime::ProviderAdoption::Absent)
             }
+        }
+
+        async fn probe(
+            &self,
+            _identity: &crate::process_driver::ProcessResourceIdentity,
+            _spec: &d2b_contracts_resource::v3::process::ProcessSpec,
+        ) -> Result<crate::process_provider_runtime::ProviderLiveness, String> {
+            Ok(crate::process_provider_runtime::ProviderLiveness::Alive)
         }
 
         async fn launch_ephemeral(
@@ -3177,13 +3359,23 @@ mod tests {
     /// renders it: the authored identity (no uid - the store stamps it), the
     /// spec layer, and the status the driver replaces.
     fn controller_child_envelope(desired_lifecycle: &str) -> Vec<u8> {
+        controller_child_envelope_for(
+            "Guest/acceptance-guest",
+            "acceptance-guest-vmm",
+            desired_lifecycle,
+        )
+    }
+
+    /// The same envelope for one named owner/child pair: the owner-scoped
+    /// relist regression commits a second owner's child beside the first.
+    fn controller_child_envelope_for(owner: &str, name: &str, desired_lifecycle: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "apiVersion": "resources.d2bus.org/v3",
             "type": "Process",
             "metadata": {
-                "name": "acceptance-guest-vmm",
+                "name": name,
                 "zone": "test",
-                "ownerRef": "Guest/acceptance-guest",
+                "ownerRef": owner,
                 "finalizers": [],
                 "deletionRequestedAt": null,
                 "createdAt": "1970-01-01T00:00:00.000Z",

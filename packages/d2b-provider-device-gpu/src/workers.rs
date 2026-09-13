@@ -75,7 +75,7 @@ impl GpuWorkerSpec {
                 ],
             ),
             GpuProcessRole::RenderNode => (
-                "render-node-worker",
+                "gpu-render-node",
                 "w1-gpu-render-node",
                 &["mount", "pid", "ipc", "uts", "cgroup", "user"][..],
                 vec![GpuDeviceNode::Dri],

@@ -41,6 +41,10 @@ pub use state::{
     TpmStateObservationKind, TpmStatePreparation, TpmStateValidationError,
 };
 pub use status::{TpmMarkerStatus, TpmStatusReport};
+pub use swtpm_argv::{
+    SwtpmArgvInput, SwtpmIoctlFlushInput, exec_arg0, exec_arg0_flush, generate_swtpm_argv,
+    generate_swtpm_ioctl_flush_argv,
+};
 
 /// Provider identity.
 pub const PROVIDER_REF: &str = "Provider/device-tpm";
@@ -48,6 +52,17 @@ pub const PROVIDER_REF: &str = "Provider/device-tpm";
 pub const DEVICE_TPM_SCHEMA_ID: &str = "device-tpm.d2bus.org/Device/spec";
 /// Device Provider finalizer.
 pub const DEVICE_TPM_FINALIZER: &str = "device-tpm.d2bus.org/state-preserved";
+/// Endpoint purpose of the swtpm worker's server socket (`--server`) - the
+/// endpoint the owning Guest's VMM consumes.
+///
+/// The declaring rows live in this Provider's `nix/default.nix`; the daemon's
+/// Endpoint driver derives its realized device-worker family from these
+/// constants, so the declared spelling and the admitted shape cannot drift
+/// apart silently.
+pub const TPM_SERVER_ENDPOINT_PURPOSE: &str = "swtpm-tpm-socket";
+/// Endpoint purpose of the swtpm worker's control socket (`--ctrl`) - the
+/// endpoint the one-shot pre-start flush connects to.
+pub const TPM_CONTROL_ENDPOINT_PURPOSE: &str = "swtpm-control-socket";
 /// Device Provider observe interval from the Device dossier.
 pub const DEVICE_TPM_OBSERVE_INTERVAL_SECS: u64 = 30;
 /// Minimum swtpm log level.

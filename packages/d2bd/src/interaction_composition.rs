@@ -191,7 +191,15 @@ pub fn interaction_endpoint_policy(service: &str, generation: u64) -> Option<End
     })
 }
 
-fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_resource::v3::identity::BindingDigest {
+/// The channel-binding digest one endpoint policy admits.
+///
+/// The acceptor compares the transport evidence against the binding the
+/// handshake derived from this same policy, so evidence built anywhere from a
+/// policy must use exactly this derivation: a foreign constant can only ever
+/// be refused with `ChannelBindingMismatch`.
+pub(crate) fn policy_channel_binding_digest(
+    policy: &EndpointPolicy,
+) -> Option<d2b_contracts_resource::v3::identity::BindingDigest> {
     d2b_contracts_resource::v3::identity::BindingDigest::parse(format!(
         "sha256:{}",
         policy
@@ -201,7 +209,12 @@ fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_resource::v3::identi
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     ))
-    .expect("fixed interaction channel binding is a valid digest")
+    .ok()
+}
+
+fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_resource::v3::identity::BindingDigest {
+    policy_channel_binding_digest(policy)
+        .expect("fixed interaction channel binding is a valid digest")
 }
 
 /// A registered interaction session after the daemon has consumed its sealed

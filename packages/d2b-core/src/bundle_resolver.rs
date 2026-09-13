@@ -79,6 +79,7 @@ use crate::processes::{
     ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
     ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
 };
+use crate::site::SiteJson;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
@@ -124,6 +125,9 @@ pub struct BundleResolver {
     pub sync: Option<SyncJson>,
     pub realm_controllers: Option<RealmControllersJson>,
     pub realm_identity: Option<RealmIdentityConfigJson>,
+    /// Trusted site-runtime contract (`site.json`); `None` for a bundle that
+    /// predates the artifact, which leaves its consumers unbound.
+    pub site: Option<SiteJson>,
     pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     pub unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     pub manifest: ManifestV04,
@@ -185,6 +189,7 @@ struct ParsedBundleArtifacts {
     sync: Option<SyncJson>,
     realm_controllers: Option<RealmControllersJson>,
     realm_identity: Option<RealmIdentityConfigJson>,
+    site: Option<SiteJson>,
     realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     manifest: ManifestV04,
@@ -201,6 +206,10 @@ struct ZoneNativeBundleIndex {
     privileges_path: String,
     #[serde(default)]
     storage_path: Option<String>,
+    /// Private site-runtime contract (`site.json`). Optional: a bundle that
+    /// predates the artifact leaves the site facts absent.
+    #[serde(default)]
+    site_path: Option<String>,
     #[serde(default)]
     realm_workloads_launcher_v2_path: Option<String>,
     zones: Vec<ZoneNativeBundleRef>,
@@ -1295,6 +1304,11 @@ impl BundleResolver {
                 ));
             }
         }
+        let site_path = index
+            .site_path
+            .as_deref()
+            .map(|path| normalize_zone_native_ref(bundle_root, path))
+            .transpose()?;
         let bundle = Bundle {
             bundle_version: index.bundle_version,
             schema_version: index.schema_version,
@@ -1343,6 +1357,7 @@ impl BundleResolver {
         let realm_workloads_launcher_v2 =
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
+        let site = load_optional_site_artifact(&bundle, bundle_root, site_path.as_deref(), policy)?;
         let host = empty_zone_native_host();
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
@@ -1370,6 +1385,7 @@ impl BundleResolver {
                 sync: None,
                 realm_controllers: None,
                 realm_identity: None,
+                site,
                 realm_workloads_launcher_v2,
                 unsafe_local_workloads: None,
                 manifest,
@@ -1434,6 +1450,7 @@ impl BundleResolver {
                 sync: None,
                 realm_controllers: None,
                 realm_identity: None,
+                site: None,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
                 manifest,
@@ -1484,6 +1501,7 @@ impl BundleResolver {
                 sync: None,
                 realm_controllers: None,
                 realm_identity: None,
+                site: None,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
                 manifest,
@@ -1515,6 +1533,7 @@ impl BundleResolver {
             sync,
             realm_controllers,
             realm_identity,
+            site,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
             manifest,
@@ -1586,6 +1605,19 @@ impl BundleResolver {
         runner_intents.extend(build_provider_controller_intents(
             &provider_controller_templates,
         ));
+        // A Device worker's intent id is `(execution target, declared row
+        // name)`. Never displace another trusted intent that already claims
+        // it: a row whose identity collides with a legacy runner or
+        // controller intent stays unbound and fails closed at launch.
+        for (intent_id, intent) in build_device_worker_intents(&provider_controller_templates) {
+            if runner_intents
+                .get(&intent_id)
+                .is_some_and(|existing| existing != &intent)
+            {
+                continue;
+            }
+            runner_intents.insert(intent_id, intent);
+        }
         runner_intents.extend(
             guest_vmm_intents
                 .values()
@@ -1625,6 +1657,7 @@ impl BundleResolver {
             sync,
             realm_controllers,
             realm_identity,
+            site,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
             manifest,
@@ -1687,6 +1720,7 @@ impl BundleResolver {
                 sync,
                 realm_controllers,
                 realm_identity,
+                site: None,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
                 manifest,
@@ -1741,6 +1775,7 @@ impl BundleResolver {
         let realm_controllers =
             load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
         let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
+        let site = load_optional_site_artifact(&bundle, bundle_root, None, policy)?;
         let realm_workloads_launcher_v2 =
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let unsafe_local_workloads =
@@ -1768,6 +1803,7 @@ impl BundleResolver {
                 sync,
                 realm_controllers,
                 realm_identity,
+                site,
                 realm_workloads_launcher_v2,
                 unsafe_local_workloads,
                 manifest,
@@ -2389,6 +2425,47 @@ impl BundleResolver {
                 && intent.execution_domain == execution_domain
                 && intent.user_ref.as_deref() == user_ref
                 && (intent.role_id == template || intent.profile_id == template)
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
+    /// Find the unique Device-owned worker intent for one exact Process row.
+    ///
+    /// A Device Provider declares one worker row per Device (`Process/gpu-<device>`,
+    /// `EphemeralProcess/swtpm-flush-<device>`, ...), so the declared row name -
+    /// not the template name, which two Devices in one Zone share - is the
+    /// launch identity: the resolved intent's role id must be that exact row
+    /// name. The template must be the row's declared template, and the
+    /// template's owning Device Provider is pinned by the closed
+    /// [`device_worker_posture`] table, so a `gpu-worker` row can never
+    /// resolve to the render-node or video posture (and vice versa). The
+    /// lookup refuses ambiguity.
+    pub fn find_device_worker_intent(
+        &self,
+        process_ref: &ResourceRef,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        user_ref: Option<&str>,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        if !matches!(
+            process_ref.resource_type().as_str(),
+            "Process" | "EphemeralProcess"
+        ) {
+            return None;
+        }
+        let mut matches = self.runner_intents.values().filter(|intent| {
+            is_device_worker_role(&intent.role)
+                && intent.role_id == process_ref.name().as_str()
+                && intent.profile_id == template
+                && intent
+                    .owner_ref
+                    .as_deref()
+                    .is_some_and(|owner| device_worker_posture(owner, template).is_some())
+                && intent.execution_ref == execution_ref
+                && intent.execution_domain == execution_domain
+                && intent.user_ref.as_deref() == user_ref
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -4430,53 +4507,268 @@ fn build_runner_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedR
     out
 }
 
-fn build_provider_controller_intents(
-    templates: &[ProcessTemplateBinding],
-) -> BTreeMap<String, ResolvedRunnerIntent> {
-    let mut out = BTreeMap::new();
-    for binding in templates {
-        let vm_name = binding.execution_ref().name().as_str().to_owned();
-        let role_id = binding.process_ref().name().as_str().to_owned();
-        let cgroup_subtree = format!("d2b.slice/{vm_name}/{role_id}");
-        let profile_id = binding.template().as_str().to_owned();
-        let principal = format!(
-            "{}:{}:{}",
-            binding.owner_ref().to_canonical_string(),
-            binding.process_ref().to_canonical_string(),
-            binding.execution_ref().to_canonical_string()
-        );
-        let profile_hash = sha2::Sha256::digest(principal.as_bytes());
-        let principal_id = 50_000_u32.saturating_add(
-            u32::from_be_bytes(
-                profile_hash[..4]
-                    .try_into()
-                    .expect("SHA-256 always has four-byte prefixes"),
-            ) & 0x00ff_ffff,
-        );
-        // The binding-owned virtiofsd serving worker declares the frozen
-        // ADR 0021 sandbox posture in its Process spec: a user namespace
-        // with the process-principal-root mapping and no host capabilities.
-        // The broker daemon binds the launch's sandbox plan to this trusted
-        // profile, so the serving template must mint it here.
-        let serving_worker = binding.owner_ref().to_canonical_string() == "Provider/volume-virtiofs"
-            && profile_id == "virtiofsd-worker";
-        let intent = ResolvedRunnerIntent {
-            intent_id: intent_id_legacy_runner(&vm_name, &role_id),
-            vm_name,
-            execution_ref: binding.execution_ref().to_canonical_string(),
-            owner_ref: Some(binding.owner_ref().to_canonical_string()),
-            execution_domain: ProcessExecutionDomain::System,
-            user_ref: None,
-            role_id,
-            role: ProcessRole::ProviderController,
-            binary_path: PathBuf::from(binding.binary_path()),
-            argv: vec![binding.binary_ref().as_str().to_owned()],
-            env: Vec::new(),
-            uid: principal_id,
-            gid: principal_id,
-            supplementary_groups: Vec::new(),
-            capabilities: Vec::new(),
-            namespaces: NamespaceSet {
+/// Provider reference of the TPM Device Provider.
+pub const DEVICE_TPM_PROVIDER_REF: &str = "Provider/device-tpm";
+/// Provider reference of the GPU Device Provider.
+pub const DEVICE_GPU_PROVIDER_REF: &str = "Provider/device-gpu";
+
+/// Umask every Device-owned worker runs under.
+///
+/// Every Device worker binds a shared Unix socket a peer in the same VM
+/// (cloud-hypervisor, or the GPU worker the video sidecar connects to)
+/// connects to as a *different* uid, so the created socket must keep its
+/// group bits: `0o007` leaves the requested `0660` intact, while the default
+/// `0o022` would strip group-write and collapse the per-VM runtime default
+/// ACL to a read-only mask. See [`crate::processes::RoleProfile::umask`].
+pub const DEVICE_WORKER_UMASK: u32 = 0o007;
+
+/// Closed sandbox posture of one Device-owned worker template.
+///
+/// A Device Provider declares its worker Process rows in Nix
+/// (`Process/<name>` / `EphemeralProcess/<name>` owned by `Device/<name>`);
+/// this value is the *private* half of that declaration: the executable, the
+/// running broker role, the sandbox class, and the device grants the broker
+/// enforces at spawn. It is deliberately not part of the public Process spec
+/// - the spec stays executable-free and path-free.
+///
+/// The compiler cross-checks a declared row against this table
+/// (`d2b_resource_compiler`), and the resolver mints the trusted runner
+/// intent from the same entry, so the declared row and the launch posture
+/// cannot drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceWorkerPosture {
+    role: ProcessRole,
+    binary_ref: &'static str,
+    seccomp_policy_ref: &'static str,
+    namespaces: NamespaceSet,
+    user_namespace: bool,
+    device_binds: &'static [&'static str],
+    umask: u32,
+}
+
+impl DeviceWorkerPosture {
+    /// The closed broker runner role this template launches as.
+    pub const fn role(&self) -> &ProcessRole {
+        &self.role
+    }
+
+    /// The provider artifact executable this template pins.
+    pub const fn binary_ref(&self) -> &'static str {
+        self.binary_ref
+    }
+
+    /// The seccomp policy class the broker loads before exec.
+    pub const fn seccomp_policy_ref(&self) -> &'static str {
+        self.seccomp_policy_ref
+    }
+
+    /// The namespace classes the launch may request.
+    pub fn namespaces(&self) -> NamespaceSet {
+        self.namespaces.clone()
+    }
+
+    /// Whether the launch pre-establishes the process-principal-root user
+    /// namespace (ADR 0021).
+    pub const fn user_namespace(&self) -> bool {
+        self.user_namespace
+    }
+
+    /// The closed device-bind set the broker grants this worker.
+    pub const fn device_binds(&self) -> &'static [&'static str] {
+        self.device_binds
+    }
+
+    /// The file-creation mask the broker installs before exec.
+    pub const fn umask(&self) -> u32 {
+        self.umask
+    }
+
+    /// The uid/gid a launch under this posture must name for the host-facing
+    /// artifacts the worker creates (the swtpm socket owner entries),
+    /// given the trusted host principal the launch runs as.
+    ///
+    /// A posture that pre-establishes the ADR 0021 single-entry user
+    /// namespace maps in-namespace `0` to that principal ([`Self::user_namespace`]);
+    /// the host-numeric principal itself is NOT mapped inside the namespace,
+    /// so a `chown` to it fails with `EINVAL` and the worker exits before it
+    /// ever binds a socket (proved on the host with `unshare -Ur`). Such a
+    /// posture therefore names the in-namespace identity the single-entry
+    /// mapping declares. A posture without a user namespace runs directly as
+    /// the host principal and keeps the host ids.
+    pub const fn launch_ids(&self, host_uid: u32, host_gid: u32) -> (u32, u32) {
+        if self.user_namespace {
+            (0, 0)
+        } else {
+            (host_uid, host_gid)
+        }
+    }
+}
+
+const fn device_namespaces(mount: bool, pid: bool, ipc: bool, uts: bool, user: bool) -> NamespaceSet {
+    NamespaceSet {
+        mount,
+        pid,
+        net: false,
+        ipc,
+        uts,
+        user,
+    }
+}
+
+/// `(mount, pid, ipc, uts, user)` for every Device worker family.
+const TPM_WORKER_NAMESPACES: NamespaceSet = device_namespaces(true, true, false, false, true);
+const TPM_FLUSH_NAMESPACES: NamespaceSet = device_namespaces(true, true, false, false, false);
+const GPU_WORKER_NAMESPACES: NamespaceSet = device_namespaces(true, true, true, true, true);
+const VIDEO_WORKER_NAMESPACES: NamespaceSet = device_namespaces(true, true, true, true, false);
+
+/// The one closed table of Device-owned worker templates.
+///
+/// Each entry is exactly what the owning Provider declares and what the
+/// privileged broker enforces for the template's role class:
+///
+/// | template | role | seccomp | namespaces | user-NS | device binds |
+/// |---|---|---|---|---|---|
+/// | `swtpm-socket` | `Swtpm` | `w1-swtpm` | mount, pid, user | yes | - |
+/// | `swtpm-init-flush` | `SwtpmPreStartFlush` | `w1-swtpm` | mount, pid | no | - |
+/// | `gpu-worker` | `Gpu` | `w1-gpu` | mount, pid, ipc, uts, user | yes | kvm, dri, udmabuf |
+/// | `gpu-render-node` | `GpuRenderNode` | `w1-gpu-render-node` | mount, pid, ipc, uts, user | yes | - |
+/// | `video-worker` | `Video` | `w1-video` | mount, pid, ipc, uts | no | dri |
+///
+/// The GPU shapes are enforced by the broker's closed GPU plan validation
+/// (`d2b-broker::ops::gpu`), and the TPM shape by its `w1-swtpm` gates
+/// (swtpm-dir hardening, permissive ioctl BPF). The render-node worker takes
+/// no device binds because the broker pre-opens the render node fd itself
+/// before `clone3(CLONE_NEWUSER)`.
+///
+/// The pre-start flush carries no user namespace: the ADR 0021
+/// `process-principal-root` mapping applies to long-lived workers only, so
+/// the one-shot flush runs as its system principal directly.
+pub fn device_worker_posture(provider_ref: &str, template: &str) -> Option<DeviceWorkerPosture> {
+    let (role, binary_ref, seccomp_policy_ref, namespaces, user_namespace, device_binds) =
+        match (provider_ref, template) {
+            (DEVICE_TPM_PROVIDER_REF, "swtpm-socket") => (
+                ProcessRole::Swtpm,
+                "swtpm",
+                "w1-swtpm",
+                TPM_WORKER_NAMESPACES,
+                true,
+                &[][..],
+            ),
+            (DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush") => (
+                ProcessRole::SwtpmPreStartFlush,
+                "swtpm-ioctl",
+                "w1-swtpm",
+                TPM_FLUSH_NAMESPACES,
+                false,
+                &[][..],
+            ),
+            (DEVICE_GPU_PROVIDER_REF, "gpu-worker") => (
+                ProcessRole::Gpu,
+                "crosvm",
+                "w1-gpu",
+                GPU_WORKER_NAMESPACES,
+                true,
+                &["/dev/kvm", "/dev/dri/renderD128", "/dev/udmabuf"][..],
+            ),
+            (DEVICE_GPU_PROVIDER_REF, "gpu-render-node") => (
+                ProcessRole::GpuRenderNode,
+                "crosvm",
+                "w1-gpu-render-node",
+                GPU_WORKER_NAMESPACES,
+                true,
+                &[][..],
+            ),
+            (DEVICE_GPU_PROVIDER_REF, "video-worker") => (
+                ProcessRole::Video,
+                "crosvm",
+                "w1-video",
+                VIDEO_WORKER_NAMESPACES,
+                false,
+                &["/dev/dri/renderD128"][..],
+            ),
+            _ => return None,
+        };
+    Some(DeviceWorkerPosture {
+        role,
+        binary_ref,
+        seccomp_policy_ref,
+        namespaces,
+        user_namespace,
+        device_binds,
+        umask: DEVICE_WORKER_UMASK,
+    })
+}
+
+/// Whether the role belongs to the Device-owned worker family.
+pub const fn is_device_worker_role(role: &ProcessRole) -> bool {
+    matches!(
+        role,
+        ProcessRole::Swtpm
+            | ProcessRole::SwtpmPreStartFlush
+            | ProcessRole::Gpu
+            | ProcessRole::GpuRenderNode
+            | ProcessRole::Video
+    )
+}
+
+/// The private sandbox shape one template intent is minted with.
+enum TemplateIntentShape {
+    /// A Provider controller: the static signed controller template, the
+    /// credential managed-identity agent, or the binding-owned serving
+    /// worker.
+    ProviderController { serving_worker: bool },
+    /// A Device-owned worker declared by its Device Provider.
+    DeviceWorker(DeviceWorkerPosture),
+}
+
+impl TemplateIntentShape {
+    fn of(binding: &ProcessTemplateBinding) -> Self {
+        let provider_ref = binding.owner_ref().to_canonical_string();
+        match device_worker_posture(&provider_ref, binding.template().as_str()) {
+            Some(posture) => Self::DeviceWorker(posture),
+            None => {
+                // The binding-owned virtiofsd serving worker declares the
+                // frozen ADR 0021 sandbox posture in its Process spec: a user
+                // namespace with the process-principal-root mapping and no
+                // host capabilities. The broker daemon binds the launch's
+                // sandbox plan to this trusted profile, so the serving
+                // template must mint it here.
+                let serving_worker = provider_ref == "Provider/volume-virtiofs"
+                    && binding.template().as_str() == "virtiofsd-worker";
+                Self::ProviderController { serving_worker }
+            }
+        }
+    }
+}
+
+/// Mint one trusted runner intent from a private template binding.
+fn mint_template_intent(
+    binding: &ProcessTemplateBinding,
+    shape: TemplateIntentShape,
+) -> ResolvedRunnerIntent {
+    let vm_name = binding.execution_ref().name().as_str().to_owned();
+    let role_id = binding.process_ref().name().as_str().to_owned();
+    let cgroup_subtree = format!("d2b.slice/{vm_name}/{role_id}");
+    let profile_id = binding.template().as_str().to_owned();
+    let principal = format!(
+        "{}:{}:{}",
+        binding.owner_ref().to_canonical_string(),
+        binding.process_ref().to_canonical_string(),
+        binding.execution_ref().to_canonical_string()
+    );
+    let profile_hash = sha2::Sha256::digest(principal.as_bytes());
+    let principal_id = 50_000_u32.saturating_add(
+        u32::from_be_bytes(
+            profile_hash[..4]
+                .try_into()
+                .expect("SHA-256 always has four-byte prefixes"),
+        ) & 0x00ff_ffff,
+    );
+    let (role, seccomp_policy_ref, namespaces, user_namespace, device_binds, umask) = match shape {
+        TemplateIntentShape::ProviderController { serving_worker } => (
+            ProcessRole::ProviderController,
+            "w1-provider-controller",
+            NamespaceSet {
                 mount: false,
                 pid: false,
                 net: false,
@@ -4484,29 +4776,103 @@ fn build_provider_controller_intents(
                 uts: false,
                 user: serving_worker,
             },
-            seccomp_policy_ref: Some("w1-provider-controller".to_owned()),
-            mount_policy: MountPolicy {
-                read_only_paths: vec!["/nix/store".to_owned()],
-                writable_paths: Vec::new(),
-                nix_store_read_only: true,
-                hide_device_nodes_by_default: true,
-                device_binds: Vec::new(),
-                bind_mounts: Vec::new(),
-            },
-            cgroup_placement: CgroupPlacement {
-                subtree: cgroup_subtree,
-                controllers: vec!["cpu".to_owned(), "memory".to_owned(), "pids".to_owned()],
-                delegated: false,
-            },
-            root_carve_out: false,
-            profile_id,
-            user_namespace: serving_worker.then_some(UserNamespaceSpec {
-                host_uid_for_zero: principal_id,
-                host_gid_for_zero: principal_id,
-            }),
-            umask: Some(0o022),
-            accepts_launch_args: binding.admits_launch_args(),
-        };
+            serving_worker,
+            Vec::new(),
+            0o022,
+        ),
+        TemplateIntentShape::DeviceWorker(posture) => (
+            posture.role,
+            posture.seccomp_policy_ref,
+            posture.namespaces,
+            posture.user_namespace,
+            posture
+                .device_binds
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect(),
+            posture.umask,
+        ),
+    };
+    ResolvedRunnerIntent {
+        intent_id: intent_id_legacy_runner(&vm_name, &role_id),
+        vm_name,
+        execution_ref: binding.execution_ref().to_canonical_string(),
+        owner_ref: Some(binding.owner_ref().to_canonical_string()),
+        execution_domain: ProcessExecutionDomain::System,
+        user_ref: None,
+        role_id,
+        role,
+        binary_path: PathBuf::from(binding.binary_path()),
+        argv: vec![binding.binary_ref().as_str().to_owned()],
+        env: Vec::new(),
+        uid: principal_id,
+        gid: principal_id,
+        supplementary_groups: Vec::new(),
+        capabilities: Vec::new(),
+        namespaces,
+        seccomp_policy_ref: Some(seccomp_policy_ref.to_owned()),
+        mount_policy: MountPolicy {
+            read_only_paths: vec!["/nix/store".to_owned()],
+            writable_paths: Vec::new(),
+            nix_store_read_only: true,
+            hide_device_nodes_by_default: true,
+            device_binds,
+            bind_mounts: Vec::new(),
+        },
+        cgroup_placement: CgroupPlacement {
+            subtree: cgroup_subtree,
+            controllers: vec!["cpu".to_owned(), "memory".to_owned(), "pids".to_owned()],
+            delegated: false,
+        },
+        root_carve_out: false,
+        profile_id,
+        user_namespace: user_namespace.then_some(UserNamespaceSpec {
+            host_uid_for_zero: principal_id,
+            host_gid_for_zero: principal_id,
+        }),
+        umask: Some(umask),
+        accepts_launch_args: binding.admits_launch_args(),
+    }
+}
+
+/// Build the trusted intents for Provider controller Templates.
+///
+/// Device-owned worker templates are minted by
+/// [`build_device_worker_intents`] instead: they launch as their own broker
+/// runner role, never as a Provider controller.
+fn build_provider_controller_intents(
+    templates: &[ProcessTemplateBinding],
+) -> BTreeMap<String, ResolvedRunnerIntent> {
+    let mut out = BTreeMap::new();
+    for binding in templates {
+        let shape = TemplateIntentShape::of(binding);
+        if matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
+            continue;
+        }
+        let intent = mint_template_intent(binding, shape);
+        out.insert(intent.intent_id.clone(), intent);
+    }
+    out
+}
+
+/// Build the trusted intents for the Device-owned worker templates a Device
+/// Provider declares.
+///
+/// Each declared `Process/swtpm-<device>`, `EphemeralProcess/swtpm-flush-<device>`,
+/// `Process/gpu-<device>`, and `Process/video-<device>` row resolves through
+/// the entry for its template in [`device_worker_posture`]; the intent's role
+/// id is the declared row name, so the exact Process row - never a template
+/// name shared by two Devices - is the launch identity.
+fn build_device_worker_intents(
+    templates: &[ProcessTemplateBinding],
+) -> BTreeMap<String, ResolvedRunnerIntent> {
+    let mut out = BTreeMap::new();
+    for binding in templates {
+        let shape = TemplateIntentShape::of(binding);
+        if !matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
+            continue;
+        }
+        let intent = mint_template_intent(binding, shape);
         out.insert(intent.intent_id.clone(), intent);
     }
     out
@@ -5820,6 +6186,50 @@ fn load_optional_allocator_artifact(
     Ok(Some(allocator))
 }
 
+/// Conventional bundle-root name of the optional site artifact.
+///
+/// Zone-native (v3) bundles declare the path in their index (`sitePath`);
+/// legacy bundles have no field for it, so the loader accepts the artifact
+/// beside `bundle.json` when it ships one.
+const SITE_ARTIFACT_FILE_NAME: &str = "site.json";
+
+/// Load the optional private site-runtime contract (`site.json`).
+///
+/// A bundle that predates the artifact yields `None`: the site facts are
+/// simply absent, and consumers refuse by name rather than inventing a path.
+fn load_optional_site_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    declared_ref: Option<&str>,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<SiteJson>, Error> {
+    let site_ref = match declared_ref {
+        Some(declared_ref) => declared_ref.to_owned(),
+        None => {
+            let conventional = bundle_root.join(SITE_ARTIFACT_FILE_NAME);
+            match std::fs::symlink_metadata(&conventional) {
+                Ok(_) => SITE_ARTIFACT_FILE_NAME.to_owned(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(Error::internal_io("site-artifact-metadata")),
+            }
+        }
+    };
+    let site_path = resolve_bundle_ref(bundle_root, &site_ref);
+    let bytes = secure_open_and_read(&site_path, policy)?;
+    verify_artifact_hash(
+        &site_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        &site_ref,
+    )?;
+    let site: SiteJson = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error("site.json", manifest_parse_reason(&error.to_string()))
+    })?;
+    site.validate()
+        .map_err(|reason| Error::manifest_parse_error("site.json", reason))?;
+    Ok(Some(site))
+}
+
 fn load_optional_storage_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -6437,6 +6847,342 @@ mod tests {
         );
     }
 
+    /// The socket owner ids one worker launch names follow the posture's
+    /// user namespace, not the host principal: an in-namespace launch must
+    /// name the only id the single-entry mapping declares (`0`), a launch
+    /// without one keeps the host principal it runs as.
+    #[test]
+    fn device_worker_posture_names_the_in_namespace_socket_ids() {
+        use crate::bundle_resolver::{DEVICE_GPU_PROVIDER_REF, DEVICE_TPM_PROVIDER_REF};
+        const HOST_UID: u32 = 60_100;
+        const HOST_GID: u32 = 60_100;
+
+        let swtpm = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+            .expect("swtpm-socket posture");
+        assert!(swtpm.user_namespace());
+        assert_eq!(swtpm.launch_ids(HOST_UID, HOST_GID), (0, 0));
+
+        let flush = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush")
+            .expect("flush posture");
+        assert!(!flush.user_namespace());
+        assert_eq!(flush.launch_ids(HOST_UID, HOST_GID), (HOST_UID, HOST_GID));
+
+        for template in ["gpu-worker", "gpu-render-node"] {
+            let posture =
+                device_worker_posture(DEVICE_GPU_PROVIDER_REF, template).expect("gpu posture");
+            assert!(posture.user_namespace(), "{template} runs in a user NS");
+            assert_eq!(posture.launch_ids(HOST_UID, HOST_GID), (0, 0), "{template}");
+        }
+
+        let video = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "video-worker")
+            .expect("video posture");
+        assert!(!video.user_namespace());
+        assert_eq!(video.launch_ids(HOST_UID, HOST_GID), (HOST_UID, HOST_GID));
+    }
+
+    #[test]
+    fn device_worker_posture_table_is_closed() {
+        use crate::bundle_resolver::{DEVICE_GPU_PROVIDER_REF, DEVICE_TPM_PROVIDER_REF};
+        let tpm = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+            .expect("swtpm-socket posture");
+        assert_eq!(tpm.role(), &ProcessRole::Swtpm);
+        assert_eq!(tpm.binary_ref(), "swtpm");
+        assert_eq!(tpm.seccomp_policy_ref(), "w1-swtpm");
+        assert_eq!(
+            tpm.namespaces(),
+            NamespaceSet {
+                mount: true,
+                pid: true,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: true,
+            }
+        );
+        assert!(tpm.user_namespace());
+        assert_eq!(tpm.device_binds(), &[] as &[&str]);
+        assert_eq!(tpm.umask(), 0o007);
+        let flush = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush")
+            .expect("flush posture");
+        assert_eq!(flush.role(), &ProcessRole::SwtpmPreStartFlush);
+        assert_eq!(flush.binary_ref(), "swtpm-ioctl");
+        assert!(!flush.user_namespace(), "user-NS is long-lived only");
+        let gpu = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "gpu-worker").expect("gpu");
+        assert_eq!(gpu.role(), &ProcessRole::Gpu);
+        assert_eq!(gpu.seccomp_policy_ref(), "w1-gpu");
+        assert_eq!(
+            gpu.device_binds(),
+            &["/dev/kvm", "/dev/dri/renderD128", "/dev/udmabuf"] as &[&str]
+        );
+        let render = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "gpu-render-node")
+            .expect("render node");
+        assert_eq!(render.role(), &ProcessRole::GpuRenderNode);
+        assert_eq!(render.seccomp_policy_ref(), "w1-gpu-render-node");
+        assert!(render.user_namespace());
+        assert!(
+            render.device_binds().is_empty(),
+            "the broker pre-opens the render node fd"
+        );
+        let video = device_worker_posture(DEVICE_GPU_PROVIDER_REF, "video-worker").expect("video");
+        assert_eq!(video.role(), &ProcessRole::Video);
+        assert_eq!(video.seccomp_policy_ref(), "w1-video");
+        assert!(!video.user_namespace());
+        assert_eq!(video.device_binds(), &["/dev/dri/renderD128"] as &[&str]);
+
+        assert!(device_worker_posture(DEVICE_TPM_PROVIDER_REF, "gpu-worker").is_none());
+        assert!(device_worker_posture("Provider/volume-virtiofs", "virtiofsd-worker").is_none());
+        // The retired Rust template name is not a template: the declared row
+        // template is `gpu-render-node`.
+        assert!(device_worker_posture(DEVICE_GPU_PROVIDER_REF, "render-node-worker").is_none());
+        assert!(device_worker_posture("Provider/device-tpm", "swtpm").is_none());
+    }
+
+    #[test]
+    fn device_worker_intents_use_the_declared_row_and_template() {
+        use crate::bundle_resolver::{DEVICE_TPM_PROVIDER_REF, DEVICE_WORKER_UMASK};
+
+        let zone = ZoneId::parse("dev").expect("zone");
+        let host_ref = ResourceRef::parse("Host/dev-host").expect("host ref");
+        let provider_ref = ResourceRef::parse(DEVICE_TPM_PROVIDER_REF).expect("provider ref");
+        let mut resources = vec![
+            BundleResource::new(
+                ResourceTypeName::parse("Host").expect("host type"),
+                BundleResourceMetadata::new(
+                    host_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(br#"{}"#).expect("host spec"),
+            )
+            .expect("host resource"),
+            BundleResource::new(
+                ResourceTypeName::parse("Provider").expect("provider type"),
+                BundleResourceMetadata::new(
+                    provider_ref.name().clone(),
+                    zone.clone(),
+                    None,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                ),
+                CanonicalJsonObject::parse(
+                    br#"{"artifactId":"device-tpm","config":{"controllerExecutionRef":"Host/dev-host"}}"#,
+                )
+                .expect("provider spec"),
+            )
+            .expect("provider resource"),
+        ];
+        for device in ["tpm", "tpm2"] {
+            resources.push(
+                BundleResource::new(
+                    ResourceTypeName::parse("Device").expect("device type"),
+                    BundleResourceMetadata::new(
+                        ResourceName::parse(device).expect("device name"),
+                        zone.clone(),
+                        Some(ResourceRef::parse("Guest/dev").expect("guest ref")),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    ),
+                    CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                        .expect("device spec"),
+                )
+                .expect("device resource"),
+            );
+        }
+        let mut bindings = Vec::new();
+        for (device, row_type, row_name, template, binary) in [
+            ("tpm", "Process", "swtpm-tpm", "swtpm-socket", "swtpm"),
+            (
+                "tpm",
+                "EphemeralProcess",
+                "swtpm-flush-tpm",
+                "swtpm-init-flush",
+                "swtpm-ioctl",
+            ),
+            ("tpm2", "Process", "swtpm-tpm2", "swtpm-socket", "swtpm"),
+        ] {
+            resources.push(
+                BundleResource::new(
+                    ResourceTypeName::parse(row_type).expect("row type"),
+                    BundleResourceMetadata::new(
+                        ResourceName::parse(row_name).expect("row name"),
+                        zone.clone(),
+                        Some(ResourceRef::parse(&format!("Device/{device}")).expect("device ref")),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    ),
+                    CanonicalJsonObject::parse(
+                        format!(
+                            r#"{{"domain":"system","executionRef":"Host/dev-host","processClass":"worker","providerRef":"Provider/system-minijail","template":"{template}"}}"#
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("row spec"),
+                )
+                .expect("row resource"),
+            );
+            bindings.push(serde_json::json!({
+                "processRef": format!("{row_type}/{row_name}"),
+                "ownerRef": DEVICE_TPM_PROVIDER_REF,
+                "executionRef": "Host/dev-host",
+                "template": template,
+                "artifactId": "device-tpm",
+                "binaryRef": binary,
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": format!("/nix/store/device-tpm/bin/{binary}"),
+                "launchArgs": true,
+            }));
+        }
+        let resource_bundle = ResourceBundle::new(
+            zone,
+            resources,
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle");
+        let mut resource_bundle_value =
+            serde_json::to_value(&resource_bundle).expect("resource bundle value");
+        resource_bundle_value["processTemplates"] = serde_json::Value::Array(bindings);
+        let resource_bundle =
+            ResourceBundle::from_json(&serde_json::to_vec(&resource_bundle_value).expect("bytes"))
+                .expect("declared-row bindings");
+        let host = serde_json::from_str::<HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([(
+                "dev".to_owned(),
+                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
+            )]),
+        );
+
+        // The declared row is the launch identity: two Devices on one Host
+        // share the template but never the row, so each row resolves to its
+        // own intent.
+        let tpm = resolver
+            .find_device_worker_intent(
+                &ResourceRef::parse("Process/swtpm-tpm").expect("row ref"),
+                "Host/dev-host",
+                ProcessExecutionDomain::System,
+                None,
+                "swtpm-socket",
+            )
+            .expect("swtpm intent");
+        assert_eq!(tpm.role, ProcessRole::Swtpm);
+        assert_eq!(tpm.role_id, "swtpm-tpm");
+        assert_eq!(tpm.profile_id, "swtpm-socket");
+        assert_eq!(tpm.vm_name, "dev-host");
+        assert_eq!(tpm.execution_ref, "Host/dev-host");
+        assert_eq!(tpm.owner_ref.as_deref(), Some(DEVICE_TPM_PROVIDER_REF));
+        assert_eq!(tpm.seccomp_policy_ref.as_deref(), Some("w1-swtpm"));
+        assert_eq!(tpm.umask, Some(DEVICE_WORKER_UMASK));
+        assert_eq!(tpm.cgroup_placement.subtree, "d2b.slice/dev-host/swtpm-tpm");
+        assert_eq!(tpm.argv, vec!["swtpm".to_owned()]);
+        assert_eq!(
+            tpm.binary_path,
+            PathBuf::from("/nix/store/device-tpm/bin/swtpm")
+        );
+        assert!(tpm.accepts_launch_args);
+        assert!(tpm.user_namespace.is_some());
+        assert!(tpm.namespaces.mount && tpm.namespaces.pid && tpm.namespaces.user);
+        assert!(tpm.uid >= 50_000 && tpm.uid == tpm.gid);
+        let second = resolver
+            .find_device_worker_intent(
+                &ResourceRef::parse("Process/swtpm-tpm2").expect("row ref"),
+                "Host/dev-host",
+                ProcessExecutionDomain::System,
+                None,
+                "swtpm-socket",
+            )
+            .expect("second swtpm intent");
+        assert_eq!(second.role_id, "swtpm-tpm2");
+        assert_ne!(second.uid, tpm.uid, "each row mints its own principal");
+        let flush = resolver
+            .find_device_worker_intent(
+                &ResourceRef::parse("EphemeralProcess/swtpm-flush-tpm").expect("flush ref"),
+                "Host/dev-host",
+                ProcessExecutionDomain::System,
+                None,
+                "swtpm-init-flush",
+            )
+            .expect("flush intent");
+        assert_eq!(flush.role, ProcessRole::SwtpmPreStartFlush);
+        assert_eq!(flush.argv, vec!["swtpm-ioctl".to_owned()]);
+        assert!(flush.user_namespace.is_none(), "flush has no user namespace");
+        assert!(!flush.namespaces.user);
+        // The declared template is the only admitted one, and the row type is
+        // an exact fence.
+        for (row_ref, template) in [
+            ("Process/swtpm-tpm", "gpu-worker"),
+            ("Process/swtpm-tpm", "swtpm-init-flush"),
+            ("Process/swtpm-other", "swtpm-socket"),
+            ("Endpoint/swtpm-tpm", "swtpm-socket"),
+        ] {
+            assert!(
+                resolver
+                    .find_device_worker_intent(
+                        &ResourceRef::parse(row_ref).expect("row ref"),
+                        "Host/dev-host",
+                        ProcessExecutionDomain::System,
+                        None,
+                        template,
+                    )
+                    .is_none(),
+                "{row_ref} must not resolve through {template}"
+            );
+        }
+        assert!(
+            resolver
+                .find_device_worker_intent(
+                    &ResourceRef::parse("Process/swtpm-tpm").expect("row ref"),
+                    "Host/other-host",
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .is_none()
+        );
+    }
+
     fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
         let bundle_dir = root.join("bundle");
         let bundle_path = bundle_dir.join("bundle.json");
@@ -6807,11 +7553,20 @@ mod tests {
         let root = test_root("zone-native-bundle-index");
         fs::create_dir_all(&root).expect("create bundle root");
         let bundle_path = root.join("bundle.json");
+        let site_bytes = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "v1",
+            "waylandSocket": "/run/user/1000/wayland-0",
+        }))
+        .expect("serialize site artifact");
+        let site_path = root.join("site.json");
+        fs::write(&site_path, &site_bytes).expect("write site artifact");
+        fs::set_permissions(&site_path, fs::Permissions::from_mode(0o640)).expect("chmod site");
         let mut bundle = serde_json::json!({
             "artifactHashes": null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
             "privilegesPath": "privileges.json",
+            "sitePath": "site.json",
             "zones": [],
             "generation": {
                 "generator": "nixos-modules/bundle.nix",
@@ -6821,7 +7576,9 @@ mod tests {
         });
         let hash =
             sha256_hex(&serde_json::to_vec(&bundle).expect("serialize bundle hash preimage"));
-        bundle["artifactHashes"] = serde_json::json!({});
+        bundle["artifactHashes"] = serde_json::json!({
+            "site.json": sha256_hex(&site_bytes),
+        });
         bundle["bundleHash"] = serde_json::Value::String(hash);
         fs::write(
             &bundle_path,
@@ -6840,8 +7597,119 @@ mod tests {
             Some(root.as_path())
         );
         assert!(resolver.zone_resource_bundles.is_empty());
+        assert_eq!(
+            resolver
+                .site
+                .as_ref()
+                .and_then(|site| site.wayland_socket()),
+            Some("/run/user/1000/wayland-0"),
+            "the declared site artifact is the projected Wayland socket"
+        );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// The site artifact is the bundle's trusted Wayland source: a bundle
+    /// that ships it (declared by a v3 index or, for legacy shapes, beside
+    /// the other artifacts) resolves the socket; one that does not - or ships
+    /// a malformed value - leaves the consumers unbound.
+    #[test]
+    fn site_artifact_loads_declared_and_conventional_and_refuses_malformed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_root("site-artifact");
+        fs::create_dir_all(&root).expect("create bundle root");
+        let site_bytes = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "v1",
+            "waylandSocket": "/run/user/1000/wayland-7",
+        }))
+        .expect("serialize site artifact");
+        let site_path = root.join("site.json");
+        fs::write(&site_path, &site_bytes).expect("write site artifact");
+        fs::set_permissions(&site_path, fs::Permissions::from_mode(0o640)).expect("chmod site");
+        let bundle = site_test_bundle(Some(BTreeMap::from([(
+            "site.json".to_owned(),
+            sha256_hex(&site_bytes),
+        )])));
+
+        let declared = load_optional_site_artifact(
+            &bundle,
+            &root,
+            Some("site.json"),
+            &current_user_bundle_policy(),
+        )
+        .expect("the declared site artifact loads")
+        .expect("the site artifact is present");
+        assert_eq!(declared.wayland_socket(), Some("/run/user/1000/wayland-7"));
+
+        let conventional = load_optional_site_artifact(
+            &bundle,
+            &root,
+            None,
+            &current_user_bundle_policy(),
+        )
+        .expect("the conventional site artifact loads")
+        .expect("the site artifact is present");
+        assert_eq!(conventional, declared);
+
+        let empty_root = test_root("site-artifact-absent");
+        fs::create_dir_all(&empty_root).expect("create empty bundle root");
+        assert_eq!(
+            load_optional_site_artifact(
+                &bundle,
+                &empty_root,
+                None,
+                &current_user_bundle_policy(),
+            )
+            .expect("an absent site artifact is not an error"),
+            None,
+            "a bundle without the artifact keeps the consumers unbound"
+        );
+
+        fs::write(
+            &site_path,
+            br#"{"schemaVersion":"v1","waylandSocket":"/tmp/wayland-0"}"#,
+        )
+        .expect("write malformed site artifact");
+        let error = load_optional_site_artifact(
+            &site_test_bundle(None),
+            &root,
+            Some("site.json"),
+            &current_user_bundle_policy(),
+        )
+        .expect_err("a malformed socket refuses the load");
+        assert_eq!(error.kind().as_str(), "manifest-parse-error");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(empty_root);
+    }
+
+    fn site_test_bundle(artifact_hashes: Option<BTreeMap<String, String>>) -> Bundle {
+        Bundle {
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+            public_manifest_path: "vms.json".to_owned(),
+            host_path: "host.json".to_owned(),
+            processes_path: "processes.json".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            sync_path: None,
+            allocator_path: None,
+            realm_controllers_path: None,
+            realm_identity_path: None,
+            realm_workloads_launcher_v2_path: None,
+            unsafe_local_workloads_path: None,
+            closures: Vec::new(),
+            minijail_profiles: Vec::new(),
+            managed_keys: Default::default(),
+            generation: BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: None,
+            artifact_hashes,
+        }
     }
 
     #[test]

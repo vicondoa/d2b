@@ -14,9 +14,16 @@
 //!   --server type=unixio,path=<vm>-tpm.sock,mode=0660,uid=<uid>,gid=<gid> \
 //!   --flags startup-clear \
 //!   --log file=<state-dir>/swtpm.log,level=20 \
-//!   --pid file=<state-dir>/swtpm.pid \
-//!   --daemon=false
+//!   --pid file=<state-dir>/swtpm.pid
 //! ```
+//!
+//! `swtpm socket` stays in the foreground unless `-d|--daemon` is
+//! given, and that flag takes no argument: swtpm 0.10.1 refuses
+//! `--daemon=false` outright
+//! (`socket: option '--daemon' doesn't allow an argument`) and exits
+//! before it ever binds a socket. Foreground operation is what the
+//! supervisor needs anyway (it holds the pidfd), so the flag is not
+//! emitted at all.
 //!
 //! Plus a pre-start flush invocation per the process invariants
 //! (`processes::VmProcessInvariants::swtpm_pre_start_flush = true`):
@@ -52,9 +59,13 @@ pub struct SwtpmArgvInput {
     /// Absolute path to the swtpm server socket (`--server`). CH
     /// connects to this one through `--tpm`.
     pub server_socket_path: String,
-    /// Numeric uid the swtpm process drops to.
+    /// Uid rendered into the `--ctrl`/`--server` socket owner entries: the
+    /// identity swtpm holds in the namespace it runs in (the in-namespace id
+    /// when the launcher installs a user namespace; naming an unmapped host
+    /// id there makes the socket chown fail with `EINVAL`).
     pub uid: u32,
-    /// Numeric gid the swtpm process drops to (also the socket group).
+    /// Gid rendered into the same socket owner entries (also the socket
+    /// group).
     pub gid: u32,
     /// `--log file=<path>` value; usually `<state_dir>/swtpm.log`.
     pub log_path: String,
@@ -184,9 +195,12 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
     argv.push("--pid".to_owned());
     argv.push(format!("file={}", input.pid_path));
 
-    // swtpm forks by default when it is `socket`-mode; the supervisor
-    // controls lifetime via pidfd, so it forces foreground operation.
-    argv.push("--daemon=false".to_owned());
+    // The supervisor controls lifetime via pidfd and swtpm's `socket`
+    // mode already runs in the foreground: `--daemon` is the opt-in
+    // (argument-less) daemonize flag, so nothing is emitted here. The
+    // pre-0.10 spelling `--daemon=false` is rejected by the installed
+    // swtpm ("option '--daemon' doesn't allow an argument"), which
+    // killed the worker before it bound a socket.
 
     for extra in &input.extra_args {
         argv.push(extra.clone());
@@ -312,7 +326,10 @@ mod tests {
         assert!(joined.contains("--flags startup-clear"));
         assert!(joined.contains("--log file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.log,level=20"));
         assert!(joined.contains("--pid file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid"));
-        assert!(joined.contains("--daemon=false"));
+        // `--daemon` is argument-less (and means daemonize): the
+        // long-lived worker must stay in the foreground, so no
+        // `--daemon` argument is rendered at all.
+        assert!(!argv.iter().any(|arg| arg.starts_with("--daemon")));
     }
 
     #[test]

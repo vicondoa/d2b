@@ -1,0 +1,627 @@
+{
+  "schemaVersion": 1,
+  "id": "d2b-host-state-posture-contract",
+  "rule": "anchor-open: an anchor component of a path walk is opened O_PATH (search permission on the parent, no rights on the component itself) and only the leaf is opened O_RDONLY. No consumer may need read on a level it does not own.",
+  "about": [
+    "Declared host posture for the state farms and shared directories a d2b host owns.",
+    "Each tree lists, per path level: who creates it, its owning principal/group, its",
+    "mode (exact, or the minimum a creation-time posture guarantees), any POSIX ACL",
+    "entries, and the rights each host principal needs or is refused.",
+    "Consumers: packages/d2b-broker/src/ops/store_view_posture.rs applies the",
+    "guest-store-view rows; nixos-modules/host-daemon.nix provisions the shared/state",
+    "rows; tests/host-integration/state-posture-contract.nix validates the live host",
+    "as each principal. The declaration is normative: posture code and validation read",
+    "this file instead of restating the contract."
+  ],
+  "principals": {
+    "root": "privileged broker (uid 0) and host operator",
+    "d2bd": "the daemon principal (user d2bd)",
+    "d2b": "host lifecycle group: daemon + admin/launcher users (e.g. alice)",
+    "users": "per-Guest runner principals' group (virtiofsd and other roles)",
+    "nobody": "any principal in none of the declared groups; the denied baseline"
+  },
+  "rightsLegend": {
+    "allow": "the operation must succeed",
+    "deny": "the operation must fail (EACCES or a refused syscall)",
+    "not-required": "the consumer must not need it; effective access may be granted or capped away by an ACL mask",
+    "preserve": "not set by posture; whatever the referenced owner declares",
+    "acl-applier": "tmpfiles: emitted by nixos-modules/host-daemon.nix at boot; spawn: granted by the broker's runner spawn preflight (packages/d2b-broker/src/live_handlers.rs) when the Guest's VMM spawns",
+    "effective": "rights are effective: a principal that cannot reach a level (an ancestor denies traverse) is denied every right on it, whatever the level's own mode grants; the level's own posture is still pinned by owner/group/mode"
+  },
+  "trees": [
+    {
+      "id": "guest-store-view",
+      "description": "Broker-owned hardlink farm for one Guest's /nix/store view. Postured on every StoreSync; the live/ subtree is a hardlink pool whose inodes are shared with /nix/store, so posture NEVER recurses into it.",
+      "creator": "broker:StoreSync",
+      "postureOwner": "packages/d2b-broker/src/ops/store_view_posture.rs",
+      "root": "<state-root>/zones/<zone>/guests/<guest>/store-view",
+      "levels": [
+        {
+          "path": ".",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "users",
+          "mode": "0755",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "live",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "users",
+          "mode": "0755",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "meta",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "users",
+          "mode": "0755",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "meta/generations",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "users",
+          "mode": "0755",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "live/.d2b-marker-<vm>",
+          "kind": "file",
+          "owner": "d2bd",
+          "group": "users",
+          "mode": "0644",
+          "posture": "exact",
+          "required": false,
+          "rights": {
+            "root": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "state",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "d2b",
+          "mode": "0750",
+          "posture": "exact",
+          "required": true,
+          "note": "HOST-ONLY: never the runner-readable users 0755 posture",
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "state/generations",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "d2b",
+          "mode": "0750",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "gcroots",
+          "kind": "dir",
+          "owner": "d2bd",
+          "group": "d2b",
+          "mode": "0750",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "sync.lock",
+          "kind": "file",
+          "owner": "d2bd",
+          "group": "d2b",
+          "mode": "0600",
+          "posture": "exact",
+          "required": true,
+          "note": "BROKER-PRIVATE lock",
+          "rights": {
+            "root": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        },
+        {
+          "path": "state/integrity-unknown.json",
+          "kind": "file",
+          "owner": "d2bd",
+          "group": "d2b",
+          "mode": "0640",
+          "posture": "exact",
+          "required": false,
+          "note": "created lazily by broker integrity code",
+          "rights": {
+            "root": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "not-required",
+              "read": "allow",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "guest-state-chain",
+      "description": "Broker-created state chain the daemon walks to reach a Guest's store view. Postured with group search only (never group write); the daemon's anchored walk opens these levels O_PATH so read is never required. Levels above the per-VM state dir only: the state dir itself (guest-state-dir) is the daemon's ownership-matrix root and is never postured.",
+      "creator": "broker:create_dir_all (StoreSync lock acquisition; UMask=0027 shapes 0750)",
+      "postureOwner": "packages/d2b-broker/src/ops/store_view_posture.rs (posture_daemon_traverse_ancestors)",
+      "root": "<state-root>/zones",
+      "levels": [
+        {
+          "path": ".",
+          "kind": "dir",
+          "owner": "root",
+          "group": "d2bd",
+          "mode": "0710",
+          "modePolicy": "group-traverse-minimum",
+          "posture": "group-traverse-minimum",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "deny",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          },
+          "acl": [
+            {
+              "spec": "u:d2bd:--x",
+              "applier": "spawn"
+            }
+          ]
+        },
+        {
+          "path": "<zone>",
+          "kind": "dir",
+          "owner": "root",
+          "group": "d2bd",
+          "mode": "0710",
+          "modePolicy": "group-traverse-minimum",
+          "posture": "group-traverse-minimum",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "deny",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          },
+          "acl": [
+            {
+              "spec": "u:d2bd:--x",
+              "applier": "spawn"
+            }
+          ]
+        },
+        {
+          "path": "<zone>/guests",
+          "kind": "dir",
+          "owner": "root",
+          "group": "d2bd",
+          "mode": "0710",
+          "modePolicy": "group-traverse-minimum",
+          "posture": "group-traverse-minimum",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "deny",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          },
+          "acl": [
+            {
+              "spec": "u:d2bd:--x",
+              "applier": "spawn"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "guest-state-dir",
+      "description": "Per-Guest state directory created by the broker's first StoreSync (create_dir_all under UMask=0027) and never postured afterwards: a chgrp/chmod here tripped the fail-closed ownership-matrix preflight for legacy per-VM trees, so the store-view walk must leave it untouched. The daemon's search right comes from the spawn-time u:d2bd:--x traversal ACL (packages/d2b-broker/src/live_handlers.rs), never from read access. Legacy /var/lib/d2b/vms/<vm> roots are governed separately by the d2bd-runtime CANONICAL_MATRIX row \".\" (d2bd:users 03770).",
+      "creator": "broker:create_dir_all (first StoreSync)",
+      "postureOwner": "packages/d2b-broker/src/live_handlers.rs (spawn-time traversal ACL)",
+      "root": "<state-root>/zones/<zone>/guests",
+      "levels": [
+        {
+          "path": "<guest>",
+          "kind": "dir",
+          "owner": "root",
+          "group": "root",
+          "mode": "0750",
+          "modePolicy": "preserve-existing",
+          "posture": "preserve-existing",
+          "required": true,
+          "matrixRow": "legacy per-VM tree: packages/d2bd-runtime/src/ownership_preflight.rs CANONICAL_MATRIX \".\": d2bd:users 03770; the v3 zone/guest tree is root-created and preserved",
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "deny",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          },
+          "acl": [
+            {
+              "spec": "u:d2bd:--x",
+              "applier": "spawn"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shared-run-dir",
+      "description": "Shared runtime root for the daemon, the broker, admin/launcher users, and per-Guest roles. Root-owned so an unprivileged principal can never rename or replace a socket or lock inside it.",
+      "creator": "nix-module:systemd.tmpfiles (nixos-modules/host-daemon.nix)",
+      "postureOwner": "nixos-modules/host-daemon.nix",
+      "root": "/run/d2b",
+      "levels": [
+        {
+          "path": ".",
+          "kind": "dir",
+          "owner": "root",
+          "group": "d2b",
+          "mode": "1770",
+          "posture": "exact",
+          "required": true,
+          "relabel": true,
+          "acl": [
+            {
+              "spec": "g::r-x",
+              "applier": "tmpfiles"
+            },
+            {
+              "spec": "u:d2bd:rwx",
+              "applier": "tmpfiles"
+            },
+            {
+              "spec": "m::rwx",
+              "applier": "tmpfiles"
+            }
+          ],
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2b": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "state-root",
+      "description": "Host state root the broker/daemon traverse to reach every per-Guest tree.",
+      "creator": "nix-module:systemd.tmpfiles (nixos-modules/host-daemon.nix)",
+      "postureOwner": "nixos-modules/host-daemon.nix",
+      "root": "/var/lib/d2b",
+      "levels": [
+        {
+          "path": ".",
+          "kind": "dir",
+          "owner": "root",
+          "group": "d2bd",
+          "mode": "0750",
+          "posture": "exact",
+          "required": true,
+          "rights": {
+            "root": {
+              "traverse": "allow",
+              "read": "allow",
+              "write": "allow"
+            },
+            "d2bd": {
+              "traverse": "allow",
+              "read": "deny",
+              "write": "deny"
+            },
+            "d2b": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            },
+            "nobody": {
+              "traverse": "deny",
+              "read": "deny",
+              "write": "deny"
+            }
+          },
+          "acl": [
+            {
+              "spec": "u:d2bd:--x",
+              "applier": "spawn"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -26,20 +26,19 @@
 //!   durable status and its sanitizers are gone with it.
 //!
 //! Process work never happens here (KTD13): the Provider effect ports own
-//! broker dispatch, device grants, and the pidfd table. Child Process and
-//! Endpoint resources are ensured as manager rows and launched by the
-//! Process/Endpoint drivers.
+//! the child-row ensures and the phase gates, and any broker work they still
+//! need is a state operation, not a launch. Child Process and Endpoint
+//! resources are ensured as manager rows and launched by the Process/Endpoint
+//! drivers, which is why the Device worker effects read the declared
+//! `Process/swtpm-<device>` / `Process/gpu-<device>` rows instead of spawning
+//! them.
 //!
-//! Cross-resource readiness (a child's or dependency's live phase) is not
-//! observable from this driver: `ResourceContext::get`/`children` return the
-//! durable row, which carries no status (R11 keeps status actor-local). The
-//! production effects read live phases through the manager view for
-//! converted rows and the durable store for unconverted rows; the driver
-//! registers `ctx.watch(.., WatchCondition::Ready)` edges so dependency and
-//! child readiness wake it, and it never fabricates a readiness it cannot
-//! observe.
-
-#![allow(dead_code)]
+//! Cross-resource readiness (a child's or dependency's live phase) is
+//! observable from an effect through [`SharedProviderChildSurface::view`],
+//! which reads the manager plane's live view for a row of the driving
+//! resource; the driver itself only registers
+//! `ctx.watch(.., WatchCondition::Ready)` edges so dependency and child
+//! readiness wake it, and it never fabricates a readiness it cannot observe.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -253,6 +252,11 @@ impl SharedProviderKind {
         self.registration().controller_ref
     }
 
+    /// The family row's ResourceType. The registration-table test reads it as
+    /// the table's own consistency check; the daemon selects a row through
+    /// the ResourceType it is already driving, so no production caller reads
+    /// it back.
+    #[allow(dead_code)]
     pub(crate) const fn resource_type(self) -> &'static str {
         self.registration().resource_type
     }
@@ -341,6 +345,13 @@ pub(crate) enum SharedProviderFinalize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedProviderEffectError {
     /// Cleanup is progressing and the owner should be re-entered.
+    ///
+    /// The converted Device Providers report teardown progress through
+    /// [`SharedProviderFinalize::Pending`] instead, so no port constructs
+    /// this variant today; the effect-error arm that maps it onto
+    /// [`SharedProviderDriverErrorKind::FinalizePending`] stays closed for the
+    /// ports still being converted (U17 Device family).
+    #[allow(dead_code)]
     Pending,
     /// The Provider path is not currently available and should retry.
     Unavailable,
@@ -427,6 +438,11 @@ pub(crate) struct SharedProviderDriverStatus {
 }
 
 impl SharedProviderDriverStatus {
+    /// The closed phase string this status was built from. No daemon read
+    /// path maps the typed status back to a phase today (the runtime phase
+    /// comes from `ResourceStatus`); the projection readers the U17 family
+    /// status work adds read it.
+    #[allow(dead_code)]
     pub(crate) const fn phase(&self) -> &'static str {
         match self.phase {
             SharedProviderEffectPhase::Ready => "Ready",
@@ -453,6 +469,11 @@ impl SharedProviderSpecEnvelope {
         &self.value
     }
 
+    /// The exact stored spec bytes. The family's handlers read [`Self::value`]
+    /// and the driver never rewrites the stored envelope, so nothing reads the
+    /// raw bytes back today; the audit-facing readers the U9/U10 cutover sized
+    /// this envelope for own it.
+    #[allow(dead_code)]
     pub(crate) fn raw(&self) -> &[u8] {
         &self.raw
     }
@@ -532,6 +553,15 @@ pub(crate) trait SharedProviderChildSurface: Send + Sync {
     async fn ensure(&self, child: ChildEnsure) -> Result<EnsureOutcome, SharedProviderEffectError>;
     /// Delete one owned child row through the manager (idempotent).
     async fn delete(&self, key: &ResourceKey) -> Result<(), SharedProviderEffectError>;
+    /// The live manager view of one child row (absent when no row exists).
+    ///
+    /// The row-owned launch path (U17) gates on this: a Provider effect
+    /// ensures the declared Process/EphemeralProcess/Endpoint child and reads
+    /// its published phase here instead of holding a raw broker handle.
+    async fn view(
+        &self,
+        key: &ResourceKey,
+    ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, SharedProviderEffectError>;
 }
 
 /// [`SharedProviderChildSurface`] over the calling resource's context.
@@ -543,34 +573,46 @@ pub(crate) trait SharedProviderChildSurface: Send + Sync {
 /// preserved.
 pub(crate) struct ContextChildSurface<'a> {
     ctx: tokio::sync::Mutex<&'a mut ResourceContext>,
-    zone: String,
+    /// The effects the calling driver owns: a Volume or VolumeBinding child
+    /// committed here changes the rows the plane's volume root resolver can
+    /// see.
+    effects: Arc<dyn SharedProviderDriverEffects>,
 }
 
 impl<'a> ContextChildSurface<'a> {
-    pub(crate) fn new(ctx: &'a mut ResourceContext) -> Self {
+    pub(crate) fn new(
+        ctx: &'a mut ResourceContext,
+        effects: Arc<dyn SharedProviderDriverEffects>,
+    ) -> Self {
         Self {
-            zone: ctx.key().zone.clone(),
             ctx: tokio::sync::Mutex::new(ctx),
+            effects,
         }
-    }
-
-    /// The child's resource key in this zone.
-    pub(crate) fn key_of(&self, target: &ResourceRef) -> ResourceKey {
-        ResourceKey::new(
-            self.zone.as_str(),
-            target.resource_type().as_str(),
-            target.name().as_str(),
-        )
     }
 }
 
 #[async_trait]
 impl SharedProviderChildSurface for ContextChildSurface<'_> {
     async fn ensure(&self, child: ChildEnsure) -> Result<EnsureOutcome, SharedProviderEffectError> {
-        let mut ctx = self.ctx.lock().await;
-        ctx.ensure_child(child)
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)
+        let (outcome, committed_row) = {
+            let mut ctx = self.ctx.lock().await;
+            let outcome = ctx
+                .ensure_child(child.clone())
+                .await
+                .map_err(|_| SharedProviderEffectError::Unavailable)?;
+            let committed = matches!(outcome, EnsureOutcome::Created(_))
+                && matches!(child.type_name.as_str(), "Volume" | "VolumeBinding");
+            (outcome, committed)
+        };
+        // The plane's per-resource anchors are a cache of the durable rows:
+        // one committed through this endpoint after the plane's last durable
+        // load is only observable through a reload, and an unregistered
+        // Volume root resolves as `volume-anchor` forever. The refresh is
+        // bounded to the commit that created such a row.
+        if committed_row {
+            self.effects.refresh_volume_anchors().await;
+        }
+        Ok(outcome)
     }
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), SharedProviderEffectError> {
@@ -584,6 +626,16 @@ impl SharedProviderChildSurface for ContextChildSurface<'_> {
             return Ok(());
         }
         ctx.delete(key)
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)
+    }
+
+    async fn view(
+        &self,
+        key: &ResourceKey,
+    ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, SharedProviderEffectError> {
+        let mut ctx = self.ctx.lock().await;
+        ctx.get_view(key)
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)
     }
@@ -612,19 +664,6 @@ pub(crate) struct SharedProviderResourceState {
     /// GPU authority leases (old `gpu_authority_leases`).
     pub(crate) gpu_authority_leases: Arc<
         Mutex<std::collections::BTreeMap<[u8; 16], d2b_core_controller::authority::AuthorityLease>>,
-    >,
-    /// GPU worker process identities (old `gpu_processes`).
-    pub(crate) gpu_processes: Arc<
-        Mutex<
-            std::collections::BTreeMap<
-                (ResourceUid, u8),
-                d2b_provider_device_gpu::GpuProcessIdentity,
-            >,
-        >,
-    >,
-    /// GPU device grants opened for the workers (old `gpu_opened_devices`).
-    pub(crate) gpu_opened_devices: Arc<
-        Mutex<std::collections::BTreeMap<ResourceUid, Vec<std::os::fd::OwnedFd>>>,
     >,
 }
 
@@ -701,6 +740,16 @@ pub(crate) trait SharedProviderDriverEffects: Send + Sync + 'static {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError>;
 
+    /// Re-register the plane's per-resource Volume anchors after a provider
+    /// effect committed a Volume or VolumeBinding child row.
+    ///
+    /// The anchor cache is a projection of the durable rows the volume root
+    /// resolver reads synchronously, so a row the manager commits through the
+    /// child endpoint after the plane's last durable load is otherwise
+    /// invisible: its root resolves as `volume-anchor` forever. Families that
+    /// declare neither row type keep the default no-op.
+    async fn refresh_volume_anchors(&self) {}
+
     /// Advance one Provider teardown stage (old `execute_finalize`).
     async fn finalize(
         &self,
@@ -755,6 +804,10 @@ impl ResourceDriverFactory for SharedProviderDriverFactory {
 /// One desired shared host-provider resource.
 pub(crate) struct SharedProviderDriver {
     zone: ZoneId,
+    /// The controller generation every effect call binds (KTD7). Each port
+    /// receives it inside `SharedProviderEffectRequest`, so only
+    /// [`Self::controller_generation`] would read the driver's own copy.
+    #[allow(dead_code)]
     controller_generation: ControllerGeneration,
     effects: Arc<dyn SharedProviderDriverEffects>,
     state: Arc<SharedProviderResourceState>,
@@ -774,7 +827,10 @@ impl SharedProviderDriver {
         }
     }
 
-    /// The controller generation every effect call binds (KTD7).
+    /// The controller generation every effect call binds (KTD7). Read by the
+    /// driver's own tests as the constructor's identity check; each production
+    /// effect call already carries it on its request.
+    #[allow(dead_code)]
     pub(crate) fn controller_generation(&self) -> ControllerGeneration {
         self.controller_generation
     }
@@ -856,14 +912,25 @@ impl SharedProviderDriver {
     /// The desired child set of one reconcile pass, as manager child rows.
     ///
     /// Providers declare the children they own; the driver materializes them
-    /// into the manager's child shape (Core-owned bodies, F1). Kinds whose
-    /// Provider realizes nothing through resource rows return an empty set.
+    /// into the manager's child shape (Core-owned bodies, F1).
+    ///
+    /// `None` marks a kind whose children are not this driver's to declare
+    /// *or diff*: the Device/Service kinds own rows another layer declares -
+    /// the Zone bundle declares the Device-owned worker rows
+    /// (`Process/swtpm-<device>`, `Process/gpu-<device>`, KTD13) with `Nix`
+    /// provenance, and the family's Provider effect ensures its own
+    /// controller-created rows through the child surface (the TPM state
+    /// Volume). Running the obsolete-children diff against an empty desired
+    /// set would retire every declared row on the first reconcile pass - the
+    /// bundle ingest would look like it never happened. Those kinds retire
+    /// their whole owned subtree on teardown instead
+    /// ([`Self::retire_obsolete_children`] in `delete`).
     async fn desired_children(
         &self,
         ctx: &mut ResourceContext,
         kind: SharedProviderKind,
         envelope: &SharedProviderSpecEnvelope,
-    ) -> Result<Vec<ChildEnsure>, SharedProviderDriverError> {
+    ) -> Result<Option<Vec<ChildEnsure>>, SharedProviderDriverError> {
         let op = DriverOp::Reconcile;
         let owner = crate::shared_provider_driver::key_ref(ctx.key());
         let uid = resource_uid(ctx.uid())
@@ -872,7 +939,7 @@ impl SharedProviderDriver {
         match kind {
             SharedProviderKind::Network => {
                 let network_spec = self.network_spec(spec, op)?;
-                network_child_ensures(&owner, &uid, &network_spec, op)
+                Ok(Some(network_child_ensures(&owner, &uid, &network_spec, op)?))
             }
             SharedProviderKind::UsbipBinding => {
                 let service_ref = spec_ref(spec, "/spec/serviceRef")
@@ -883,7 +950,7 @@ impl SharedProviderDriver {
                     &owner, &service_ref, &guest_ref,
                 )
                 .map_err(|_| self.error(SharedProviderDriverErrorKind::SpecInvalid, op))?;
-                self.binding_child_ensures(&desired, op)
+                Ok(Some(self.binding_child_ensures(&desired, op)?))
             }
             SharedProviderKind::SecurityKeyService => {
                 let device_uid = match spec_ref(spec, "/spec/provider/settings/deviceRef") {
@@ -904,11 +971,11 @@ impl SharedProviderDriver {
                     // The Device row the relay is derived from is not present:
                     // the Service effect reports Pending until it is; no child
                     // is declared yet (old effect returned Pending here).
-                    return Ok(Vec::new());
+                    return Ok(Some(Vec::new()));
                 };
                 let device_uid = resource_uid(&device_uid)
                     .map_err(|_| self.error(SharedProviderDriverErrorKind::SpecInvalid, op))?;
-                security_key_relay_child_ensures(spec, &owner, &device_uid, op)
+                Ok(Some(security_key_relay_child_ensures(spec, &owner, &device_uid, op)?))
             }
             SharedProviderKind::SecurityKeyBinding => {
                 let service_ref = spec_ref(spec, "/spec/serviceRef")
@@ -935,13 +1002,15 @@ impl SharedProviderDriver {
                     ),
                 }
                 .map_err(|_| self.error(SharedProviderDriverErrorKind::SpecInvalid, op))?;
-                self.binding_child_ensures(&desired, op)
+                Ok(Some(self.binding_child_ensures(&desired, op)?))
             }
+            // The Device/Service kinds declare no children through the
+            // driver; see [`Self::desired_children`]'s contract.
             SharedProviderKind::TpmDevice
             | SharedProviderKind::UsbipDevice
             | SharedProviderKind::UsbipService
             | SharedProviderKind::SecurityKeyDevice
-            | SharedProviderKind::GpuDevice => Ok(Vec::new()),
+            | SharedProviderKind::GpuDevice => Ok(None),
         }
     }
 
@@ -1103,7 +1172,12 @@ impl ResourceDriver for SharedProviderDriver {
         let op = DriverOp::Recover;
         let envelope = self.envelope(ctx, op)?;
         let kind = self.kind(ctx, &envelope, op)?;
-        let desired = self.desired_children(ctx, kind, &envelope).await?;
+        let Some(desired) = self.desired_children(ctx, kind, &envelope).await? else {
+            // A kind with no driver-declared children has nothing to adopt
+            // here; its Provider-side realization is discovered in the
+            // effect.
+            return Ok(RecoveryOutcome::Adopted);
+        };
         if desired.is_empty() {
             return Ok(RecoveryOutcome::Adopted);
         }
@@ -1140,25 +1214,35 @@ impl ResourceDriver for SharedProviderDriver {
         }
 
         // Desired child set through the manager child API (F1): every row is
-        // committed before its actor exists.
+        // committed before its actor exists. Kinds whose children another
+        // layer declares (the bundle's Device worker rows, the effect's
+        // controller-created rows) have no desired set here and skip the
+        // child machinery entirely - diffing their owned rows against an
+        // empty set would retire the declared rows on every pass.
         let desired = self.desired_children(ctx, kind, &envelope).await?;
         let mut mutated = false;
-        for child in &desired {
-            match ctx.ensure_child(child.clone()).await {
-                Ok(EnsureOutcome::Created(_)) | Ok(EnsureOutcome::Updated(_)) => mutated = true,
-                Ok(EnsureOutcome::Unchanged(_)) => {}
-                Err(_) => {
-                    return Err(self.error(SharedProviderDriverErrorKind::ChildMutation, op));
+        if let Some(desired) = &desired {
+            for child in desired {
+                match ctx.ensure_child(child.clone()).await {
+                    Ok(EnsureOutcome::Created(_)) | Ok(EnsureOutcome::Updated(_)) => mutated = true,
+                    Ok(EnsureOutcome::Unchanged(_)) => {}
+                    Err(_) => {
+                        return Err(self.error(SharedProviderDriverErrorKind::ChildMutation, op));
+                    }
                 }
             }
-        }
-        mutated |= self.retire_obsolete_children(ctx, &desired, op).await?;
-        for child in &desired {
-            self.watch_once(
-                ctx,
-                ResourceKey::new(self.zone.as_str(), child.type_name.as_str(), child.name.as_str()),
-            )
-            .await;
+            mutated |= self.retire_obsolete_children(ctx, desired, op).await?;
+            for child in desired {
+                self.watch_once(
+                    ctx,
+                    ResourceKey::new(
+                        self.zone.as_str(),
+                        child.type_name.as_str(),
+                        child.name.as_str(),
+                    ),
+                )
+                .await;
+            }
         }
 
         let operation_id = self.operation_id(ctx, kind);
@@ -1173,7 +1257,7 @@ impl ResourceDriver for SharedProviderDriver {
         // The surface borrows the context mutably for the effect call; the
         // driver reads nothing else from the context until it is dropped.
         let outcome = {
-            let surface = ContextChildSurface::new(ctx);
+            let surface = ContextChildSurface::new(ctx, Arc::clone(&self.effects));
             let request = SharedProviderEffectRequest {
                 zone: self.zone.clone(),
                 target,
@@ -1231,7 +1315,7 @@ impl ResourceDriver for SharedProviderDriver {
             .status::<SharedProviderDriverStatus>()
             .and_then(|status| status.resource.clone());
         let finalized = {
-            let surface = ContextChildSurface::new(ctx);
+            let surface = ContextChildSurface::new(ctx, Arc::clone(&self.effects));
             let request = SharedProviderEffectRequest {
                 zone: self.zone.clone(),
                 target,
@@ -1793,7 +1877,6 @@ mod tests {
 
     struct Fixture {
         ctx: ResourceContext,
-        manager: Arc<RecordingManager>,
         effects: Arc<RecordingEffects>,
         requeue: Arc<RecordingRequeue>,
         log: Log,
@@ -1825,7 +1908,6 @@ mod tests {
         );
         Fixture {
             ctx,
-            manager,
             effects,
             requeue,
             log,
@@ -1846,16 +1928,6 @@ mod tests {
         });
         let key = fixture.ctx.key().clone();
         factory.create(&key).await
-    }
-
-    /// USBIP Binding spec (the child-bearing kind whose desired set comes
-    /// from the Provider-declared intents).
-    fn usb_binding_spec() -> serde_json::Value {
-        json!({
-            "providerRef": d2b_provider_device_usbip::PROVIDER_REF,
-            "serviceRef": format!("{}/svc", d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE),
-            "guestRef": "Guest/g",
-        })
     }
 
     /// Device spec pinned to one Device Provider.
@@ -1957,10 +2029,12 @@ mod tests {
         assert_eq!(fixture.requeue.scheduled.lock().len(), 1, "pending reconcile self-resyncs");
     }
 
-    /// Owned children the desired set no longer derives retire in the
-    /// family's preserved order: endpoints before processes.
+    /// Owned children retire in the family's preserved order on teardown:
+    /// endpoints before the processes they gate (R9/F3). The Device kinds'
+    /// rows are declared by another layer, so teardown is the pass that
+    /// retires their whole owned subtree.
     #[tokio::test]
-    async fn reconcile_retires_obsolete_owned_children_endpoint_first() {
+    async fn delete_retires_owned_children_endpoint_first() {
         let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let manager = RecordingManager::with_owned(
             Arc::clone(&log),
@@ -1972,7 +2046,7 @@ mod tests {
         let mut fixture = fixture(
             DEVICE_TYPE_NAME,
             "dev-row",
-            device_spec(d2b_provider_device_usbip::PROVIDER_REF),
+            device_spec(d2b_provider_device_tpm::PROVIDER_REF),
             Arc::clone(&manager),
             Arc::new(RecordingRequeue::default()),
             Arc::clone(&log),
@@ -1980,7 +2054,7 @@ mod tests {
             SharedProviderFinalize::Complete,
         );
         let mut driver = driver(&fixture).await;
-        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+        driver.delete(&mut fixture.ctx).await.expect("teardown");
         let deletions = log
             .lock()
             .iter()
@@ -1990,6 +2064,49 @@ mod tests {
         assert_eq!(
             deletions,
             vec!["delete:Endpoint/stale-endpoint".to_owned(), "delete:Process/stale-proxy".to_owned()]
+        );
+    }
+
+    /// The Device kinds own rows another layer declares - the Zone bundle's
+    /// Device worker rows (`Process/swtpm-<device>`, `EphemeralProcess/swtpm-flush-<device>`,
+    /// KTD13) and the family effect's controller-created rows (the TPM state
+    /// Volume) - and the driver derives no child set for them. A reconcile
+    /// pass must leave those rows alone: diffing the owned set against the
+    /// empty desired set retired every declared row on the pass that
+    /// followed the bundle ingest, so the ingest's rows never stayed in the
+    /// manager projection the `device-worker-launch` fixture reads.
+    #[tokio::test]
+    async fn reconcile_leaves_the_declared_device_rows_alone() {
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = RecordingManager::with_owned(
+            Arc::clone(&log),
+            vec![
+                owned_row("dev", "Process", "swtpm-tpm-0"),
+                owned_row("dev", "EphemeralProcess", "swtpm-flush-tpm-0"),
+                owned_row("dev", "Endpoint", "tpm-ctrl-tpm-0"),
+            ],
+        );
+        let mut fixture = fixture(
+            DEVICE_TYPE_NAME,
+            "dev-row",
+            device_spec(d2b_provider_device_tpm::PROVIDER_REF),
+            Arc::clone(&manager),
+            Arc::new(RecordingRequeue::default()),
+            Arc::clone(&log),
+            SharedProviderEffectPhase::Ready,
+            SharedProviderFinalize::Complete,
+        );
+        let mut driver = driver(&fixture).await;
+        driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+        let entries = log.lock().clone();
+        assert!(
+            !entries.iter().any(|entry| entry.starts_with("delete:")),
+            "the declared rows are not this driver's to retire: {entries:?}"
+        );
+        assert_eq!(
+            entries.iter().filter(|entry| entry.as_str() == "effect:tpm").count(),
+            1,
+            "the pass still runs its typed effect: {entries:?}"
         );
     }
 

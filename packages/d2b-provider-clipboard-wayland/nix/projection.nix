@@ -133,7 +133,7 @@ let
           providerRef = providerRef;
           endpointClass = "service";
           transport = "opaque-carriage";
-          purpose = "clipboard-wayland.d2bus.org/bridge";
+          purpose = "clipboard-wayland-bridge";
           serviceFingerprint = null;
           locality = "host-local";
           visibility = "provider";

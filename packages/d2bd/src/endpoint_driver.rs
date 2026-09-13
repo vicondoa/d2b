@@ -20,7 +20,12 @@
 //!   rendezvous, so the same recover/reconcile/delete verbs run against the
 //!   guest's committed VMM Process row instead of a socket this daemon
 //!   creates (U17: the row's actor owns its status; the old publication
-//!   stage wrote both rows from exactly that evidence).
+//!   stage wrote both rows from exactly that evidence);
+//! - the Device TPM Provider's worker-socket endpoints (`swtpm-tpm-socket`
+//!   on the Device-class row, `swtpm-control-socket` on the Control-class
+//!   one): one swtpm launch composes both sockets, so the producer Process
+//!   row's `Ready` status is the evidence - the same rule as the control
+//!   family, and the daemon creates and removes nothing for this shape.
 //!
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`EndpointDriverFactory`] registration under `Endpoint`.
@@ -115,6 +120,25 @@ pub(crate) fn guest_control_purpose(purpose: &str) -> bool {
     guest_control_producer(purpose).is_some()
 }
 
+/// The Endpoint class the Device TPM Provider declares for one of its
+/// device-worker purposes, or `None` for any other purpose.
+///
+/// Derived from the provider's own constants (`TPM_SERVER_ENDPOINT_PURPOSE`,
+/// `TPM_CONTROL_ENDPOINT_PURPOSE`), so the closed realization set cannot
+/// drift from the rows the provider declares in its projection.
+pub(crate) fn device_worker_endpoint_class(purpose: &str) -> Option<EndpointClass> {
+    match purpose {
+        d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE => Some(EndpointClass::Device),
+        d2b_provider_device_tpm::TPM_CONTROL_ENDPOINT_PURPOSE => Some(EndpointClass::Control),
+        _ => None,
+    }
+}
+
+/// Whether one purpose belongs to the device-worker family.
+pub(crate) fn device_worker_purpose(purpose: &str) -> bool {
+    device_worker_endpoint_class(purpose).is_some()
+}
+
 /// The realization the v3 plane owns for one admitted Endpoint spec. Anything
 /// outside this closed set is refused at validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +154,14 @@ pub(crate) enum EndpointRealization {
     /// realization is the evidence row's committed VMM Process being live,
     /// the evidence the old daemon publication stage read.
     GuestControl,
+    /// One Device-owning worker's declared socket: the Device TPM Provider's
+    /// swtpm worker rows (`swtpm-tpm-socket` on the Device-class row the
+    /// Guest's VMM consumes, `swtpm-control-socket` on the Control-class one
+    /// the pre-start flush connects to). One launch composes both sockets, so
+    /// the realization is the producer Process row's own `Ready` status - the
+    /// same rule the guest-runtime control family follows; the daemon creates
+    /// and removes nothing for this shape.
+    DeviceWorkerSocket,
 }
 
 /// Classify one Endpoint spec onto the realization the plane owns.
@@ -157,6 +189,19 @@ pub(crate) fn endpoint_realization(spec: &EndpointSpec) -> Option<EndpointRealiz
         && spec.locality() == producer.locality()
     {
         return Some(EndpointRealization::GuestControl);
+    }
+    // The device-worker family is exactly the Device TPM Provider's declared
+    // worker-socket rows: the purpose names the class, the producer is the
+    // swtpm worker Process that owns both sockets, and the posture is the
+    // owner-scoped host-local one the provider's projection declares.
+    if spec.transport() == EndpointTransport::OpaqueCarriage
+        && spec.visibility() == EndpointVisibility::Owner
+        && spec.locality() == EndpointLocality::HostLocal
+        && spec.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
+        && spec.producer_ref().resource_type().as_str() == "Process"
+        && device_worker_endpoint_class(spec.purpose().as_str()) == Some(spec.endpoint_class())
+    {
+        return Some(EndpointRealization::DeviceWorkerSocket);
     }
     None
 }
@@ -1080,6 +1125,121 @@ mod tests {
         }
         assert!(!super::guest_control_purpose("virtiofsd"));
         assert!(!super::guest_control_purpose("aca-sandbox-agent"));
+    }
+
+    /// One device-worker endpoint exactly as the Device TPM Provider's
+    /// projection declares it: purpose names the class, the swtpm worker
+    /// Process is the producer, and the posture is owner-scoped host-local.
+    fn device_worker_endpoint_spec(purpose: &str) -> EndpointSpec {
+        let class =
+            super::device_worker_endpoint_class(purpose).expect("declared device-worker purpose");
+        EndpointSpec::new(
+            ResourceRef::parse("Provider/device-tpm").expect("provider"),
+            ResourceRef::parse("Process/swtpm-tpm").expect("producer"),
+            class,
+            EndpointTransport::OpaqueCarriage,
+            BoundedToken::parse(purpose).expect("purpose"),
+            None,
+            EndpointLocality::HostLocal,
+            EndpointVisibility::Owner,
+            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
+                .expect("attachment policy"),
+            EndpointConsumerPolicy::new(
+                vec![],
+                vec![BoundedToken::parse("runtime-cloud-hypervisor").expect("component")],
+                vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
+            )
+            .expect("consumer policy"),
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .expect("device worker endpoint spec")
+    }
+
+    /// The Device TPM Provider's declared worker-socket rows are admitted: the
+    /// v3 plane realizes them on the producer worker row's own evidence, so the
+    /// rows reach a defined state instead of `endpoint-shape-unsupported`.
+    #[test]
+    fn provider_committed_device_worker_shapes_are_admitted() {
+        for purpose in [
+            d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE,
+            d2b_provider_device_tpm::TPM_CONTROL_ENDPOINT_PURPOSE,
+        ] {
+            let spec = device_worker_endpoint_spec(purpose);
+            assert_eq!(
+                super::endpoint_realization(&spec),
+                Some(super::EndpointRealization::DeviceWorkerSocket),
+                "{purpose} is one of the Device TPM Provider's worker sockets",
+            );
+            assert!(super::device_worker_purpose(purpose));
+        }
+        assert!(!super::device_worker_purpose("virtiofsd"));
+        assert!(!super::device_worker_purpose("ch-api"));
+    }
+
+    /// A device-worker look-alike stays refused at validate: the purpose must
+    /// be one the provider declares, with the class that purpose names, on a
+    /// Process producer, and with the owner-scoped host-local posture - not
+    /// every device-shaped Endpoint, and not a declared purpose on another
+    /// class or producer type.
+    #[tokio::test]
+    async fn device_worker_look_alikes_stay_refused() {
+        let server = d2b_provider_device_tpm::TPM_SERVER_ENDPOINT_PURPOSE;
+        let with = |class, producer: &str, locality, visibility| {
+            EndpointSpec::new(
+                ResourceRef::parse("Provider/device-tpm").expect("provider"),
+                ResourceRef::parse(producer).expect("producer"),
+                class,
+                EndpointTransport::OpaqueCarriage,
+                BoundedToken::parse(server).expect("purpose"),
+                None,
+                locality,
+                visibility,
+                d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
+                    .expect("attachment policy"),
+                EndpointConsumerPolicy::new(
+                    vec![],
+                    vec![],
+                    vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
+                )
+                .expect("consumer policy"),
+                EndpointLifecyclePolicy::RecycleWithProducer,
+            )
+            .expect("endpoint spec")
+        };
+        for spec in [
+            // The declared purpose on the other declared class.
+            with(
+                EndpointClass::Control,
+                "Process/swtpm-tpm",
+                EndpointLocality::HostLocal,
+                EndpointVisibility::Owner,
+            ),
+            // A declared purpose produced by a Guest rather than the worker.
+            with(
+                EndpointClass::Device,
+                "Guest/acceptance-guest",
+                EndpointLocality::HostLocal,
+                EndpointVisibility::Owner,
+            ),
+            // A declared purpose on a provider-visible or non-host-local row.
+            with(
+                EndpointClass::Device,
+                "Process/swtpm-tpm",
+                EndpointLocality::CrossDomain,
+                EndpointVisibility::Owner,
+            ),
+            with(
+                EndpointClass::Device,
+                "Process/swtpm-tpm",
+                EndpointLocality::HostLocal,
+                EndpointVisibility::Provider,
+            ),
+        ] {
+            let mut ctx = fixture(test_row(&spec));
+            let mut d = driver(FakeSocketEffects::new()).await;
+            let failure = d.validate(&mut ctx).await.expect_err("terminal");
+            assert_eq!(failure.class(), FailureClass::Terminal);
+        }
     }
 
     /// A look-alike control endpoint stays refused at validate: the admitted

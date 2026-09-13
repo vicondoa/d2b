@@ -163,7 +163,7 @@ let
             providerRef = providerRef;
             endpointClass = "control";
             transport = "opaque-carriage";
-            purpose = "runtime-qemu-media.d2bus.org/qmp";
+            purpose = "qmp-control";
             serviceFingerprint = null;
             locality = "host-local";
             visibility = "owner";

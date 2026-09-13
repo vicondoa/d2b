@@ -443,6 +443,88 @@ pub(crate) struct ServingWorkerLaunch {
     pub(crate) socket_group: Option<String>,
 }
 
+/// Typed launch parameters for one Device-owned worker row.
+///
+/// The Device Providers declare their worker rows path-free (`Process/swtpm-<device>`,
+/// `Process/gpu-<device>`, ...), and the Process spec is argv-free by
+/// contract, so the host inputs the device argv generators need are derived
+/// by the Process controller and travel to the provider composition as these
+/// typed parameters - never as argv on the row or the spec (U17 gap
+/// closure).
+///
+/// The executable is carried only so the owning Provider's own argv
+/// generator validates it: the trusted template pins the binary and the
+/// broker composes `argv[0]`, so the composed argument list starts after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeviceWorkerLaunch {
+    /// `Process/swtpm-<device>` (`swtpm-socket`).
+    Swtpm(Box<SwtpmWorkerParams>),
+    /// `EphemeralProcess/swtpm-flush-<device>` (`swtpm-init-flush`).
+    SwtpmFlush(Box<SwtpmFlushParams>),
+    /// `Process/gpu-<device>` (`gpu-worker` / `gpu-render-node`).
+    Gpu(Box<GpuWorkerParams>),
+    /// `Process/video-<device>` (`video-worker`).
+    Video(Box<VideoWorkerParams>),
+}
+
+/// Long-lived `swtpm socket` inputs: the per-Device state directory, the two
+/// sockets swtpm binds, and the socket owner ids it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SwtpmWorkerParams {
+    /// Trusted `swtpm` binary the declared template pins.
+    pub(crate) binary_path: PathBuf,
+    /// VM the Device belongs to (the socket root and the process title).
+    pub(crate) vm_name: String,
+    /// State directory the controller-owned state Volume is backed by.
+    pub(crate) state_dir: PathBuf,
+    /// `--ctrl` socket (daemon-only; the guest VMM never connects to it).
+    pub(crate) ctrl_socket_path: PathBuf,
+    /// `--server` socket the guest VMM connects to.
+    pub(crate) server_socket_path: PathBuf,
+    /// The identity the worker holds in the namespace its posture installs:
+    /// in-namespace `0` under the ADR 0021 single-entry mapping (the host
+    /// principal is unmapped there, so naming it makes swtpm's socket chown
+    /// fail with `EINVAL`), the host principal for a posture without one.
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    /// `--log level=<N>`; the Device Provider's own bounded default.
+    pub(crate) log_level: u8,
+}
+
+/// Pre-start flush inputs: `swtpm_ioctl -i --unix <ctrl>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SwtpmFlushParams {
+    /// Trusted `swtpm-ioctl` binary the declared template pins.
+    pub(crate) ioctl_binary_path: PathBuf,
+    pub(crate) vm_name: String,
+    /// The same `--ctrl` socket the long-lived worker binds.
+    pub(crate) ctrl_socket_path: PathBuf,
+}
+
+/// `crosvm device gpu` inputs: the private sidecar socket, the host Wayland
+/// socket the sidecar renders into, and the Device's declared context shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GpuWorkerParams {
+    pub(crate) binary_path: PathBuf,
+    pub(crate) vm_name: String,
+    /// `--socket` value the guest VMM's `--gpu socket=` argument names.
+    pub(crate) socket_path: PathBuf,
+    /// `--wayland-sock` value.
+    pub(crate) wayland_sock: PathBuf,
+    /// `--params` payload, from the owning Device's declared settings.
+    pub(crate) params: d2b_provider_device_gpu::GpuParams,
+}
+
+/// `crosvm device video-decoder` inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VideoWorkerParams {
+    pub(crate) binary_path: PathBuf,
+    pub(crate) vm_name: String,
+    /// `--socket-path` value the guest VMM's `--vhost-user-media socket=`
+    /// argument names.
+    pub(crate) socket_path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) zone: ZoneId,
@@ -475,6 +557,13 @@ pub(crate) struct ProcessResourceContext<'a> {
     /// Binding-declared serving-worker launch inputs, when this Process is a
     /// VolumeBinding-owned serving worker.
     pub(crate) worker_launch: Option<ServingWorkerLaunch>,
+    /// Device-declared worker launch parameters, when this Process is one of
+    /// the declared Device-owned worker rows (`Process/swtpm-<device>`,
+    /// `EphemeralProcess/swtpm-flush-<device>`, `Process/gpu-<device>`,
+    /// `Process/video-<device>`). Derived by the Process controller from the
+    /// owning Device row, the trusted declared template, and the daemon's own
+    /// runtime paths.
+    pub(crate) device_worker_launch: Option<DeviceWorkerLaunch>,
     /// The canonical launch identity the owning row resolved (KTD7). The
     /// ticket builder consumes this value instead of re-deriving the owner,
     /// target, VM, or legacy role from the fields above.
@@ -514,6 +603,7 @@ impl<'a> ProcessResourceContext<'a> {
             user_ref: None,
             guest_descriptor_digest: None,
             worker_launch: None,
+            device_worker_launch: None,
             launch: None,
         }
     }
@@ -527,6 +617,15 @@ impl<'a> ProcessResourceContext<'a> {
     /// Attach the binding-declared serving-worker launch inputs.
     pub(crate) fn with_worker_launch(mut self, launch: Option<ServingWorkerLaunch>) -> Self {
         self.worker_launch = launch;
+        self
+    }
+
+    /// Attach the Device-declared worker launch parameters.
+    pub(crate) fn with_device_worker_launch(
+        mut self,
+        launch: Option<DeviceWorkerLaunch>,
+    ) -> Self {
+        self.device_worker_launch = launch;
         self
     }
 
@@ -1018,6 +1117,19 @@ impl ProductionProcessProviders {
         &self.minijail
     }
 
+    /// Borrow the trusted bundle this composition was built from. The Process
+    /// controller derives Device-worker launch parameters from the same
+    /// trusted intent table the provider ticket resolves through.
+    pub(crate) const fn bundle(&self) -> &BundleResolver {
+        &self.bundle
+    }
+
+    /// The runtime root the daemon owns (the broker socket's parent), under
+    /// which the per-VM device sockets live.
+    pub(crate) fn socket_runtime_dir(&self) -> &std::path::Path {
+        &self.socket_runtime_dir
+    }
+
     /// Borrow the daemon-owned systemd Provider.
     pub const fn systemd(&self) -> &SystemdProcessProvider<BrokerSystemdSupervisor> {
         &self.systemd
@@ -1229,11 +1341,6 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        // XXX-host-bringup: temporary spawn visibility; remove once green.
-        tracing::warn!(
-            template = %spec.execution().template().as_str(),
-            "resource launch started",
-        );
         let context = context
             .with_execution_ref(spec.execution().execution_ref())
             .with_user_ref(spec.execution().user_ref());
@@ -1254,8 +1361,14 @@ impl ProductionProcessProviders {
         // A binding-owned serving worker launches with the binding-declared
         // arguments; the template decides whether that is admitted at all
         // (the broker refuses supplied arguments on every other template).
-        let ticket = match context.worker_launch.as_ref() {
-            Some(launch) => ticket
+        // A declared Device-owned worker row launches with the typed
+        // parameters the Process controller derived from its owning Device
+        // row, its trusted template, and the daemon's own runtime paths.
+        let ticket = match (
+            context.worker_launch.as_ref(),
+            context.device_worker_launch.as_ref(),
+        ) {
+            (Some(launch), None) => ticket
                 .with_launch_args(serving_worker_launch_args(
                     &self.bundle,
                     &self.socket_runtime_dir,
@@ -1263,7 +1376,16 @@ impl ProductionProcessProviders {
                     launch,
                 )?)
                 .map_err(|_| "provider-ticket:serving-args-invalid".to_owned())?,
-            None => ticket,
+            (None, Some(launch)) => ticket
+                .with_launch_args(device_worker_launch_args(
+                    &self.socket_runtime_dir,
+                    launch,
+                )?)
+                .map_err(|_| "provider-ticket:device-worker-args-invalid".to_owned())?,
+            (None, None) => ticket,
+            (Some(_), Some(_)) => {
+                return Err("provider-ticket:launch-args-conflict".to_owned());
+            }
         };
         self.retire_resource_if_identity_changed(
             &context,
@@ -1466,8 +1588,9 @@ impl ProductionProcessProviders {
         self.validate_execution_target(spec.execution().execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         validate_resource_execution_target(self.mode, &context, spec.execution())?;
-        let ticket = resource_ticket(
+        let ticket = ephemeral_launch_ticket(
             &self.bundle,
+            &self.socket_runtime_dir,
             &context,
             spec.execution(),
             spec.activation_input(),
@@ -1475,7 +1598,6 @@ impl ProductionProcessProviders {
             provider,
             self.mode,
             timeout,
-            None,
         )?;
         self.retire_resource_if_identity_changed(
             &context,
@@ -3587,6 +3709,171 @@ fn serving_worker_launch_args(
     Ok(args)
 }
 
+/// One derived device-worker path the daemon owns: absolute, free of `..`,
+/// and - when an anchor is given - contained by it.
+fn device_worker_path(
+    path: &std::path::Path,
+    anchor: Option<&std::path::Path>,
+    which: &str,
+) -> Result<(), String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!("provider-ticket:device-worker-path-invalid:{which}"));
+    }
+    if let Some(anchor) = anchor
+        && !path.starts_with(anchor)
+    {
+        return Err(format!("provider-ticket:device-worker-path-unanchored:{which}"));
+    }
+    Ok(())
+}
+
+/// Compose one Device-owned worker row's launch arguments.
+///
+/// This is the seat where the daemon's runtime paths (state directory, socket
+/// roots) become the launch's arguments: the owning Device Provider's own argv
+/// generator renders and validates them (absolute paths, bounded log level,
+/// closed context classes), and the executable slot is dropped because the
+/// trusted template pins the binary and the broker composes `argv[0]`.
+///
+/// The fence: every path the generator renders is anchored - the state
+/// directory under the trusted storage root and the sockets under the runtime
+/// root the daemon owns - so a declared row can never launch with a socket the
+/// daemon did not derive.
+fn device_worker_launch_args(
+    socket_runtime_dir: &std::path::Path,
+    launch: &DeviceWorkerLaunch,
+) -> Result<Vec<String>, String> {
+    let argv = match launch {
+        DeviceWorkerLaunch::Swtpm(params) => {
+            device_worker_path(&params.state_dir, None, "swtpm-state-dir")?;
+            device_worker_path(&params.ctrl_socket_path, None, "swtpm-ctrl-socket")?;
+            device_worker_path(
+                &params.server_socket_path,
+                Some(socket_runtime_dir),
+                "swtpm-server-socket",
+            )?;
+            d2b_provider_device_tpm::generate_swtpm_argv(&d2b_provider_device_tpm::SwtpmArgvInput {
+                swtpm_binary_path: params.binary_path.to_string_lossy().into_owned(),
+                vm_name: params.vm_name.clone(),
+                state_dir: params.state_dir.to_string_lossy().into_owned(),
+                ctrl_socket_path: params.ctrl_socket_path.to_string_lossy().into_owned(),
+                server_socket_path: params.server_socket_path.to_string_lossy().into_owned(),
+                uid: params.uid,
+                gid: params.gid,
+                log_path: params
+                    .state_dir
+                    .join("swtpm.log")
+                    .to_string_lossy()
+                    .into_owned(),
+                log_level: params.log_level,
+                pid_path: params
+                    .state_dir
+                    .join("swtpm.pid")
+                    .to_string_lossy()
+                    .into_owned(),
+                startup_clear: true,
+                extra_args: Vec::new(),
+            })
+            .map_err(|_| "provider-ticket:device-worker-argv-invalid:swtpm".to_owned())?
+        }
+        DeviceWorkerLaunch::SwtpmFlush(params) => {
+            device_worker_path(&params.ctrl_socket_path, None, "swtpm-flush-ctrl-socket")?;
+            d2b_provider_device_tpm::generate_swtpm_ioctl_flush_argv(
+                &d2b_provider_device_tpm::SwtpmIoctlFlushInput {
+                    swtpm_ioctl_binary_path: params.ioctl_binary_path.to_string_lossy().into_owned(),
+                    vm_name: params.vm_name.clone(),
+                    ctrl_socket_path: params.ctrl_socket_path.to_string_lossy().into_owned(),
+                },
+            )
+            .map_err(|_| "provider-ticket:device-worker-argv-invalid:swtpm-flush".to_owned())?
+        }
+        DeviceWorkerLaunch::Gpu(params) => {
+            device_worker_path(
+                &params.socket_path,
+                Some(socket_runtime_dir),
+                "gpu-worker-socket",
+            )?;
+            device_worker_path(&params.wayland_sock, None, "gpu-worker-wayland-sock")?;
+            d2b_provider_device_gpu::generate_gpu_argv(&d2b_provider_device_gpu::GpuArgvInput {
+                crosvm_binary_path: params.binary_path.to_string_lossy().into_owned(),
+                vm_name: params.vm_name.clone(),
+                socket_path: params.socket_path.to_string_lossy().into_owned(),
+                wayland_sock: params.wayland_sock.to_string_lossy().into_owned(),
+                params: params.params.clone(),
+                extra_args: Vec::new(),
+            })
+            .map_err(|_| "provider-ticket:device-worker-argv-invalid:gpu".to_owned())?
+        }
+        DeviceWorkerLaunch::Video(params) => {
+            device_worker_path(
+                &params.socket_path,
+                None,
+                "video-worker-socket",
+            )?;
+            d2b_provider_device_gpu::generate_video_argv(&d2b_provider_device_gpu::VideoArgvInput {
+                crosvm_binary_path: params.binary_path.to_string_lossy().into_owned(),
+                vm_name: params.vm_name.clone(),
+                socket_path: params.socket_path.to_string_lossy().into_owned(),
+                backend: d2b_provider_device_gpu::VideoBackend::Vaapi,
+            })
+            .map_err(|_| "provider-ticket:device-worker-argv-invalid:video".to_owned())?
+        }
+    };
+    // `argv[0]` is the trusted binary the template pins: the broker composes
+    // it, so the ticket carries only the argument tail.
+    let mut argv = argv;
+    if argv.is_empty() {
+        return Err("provider-ticket:device-worker-argv-empty".to_owned());
+    }
+    Ok(argv.split_off(1))
+}
+
+/// Compose the launch ticket of one one-shot (`EphemeralProcess`) resource
+/// row.
+///
+/// A declared Device-owned one-shot worker row (the TPM pre-start flush) is
+/// still a Device worker: its ticket carries the typed parameters the Process
+/// controller derived from its owning Device row, its trusted template, and
+/// the daemon's own runtime paths - the same attach `launch_resource`
+/// performs for the durable rows. Without it the ticket carries no launch
+/// arguments, the broker composes the bare template argv
+/// (`mint_template_intent` renders `[binary_ref]`), and the one-shot worker
+/// can neither reach its ctrl socket nor pass the typed `w1-swtpm` fence that
+/// fences that socket.
+fn ephemeral_launch_ticket(
+    bundle: &BundleResolver,
+    socket_runtime_dir: &std::path::Path,
+    context: &ProcessResourceContext<'_>,
+    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+    activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
+    spec_bytes: &[u8],
+    provider: ManagedProvider,
+    mode: DaemonMode,
+    timeout: Duration,
+) -> Result<LaunchTicket, String> {
+    let ticket = resource_ticket(
+        bundle,
+        context,
+        execution,
+        activation_input,
+        spec_bytes,
+        provider,
+        mode,
+        timeout,
+        None,
+    )?;
+    match context.device_worker_launch.as_ref() {
+        Some(launch) => ticket
+            .with_launch_args(device_worker_launch_args(socket_runtime_dir, launch)?)
+            .map_err(|_| "provider-ticket:device-worker-args-invalid".to_owned()),
+        None => Ok(ticket),
+    }
+}
+
 fn resource_ticket(
     bundle: &BundleResolver,
     context: &ProcessResourceContext<'_>,
@@ -3654,6 +3941,14 @@ fn resource_ticket(
         )
     });
     let binding_worker = launch.is_binding_worker();
+    // A Device-declared worker row (`Process/swtpm-<device>`,
+    // `EphemeralProcess/swtpm-flush-<device>`, `Process/gpu-<device>`, ...)
+    // is owned by the Device it serves and executes on the Host: its trusted
+    // template is the owning Device Provider's declared `processTemplates`
+    // binding for that exact row, never the guest VMM chain.
+    let device_worker = launch
+        .owner_ref()
+        .is_some_and(|owner| owner.resource_type().as_str() == "Device");
     let generic_intent = if exact_static_controller {
         None
     } else if managed_identity_agent {
@@ -3678,6 +3973,17 @@ fn resource_ticket(
             user_ref.as_deref(),
             execution.template().as_str(),
             Some("Provider/volume-virtiofs"),
+        )
+    } else if device_worker {
+        // The declared row name is the launch identity: two Devices in one
+        // Zone share the template but never the row, and the lookup pins the
+        // template's owning Device Provider through the closed posture table.
+        bundle.find_device_worker_intent(
+            context.resource_ref,
+            &execution_ref,
+            execution_domain,
+            user_ref.as_deref(),
+            execution.template().as_str(),
         )
     } else if let Some(owner) = launch
         .owner_ref()
@@ -3715,13 +4021,19 @@ fn resource_ticket(
         .flatten()
         .or(generic_intent)
         .ok_or_else(|| "provider-ticket:template-not-found".to_owned())?;
-    let ticket_template =
-        if exact_static_controller || managed_identity_agent || binding_worker {
-            execution.template().clone()
-        } else {
-            BoundedToken::parse(trusted_intent.role_id.clone())
-                .map_err(|_| "provider-ticket:invalid-template".to_owned())?
-        };
+    let ticket_template = if exact_static_controller
+        || managed_identity_agent
+        || binding_worker
+        || device_worker
+    {
+        // The resolved device-worker intent's role id is the declared row
+        // name the broker keys the launch by; the ticket's template is the
+        // row's declared template.
+        execution.template().clone()
+    } else {
+        BoundedToken::parse(trusted_intent.role_id.clone())
+            .map_err(|_| "provider-ticket:invalid-template".to_owned())?
+    };
     let provider_name = context.provider_ref.name().as_str();
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| "provider-ticket:invalid-provider")?;
@@ -4193,6 +4505,234 @@ mod tests {
         assert!(!controller_session_needs_fence(Some(&live), &live, false));
         assert!(controller_session_needs_fence(None, &live, false));
         assert!(controller_session_needs_fence(Some(&live), &live, true));
+    }
+
+    // -- Device-owned worker launch arguments (U17 gap closure) --------------
+    //
+    // The declared Device worker rows carry no paths (the Process spec is
+    // argv-free and the rows are declared path-free), so the Process
+    // controller derives typed parameters and this composition seat renders
+    // them through the owning Device Provider's own argv generator. These
+    // tests pin the rendered tail (`argv[0]` is the broker-pinned executable)
+    // and the daemon-side path fence.
+
+    fn swtpm_params() -> DeviceWorkerLaunch {
+        DeviceWorkerLaunch::Swtpm(Box::new(SwtpmWorkerParams {
+            binary_path: PathBuf::from("/nix/store/swtpm/bin/swtpm"),
+            vm_name: "corp-vm".to_owned(),
+            state_dir: PathBuf::from("/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state"),
+            ctrl_socket_path: PathBuf::from(
+                "/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock",
+            ),
+            server_socket_path: PathBuf::from("/run/d2b/vms/corp-vm/tpm.sock"),
+            uid: 60_100,
+            gid: 60_100,
+            log_level: 20,
+        }))
+    }
+
+    /// The socket owner ids the rendered argv names follow the posture's
+    /// user namespace, not the host principal: the swtpm worker runs under
+    /// the ADR 0021 single-entry mapping, whose only id is in-namespace `0`
+    /// (naming the host principal there made swtpm exit 1 on a socket-chown
+    /// `EINVAL` before it ever bound a socket).
+    #[test]
+    fn namespaced_swtpm_worker_argv_names_the_in_namespace_socket_owner() {
+        use d2b_core::bundle_resolver::{DEVICE_TPM_PROVIDER_REF, device_worker_posture};
+
+        let posture = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-socket")
+            .expect("swtpm-socket posture");
+        assert!(posture.user_namespace(), "the long-lived worker is namespaced");
+        let (uid, gid) = posture.launch_ids(60_100, 60_100);
+        assert_eq!(
+            (uid, gid),
+            (0, 0),
+            "the host principal is unmapped inside its own namespace"
+        );
+
+        let DeviceWorkerLaunch::Swtpm(mut params) = swtpm_params() else {
+            unreachable!("fixture is the long-lived swtpm family");
+        };
+        params.uid = uid;
+        params.gid = gid;
+        let args = device_worker_launch_args(
+            std::path::Path::new("/run/d2b"),
+            &DeviceWorkerLaunch::Swtpm(params),
+        )
+        .expect("the derived typed parameters render");
+        for flag in ["--ctrl", "--server"] {
+            let value = &args[args
+                .iter()
+                .position(|arg| arg == flag)
+                .expect("socket flag is rendered")
+                + 1];
+            assert!(
+                value.ends_with(",mode=0660,uid=0,gid=0"),
+                "{flag} must name the in-namespace owner: {value}"
+            );
+        }
+
+        let flush = device_worker_posture(DEVICE_TPM_PROVIDER_REF, "swtpm-init-flush")
+            .expect("flush posture");
+        assert!(!flush.user_namespace(), "the one-shot flush runs unnamespaced");
+        assert_eq!(
+            flush.launch_ids(60_100, 60_100),
+            (60_100, 60_100),
+            "a posture without a user namespace keeps the host ids"
+        );
+    }
+
+    #[test]
+    fn device_worker_launch_args_render_the_owning_provider_argv() {
+        let args = device_worker_launch_args(std::path::Path::new("/run/d2b"), &swtpm_params())
+            .expect("the derived typed parameters render");
+        assert_eq!(
+            args,
+            vec![
+                "socket",
+                "--tpm2",
+                "--tpmstate",
+                "dir=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state",
+                "--ctrl",
+                "type=unixio,path=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock,mode=0660,uid=60100,gid=60100",
+                "--server",
+                "type=unixio,path=/run/d2b/vms/corp-vm/tpm.sock,mode=0660,uid=60100,gid=60100",
+                "--flags",
+                "startup-clear",
+                "--log",
+                "file=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/swtpm.log,level=20",
+                "--pid",
+                "file=/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/swtpm.pid",
+            ],
+            "the executable slot is the broker-pinned argv[0], never a ticket argument"
+        );
+
+        let flush = DeviceWorkerLaunch::SwtpmFlush(Box::new(SwtpmFlushParams {
+            ioctl_binary_path: PathBuf::from("/nix/store/swtpm/bin/swtpm_ioctl"),
+            vm_name: "corp-vm".to_owned(),
+            ctrl_socket_path: PathBuf::from(
+                "/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock",
+            ),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &flush)
+                .expect("the one-shot flush parameters render"),
+            vec![
+                "-i",
+                "--unix",
+                "/var/lib/d2b/vms/corp-vm/swtpm/device-abc-tpm-state/ctrl.sock",
+            ]
+        );
+
+        let video = DeviceWorkerLaunch::Video(Box::new(VideoWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b-video/corp-vm/video.sock"),
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &video)
+                .expect("the video sidecar parameters render"),
+            vec![
+                "device",
+                "video-decoder",
+                "--socket-path",
+                "/run/d2b-video/corp-vm/video.sock",
+                "--backend",
+                "vaapi",
+            ]
+        );
+    }
+
+    /// The fence: a socket the daemon did not derive under its own runtime
+    /// root never reaches a launch, even when every typed field is otherwise
+    /// well formed.
+    #[test]
+    fn device_worker_launch_args_refuse_a_socket_outside_the_runtime_root() {
+        let mut params = swtpm_params();
+        let DeviceWorkerLaunch::Swtpm(swtpm) = &mut params else {
+            unreachable!("fixture is the long-lived swtpm family");
+        };
+        swtpm.server_socket_path = PathBuf::from("/run/foreign/tpm.sock");
+        let error = device_worker_launch_args(std::path::Path::new("/run/d2b"), &params)
+            .expect_err("a foreign socket is refused");
+        assert_eq!(
+            error,
+            "provider-ticket:device-worker-path-unanchored:swtpm-server-socket"
+        );
+
+        let gpu = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: d2b_provider_device_gpu::GpuParams {
+                context_types: vec![d2b_provider_device_gpu::GpuContextType::Virgl],
+                displays: vec![d2b_provider_device_gpu::GpuDisplayConfig { hidden: true }],
+                egl: true,
+                vulkan: true,
+            },
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
+                .expect_err("a relative socket is refused"),
+            "provider-ticket:device-worker-path-invalid:gpu-worker-socket"
+        );
+    }
+
+    /// The GPU shape renders from the owning Device's declared settings once
+    /// the Wayland socket is bound, so the family is one bound input away from
+    /// the same composition seat as the others.
+    #[test]
+    fn device_worker_launch_args_render_the_gpu_shape_from_device_settings() {
+        let gpu = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+            binary_path: PathBuf::from("/nix/store/crosvm/bin/crosvm"),
+            vm_name: "corp-vm".to_owned(),
+            socket_path: PathBuf::from("/run/d2b/vms/corp-vm/gpu.sock"),
+            wayland_sock: PathBuf::from("/run/user/1000/wayland-0"),
+            params: d2b_provider_device_gpu::GpuParams {
+                context_types: vec![
+                    d2b_provider_device_gpu::GpuContextType::Virgl,
+                    d2b_provider_device_gpu::GpuContextType::Virgl2,
+                    d2b_provider_device_gpu::GpuContextType::CrossDomain,
+                ],
+                displays: vec![d2b_provider_device_gpu::GpuDisplayConfig { hidden: true }],
+                egl: true,
+                vulkan: true,
+            },
+        }));
+        assert_eq!(
+            device_worker_launch_args(std::path::Path::new("/run/d2b"), &gpu)
+                .expect("the GPU parameters render"),
+            vec![
+                "device",
+                "gpu",
+                "--socket",
+                "/run/d2b/vms/corp-vm/gpu.sock",
+                "--wayland-sock",
+                "/run/user/1000/wayland-0",
+                "--params",
+                "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}",
+            ]
+        );
+
+        // The socket is the bundle-projected site value, not a hardcoded
+        // `wayland-0`: a site whose compositor is not first on the seat
+        // renders the projected display name.
+        let DeviceWorkerLaunch::Gpu(params) = &gpu else {
+            unreachable!("fixture is the GPU family");
+        };
+        let mut projected = (**params).clone();
+        projected.wayland_sock = PathBuf::from("/run/user/1001/wayland-7");
+        let rendered = device_worker_launch_args(
+            std::path::Path::new("/run/d2b"),
+            &DeviceWorkerLaunch::Gpu(Box::new(projected)),
+        )
+        .expect("the projected Wayland socket renders");
+        let wayland = rendered
+            .iter()
+            .position(|arg| arg == "--wayland-sock")
+            .expect("the GPU shape carries --wayland-sock");
+        assert_eq!(rendered[wayland + 1], "/run/user/1001/wayland-7");
     }
 
     fn controller_resource() -> ControllerProcessResource {
@@ -4922,5 +5462,435 @@ mod tests {
             "Host",
             "the DAG node executes on the shared host target"
         );
+    }
+
+    /// A declared Device-owned worker row's ticket resolves through the
+    /// Device Provider's signed template binding for that exact declared row
+    /// (never the guest VMM chain), and the ticket carries the row's declared
+    /// template even though the resolved intent's role id is the row name.
+    #[test]
+    fn device_worker_resource_ticket_resolves_the_declared_row_intent() {
+        let zone = ZoneId::parse("dev").expect("zone");
+        let device_ref = ResourceRef::parse("Device/tpm-0").expect("device ref");
+        let device_owner = ResourceRef::parse("Guest/dev").expect("guest ref");
+        let provider = ResourceRef::parse("Provider/system-minijail").expect("provider");
+        let binding_owner = ResourceRef::parse("Provider/device-tpm").expect("binding owner");
+        let target = ResourceRef::parse("Host/dev-host").expect("target");
+        let process_ref = ResourceRef::parse("Process/swtpm-tpm-0").expect("process ref");
+        let template = BoundedToken::parse("swtpm-socket").expect("template");
+        let execution = d2b_contracts_resource::v3::process::ExecutionSpec::new(
+            target.clone(),
+            Some(ExecutionDomain::System),
+            None,
+            ProcessClass::Worker,
+            template.clone(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            d2b_contracts_resource::v3::process::SandboxSpec::default(),
+            d2b_contracts_resource::v3::execution_policy::BudgetSpec::default(),
+            None,
+            Vec::new(),
+            d2b_contracts_resource::v3::process::TelemetrySpec::default(),
+        )
+        .expect("execution");
+        let process = BundleResource::new(
+            ResourceTypeName::parse("Process").expect("process type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("swtpm-tpm-0").expect("process name"),
+                zone.clone(),
+                Some(device_ref.clone()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"domain":"system","executionRef":"Host/dev-host","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-socket"}"#,
+            )
+            .expect("process spec"),
+        )
+        .expect("process resource");
+        let device = BundleResource::new(
+            ResourceTypeName::parse("Device").expect("device type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("tpm-0").expect("device name"),
+                zone.clone(),
+                Some(device_owner),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                .expect("device spec"),
+        )
+        .expect("device resource");
+        let provider_resource = BundleResource::new(
+            ResourceTypeName::parse("Provider").expect("provider type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("device-tpm").expect("provider name"),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"artifactId":"device-tpm","config":{"controllerExecutionRef":"Host/dev-host"}}"#,
+            )
+            .expect("provider spec"),
+        )
+        .expect("provider resource");
+        let resource_bundle = ResourceBundle::new(
+            zone.clone(),
+            vec![process, device, provider_resource],
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle")
+        .with_process_templates(vec![
+            d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding::new_with_launch_args(
+                process_ref.clone(),
+                binding_owner,
+                target.clone(),
+                template.clone(),
+                d2b_contracts_resource::v3::ArtifactId::parse("device-tpm").expect("artifact"),
+                d2b_contracts_provider::v3::BinaryRef::parse("swtpm").expect("binary"),
+                d2b_contracts_provider::v3::ArtifactDigest::parse(format!(
+                    "sha256:{}",
+                    "a".repeat(64)
+                ))
+                .expect("digest"),
+                "/nix/store/device-tpm/bin/swtpm",
+            )
+            .expect("template binding"),
+        ])
+        .expect("process templates");
+        let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([(
+                "dev".to_owned(),
+                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
+            )]),
+        );
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let context = ProcessResourceContext::new(
+            zone.clone(),
+            &process_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_owner_ref(Some(device_ref.clone()))
+        .with_lifecycle_identity(Some(zone_uid.clone()), Some(1), None);
+        let ticket = resource_ticket(
+            &resolver,
+            &context,
+            &execution,
+            None,
+            b"process-spec",
+            ManagedProvider::Minijail,
+            DaemonMode::Host,
+            Duration::from_secs(5),
+            Some(ReadinessClass::ReadyCondition),
+        )
+        .expect("device worker ticket");
+        assert_eq!(ticket.template(), &template);
+        assert_eq!(ticket.process_ref(), &process_ref);
+        assert_eq!(ticket.owner_ref(), Some(&device_ref));
+        assert_eq!(ticket.execution_ref(), &target);
+        assert_eq!(ticket.launch_identity().role(), "swtpm-tpm-0");
+        // The declared row name is the launch identity: a Device-owned row
+        // with no binding of its own still resolves through the
+        // device-worker lookup (never the template's other row and never the
+        // guest VMM chain), and refuses by name.
+        let other_ref = ResourceRef::parse("Process/swtpm-other").expect("other ref");
+        let other_context = ProcessResourceContext::new(
+            zone,
+            &other_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_owner_ref(Some(device_ref))
+        .with_lifecycle_identity(Some(zone_uid), Some(1), None);
+        assert_eq!(
+            resource_ticket(
+                &resolver,
+                &other_context,
+                &execution,
+                None,
+                b"process-spec",
+                ManagedProvider::Minijail,
+                DaemonMode::Host,
+                Duration::from_secs(5),
+                Some(ReadinessClass::ReadyCondition),
+            ),
+            Err("provider-ticket:template-not-found".to_owned())
+        );
+    }
+
+    /// A declared Device-owned one-shot worker row's ticket carries the typed
+    /// launch arguments the daemon composed for it - the TPM pre-start flush
+    /// (`swtpm_ioctl -i --unix <ctrl>`) - and a row with no typed launch keeps
+    /// the bare template argv.
+    ///
+    /// This is the regression the ephemeral launch path must not reintroduce:
+    /// `mint_template_intent` renders `[binary_ref]` for a Device-worker
+    /// template, so a ticket built without the attach makes the one-shot
+    /// worker run with no ctrl socket at all (and the broker's typed
+    /// `w1-swtpm` fence then refuses the launch).
+    #[test]
+    fn ephemeral_device_worker_ticket_carries_the_composed_flush_argv() {
+        let zone = ZoneId::parse("dev").expect("zone");
+        let device_ref = ResourceRef::parse("Device/tpm-0").expect("device ref");
+        let device_owner = ResourceRef::parse("Guest/dev").expect("guest ref");
+        let provider = ResourceRef::parse("Provider/system-minijail").expect("provider");
+        let binding_owner = ResourceRef::parse("Provider/device-tpm").expect("binding owner");
+        let target = ResourceRef::parse("Host/dev-host").expect("target");
+        let process_ref =
+            ResourceRef::parse("EphemeralProcess/swtpm-flush-tpm-0").expect("process ref");
+        let template = BoundedToken::parse("swtpm-init-flush").expect("template");
+        let execution = d2b_contracts_resource::v3::process::ExecutionSpec::new(
+            target.clone(),
+            Some(ExecutionDomain::System),
+            None,
+            ProcessClass::Worker,
+            template.clone(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            d2b_contracts_resource::v3::process::SandboxSpec::default(),
+            d2b_contracts_resource::v3::execution_policy::BudgetSpec::default(),
+            None,
+            Vec::new(),
+            d2b_contracts_resource::v3::process::TelemetrySpec::default(),
+        )
+        .expect("execution");
+        let state_dir = "/var/lib/d2b/tpm-state/device-123e4567e89b42d3a456426614174000-tpm-state";
+        let ctrl_socket = format!("{state_dir}/ctrl.sock");
+        let flush = BundleResource::new(
+            ResourceTypeName::parse("EphemeralProcess").expect("process type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("swtpm-flush-tpm-0").expect("process name"),
+                zone.clone(),
+                Some(device_ref.clone()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"domain":"system","executionRef":"Host/dev-host","processClass":"worker","providerRef":"Provider/system-minijail","template":"swtpm-init-flush"}"#,
+            )
+            .expect("process spec"),
+        )
+        .expect("process resource");
+        let device = BundleResource::new(
+            ResourceTypeName::parse("Device").expect("device type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("tpm-0").expect("device name"),
+                zone.clone(),
+                Some(device_owner),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(br#"{"providerRef":"Provider/device-tpm"}"#)
+                .expect("device spec"),
+        )
+        .expect("device resource");
+        let provider_resource = BundleResource::new(
+            ResourceTypeName::parse("Provider").expect("provider type"),
+            BundleResourceMetadata::new(
+                ResourceName::parse("device-tpm").expect("provider name"),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"artifactId":"device-tpm","config":{"controllerExecutionRef":"Host/dev-host"}}"#,
+            )
+            .expect("provider spec"),
+        )
+        .expect("provider resource");
+        let resource_bundle = ResourceBundle::new(
+            zone.clone(),
+            vec![flush, device, provider_resource],
+            format!("sha256:{}", "b".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("1970-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("resource bundle")
+        .with_process_templates(vec![
+            d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding::new_with_launch_args(
+                process_ref.clone(),
+                binding_owner,
+                target.clone(),
+                template.clone(),
+                d2b_contracts_resource::v3::ArtifactId::parse("device-tpm").expect("artifact"),
+                d2b_contracts_provider::v3::BinaryRef::parse("swtpm-ioctl").expect("binary"),
+                d2b_contracts_provider::v3::ArtifactDigest::parse(format!(
+                    "sha256:{}",
+                    "a".repeat(64)
+                ))
+                .expect("digest"),
+                "/nix/store/device-tpm/bin/swtpm-ioctl",
+            )
+            .expect("template binding"),
+        ])
+        .expect("process templates");
+        let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 11,
+                schema_version: "v2".to_owned(),
+                public_manifest_path: "vms.json".to_owned(),
+                host_path: "host.json".to_owned(),
+                processes_path: "processes.json".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                sync_path: None,
+                allocator_path: None,
+                realm_controllers_path: None,
+                realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
+                unsafe_local_workloads_path: None,
+                closures: Vec::new(),
+                minijail_profiles: Vec::new(),
+                managed_keys: Default::default(),
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::from([(
+                "dev".to_owned(),
+                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
+            )]),
+        );
+        let uid = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("uid");
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let context = ProcessResourceContext::new(
+            zone.clone(),
+            &process_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        )
+        .with_owner_ref(Some(device_ref.clone()))
+        .with_lifecycle_identity(Some(zone_uid), Some(1), None)
+        .with_device_worker_launch(Some(DeviceWorkerLaunch::SwtpmFlush(Box::new(
+            SwtpmFlushParams {
+                ioctl_binary_path: PathBuf::from("/nix/store/device-tpm/bin/swtpm_ioctl"),
+                vm_name: "dev".to_owned(),
+                ctrl_socket_path: PathBuf::from(&ctrl_socket),
+            },
+        ))));
+        let spec_bytes = serde_json::to_vec(
+            &d2b_provider_device_tpm::build_swtpm_flush_spec(&device_ref, "dev", &target)
+                .expect("flush spec"),
+        )
+        .expect("spec bytes");
+        let ticket = ephemeral_launch_ticket(
+            &resolver,
+            std::path::Path::new("/run/d2b"),
+            &context,
+            &execution,
+            None,
+            &spec_bytes,
+            ManagedProvider::Minijail,
+            DaemonMode::Host,
+            Duration::from_secs(5),
+        )
+        .expect("ephemeral device worker ticket");
+        assert_eq!(ticket.template(), &template);
+        assert_eq!(ticket.process_ref(), &process_ref);
+        assert_eq!(ticket.owner_ref(), Some(&device_ref));
+        assert_eq!(
+            ticket.launch_args().to_vec(),
+            vec!["-i".to_owned(), "--unix".to_owned(), ctrl_socket.clone()],
+            "the one-shot flush ticket must carry the composed ctrl socket"
+        );
+        // No typed launch -> no controller-supplied arguments: the attach is
+        // the declared Device worker's, never a blanket default.
+        let bare = context.with_device_worker_launch(None);
+        let bare_ticket = ephemeral_launch_ticket(
+            &resolver,
+            std::path::Path::new("/run/d2b"),
+            &bare,
+            &execution,
+            None,
+            &spec_bytes,
+            ManagedProvider::Minijail,
+            DaemonMode::Host,
+            Duration::from_secs(5),
+        )
+        .expect("ephemeral ticket without a typed launch");
+        assert!(bare_ticket.launch_args().is_empty());
+        assert_eq!(bare_ticket.template(), &template);
     }
 }

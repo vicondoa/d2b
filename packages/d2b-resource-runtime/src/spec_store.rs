@@ -21,8 +21,8 @@
 //! and its audit-log record commit inside one `BEGIN IMMEDIATE` transaction,
 //! and the async call returns only after that commit (commit-before-return,
 //! R7/R10, AE1). File posture: the store creates its file with mode 0600
-//! (directory 0700 when it creates the directory); the WAL and SHM side
-//! files are tightened to 0600 as well.
+//! (directory 0700 when it creates the directory); the database's
+//! `<name>-wal` and `<name>-shm` side files are tightened to 0600 as well.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
@@ -116,9 +116,14 @@ pub struct SpecSelector {
 pub enum EnsureOutcome {
     /// Row absent: committed at generation 1 before this value returned.
     Created(StoredDesiredResource),
-    /// Same resource, byte-identical spec: no-op, current handle returned.
+    /// Same resource, every committed column identical: no-op, current
+    /// handle returned. A row whose spec bytes match but whose metadata or
+    /// owner binding differ is **not** unchanged - it is [`Self::Updated`],
+    /// or the incoming columns would be silently discarded.
     Unchanged(StoredDesiredResource),
-    /// Changed spec: new generation committed before this value returned.
+    /// The committed row changed before this value returned: either a new
+    /// spec (which advances the generation) or differing
+    /// metadata/owner_uid/provenance written without advancing it.
     Updated(StoredDesiredResource),
 }
 
@@ -249,15 +254,35 @@ fn ensure_transactional_inner(
     tx: &rusqlite::Transaction<'_>,
     row: StoredDesiredResource,
 ) -> Result<EnsureOutcome, SpecStoreError> {
-    let existing: Option<(u64, bool, Vec<u8>)> = tx
+    // Every column the row's readers observe is compared, not only the spec:
+    // a `metadata`-only ensure (the authored envelope the display status and
+    // the owned-child annotations read) must never be a silent no-op.
+    let existing: Option<(u64, bool, Vec<u8>, Vec<u8>, Option<Vec<u8>>, String)> = tx
         .query_row(
-            "SELECT generation, deleting, spec FROM resources \
+            "SELECT generation, deleting, spec, metadata, owner_uid, provenance FROM resources \
              WHERE zone = ?1 AND type = ?2 AND name = ?3",
             params![row.key.zone, row.key.type_name, row.key.name],
-            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? != 0, r.get::<_, Vec<u8>>(2)?)),
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)? as u64,
+                    r.get::<_, i64>(1)? != 0,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Option<Vec<u8>>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((generation, deleting, existing_spec)) = existing else {
+    let Some((
+        generation,
+        deleting,
+        existing_spec,
+        existing_metadata,
+        existing_owner,
+        existing_provenance,
+    )) = existing
+    else {
         let stored = insert_new(tx, &row)?;
         insert_audit(
             tx,
@@ -278,9 +303,45 @@ fn ensure_transactional_inner(
             name: row.key.name.clone(),
         });
     }
-    if existing_spec == row.spec {
+    let incoming_owner = row.owner_uid.map(|uid| uid.to_vec());
+    let spec_changed = existing_spec != row.spec;
+    if !spec_changed
+        && existing_metadata == row.metadata
+        && existing_owner == incoming_owner
+        && existing_provenance == row.provenance.as_str()
+    {
         let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
         return Ok(EnsureOutcome::Unchanged(stored));
+    }
+    if !spec_changed {
+        // Spec bytes identical: the row's authored metadata, owner binding,
+        // and provenance still move to the incoming values, at the committed
+        // generation (identity and generation are the spec's contract; the
+        // annotation columns are not).
+        tx.execute(
+            "UPDATE resources SET owner_uid = ?4, provenance = ?5, metadata = ?6 \
+             WHERE zone = ?1 AND type = ?2 AND name = ?3",
+            params![
+                row.key.zone,
+                row.key.type_name,
+                row.key.name,
+                incoming_owner,
+                row.provenance.as_str(),
+                row.metadata,
+            ],
+        )?;
+        insert_audit(
+            tx,
+            now(),
+            "resource.ensure",
+            row.provenance.as_str(),
+            Some(&row.key),
+            "ensure.metadata",
+            Some(generation as i64),
+            Some(generation as i64),
+        )?;
+        let stored = load_row(tx, &row.key)?.expect("row present within its own transaction");
+        return Ok(EnsureOutcome::Updated(stored));
     }
     let next = generation + 1;
     tx.execute(
@@ -292,7 +353,7 @@ fn ensure_transactional_inner(
             row.key.name,
             next as i64,
             row.uid.as_slice(),
-            row.owner_uid.map(|u| u.to_vec()),
+            incoming_owner,
             row.provenance.as_str(),
             row.spec,
             row.metadata,
@@ -318,16 +379,31 @@ fn ensure_transactional_inner(
 
 fn tighten_file_modes(path: &Path) {
     // Best-effort posture enforcement: the store file and its WAL/SHM side
-    // files carry the daemon's private-data mode (0600). Side files only
-    // exist while a connection holds the database open in WAL mode.
+    // files carry the daemon's private-data mode (0600). SQLite names the
+    // side files by appending `-wal`/`-shm` to the *database file name*, so
+    // the suffix is appended here too - `with_extension` would rewrite the
+    // real suffix (`spec-store.sqlite3` -> `spec-store.db-wal`) and leave
+    // the files SQLite actually created at their creation mode. Side files
+    // only exist while a connection holds the database open in WAL mode.
     let tighten = |p: &Path| {
         if let Ok(file) = std::fs::File::open(p) {
             let _ = file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600));
         }
     };
+    let side_file = |suffix: &str| {
+        path.file_name().map(|name| {
+            let mut name = name.to_os_string();
+            name.push(suffix);
+            path.with_file_name(name)
+        })
+    };
     tighten(path);
-    tighten(&path.with_extension("db-wal"));
-    tighten(&path.with_extension("db-shm"));
+    if let Some(wal) = side_file("-wal") {
+        tighten(&wal);
+    }
+    if let Some(shm) = side_file("-shm") {
+        tighten(&shm);
+    }
 }
 
 fn open_connection(path: &Path) -> Result<Connection, SpecStoreError> {
@@ -837,7 +913,8 @@ mod tests {
         assert!(history.iter().all(|rec| {
             matches!(
                 rec.operation.as_str(),
-                "ensure.create" | "ensure.update" | "deletion.mark" | "deletion.removed"
+                "ensure.create" | "ensure.update" | "ensure.metadata" | "deletion.mark"
+                    | "deletion.removed"
             )
         }));
     }
@@ -882,6 +959,52 @@ mod tests {
         store.list(SpecSelector::default()).await.unwrap()
     }
 
+    /// A metadata-only ensure is not a silent no-op (issue: the display
+    /// status and owned-child annotations read the authored metadata): the
+    /// incoming metadata/owner binding are written without advancing the
+    /// committed generation, and a byte-identical ensure still returns
+    /// `Unchanged`.
+    #[tokio::test]
+    async fn metadata_only_ensure_writes_columns_without_a_generation() {
+        let dir = TempDir::new().unwrap();
+        let store = open_in(&dir);
+        let key = ResourceKey::new("host", "Volume", "data");
+        let created = store.ensure(row("data", b"spec-v1")).await.unwrap().row().clone();
+        assert_eq!(created.generation, 1);
+
+        // Same spec, new authored metadata: written at the same generation.
+        let mut with_metadata = row("data", b"spec-v1");
+        with_metadata.metadata = b"authored-2".to_vec();
+        let updated = store.ensure(with_metadata.clone()).await.unwrap();
+        assert!(
+            matches!(updated, EnsureOutcome::Updated(_)),
+            "a metadata-only ensure is a change, not Unchanged"
+        );
+        assert_eq!(
+            updated.row().generation,
+            created.generation,
+            "the metadata-only change does not advance the generation"
+        );
+        assert_eq!(updated.row().metadata, b"authored-2");
+        let read = store.get(key.clone()).await.unwrap();
+        assert_eq!(read.metadata, b"authored-2", "the incoming metadata is durable");
+        assert_eq!(read.spec, b"spec-v1", "the spec bytes are untouched");
+
+        // Byte-identical ensure: unchanged (no spurious write).
+        let unchanged = store.ensure(with_metadata).await.unwrap();
+        assert!(matches!(unchanged, EnsureOutcome::Unchanged(_)));
+
+        // Same spec, new owner binding: also a change, same generation.
+        let mut with_owner = row("data", b"spec-v1");
+        with_owner.metadata = b"authored-2".to_vec();
+        with_owner.owner_uid = Some(uid_for("owner"));
+        let owned = store.ensure(with_owner).await.unwrap();
+        assert!(matches!(owned, EnsureOutcome::Updated(_)));
+        assert_eq!(owned.row().generation, created.generation);
+        assert_eq!(owned.row().owner_uid, Some(uid_for("owner")));
+        assert_eq!(store.get(key).await.unwrap().owner_uid, Some(uid_for("owner")));
+    }
+
     /// File posture (0600 store / WAL / SHM, 0700 dir) asserted after writes.
     #[tokio::test]
     async fn file_mode_private() {
@@ -899,6 +1022,37 @@ mod tests {
         assert_eq!(mode(&path.with_extension("db-wal")), 0o600, "wal mode");
         assert_eq!(mode(&path.with_extension("db-shm")), 0o600, "shm mode");
         assert_eq!(mode(&path.parent().unwrap()), 0o700, "store dir mode");
+    }
+
+    /// The side files of the *actual* database path are the ones tightened
+    /// (issue: `with_extension` rewrote the suffix for
+    /// `*.<suffix-db>` names, so a `.sqlite3` store kept SQLite's creation
+    /// mode on its real WAL/SHM while the module claimed 0600).
+    #[tokio::test]
+    async fn side_files_of_a_suffixed_database_are_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("zones").join("dev").join("spec-store.sqlite3");
+        let store = SpecStore::open(&path).expect("open");
+        store.ensure(row("data", b"spec-v1")).await.unwrap();
+        let side = |suffix: &str| path.with_file_name(format!("spec-store.sqlite3{suffix}"));
+        let chmod = |p: &Path, mode: u32| {
+            let file = std::fs::File::open(p).unwrap_or_else(|error| panic!("{p:?}: {error}"));
+            file.set_permissions(PermissionsExt::from_mode(mode)).unwrap();
+        };
+        // The connection created these side files; force a world-readable
+        // mode so the assertions prove the store tightened them, not that
+        // the process umask happened to.
+        chmod(&side("-wal"), 0o644);
+        chmod(&side("-shm"), 0o644);
+        // A second open on the same file re-runs `tighten_file_modes` while
+        // the first connection keeps the side files alive.
+        let reopened = SpecStore::open(&path).expect("reopen");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&side("-wal")), 0o600, "the real wal is tightened");
+        assert_eq!(mode(&side("-shm")), 0o600, "the real shm is tightened");
+        drop(reopened);
+        drop(store);
     }
 
     /// List honors selector filters (zone / type / owner).

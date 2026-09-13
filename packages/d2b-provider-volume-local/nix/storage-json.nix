@@ -799,7 +799,7 @@ let
         accessAcl = [
           {
             principal = principal "user" "d2b-${name}-gpu";
-            permissions = "r-x";
+            permissions = "rx";
           }
         ];
         invariants = [ "no-symlink" "scope-authorization-required" ];
@@ -827,7 +827,7 @@ let
         accessAcl = [
           {
             principal = principal "user" "d2b-${name}-gpu";
-            permissions = "r--";
+            permissions = "r";
           }
         ];
         invariants = [ "no-symlink" "scope-authorization-required" ];
@@ -862,6 +862,138 @@ let
       })
     ])
     audioVms);
+
+  # Zone-native Guests that own at least one `Device` row.
+  #
+  # The Device-worker launch path resolves a declared worker row's VM scope
+  # from the owning Device's declared Guest owner
+  # (`Device.metadata.ownerRef == Guest/<name>`; the daemon's
+  # `device_worker_vm`), and the TPM worker resolves its state directory from
+  # the trusted `path:swtpm-state:<guest>` row plus the TPM Provider's own
+  # state Volume name (`device-<32hex>-tpm-state`,
+  # `packages/d2b-provider-device-tpm/src/resources.rs`). A zone-native Guest
+  # is not in the legacy VM set (`normalNixosVms`/`tpmVms`), so nothing emits
+  # that row for it. Emit it from here, keyed by the same Device-owner
+  # relation, for every Guest the compiler knows only as a resource.
+  zoneGuestDeviceOwners =
+    let
+      ownerOf = deviceRow:
+        let
+          ownerRef = (deviceRow.metadata or { }).ownerRef or null;
+          parts = if builtins.isString ownerRef then lib.splitString "/" ownerRef else [ ];
+        in
+        if lib.length parts == 2 && builtins.elemAt parts 0 == "Guest" then
+          builtins.elemAt parts 1
+        else
+          null;
+      guestOwners = lib.concatMap
+        (zoneName:
+          let
+            zone = cfg.zones.${zoneName};
+            resources = zone.resources or { };
+          in
+          map
+            (deviceName: ownerOf resources.${deviceName})
+            (lib.filter
+              (name: (resources.${name}.type or null) == "Device")
+              (lib.attrNames resources)))
+        (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+      declaredGuests = lib.concatMap
+        (zoneName:
+          let resources = cfg.zones.${zoneName}.resources or { };
+          in lib.filter
+            (name: (resources.${name}.type or null) == "Guest")
+            (lib.attrNames resources))
+        (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+    in
+    lib.unique (lib.filter
+      (name:
+        name != null
+        && builtins.elem name declaredGuests
+        # A legacy VM that already carries `path:swtpm-state:<vm>` keeps its
+        # own row: storage path ids are unique, and the legacy row's root is
+        # the per-VM tree.
+        && !(builtins.hasAttr name tpmVms))
+      guestOwners);
+
+  # The host-global TPM state policy root. The TPM Provider's state Volume
+  # names the opaque `sourcePolicyId: "tpm-state"`, which the volume-local
+  # runtime resolves as the storage contract's `path:tpm-state` row, and the
+  # daemon's Process driver resolves the worker's state directory as
+  # `<path:swtpm-state:<guest>>/<volume name>`
+  # (`BundleResolver::resolve_volume_view_root`). Both sides compose
+  # `<root>/<volume-name>`, so the two rows must carry the same path for the
+  # swtpm NVRAM directory the worker opens to be the directory the Volume
+  # controller provisions. Per-Device isolation comes from the Volume name
+  # (`device-<32hex>-tpm-state`, derived from the Device's durable uid), and
+  # the root itself is daemon-owned: the controller creates each Device's
+  # subdirectory inside it. It is a sibling of the daemon state policy root
+  # (`${toString cfg.site.stateDir}/daemon-state`) rather than a per-VM child
+  # of the legacy store tree, which a zone-native host never provisions.
+  zoneGuestTpmStateRoot = "${toString cfg.site.stateDir}/tpm-state";
+
+  perZoneGuestTpmStoragePaths = lib.flatten (map
+    (name: [
+      (mkPath {
+        id = "path:swtpm-state:${name}";
+        scope = "vm:${name}";
+        path = zoneGuestTpmStateRoot;
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2bd";
+        mode = "0700";
+        creator = actor "nix-module" "tmpfiles";
+        writers = [
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-broker")
+        ];
+        readers = [ (actor "broker" "d2b-broker") ];
+        cleanupPolicy = "never";
+        repairPolicy = "broker-fail-closed";
+        sensitivity = "secret-adjacent";
+        invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+      })
+      (mkPath {
+        id = "path:swtpm-marker:${name}";
+        scope = "vm:${name}";
+        path = "${toString cfg.site.stateDir}/swtpm-markers/${name}";
+        kind = "regular-file";
+        owner = principal "user" "root";
+        group = principal "group" "root";
+        mode = "0600";
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
+        readers = [ (actor "broker" "d2b-broker") ];
+        cleanupPolicy = "never";
+        repairPolicy = "broker-fail-closed";
+        sensitivity = "secret-adjacent";
+        invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
+      })
+    ])
+    zoneGuestDeviceOwners)
+  ++ lib.optionals (zoneGuestDeviceOwners != [ ]) [
+    # The Provider-declared policy root (`sourcePolicyId: "tpm-state"`) that
+    # every Device's controller-created state Volume resolves under. Same path
+    # as every `path:swtpm-state:<guest>` row above, so the daemon's driver
+    # derivation and the volume-local controller's Volume root agree.
+    (mkPath {
+      id = "path:tpm-state";
+      scope = "host";
+      path = zoneGuestTpmStateRoot;
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2bd";
+      mode = "0700";
+      creator = actor "nix-module" "tmpfiles";
+      writers = [
+        (actor "daemon" "d2bd")
+        (actor "broker" "d2b-broker")
+      ];
+      readers = [ (actor "broker" "d2b-broker") ];
+      cleanupPolicy = "never";
+      repairPolicy = "broker-fail-closed";
+      sensitivity = "secret-adjacent";
+      invariants = [ "no-symlink" "broker-opaque-id-only" "scope-authorization-required" ];
+    })
+  ];
 
   nodeWritablePaths = lib.flatten (map
     (dag: lib.flatten (map
@@ -1050,6 +1182,7 @@ let
       ++ perTpmStoragePaths
       ++ perQemuMediaStoragePaths
       ++ perAudioVmStoragePaths
+      ++ perZoneGuestTpmStoragePaths
       ++ nodeWritablePaths
       ++ readinessSocketPaths
       ++ diskInitPaths;

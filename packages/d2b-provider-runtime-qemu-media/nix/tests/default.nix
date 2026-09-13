@@ -172,7 +172,7 @@ in
           networkUsage = null;
           deviceUsage = [ ];
         };
-        endpoint = "runtime-qemu-media.d2bus.org/qmp";
+        endpoint = "qmp-control";
         guest = {
           schemaId = "runtime-qemu-media.d2bus.org/Guest/spec";
           schemaVersion = "1.0";

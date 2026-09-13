@@ -43,7 +43,6 @@ use ttrpc::{
 use crate::guest_mode::GuestIdentity;
 
 const ROLE_REF: &str = "Role/guest-component-session";
-const WATCH_STREAM_PREFIX: &str = "guest-watch";
 const SCHEMA_BYTES: &[u8] = br#"{"apiVersion":"d2b-cjson/v1","resourceType":"target-local"}"#;
 const GUEST_SEED_DIGEST_DOMAIN: &str = "d2b-guest-local-seed-v1";
 type CommitFence = Arc<dyn Fn() -> Result<(), StoreError> + Send + Sync>;
@@ -211,10 +210,11 @@ impl GuestResourceRuntime {
 
     /// Bind the target-local Resource API to the narrow Guest seed contract.
     ///
-    /// This capability exposes only `CommitBatch` mutations and revision
-    /// watches for the descriptor's approved target-local ResourceTypes. The
-    /// route and session generation remain sealed by the authenticated
-    /// ComponentSession.
+    /// This capability exposes only `CommitBatch` mutations for the
+    /// descriptor's approved target-local ResourceTypes. WATCH requests are
+    /// validated here and then refused by the target-local store
+    /// (`watch-not-wired`), which serves no stream. The route and session
+    /// generation remain sealed by the authenticated ComponentSession.
     pub fn bind_seed_session(
         &self,
         route: &d2b_session::AuthenticatedSessionRouteBinding,
@@ -371,7 +371,10 @@ impl GuestResourceSeedSession {
         validate_watch_request(request, &self.approved_types)
     }
 
-    /// Open a target-local Watch from an exact previous revision.
+    /// Ask to open a target-local Watch from an exact previous revision.
+    ///
+    /// The guest-local store serves no watch stream: the response carries the
+    /// typed `watch-not-wired` capability error instead of a stream name.
     pub async fn watch(
         &self,
         request: wire::WatchRequest,
@@ -453,7 +456,6 @@ fn is_zero_fingerprint(value: &SchemaFingerprint) -> bool {
 struct GuestStoreState {
     revision: u64,
     resources: BTreeMap<ResourceRef, StoredResource>,
-    next_watch: u64,
 }
 
 /// Target-local store owned by one Guest.
@@ -482,7 +484,6 @@ impl GuestResourceStore {
             state: Mutex::new(GuestStoreState {
                 revision: 0,
                 resources: BTreeMap::new(),
-                next_watch: 0,
             }),
         }
     }
@@ -524,6 +525,16 @@ impl GuestResourceStore {
     fn invalid(reason: &'static str) -> StoreError {
         StoreError::new(
             StoreErrorKind::ResourceSchemaInvalid,
+            None,
+            None,
+            RetryClass::Never,
+            reason,
+        )
+    }
+
+    fn unsupported_capability(reason: &'static str) -> StoreError {
+        StoreError::new(
+            StoreErrorKind::UnsupportedCapability,
             None,
             None,
             RetryClass::Never,
@@ -807,6 +818,12 @@ impl ResourceStoreBackend for GuestResourceStore {
         })
     }
 
+    /// WATCH is refused, never receipted: nothing in the composition pumps a
+    /// per-request `guest-watch-N` stream into the component stream a client
+    /// would subscribe to, so a receipt would name a stream no one fills and
+    /// the client would wait forever. Answer the typed capability error the
+    /// manager-backed path also answers (`watch-not-wired`); the caller
+    /// relists instead of waiting on that stream.
     async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
         if request.zone != self.zone {
             return Err(Self::not_found());
@@ -818,15 +835,7 @@ impl ResourceStoreBackend for GuestResourceStore {
         {
             return Err(Self::forbidden());
         }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Self::unavailable("guest-target-store-poisoned"))?;
-        state.next_watch = state.next_watch.saturating_add(1);
-        Ok(StoreWatchReceipt {
-            stream_name: format!("{WATCH_STREAM_PREFIX}-{}", state.next_watch),
-            snapshot_revision: ZoneRevision::new(state.revision),
-        })
+        Err(Self::unsupported_capability("watch-not-wired"))
     }
 
     async fn resolve_ref(
@@ -1468,6 +1477,43 @@ mod tests {
             .await
             .expect_err("Zone watch is not target-local");
         assert_eq!(error.kind(), StoreErrorKind::AuthorizationDenied);
+    }
+
+    #[tokio::test]
+    async fn target_local_store_refuses_watch_instead_of_naming_a_stream() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
+        let store_identity = StoreSealIdentity::new(
+            d2b_contracts_resource::v3::StoreSlot::new(0).expect("store slot"),
+            zone.clone(),
+            uid,
+        );
+        let (_, acceptor) =
+            d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
+        let target = ResourceRef::parse("Guest/work").expect("guest ref");
+        let store = GuestResourceStore::new(zone.clone(), target, acceptor);
+        let error = store
+            .watch(StoreWatchRequest {
+                operation: d2b_contracts_resource::v3::StoreOperationContext {
+                    operation_id: "watch".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "watch".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 1,
+                },
+                zone,
+                resource_types: vec![ResourceTypeName::parse("Process").expect("Process type")],
+                resource_names: Vec::new(),
+                filters: Vec::new(),
+                after_revision: ZoneRevision::new(0),
+                initial_credits: 1,
+                projection: d2b_contracts_resource::v3::StoreProjection::MetadataOnly,
+            })
+            .await
+            .expect_err("a watch whose stream no one fills must be refused, not receipted");
+        assert_eq!(error.kind(), StoreErrorKind::UnsupportedCapability);
+        assert_eq!(error.reason_code(), "watch-not-wired");
+        assert_eq!(error.retry_class(), RetryClass::Never);
     }
 
     fn seed_request(kind: &str, name: &str) -> wire::CommitBatchRequest {

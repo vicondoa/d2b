@@ -16,15 +16,22 @@
 //! spawn that fails after the commit (e.g. no provider factory for the type)
 //! leaves the row durable; a later Ensure or manager restart recovers it.
 //!
-//! ## Admission hook (KTD2 review finding)
+//! ## Admission boundary (KTD2 review finding; security review finding 3)
 //!
-//! The redb `SealedMutation` admission-seal contract was cut consciously:
-//! admission happens at the manager boundary, before any persistence. The
-//! constructor takes a [`MutationAdmission`] invoked on every `Apply` /
-//! `Ensure` / `Remove` entry point with the caller's subject context and the
-//! desired mutation. U8/U10 wire the real subjects (API caller identity,
-//! bundle identity, owning-resource identity); tests default to
-//! [`AllowAll`].
+//! Admission happens at the public API boundary, before a mutation reaches
+//! this manager: `ResourceService` authorizes every parsed mutation and the
+//! admitted subject is sealed into the request the manager-backed store
+//! commits (see `packages/d2b-resource-api/src/service.rs`). The redb
+//! `SealedMutation` admission seal was cut with the durable plane.
+//!
+//! The manager itself trusts its in-process callers: the API's
+//! `ManagerBackend`, resource actors' owned-child ensures, and bundle
+//! ingestion. [`MutationAdmission`] is a retained extension seam, and the
+//! constructor still takes one, but the per-Zone plane composition installs
+//! [`AllowAll`] - no policy distinguishes API caller identity, bundle
+//! identity, and owning-resource identity between the API boundary and the
+//! spec store today. Do not read this hook as a fence: the public API's
+//! authorizer is the sole admission point in production.
 //!
 //! ## Supervision (R17, spec sections 16, 33)
 //!
@@ -70,8 +77,11 @@ use crate::watch::{
 // Admission hook: the manager boundary replaces the cut redb seal (KTD2)
 // ---------------------------------------------------------------------------
 
-/// Who is asking for a durable mutation (U8/U10 wire the real subjects: API
-/// caller identity, bundle identity, owning-resource identity).
+/// Who is asking for a durable mutation. Every mutating entry point fills
+/// this from its caller: the API caller identity through
+/// `manager_backend::api_subject`, bundle ingestion through
+/// `nix_bundle_subject`, and owned-child ensures through
+/// `resource_owner_subject`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutationSubject {
     /// Human/credential-readable principal: the API caller subject, `nix`
@@ -105,15 +115,20 @@ pub enum AdmissionDecision {
 }
 
 /// The manager-boundary admission hook (U3): invoked on EVERY `Apply` /
-/// `Ensure` / `Remove` entry point before persisting. U8/U10 wire the real
-/// admission (API caller subject / bundle identity / owning-resource
-/// identity); tests default to [`AllowAll`].
+/// `Ensure` / `Remove` entry point before persisting, with the caller's
+/// subject and the desired mutation.
+///
+/// This is an extension seam, not a security boundary. The per-Zone plane
+/// composition installs [`AllowAll`], so no policy currently distinguishes
+/// API caller, bundle, and owning-resource subjects inside the manager; the
+/// public API's authorizer is the sole admission point (see the module docs).
 pub trait MutationAdmission: Send + Sync + 'static {
     fn admit(&self, subject: &MutationSubject, request: &MutationRequest) -> AdmissionDecision;
 }
 
-/// Default admission: allow everything (tests, and callers that authorize
-/// upstream).
+/// Default admission: allow everything. This is also what production
+/// installs today (the per-Zone plane composition), so its name describes a
+/// seam rather than an upstream assumption.
 pub struct AllowAll;
 
 impl MutationAdmission for AllowAll {
@@ -719,9 +734,12 @@ impl ResourceManagerState {
         let changed = matches!(outcome, EnsureOutcome::Created(_) | EnsureOutcome::Updated(_));
         self.index_row(committed.clone());
         if matches!(outcome, EnsureOutcome::Updated(_)) {
-            // The committed generation moved past the published status: the
-            // actor republishes after `SpecChanged`, and until it does the
-            // runtime view claims no observed state for the new row.
+            // The committed row moved past the row the published status was
+            // projected from: either the generation advanced (the spec bytes
+            // changed) or a byte-identical spec arrived with authored
+            // metadata/owner changes at the unchanged generation. The actor
+            // republishes after `SpecChanged`, and until it does the runtime
+            // view claims no observed state for the changed row.
             self.statuses.remove(&committed.key);
             self.status_generations.remove(&committed.key);
             self.status_projections.remove(&committed.key);
@@ -1583,11 +1601,13 @@ mod tests {
 
     use crate::context::{ChildEnsure, WatchCondition, WatchSatisfied};
     use crate::error::{DriverFailure, DriverOp, FailureClass, FailureOutcome};
+    use crate::spec_store::EnsureOutcome;
     use crate::error::ResourceError;
     use crate::identity::ResourceTypeName;
     use crate::resource::test_support::{
-        FakeFactory, desired, fake_not_yet_failure, harness, harness_over, harness_over_with_factory,
-        harness_targeted, harness_with, key, subject, until, wait_row_gone, wait_status,
+        FakeFactory, desired, fake_not_yet_failure, fake_refused_failure, harness, harness_over,
+        harness_over_with_factory, harness_targeted, harness_with, key, subject, until,
+        wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -2900,6 +2920,42 @@ mod tests {
         assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 2);
     }
 
+    /// A pass that reports a scheduled retry is NOT a satisfied pass: the row
+    /// publishes the honest `Pending` (the closed vocabulary has no
+    /// awaiting-restart phase) while the driver waits out its backoff, and it
+    /// only goes wire `Ready` once a pass actually satisfies the desired
+    /// state. Before this, the awaiting-restart arm returned `Satisfied` and
+    /// the runtime published wire `Ready` over a process that did not exist.
+    #[tokio::test]
+    async fn scheduled_retry_publishes_pending_never_ready() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::RetryScheduledOnce;
+        let handle =
+            h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+
+        until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
+        wait_status(&h.client, &k, ResourceStatus::Pending).await;
+        let view = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(
+            view.observed_status(),
+            Some(ResourceStatus::Pending),
+            "a scheduled-retry pass is not ready"
+        );
+        assert_eq!(view.wire_status()["phase"], "Pending");
+        assert_eq!(
+            view.wire_status()["resource"],
+            serde_json::json!({}),
+            "a not-ready pass publishes no evidence layer of its own"
+        );
+
+        // The scheduled retry re-enters the driver and the satisfying pass
+        // publishes Ready.
+        handle.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+    }
+
     /// R11/AE6: status transitions publish `RuntimeChanged` to the manager
     /// (which feeds the watch hub) and perform zero persistent writes.
     #[tokio::test]
@@ -2937,6 +2993,359 @@ mod tests {
             "nothing after the snapshot is a desired write: status is memory-only"
         );
         assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 4, "three churn passes ran");
+    }
+
+    /// R13/issue #508: a terminal `Refused` verdict is a decision against the
+    /// committed row - it publishes its evidence (registered kind, stage, and
+    /// compared values) into the wire layer and never requeues. A requeue
+    /// here would busy-loop a row that can never converge.
+    #[tokio::test]
+    async fn terminal_refusal_publishes_its_evidence_and_never_requeues() {
+        let h = harness_with(&["Test"], Duration::from_millis(300)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::RefusedWithEvidence;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        wait_status(&h.client, &k, ResourceStatus::Failed(fake_refused_failure())).await;
+
+        let view = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(view.observed_status_projection(), None);
+        let layer = view.wire_status();
+        assert_eq!(layer["phase"], serde_json::json!("Failed"));
+        assert_eq!(layer["resource"]["driverFailure"]["code"], "volume-spec-invalid");
+        assert_eq!(layer["resource"]["driverFailure"]["outcome"], "refused");
+        assert_eq!(layer["resource"]["driverFailure"]["retryable"], false);
+        assert_eq!(layer["resource"]["driverFailure"]["comparisons"][0]["field"], "spec.schema");
+
+        // Several backoff windows: a refusal must not be requeued.
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "a terminal refusal never enters the driver again"
+        );
+    }
+
+    /// R14: a trigger that coalesced while a long effect was in flight is
+    /// still reconciled after that effect fails terminally. The failure
+    /// assesses the generation the pass read; the newer committed generation
+    /// must not die with the coalesced flag.
+    #[tokio::test]
+    async fn coalesced_trigger_is_reconciled_after_a_terminal_effect_failure() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::GatedRefusedEffectOnce;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
+
+        // A commit while the effect is in flight: the manager sends
+        // `SpecChanged`, which the actor coalesces into the pending flag
+        // instead of entering the driver (R14).
+        let updated = h
+            .client
+            .ensure(subject(), None, desired("Test", "data", b"two"))
+            .await
+            .expect("second ensure commits generation 2");
+        assert_eq!(updated.generation, 2);
+
+        // The gated effect then fails terminally: the refusal publishes, and
+        // the pending trigger drives a second pass over generation 2.
+        shared.open_gate();
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        assert_eq!(
+            shared.generations_seen.lock().clone(),
+            vec![1, 2],
+            "the newer committed generation was reconciled"
+        );
+        assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 2);
+    }
+
+    /// The projection channel's failure case: a pass that computed a
+    /// `status.resource` layer and then failed publishes the failure, not the
+    /// stale success layer. `wire_status` prefers a projection when one is
+    /// present, so a leaked layer would hide the driver failure entirely.
+    #[tokio::test]
+    async fn failed_pass_drops_the_projection_it_computed() {
+        let h = harness_with(&["Test"], Duration::from_millis(400)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionThenFailOnce;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile)),
+        )
+        .await;
+
+        let failed = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(
+            failed.observed_status_projection(),
+            None,
+            "the failure is the row's evidence; the doomed projection must not ride along"
+        );
+        assert_eq!(failed.wire_status()["resource"]["driverFailure"]["outcome"], "not-yet");
+
+        // The requeued pass converges and publishes no projection either.
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let done = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(done.observed_status_projection(), None);
+    }
+
+    /// §36 concurrency (`long-running effect does not block actor mailbox`):
+    /// an `InProgress` effect leaves the mailbox free. The effect is gated, so
+    /// the observed status can only change if the actor handled a message
+    /// while the effect was still in flight; completion then drives the
+    /// follow-up pass.
+    #[tokio::test]
+    async fn long_effect_leaves_the_actor_mailbox_responsive() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        let handle =
+            h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
+
+        handle
+            .actor
+            .send_message(ResourceMsg::TargetUnavailable { session_generation: 1 })
+            .expect("cast target loss");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::not_yet(
+                DriverOp::Recover,
+                crate::error::FailureKinds::TARGET_UNAVAILABLE,
+            )),
+        )
+        .await;
+        assert!(
+            !shared.gate_open.load(AtomicOrdering::SeqCst),
+            "the effect is still gated: only a responsive mailbox could publish this status"
+        );
+
+        shared.open_gate();
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        assert_eq!(shared.max_concurrent_reconcile.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    /// F2/R15 (`RecoveryOutcome::Missing`): absence on the target is never a
+    /// failure - the start pass proceeds to reconcile, which is where the
+    /// resource gets created, and nothing failure-shaped reaches the wire.
+    #[tokio::test]
+    async fn recover_missing_proceeds_to_reconcile_without_a_failure() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.recover_outcome.lock() = crate::driver::RecoveryOutcome::Missing;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+
+        let view = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(view.wire_status()["phase"], serde_json::json!("Ready"));
+        assert_eq!(
+            view.wire_status()["resource"],
+            serde_json::json!({}),
+            "absence is not failure evidence"
+        );
+        assert_eq!(shared.validate_calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(shared.recover_calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "the start pass reconciles after Missing"
+        );
+    }
+
+    /// §36 internal watches (`watch registrations are not persisted`):
+    /// neither the registration nor its satisfaction writes anything durable;
+    /// the audit log holds only the desired mutations.
+    #[tokio::test]
+    async fn internal_watch_traffic_writes_no_store_rows() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let dshare = h.factory.shared(&dkey);
+        *dshare.watch_target.lock() = Some(tkey.clone());
+        h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // Let the satisfaction (and any reconcile it triggers) flow through.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let history = h.store.history(100).await.expect("history");
+        assert_eq!(
+            history.len(),
+            2,
+            "only the two desired ensures are durable; watches are runtime-only (R12)"
+        );
+    }
+
+    /// §36 internal watches (`restart rebuilds dependency relationships
+    /// through reconciliation`): the dependency edge is ephemeral, so the
+    /// restarted dependent re-registers it during its start reconcile, and
+    /// the rebuilt edge notifies it again when the target becomes Ready.
+    #[tokio::test]
+    async fn restart_rebuilds_watch_edges_through_reconcile() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let tshare = h.factory.shared(&tkey);
+        let dshare = h.factory.shared(&dkey);
+        *dshare.watch_target.lock() = Some(tkey.clone());
+        h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        wait_status(&h.client, &dkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // Both actor trees are quiescent now: the pre-restart edge is live and
+        // idle, so every later counter movement belongs to the restart.
+        let watches_before = dshare.watch_calls.load(AtomicOrdering::SeqCst);
+        let reconciles_before = dshare.reconcile_calls.load(AtomicOrdering::SeqCst);
+
+        // Gate the restarted target's start pass so the dependent's
+        // re-registered watch lands while the target is not Ready yet: the
+        // notification then has to come from the target's own transition.
+        *tshare.reconcile_mode.lock() = ReconcileMode::GatedEffectOnce;
+        let restarted =
+            harness_over_with_factory(h.store.clone(), "test", h.factory.clone(), Duration::from_millis(200))
+                .await;
+
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) > watches_before).await;
+        wait_status(&restarted.client, &dkey, ResourceStatus::Ready).await;
+
+        tshare.open_gate();
+        until(|| {
+            dshare.reconcile_calls.load(AtomicOrdering::SeqCst) >= reconciles_before + 2
+        })
+        .await;
+        wait_status(&restarted.client, &tkey, ResourceStatus::Ready).await;
+    }
+
+    /// F1/AE1 at the child boundary: an owned-child ensure commits the row
+    /// (with its parent recorded as owner) before the child actor is created;
+    /// a poisoned spawn leaves the child row durable and a restart recovers
+    /// it with the same ownership edge.
+    #[tokio::test]
+    async fn child_ensure_persists_before_spawn_and_restart_recovers() {
+        let h = harness(&["Volume"]).await; // factory does NOT cover "Worker"
+        let parent = key("test", "Volume", "data");
+        h.client.ensure(subject(), None, desired("Volume", "data", b"vol")).await.expect("parent");
+        let child = key("test", "Worker", "helper");
+        let error = h
+            .client
+            .ensure_child(
+                parent.clone(),
+                ChildEnsure {
+                    type_name: ResourceTypeName::new("Worker"),
+                    name: "helper".to_owned(),
+                    spec: b"w".to_vec(),
+                    metadata: Vec::new(),
+                },
+            )
+            .await
+            .expect_err("spawn fails after commit");
+        assert!(matches!(error, ResourceError::Provider { .. }), "got {error}");
+
+        let row = h
+            .client
+            .get_row(child.clone())
+            .await
+            .expect("get_row")
+            .expect("child row committed before its spawn");
+        assert_eq!(row.owner_uid, Some(crate::manager::deterministic_uid(&parent)));
+        let view = h.client.get(child.clone()).await.expect("get").expect("view");
+        assert_eq!(view.owner_key, Some(parent.clone()));
+
+        let restarted =
+            harness_over(h.store.clone(), "test", &["Volume", "Worker"], Duration::from_millis(200))
+                .await;
+        wait_status(&restarted.client, &child, ResourceStatus::Ready).await;
+    }
+
+    /// An owned-child ensure whose spec bytes match but whose authored
+    /// metadata differs is a change, not a silent no-op: the annotation
+    /// columns move at the committed generation, and `SpecChanged` reaches
+    /// the actor so nothing keeps serving the stale annotation.
+    #[tokio::test]
+    async fn metadata_only_child_ensure_writes_and_notifies_the_actor() {
+        let h = harness(&["Volume", "Worker"]).await;
+        let parent = key("test", "Volume", "data");
+        h.client.ensure(subject(), None, desired("Volume", "data", b"vol")).await.expect("parent");
+        let child = key("test", "Worker", "helper");
+        let child_ensure = |metadata: &[u8]| ChildEnsure {
+            type_name: ResourceTypeName::new("Worker"),
+            name: "helper".to_owned(),
+            spec: b"w".to_vec(),
+            metadata: metadata.to_vec(),
+        };
+        let created = h
+            .client
+            .ensure_child(parent.clone(), child_ensure(b"annotation-1"))
+            .await
+            .expect("first child ensure");
+        assert!(matches!(created, EnsureOutcome::Created(_)));
+        wait_status(&h.client, &child, ResourceStatus::Ready).await;
+        let reconciles = h.factory.shared(&child).reconcile_calls.load(AtomicOrdering::SeqCst);
+
+        let updated = h
+            .client
+            .ensure_child(parent.clone(), child_ensure(b"annotation-2"))
+            .await
+            .expect("metadata-only child ensure");
+        assert!(
+            matches!(updated, EnsureOutcome::Updated(_)),
+            "a metadata-only ensure is a committed change"
+        );
+        assert_eq!(updated.row().metadata, b"annotation-2");
+        assert_eq!(
+            updated.row().generation,
+            1,
+            "the metadata-only change does not advance the generation"
+        );
+        let row = h.client.get_row(child.clone()).await.expect("get_row").expect("child row");
+        assert_eq!(row.metadata, b"annotation-2", "the new annotation is durable");
+        until(|| {
+            h.factory.shared(&child).reconcile_calls.load(AtomicOrdering::SeqCst) > reconciles
+        })
+        .await;
+    }
+
+    /// §36 desired state + the projection channel: delete commits the durable
+    /// deleting mark, publishes the `Deleting` status, and drops the
+    /// projection of the pass that preceded it; only completed cleanup
+    /// removes the row.
+    #[tokio::test]
+    async fn delete_clears_the_projection_before_cleanup_completes() {
+        let h = harness(&["Test"]).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k);
+        *shared.reconcile_mode.lock() = ReconcileMode::ProjectionOnce;
+        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        let ready = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert!(ready.observed_status_projection().is_some(), "the pass published its projection");
+
+        shared.delete_blocked.store(true, AtomicOrdering::SeqCst);
+        h.client.remove(subject(), k.clone()).await.expect("remove");
+        wait_status(&h.client, &k, ResourceStatus::Deleting).await;
+        let deleting = h.client.get(k.clone()).await.expect("get").expect("view");
+        assert_eq!(
+            deleting.observed_status_projection(),
+            None,
+            "deletion drops the projection it invalidates"
+        );
+        assert_eq!(deleting.wire_status()["phase"], serde_json::json!("Deleted"));
+        assert!(
+            h.client.get_row(k.clone()).await.expect("get_row").is_some_and(|row| row.deleting),
+            "the durable deleting mark outlives the published transition"
+        );
+
+        shared.open_gate();
+        wait_row_gone(&h.client, &k).await;
     }
 }
 

@@ -899,6 +899,20 @@ pub fn system_core_endpoint_policy() -> EndpointPolicy {
     )
 }
 
+/// The transport evidence one endpoint policy admits.
+///
+/// The acceptor validates the evidence against the binding the handshake
+/// derived from the same policy, so the digest here is the policy's own
+/// channel binding: a foreign constant can never be admitted.
+fn endpoint_transport_evidence(policy: &EndpointPolicy) -> Option<TransportEvidence> {
+    let digest = BindingDigest::parse(format!(
+        "sha256:{}",
+        crate::runtime_util::hex_bytes(&policy.transport_binding.channel_binding)
+    ))
+    .ok()?;
+    Some(TransportEvidence::new(EvidenceClass::UnixPeer, digest))
+}
+
 pub fn unix_transport(
     socket: SeqpacketSocket,
     policy: &EndpointPolicy,
@@ -1046,11 +1060,8 @@ pub async fn register_system_core_session(
     let candidate = acceptor
         .admit(
             initiator,
-            TransportEvidence::new(
-                d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer,
-                BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
-                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
-            ),
+            endpoint_transport_evidence(&policy)
+                .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
             1,
         )
         .await
@@ -3479,6 +3490,122 @@ mod tests {
         registrar
             .component_session_acceptor(system_core_endpoint_policy(), verified_peer)
             .unwrap();
+    }
+
+    /// Regression (security review finding 2): the system-core initiator
+    /// builds its evidence from the policy the acceptor admits, so the lane
+    /// admits its own binding and refuses another endpoint class's.
+    #[tokio::test(flavor = "current_thread")]
+    async fn system_core_evidence_comes_from_the_system_core_policy() {
+        use d2b_contracts_zone_session::v3::component_session::{
+            AuthorizationLease, SessionErrorCode,
+        };
+        use d2b_session::{
+            SessionAcceptor, SessionAuthenticationBinding, SessionError,
+            SessionRegistrationCapability,
+        };
+
+        struct Admission;
+
+        impl SessionRegistrationCapability<()> for Admission {
+            type Error = std::convert::Infallible;
+
+            fn consume(self, _registrar: &()) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        fn acceptor(policy: &EndpointPolicy) -> SessionAcceptor<Admission> {
+            let zone = ZoneId::parse("work").unwrap();
+            let subject_ref = ResourceRef::parse("Host/system-core").unwrap();
+            let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+            let zone_ref = ResourceRef::parse("Zone/work").unwrap();
+            SessionAcceptor::from_verified_adapter(
+                policy.clone(),
+                zone,
+                move |_evidence: TransportEvidence,
+                      binding: &SessionAuthenticationBinding,
+                      _expected_zone: &ZoneId,
+                      now_tick: u64| {
+                    let subject = AuthenticatedSubjectContext::new(
+                        subject_ref.clone(),
+                        subject_uid.clone(),
+                        zone_ref.clone(),
+                        binding.evidence_class(),
+                        binding.purpose().clone(),
+                        binding.service().clone(),
+                        SessionBinding::new(
+                            binding.schema_fingerprint().clone(),
+                            binding.transport_binding().clone(),
+                            binding.reconnect_generation(),
+                            binding.transcript_hash().clone(),
+                        ),
+                    );
+                    let lease = AuthorizationLease::new(1, now_tick.saturating_add(10))
+                        .map_err(SessionError::from)?;
+                    Ok((subject, lease))
+                },
+                move |_subject: &AuthenticatedSubjectContext,
+                      _request: &d2b_session::SessionAuthorizationRequest,
+                      previous: AuthorizationLease,
+                      now_tick: u64| {
+                    if previous.policy_revision() != 1 {
+                        return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+                    }
+                    AuthorizationLease::new(1, now_tick.saturating_add(10))
+                        .map_err(SessionError::from)
+                },
+                Admission,
+            )
+            .expect("a system-core acceptor")
+        }
+
+        let policy = system_core_endpoint_policy();
+        let (initiator_fd, responder_fd) = prearmed_seqpacket_pair().unwrap();
+        let initiator_socket = SeqpacketSocket::from_parent_prearmed(initiator_fd).unwrap();
+        let responder_socket = SeqpacketSocket::from_parent_prearmed(responder_fd).unwrap();
+        let (initiator, responder) = tokio::join!(
+            SessionEngine::establish_initiator(
+                unix_transport(initiator_socket, &policy).unwrap(),
+                policy.clone(),
+                HandshakeCredentials::Nn,
+                std::time::Instant::now(),
+            ),
+            SessionEngine::establish_responder(
+                unix_transport(responder_socket, &policy).unwrap(),
+                policy.clone(),
+                HandshakeCredentials::Nn,
+                std::time::Instant::now(),
+            ),
+        );
+        let admitted = acceptor(&policy)
+            .admit(
+                initiator.unwrap(),
+                endpoint_transport_evidence(&policy).expect("a policy digest"),
+                1,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            admitted,
+            Ok(()),
+            "the system-core lane must admit its own binding",
+        );
+        let foreign = endpoint_transport_evidence(
+            &d2b_session_unix::credential_provider_endpoint_policy(),
+        )
+        .expect("a policy digest");
+        let refused = acceptor(&policy)
+            .admit(responder.unwrap(), foreign, 1)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            refused,
+            Err(SessionErrorCode::ChannelBindingMismatch),
+            "another endpoint class's binding can never admit this lane",
+        );
     }
 
     #[test]

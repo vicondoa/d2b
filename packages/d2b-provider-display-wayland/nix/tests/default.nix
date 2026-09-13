@@ -105,10 +105,16 @@ in
           .providerProjectionDisplayWayland.processesByZone.dev);
         resources = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionDisplayWayland.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purpose = (projected.config.d2b._resourceCompiler
+          .providerProjectionDisplayWayland.resourcesByZone.dev)
+          ."wayland-session".spec.purpose;
       };
       expected = {
         processes = [ "wayland-frontend-session" "wayland-proxy-session" ];
         resources = [ "wayland-session" ];
+        purpose = "display-wayland-cross-domain";
       };
     };
     "provider-display-wayland/rejects-unknown-provider-field" = {

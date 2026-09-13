@@ -352,12 +352,24 @@ pub fn plan_entry(
             BTreeSet::new()
         }
         RepairPolicy::ExactMode => [DriftClass::Mode].into_iter().collect(),
-        RepairPolicy::ExactOwnerAndAcl => [DriftClass::Owner, DriftClass::Mode, DriftClass::Acl]
-            .into_iter()
-            .collect(),
+        // The ACL half of this policy is delivered by the separate `apply_acl`
+        // pass, which runs for every entry that declares grants; the layout
+        // effect's repair pass cannot recover ACLs.
+        RepairPolicy::ExactOwnerAndAcl => {
+            [DriftClass::Owner, DriftClass::Mode].into_iter().collect()
+        }
     };
     let repair: BTreeSet<DriftClass> = repair.intersection(&observed.drift).copied().collect();
-    let unrepaired: BTreeSet<DriftClass> = observed.drift.difference(&repair).copied().collect();
+    // ACL drift is never *unrepaired* drift: the `apply_acl` pass re-applies
+    // the declared grants on every plan, so counting the class here would
+    // report `EntryDrift` on every cycle of a healthy ACL-declaring entry.
+    let acl_covered = entry.has_acl();
+    let unrepaired: BTreeSet<DriftClass> = observed
+        .drift
+        .difference(&repair)
+        .copied()
+        .filter(|class| !(acl_covered && *class == DriftClass::Acl))
+        .collect();
 
     let plan = EntryPlan {
         repair,

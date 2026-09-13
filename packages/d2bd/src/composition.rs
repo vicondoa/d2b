@@ -6,10 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -26,10 +25,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use d2b_contracts::workload_identity::{WorkloadIdentity, WorkloadTarget};
+use d2b_contracts::workload_identity::WorkloadTarget;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
-    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
+    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, VmId},
 };
 use d2b_contracts_broker::broker_wire::{
     ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
@@ -48,7 +47,7 @@ use d2b_contracts_broker::broker_wire::{
     RunKeysRotateRequest as BrokerRunKeysRotateRequest,
     RunMigrateRequest as BrokerRunMigrateRequest,
     RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
-    SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
+    SignalRunnerRequest,
     StoreVerifyRequest as BrokerStoreVerifyRequest,
 };
 #[cfg(test)]
@@ -90,7 +89,7 @@ use d2b_core::allocator_config::AllocatorZoneTopology;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_installer_host,
-    intent_id_keys_rotate, intent_id_legacy_runner, intent_id_migrate_host,
+    intent_id_keys_rotate, intent_id_migrate_host,
     intent_id_nft_host, intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_trust,
 };
 use d2b_core::bundle_resolver::{
@@ -159,9 +158,7 @@ pub use d2bd_runtime::public_read_model::{
     PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
     request_invalidates_public_status_model,
 };
-pub(crate) use d2bd_runtime::readiness::{
-    wait_for_one_shot_exit, wait_for_readiness,
-};
+pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
 pub(crate) use d2bd_runtime::resource_api::resource_runtime_error_frame;
 use d2bd_runtime::supervisor::pidfd_table::{
     BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
@@ -5287,217 +5284,6 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     let _ = resolver;
 }
 
-/// Drive the per-env usbipd spawn plan derived from the manifest.
-/// Best-effort: any failure to dispatch a single env's spawn is
-/// logged and the loop continues; the transitional NixOS units
-/// remain in place to keep operators served while the daemon path
-/// bakes in production.
-#[allow(dead_code)]
-async fn run_usbipd_perenv_autostart(
-    state: &ServerState,
-    resolver: &d2b_core::bundle_resolver::BundleResolver,
-) {
-    let specs = d2bd_runtime::usbipd_perenv_autostart::derive_per_env_usbipd_specs(
-        &resolver.manifest,
-        &resolver.host,
-    );
-    if specs.is_empty() {
-        tracing::debug!("usbipd-perenv autostart: no usbip-enabled envs in manifest");
-        return;
-    }
-    tracing::info!(
-        spec_count = specs.len(),
-        env_count = specs.len() / 2,
-        "usbipd-perenv autostart: dispatching per-env usbipd backend+proxy spawns",
-    );
-    let state_arc = Arc::new(state.clone());
-    let report = tokio::task::spawn_blocking(move || {
-        let spawner = BrokerPerEnvUsbipdSpawner {
-            state: Arc::clone(&state_arc),
-            tracing_span_id: None,
-        };
-        d2bd_runtime::usbipd_perenv_autostart::execute_usbipd_perenv_autostart(&specs, &spawner)
-    })
-    .await
-    .unwrap_or_else(|join_err| {
-        tracing::warn!(error = ?join_err, "usbipd-perenv autostart: join task failed");
-        d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdAutostartReport::default()
-    });
-    tracing::info!(
-        spawned = report.spawned(),
-        already_running = report.already_running(),
-        skipped_pending_bundle = report.skipped_pending_bundle(),
-        failed = report.failed(),
-        "usbipd-perenv autostart: complete",
-    );
-    for entry in &report.specs {
-        match &entry.outcome {
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::Spawned => {
-                tracing::info!(
-                    env = %entry.env, role = ?entry.role, port = entry.backend_port,
-                    "usbipd-perenv: spawned"
-                );
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::AlreadyRunning => {
-                tracing::info!(env = %entry.env, role = ?entry.role, "usbipd-perenv: already-running (idempotent)");
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::SkippedPendingBundle => {
-                tracing::info!(
-                    env = %entry.env, role = ?entry.role,
-                    "usbipd-perenv: skipped - bundle has no sys-<env>-usbipd runner intent yet (transitional NixOS unit serves this env)"
-                );
-            }
-            d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome::Failed { reason } => {
-                tracing::warn!(env = %entry.env, role = ?entry.role, reason = %reason, "usbipd-perenv: failed");
-            }
-        }
-    }
-}
-
-/// Live broker adapter for the per-env usbipd spawner trait.
-/// Translates `BundleIntentMissing` into `SkippedPendingBundle` per the
-/// trait contract so the transitional window does not fail-closed before
-/// `processes-json.nix` grows the new DAGs.
-struct BrokerPerEnvUsbipdSpawner {
-    state: Arc<ServerState>,
-    tracing_span_id: Option<TracingSpanId>,
-}
-
-impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner {
-    fn is_running(&self, vm_id: &str, role_id: &str) -> bool {
-        if let Err(error) = self.state.pidfd_table.prune_dead_entries() {
-            tracing::warn!(
-                vm = %vm_id,
-                role = %role_id,
-                error = %error,
-                "usbipd-perenv: failed to prune stale pidfd entries before is_running check"
-            );
-        }
-        self.state.pidfd_table.contains(vm_id, role_id)
-    }
-
-    fn spawn(
-        &self,
-        spec: &d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpec,
-    ) -> d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome {
-        use d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdOutcome;
-        // Per-env usbipd runners (`sys-<env>-usbipd`) are framework
-        // infrastructure services, not realm workloads.  They serve the
-        // USBIP transport layer for ALL VMs in an env and are never
-        // declared under `d2b.realms.<realm>.workloads`.  Their
-        // `workload_identity` is correctly `None`: no realm workload row
-        // exists for them and threading a synthetic identity would
-        // misrepresent their scope in the broker audit trail.
-        let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            guest_execution: None,
-            workload_identity: None,
-            vm_id: VmId::new(spec.vm_id.clone()),
-            role_id: RoleId::new(spec.role.role_id().to_owned()),
-            resource_ref: None,
-            resource_uid: None,
-            zone_uid: None,
-            owner_ref: None,
-            owner_uid: None,
-            provider_ref: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            runtime_scope: None,
-            activation_input: None,
-            sandbox_plan: None,
-            role: d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
-            bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
-            runtime_allocations: vec![],
-            tracing_span_id: self.tracing_span_id.clone(),
-            inherited_fd_count: 0,
-            network_tap_context: None,
-                        launch_args: None,
-            });
-        match dispatch_broker_request_with_fds_timeout(
-            &self.state,
-            request,
-            Duration::from_secs(10),
-        ) {
-            Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
-                let pidfd = match duplicate_received_fd(
-                    &received_fds,
-                    response.pidfd_index,
-                    "duplicate per-env usbipd SpawnRunner pidfd",
-                ) {
-                    Ok(fd) => fd,
-                    Err(error) => {
-                        close_received_fds(&received_fds);
-                        return PerEnvUsbipdOutcome::Failed {
-                            reason: format!("pidfd-duplicate:{}", error.kind()),
-                        };
-                    }
-                };
-                if let Err(error) = self.state.pidfd_table.register(
-                    spec.vm_id.clone(),
-                    spec.role.role_id().to_owned(),
-                    PidfdEntry {
-                        pidfd,
-                        pid: response.pid,
-                        start_time_ticks: response.start_time_ticks,
-                    },
-                ) {
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed {
-                        reason: format!("pidfd-register:{error}"),
-                    };
-                }
-                if let Err(error) = self.state.pidfd_table.snapshot() {
-                    let _ = self
-                        .state
-                        .pidfd_table
-                        .deregister(&spec.vm_id, spec.role.role_id());
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed {
-                        reason: format!("pidfd-snapshot:{error}"),
-                    };
-                }
-                if let Err(error) = write_runner_snapshot(
-                    &self.state,
-                    &spec.vm_id,
-                    spec.role.role_id(),
-                    d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
-                    response.pid,
-                    response.start_time_ticks,
-                ) {
-                    cleanup_vm_start_registration(&self.state, &spec.vm_id, spec.role.role_id());
-                    close_received_fds(&received_fds);
-                    return PerEnvUsbipdOutcome::Failed { reason: error };
-                }
-                close_received_fds(&received_fds);
-                PerEnvUsbipdOutcome::Spawned
-            }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                if error.kind == "bundle-intent-missing" {
-                    PerEnvUsbipdOutcome::SkippedPendingBundle
-                } else {
-                    PerEnvUsbipdOutcome::Failed {
-                        reason: format!("broker-error:{}", error.kind),
-                    }
-                }
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                PerEnvUsbipdOutcome::Failed {
-                    reason: format!("broker-protocol:{}", broker_response_kind(&other)),
-                }
-            }
-            Err(error) => PerEnvUsbipdOutcome::Failed {
-                reason: format!("broker-dispatch:{}", error.message()),
-            },
-        }
-    }
-}
-
 /// Thin wrapper used by the `options.once` test path and by direct
 /// unit-test callers: authorizes the peer (SO_PEERCRED), then runs the
 /// authorized connection body. The production accept loop authorizes the
@@ -8609,10 +8395,6 @@ fn dispatch_device_tpm_reconcile_inner(
     let runtime = plane.zone(&zone).inspect_err(|error| {
         tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
     })?;
-    let resolver = load_bundle_resolver(state).map_err(|error| {
-        tracing::warn!(?error, "Device TPM reconcile bundle resolver unavailable");
-        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-    })?;
     let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
     let inventory = dispatch_broker_legacy_tpm_inventory(
         state,
@@ -8640,11 +8422,6 @@ fn dispatch_device_tpm_reconcile_inner(
         operation_id,
         legacy_intent_anchor,
     ))?;
-    let intent = tpm_state_intent(&device_uid, vm_id);
-    let binary = d2b_provider_device_tpm::SignedBinaryRef::from_core(
-        d2b_provider_device_tpm::BinaryKind::Swtpm,
-        tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
-    );
     let guest_ref = ResourceRef::parse(&format!("Guest/{vm_id}"))
         .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
     let lifecycle_operation_id =
@@ -8662,29 +8439,34 @@ fn dispatch_device_tpm_reconcile_inner(
         lifecycle_admission.provider_assignment_generation,
     )
     .map_err(|_| resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
-    let outcome = tpm_effect_port::reconcile_device_tpm(
-            state,
-            &resolver,
-            VmId::new(vm_id),
-            BundleOpId::new(migration_intent),
-            decision,
-            tpm_effect_port::AdmittedTpmDevice::new(
-                device_uid,
-                device_ref,
-                zone.as_str(),
-                ResourceRef::parse("Host/host-system")
-                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
-                lifecycle_authorization,
-            ),
-            intent,
-            d2b_provider_device_tpm::SwtpmSettings { log_level },
-            binary,
-            broker_caller_role_for_peer(peer),
-        )
-        .map_err(|error| {
-            tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
-            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-        })?;
+    let execution_ref = ResourceRef::parse("Host/host-system")
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let mut controller = d2b_provider_device_tpm::TpmResourceController::new(
+        device_uid.clone(),
+        device_ref.clone(),
+        execution_ref.clone(),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let outcome = tpm_effect_port::reconcile_device_tpm_controller(
+        state,
+        VmId::new(vm_id),
+        BundleOpId::new(migration_intent),
+        decision,
+        tpm_effect_port::AdmittedTpmDevice::new(
+            device_uid,
+            device_ref,
+            zone.as_str(),
+            execution_ref,
+            lifecycle_authorization,
+        ),
+        broker_caller_role_for_peer(peer),
+        &tpm_effect_port::NoManagerChildSurface,
+        &mut controller,
+    )
+    .map_err(|error| {
+        tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
     Ok(json!({
         "resourceType": "Device",
         "provider": d2b_provider_device_tpm::PROVIDER_REF,
@@ -16818,7 +16600,6 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
 
 #[derive(Debug)]
 enum VmRunnerLaunch {
-    Legacy(Box<d2b_contracts_broker::broker_wire::SpawnRunnerResponse>),
     Provider,
     ControllerOwned,
 }
@@ -16957,14 +16738,6 @@ struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
     caller_role: BrokerCallerRole,
-    lifecycle_authorization: Option<provider_effects::LifecycleAuthorization>,
-    /// Workload identity from the `VmProcessDag` this runner was constructed
-    /// for.  `None` for VMs that predate realm workload declarations; `Some`
-    /// for VMs declared as realm workloads.  Threaded into every
-    /// `SpawnRunner` request so the broker can record the identity in the
-    /// audit trail and privilege metadata without re-reading the process DAG.
-    workload_identity: Option<WorkloadIdentity>,
-    network_tap_context: Option<d2b_contracts_broker::broker_wire::NetworkTapContext>,
 }
 
 impl VmStartRunner<'_> {
@@ -17016,18 +16789,11 @@ impl VmStartRunner<'_> {
         &self,
         vm: &str,
         node: &ProcessNode,
-        runner_role: RunnerRole,
         timeout: Duration,
     ) -> Result<VmRunnerLaunch, String> {
         if node.role == ProcessRole::CloudHypervisorRunner {
             return Ok(VmRunnerLaunch::ControllerOwned);
         }
-        let intent_id = intent_id_legacy_runner(vm, &node.id.0);
-        let intent = self
-            .resolver
-            .find_runner_intent(&intent_id)
-            .ok_or_else(|| "bundle-intent-missing".to_owned())?;
-        let role_id = tracked_role_id(node);
         // Dispatch DiskInit before SpawnRunner when the ProcessNode declares
         // disk initialization plan operations. The broker resolves those
         // operations from the trusted bundle and creates the disk images
@@ -17091,169 +16857,25 @@ impl VmStartRunner<'_> {
             block_on_future(providers.launch_node(vm, node, timeout))?;
             return Ok(VmRunnerLaunch::Provider);
         }
-        match dispatch_broker_request_with_fds_timeout_as(
-            self.state,
-            BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                workload_identity: self.workload_identity.clone(),
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role_id.clone()),
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                owner_uid: None,
-                provider_ref: None,
-                bundle_content_identity: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                runtime_scope: None,
-                activation_input: None,
-                sandbox_plan: None,
-                guest_execution: None,
-                role: runner_role,
-                bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
-                runtime_allocations: vec![],
-                tracing_span_id: None,
-                inherited_fd_count: 0,
-                network_tap_context: self.network_tap_context.clone(),
-                            launch_args: None,
-            }),
-            self.caller_role.clone(),
-            timeout,
-        ) {
-            Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
-                if let Err(error) =
-                    self.register_node_pidfd(vm, node, runner_role, &response, &received_fds)
-                {
-                    stop_unregistered_spawned_runner(
-                        self.state,
-                        vm,
-                        &role_id,
-                        &response,
-                        &received_fds,
-                        self.caller_role.clone(),
-                    );
-                    close_received_fds(&received_fds);
-                    return Err(error);
-                }
-                close_received_fds(&received_fds);
-                Ok(VmRunnerLaunch::Legacy(Box::new(response)))
-            }
-            Ok((BrokerResponse::Error(error), received_fds)) => {
-                close_received_fds(&received_fds);
-                tracing::warn!(
-                    node = %node.id.0,
-                    broker_kind = %error.kind,
-                    broker_operation = %error.operation,
-                    broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
-                    broker_message = %error.message,
-                    broker_action = %error.action,
-                    "vm start node spawn failed"
-                );
-                Err(format!("broker-error:{}", error.kind))
-            }
-            Ok((other, received_fds)) => {
-                close_received_fds(&received_fds);
-                tracing::warn!(
-                    node = %node.id.0,
-                    broker_response_kind = %broker_response_kind(&other),
-                    "vm start node received unexpected broker response"
-                );
-                Err("broker-protocol".to_owned())
-            }
-            Err(error) => {
-                tracing::warn!(node = %node.id.0, error = ?error, "vm start node dispatch failed");
-                Err("broker-dispatch".to_owned())
-            }
-        }
-    }
-
-    fn register_node_pidfd(
-        &self,
-        vm: &str,
-        node: &ProcessNode,
-        runner_role: RunnerRole,
-        response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-        received_fds: &[RawFd],
-    ) -> Result<(), String> {
-        let VmStartNodeMode::LongLived(_) = vm_start_node_mode(&node.role) else {
-            return Ok(());
-        };
-        let pidfd = duplicate_received_fd(
-            received_fds,
-            response.pidfd_index,
-            "duplicate SpawnRunner pidfd",
-        )
-        .map_err(|error| error.message())?;
-        let role_id = tracked_role_id(node);
-        // Serialize register + snapshot as one unit so a concurrent
-        // different-VM op cannot persist a stale snapshot that drops this
-        // entry (register A, snapshot A reads {A}, register B, snapshot B
-        // writes {A,B}, delayed snapshot A overwrites with {A} - losing B).
-        let _mguard = self.state.pidfd_table.mutation_guard();
-        self.state
-            .pidfd_table
-            .register(
-                vm.to_owned(),
-                role_id.clone(),
-                PidfdEntry {
-                    pidfd,
-                    pid: response.pid,
-                    start_time_ticks: response.start_time_ticks,
-                },
-            )
-            .map_err(|error| format!("pidfd-register:{error}"))?;
-        if let Err(error) = self.state.pidfd_table.snapshot() {
-            let _ = self.state.pidfd_table.deregister(vm, &role_id);
-            return Err(format!("pidfd-snapshot:{error}"));
-        }
-        // The pidfd-table register + snapshot sequence is now complete and
-        // consistent, so release the serialization guard BEFORE
-        // `write_runner_snapshot` (which writes a separate runner-snapshot
-        // file and never touches the pidfd table). Holding it across the
-        // failure path below would self-deadlock: `cleanup_vm_start_registration`
-        // re-acquires this same non-reentrant guard.
-        drop(_mguard);
-        if let Err(error) = write_runner_snapshot_with_authorization(
-            self.state,
-            vm,
-            &role_id,
-            runner_role,
-            response.pid,
-            response.start_time_ticks,
-            None,
-            self.lifecycle_authorization.as_ref(),
-        ) {
-            cleanup_vm_start_registration(self.state, vm, &role_id);
-            return Err(error);
-        }
-        if matches!(runner_role, RunnerRole::QemuMedia)
-            && let Some(console_fd_index) = response.console_fd_index
-        {
-            let console_fd = duplicate_received_fd(
-                received_fds,
-                console_fd_index,
-                "duplicate qemu-media console fd",
-            )
-            .map_err(|error| {
-                cleanup_vm_start_registration(self.state, vm, &role_id);
-                error.message()
-            })?;
-            let console_stream: UnixStream = console_fd.into();
-            self.state
-                .console_sessions
-                .lock()
-                .unwrap()
-                .register_session(
-                    vm.to_owned(),
-                    console_session::create_qemu_session(console_stream),
-                );
-        }
-        Ok(())
+        // U17: this launcher never spawns through the raw broker surface.
+        // Both `NodeRunner` entry points filter the two node classes
+        // `supports_node` declines before they reach here: a guest-owned node
+        // is launched by its Guest (`spawn_and_wait_ready` returns `Ok`), and
+        // a durable-wayland node stays readiness-only. Every remaining
+        // long-lived role is provider-managed, or the controller-owned Cloud
+        // Hypervisor runner returned above. A node that is none of those is a
+        // regression: refuse it instead of falling back to a direct
+        // `SpawnRunner`.
+        tracing::warn!(
+            vm = %vm,
+            node = %node.id.0,
+            role = ?node.role,
+            "vm start node is not provider-managed; refusing a raw spawn"
+        );
+        Err(format!(
+            "vm-start-node-not-provider-managed:{}",
+            node.id.0
+        ))
     }
 
     fn boot_qemu_media(
@@ -17402,13 +17024,8 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 // is no daemon-held pidfd to observe - no liveness probe.
                 wait_for_readiness(node, readiness, budget.readiness, None)
             }
-            VmStartNodeMode::OneShot(runner_role) => {
-                match self.spawn_runner(vm, node, runner_role, budget.spawn)? {
-                    VmRunnerLaunch::Legacy(response) => wait_for_one_shot_exit(
-                        response.pid,
-                        response.start_time_ticks,
-                        budget.readiness,
-                    ),
+            VmStartNodeMode::OneShot(_) => {
+                match self.spawn_runner(vm, node, budget.spawn)? {
                     VmRunnerLaunch::Provider => {
                         let providers = self
                             .state
@@ -17422,41 +17039,20 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     }
                 }
             }
-            VmStartNodeMode::LongLived(runner_role) => {
-                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+            VmStartNodeMode::LongLived(_) => {
+                let launch = self.spawn_runner(vm, node, budget.spawn)?;
                 if matches!(launch, VmRunnerLaunch::ControllerOwned) {
                     return wait_for_readiness(node, readiness, budget.readiness, None);
                 }
-                let provider_liveness;
-                let legacy_liveness;
-                let liveness: &dyn d2bd_runtime::supervisor::readiness_liveness::LivenessProbe =
-                    match &launch {
-                        VmRunnerLaunch::Provider => {
-                            let providers = self
-                                .state
-                                .provider_runtime
-                                .process_providers()
-                                .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
-                            provider_liveness =
-                                process_provider_runtime::ProviderLivenessProbe::new(
-                                    providers.clone(),
-                                    vm,
-                                    node,
-                                );
-                            &provider_liveness
-                        }
-                        VmRunnerLaunch::Legacy(_) => {
-                            legacy_liveness = d2bd_runtime::supervisor::readiness_liveness::PidfdLivenessProbe::new(
-                            &self.state.pidfd_table,
-                            &self.state.broker_reap_log,
-                            vm,
-                            tracked_role_id(node),
-                        );
-                            &legacy_liveness
-                        }
-                        VmRunnerLaunch::ControllerOwned => unreachable!("handled above"),
-                    };
-                wait_for_readiness(node, readiness, budget.readiness, Some(liveness))?;
+                let providers = self
+                    .state
+                    .provider_runtime
+                    .process_providers()
+                    .ok_or_else(|| "provider-runtime-unavailable".to_owned())?;
+                let liveness = process_provider_runtime::ProviderLivenessProbe::new(
+                    providers, vm, node,
+                );
+                wait_for_readiness(node, readiness, budget.readiness, Some(&liveness))?;
                 if node.role == ProcessRole::QemuMediaRunner {
                     self.boot_qemu_media(vm, node, budget.readiness)?;
                 }
@@ -17482,8 +17078,8 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             return Ok(());
         }
         match vm_start_node_mode(&node.role) {
-            VmStartNodeMode::LongLived(runner_role) => {
-                let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+            VmStartNodeMode::LongLived(_) => {
+                let launch = self.spawn_runner(vm, node, budget.spawn)?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -17555,177 +17151,11 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
     }
 }
 
-fn stop_unregistered_spawned_runner(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-    received_fds: &[RawFd],
-    caller_role: BrokerCallerRole,
-) {
-    let pidfd = duplicate_received_fd(
-        received_fds,
-        response.pidfd_index,
-        "duplicate failed-registration SpawnRunner pidfd",
-    )
-    .map_err(|error| error.message());
-    if let Err(error) = &pidfd {
-        tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            error = %error,
-            "spawn registration failed; could not duplicate pidfd for cleanup"
-        );
-    }
-
-    signal_unregistered_spawned_runner(
-        state,
-        vm,
-        role_id,
-        response,
-        pidfd.as_ref().ok(),
-        RunnerSignal::Term,
-        caller_role.clone(),
-    );
-    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(state, caller_role.clone(), vm, role_id);
-        return;
-    }
-
-    tracing::warn!(
-        vm = %vm,
-        role = %role_id,
-        pid = response.pid,
-        "spawn registration failed; SIGTERM cleanup did not reap runner, escalating"
-    );
-    signal_unregistered_spawned_runner(
-        state,
-        vm,
-        role_id,
-        response,
-        pidfd.as_ref().ok(),
-        RunnerSignal::Kill,
-        caller_role.clone(),
-    );
-    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
-        deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
-    } else {
-        tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            "spawn registration failed; runner was not observed reaped after SIGKILL, leaving broker pidfd registered"
-        );
-    }
-}
-
-fn signal_unregistered_spawned_runner(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
-    pidfd: Option<&OwnedFd>,
-    signal: RunnerSignal,
-    caller_role: BrokerCallerRole,
-) {
-    let signal_number = match signal {
-        RunnerSignal::Term => libc::SIGTERM,
-        RunnerSignal::Kill => libc::SIGKILL,
-        RunnerSignal::Quit => libc::SIGQUIT,
-    };
-    let pidfd_signal = rustix::process::Signal::from_raw(signal_number);
-    if let (Some(pidfd), Some(pidfd_signal)) = (pidfd, pidfd_signal) {
-        match rustix::process::pidfd_send_signal(pidfd.as_fd(), pidfd_signal) {
-            Ok(()) => {
-                tracing::warn!(
-                    vm = %vm,
-                    role = %role_id,
-                    pid = response.pid,
-                    signal = runner_signal_label(signal),
-                    "spawn registration failed; signaled unregistered runner by pidfd"
-                );
-                return;
-            }
-            Err(error) => tracing::warn!(
-                vm = %vm,
-                role = %role_id,
-                pid = response.pid,
-                signal = runner_signal_label(signal),
-                error = %error,
-                "spawn registration failed; direct pidfd signal failed, falling back to broker"
-            ),
-        }
-    }
-
-    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
-        vm_id: VmId::new(vm),
-        role_id: RoleId::new(role_id),
-        signal,
-        pid: Some(response.pid),
-        expected_start_time_ticks: Some(response.start_time_ticks),
-        resource_ref: None,
-        resource_uid: None,
-        zone_uid: None,
-        owner_ref: None,
-        provider_ref: None,
-        provider_identity: None,
-        template_identity: None,
-        generation: None,
-        runtime_scope: None,
-        guest_execution: None,
-        tracing_span_id: None,
-    });
-    match dispatch_broker_request_as(state, request, caller_role) {
-        Ok(BrokerResponse::SignalRunner(resp))
-            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
-        {
-            tracing::warn!(
-                vm = %vm,
-                role = %role_id,
-                pid = response.pid,
-                signal = runner_signal_label(signal),
-                "spawn registration failed; broker signaled unregistered runner"
-            );
-        }
-        Ok(other) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            signal = runner_signal_label(signal),
-            response = ?other,
-            "spawn registration failed; broker cleanup signal returned unexpected response"
-        ),
-        Err(error) => tracing::warn!(
-            vm = %vm,
-            role = %role_id,
-            pid = response.pid,
-            signal = runner_signal_label(signal),
-            error = ?error,
-            "spawn registration failed; broker cleanup signal failed"
-        ),
-    }
-}
-
-fn wait_unregistered_spawned_runner_reaped(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        refresh_broker_reap_log(state, "unregistered-spawn-cleanup");
-        if state.broker_reap_log.take_for(vm, role_id).is_some() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
+/// Seed one runner snapshot for a test double. Production no longer writes
+/// these: the Process controller owns the durable process identity now, and
+/// the snapshot store is read only by the startup adoption pass over
+/// previously-registered runners.
+#[cfg(test)]
 fn write_runner_snapshot(
     state: &ServerState,
     vm: &str,
@@ -17746,28 +17176,12 @@ fn write_runner_snapshot(
     )
 }
 
-#[allow(dead_code)]
-fn write_runner_snapshot_owned(
-    state: &ServerState,
-    vm: &str,
-    role_id: &str,
-    role: RunnerRole,
-    pid: i32,
-    start_time_ticks: u64,
-    owner_resource_uid: Option<&str>,
-) -> Result<(), String> {
-    write_runner_snapshot_with_authorization(
-        state,
-        vm,
-        role_id,
-        role,
-        pid,
-        start_time_ticks,
-        owner_resource_uid,
-        None,
-    )
-}
-
+/// Write one runner snapshot with its Core lifecycle authorization.
+///
+/// Production's writer was the retained legacy TPM connector's executor;
+/// with the TPM port on Device-owned rows (U17) only test doubles write
+/// snapshots, and the startup adoption pass reads them.
+#[cfg(test)]
 pub(crate) fn write_runner_snapshot_with_authorization(
     state: &ServerState,
     vm: &str,
@@ -17908,15 +17322,6 @@ fn vm_start_primary_runner_role_id(tracked_roles: &[String]) -> &str {
         })
         .map(String::as_str)
         .unwrap_or(VM_RUNNER_ROLE_ID)
-}
-
-fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
-    let _mguard = state.pidfd_table.mutation_guard();
-    let _ = state.pidfd_table.deregister(vm, role_id);
-    if let Err(error) = state.pidfd_table.snapshot() {
-        tracing::warn!(vm = %vm, role = %role_id, error = ?error, "failed to persist pidfd table cleanup");
-    }
-    remove_runner_snapshot(state, vm, role_id);
 }
 
 fn rollback_failed_vm_start(
@@ -20198,7 +19603,6 @@ fn dispatch_broker_vm_start(
         BrokerCallerRole::AdminUid {
             uid: state.daemon_uid,
         },
-        None,
     )
 }
 
@@ -20412,7 +19816,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                 self.state,
                 self.request.clone(),
                 self.caller_role.clone(),
-                Some(&self.authorization),
             ),
             provider_effects::GuestLifecycleOperation::Stop => {
                 dispatch_broker_vm_stop_with_timeout_as_inner(
@@ -20437,7 +19840,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                             self.state,
                             self.request.clone(),
                             self.caller_role.clone(),
-                            Some(&self.authorization),
                         )
                     }
                     Ok(response) => Ok(response),
@@ -20654,7 +20056,6 @@ fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
-    lifecycle_authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
@@ -20695,9 +20096,6 @@ fn dispatch_broker_vm_start_inner(
         state,
         resolver: &resolver,
         caller_role: caller_role.clone(),
-        lifecycle_authorization: lifecycle_authorization.cloned(),
-        workload_identity: dag.workload_identity.clone(),
-        network_tap_context: network_tap_context_for_vm(state, &resolver, request.vm.as_str()),
     };
 
     // StoreSync owns the guest-served live marker
@@ -21530,7 +20928,6 @@ fn dispatch_broker_vm_restart(
         state,
         request.clone(),
         BrokerCallerRole::LauncherUid { uid: 0 },
-        None,
     )?;
     if response_outcome(&start_response) != Some("applied") {
         return Ok(retarget_mutating_response(&start_response, "vm restart"));
@@ -29662,98 +29059,6 @@ mod broker_dispatch_tests {
         let _ = child.wait();
     }
 
-    #[test]
-    fn unregistered_spawn_cleanup_uses_broker_and_waits_for_reap_before_deregister() {
-        let vm = "vm-unregistered-cleanup";
-        let role = "video";
-        let pid = 4242;
-        let start_time_ticks = 99;
-        let (socket_path, broker) =
-            start_test_broker_server("unregistered-cleanup", 3, move |index, env, fd| {
-                match (index, env.request) {
-                    (0, BrokerRequest::SignalRunner(req)) => {
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        assert_eq!(req.signal, RunnerSignal::Term);
-                        assert_eq!(req.pid, Some(pid));
-                        assert_eq!(req.expected_start_time_ticks, Some(start_time_ticks));
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
-                                signaled: true,
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                            }),
-                        )
-                        .expect("write signal response");
-                    }
-                    (1, BrokerRequest::PollChildReaped) => {
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
-                                notifications: vec![ChildReapedNotification {
-                                    runner_id: format!("{vm}:{role}"),
-                                    pid,
-                                    exit_status: ChildExitStatus {
-                                        kind: ChildExitKind::Exited,
-                                        code: Some(0),
-                                        signal: None,
-                                    },
-                                    reaped_at_ms: 123,
-                                }],
-                            }),
-                        )
-                        .expect("write poll response");
-                    }
-                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
-                        assert_eq!(req.vm_id.as_str(), vm);
-                        assert_eq!(req.role_id.as_str(), role);
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
-                                vm_id: VmId::new(vm),
-                                role_id: RoleId::new(role),
-                                removed: true,
-                            }),
-                        )
-                        .expect("write dereg response");
-                    }
-                    other => panic!("unexpected request {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        super::stop_unregistered_spawned_runner(
-            &state,
-            vm,
-            role,
-            &SpawnRunnerResponse {
-                vm_id: VmId::new(vm),
-                role_id: RoleId::new(role),
-                role: RunnerRole::Video,
-                resource_ref: None,
-                resource_uid: None,
-                zone_uid: None,
-                owner_ref: None,
-                runtime_scope: None,
-                execution_ref: None,
-                execution_domain: None,
-                user_ref: None,
-                guest_execution: None,
-                provider_identity: None,
-                template_identity: None,
-                generation: None,
-                bundle_content_identity: None,
-                pid,
-                start_time_ticks,
-                pidfd_index: 0,
-                controller_bootstrap_fd_index: None,
-                console_fd_index: None,
-            },
-            &[],
-            BrokerCallerRole::AdminUid { uid: 0 },
-        );
-        broker.join().expect("broker join");
-    }
 
     #[test]
     fn stop_vm_pidfd_role_falls_back_to_broker_on_sigkill_eperm() {

@@ -78,10 +78,16 @@ in
           .providerProjectionDeviceUsbip.processesByZone.dev);
         endpoints = lib.attrNames (projected.config.d2b._resourceCompiler
           .providerProjectionDeviceUsbip.resourcesByZone.dev);
+        # `EndpointSpec.purpose` is a `BoundedToken`; a dotted spelling is a
+        # decode refusal at the daemon.
+        purpose = (projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceUsbip.resourcesByZone.dev)
+          ."usbip-usb-binding".spec.purpose;
       };
       expected = {
         processes = [ "usbip-usb-binding" ];
         endpoints = [ "usbip-usb-binding" ];
+        purpose = "usb-guest-proxy";
       };
     };
   };

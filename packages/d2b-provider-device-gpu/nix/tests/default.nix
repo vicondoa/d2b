@@ -103,5 +103,74 @@ in
         .providerProjectionDeviceGpu.processesByZone.dev);
       expected = [ "gpu-gpu" "video-gpu" ];
     };
+    "provider-device-gpu/worker-posture" = {
+      expr = let
+        processes = projected.config.d2b._resourceCompiler
+          .providerProjectionDeviceGpu.processesByZone.dev;
+        gpu = processes.gpu-gpu;
+        video = processes.video-gpu;
+      in {
+        gpuOwner = gpu.metadata.ownerRef;
+        gpuTemplate = gpu.spec.template;
+        gpuSandbox = gpu.spec.sandbox;
+        gpuRestartPolicy = gpu.spec.restartPolicy;
+        videoOwner = video.metadata.ownerRef;
+        videoTemplate = video.spec.template;
+        videoSandbox = video.spec.sandbox;
+        videoRestartPolicy = video.spec.restartPolicy;
+      };
+      expected = {
+        gpuOwner = "Device/gpu";
+        gpuTemplate = "gpu-worker";
+        # A persistent launch refusal (a host-device grant the broker
+        # refuses, a site with no projected Wayland socket) must reach the
+        # closed terminal classification instead of retrying forever, while
+        # `resetAfter` keeps crash-restart for a healthy worker.
+        gpuRestartPolicy = {
+          class = "on-failure";
+          backoffBase = "1s";
+          backoffMax = "60s";
+          backoffMultiplierMilli = 2000;
+          maxRestarts = 2;
+          resetAfter = "300s";
+        };
+        gpuSandbox = {
+          namespaceClasses = [ "mount" "pid" "ipc" "uts" "user" ];
+          capabilityClasses = [ ];
+          seccompClass = "strict";
+          noNewPrivileges = true;
+          startRoot = false;
+          readOnlyRoot = true;
+          environmentClass = "minimal";
+          umask = "0007";
+          oomScoreAdj = 0;
+          userNamespace = { mappingClass = "process-principal-root"; };
+        };
+        videoOwner = "Device/gpu";
+        videoTemplate = "video-worker";
+        videoRestartPolicy = {
+          class = "on-failure";
+          backoffBase = "1s";
+          backoffMax = "60s";
+          backoffMultiplierMilli = 2000;
+          maxRestarts = 2;
+          resetAfter = "300s";
+        };
+        # The video sidecar fences a pid namespace and a DRI device bind, and
+        # never a user namespace.
+        videoSandbox = {
+          namespaceClasses = [ "mount" "pid" "ipc" "uts" ];
+          capabilityClasses = [ ];
+          seccompClass = "strict";
+          noNewPrivileges = true;
+          startRoot = false;
+          readOnlyRoot = true;
+          environmentClass = "minimal";
+          umask = "0007";
+          oomScoreAdj = 0;
+          userNamespace = null;
+        };
+      };
+    };
   };
 }

@@ -90,7 +90,7 @@ let
             providerRef = providerRef;
             endpointClass = "device";
             transport = "opaque-carriage";
-            purpose = "security-key.d2bus.org/ctaphid";
+            purpose = "security-key-ctaphid";
             serviceFingerprint = null;
             locality = "guest-local";
             visibility = "owner";

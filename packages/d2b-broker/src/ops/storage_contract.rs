@@ -12,7 +12,7 @@ use d2b_contracts_broker::broker_wire::{
     ReconcileStorageScopeResponse, StorageReconcileStatus, ValidateLockSpecResponse,
 };
 use d2b_core::bundle_resolver::BundleResolver;
-use d2b_core::storage::{PrincipalKind, PrincipalRef, StoragePathKind};
+use d2b_core::storage::{PrincipalKind, PrincipalRef, StoragePathKind, StoragePathSpec};
 use nix::unistd::{Gid, Group, Uid, User};
 
 use super::hosts::stable_hash_str;
@@ -343,6 +343,18 @@ fn resolve_gid(principal: &PrincipalRef) -> Result<Gid, StorageContractError> {
             detail: "principal-is-not-gid-or-group".to_owned(),
         }),
     }
+}
+
+/// The numeric posture one trusted storage row declares for its path -
+/// `(owner_uid, owner_gid, mode)` - resolved against this host.
+///
+/// `None` when the row's principals or mode cannot be resolved here: a caller
+/// that must record a posture fails closed instead of inventing one.
+pub(crate) fn row_posture(spec: &StoragePathSpec) -> Option<(u32, u32, u32)> {
+    let owner_uid = resolve_uid(&spec.owner).ok()?.as_raw();
+    let owner_gid = resolve_gid(&spec.group).ok()?.as_raw();
+    let mode = parse_mode(&spec.mode, spec.id.as_str()).ok()?;
+    Some((owner_uid, owner_gid, mode))
 }
 
 #[cfg(test)]
