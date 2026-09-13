@@ -13,6 +13,7 @@ pub mod constellation_error;
 pub mod contract_id;
 pub mod controller_config;
 pub mod error;
+pub mod failure_kinds;
 pub mod foundation_effects;
 pub mod identity;
 pub mod identity_config;

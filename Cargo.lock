@@ -1688,6 +1688,7 @@ name = "d2b-resource-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts",
  "parking_lot",
  "ractor",
  "rusqlite",
