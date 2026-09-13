@@ -71,6 +71,14 @@ impl PreparedAuthorityOperation {
             && self.store_binding_digest == operation.store_binding_digest
             && self.nonce != 0
     }
+
+    /// The nonce this prepared operation was minted with. Hidden like the
+    /// capability's accessor: it exists so an adapter can pin that every
+    /// prepare derives its own non-zero value instead of a constant.
+    #[doc(hidden)]
+    pub const fn nonce(&self) -> u64 {
+        self.nonce
+    }
 }
 
 /// Non-authorizing recovery data returned by a storage adapter. Core validates

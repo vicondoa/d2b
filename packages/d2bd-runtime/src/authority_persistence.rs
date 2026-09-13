@@ -16,7 +16,10 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use sha2::{Digest, Sha256};
@@ -77,6 +80,10 @@ pub struct ZoneAuthorityLedger {
     rows: Rows,
     owner_provenance: Mutex<Option<Arc<dyn AuthorityOwnerProvenance>>>,
     external_inventory: Mutex<Option<Arc<dyn ExternalNicRecoveryInventory>>>,
+    /// The nonce handed to each prepared operation. It is derived per prepare
+    /// (never a constant): the capability binding proves a live prepared
+    /// operation, so every prepare must carry its own distinct non-zero value.
+    prepare_nonce: AtomicU64,
 }
 
 impl core::fmt::Debug for ZoneAuthorityLedger {
@@ -96,7 +103,14 @@ impl ZoneAuthorityLedger {
             rows: Arc::new(Mutex::new(BTreeMap::new())),
             owner_provenance: Mutex::new(None),
             external_inventory: Mutex::new(None),
+            prepare_nonce: AtomicU64::new(1),
         }
+    }
+
+    /// The nonce for one prepared operation: distinct per prepare within this
+    /// ledger's lifetime, and never zero (the type refuses zero).
+    fn next_prepare_nonce(&self) -> u64 {
+        self.prepare_nonce.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Install the daemon's authoritative owner source. Until one is
@@ -399,7 +413,8 @@ impl AuthorityPersistence for ZoneAuthorityLedger {
             // keeps the identical row or is refused as a claim conflict -
             // never a silent replacement of a live row.
             self.prepare_authority_operation(operation_id.to_owned(), payload, &claim_digest)?;
-            PreparedAuthorityOperation::new(operation_id.to_owned(), store_binding_digest, 1)
+            let nonce = self.next_prepare_nonce();
+            PreparedAuthorityOperation::new(operation_id.to_owned(), store_binding_digest, nonce)
         })
     }
 
@@ -599,6 +614,27 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].operation_id, "operation-a");
         assert_eq!(rows[0].state, AuthorityOperationState::Pending);
+    }
+
+    #[tokio::test]
+    async fn every_prepared_operation_carries_its_own_nonce() {
+        let ledger = ledger_with(OWNER_REF, OWNER_UID, 2);
+        let claim = generic_claim(OWNER_REF, OWNER_UID, 2);
+        let first = ledger.prepare("operation-a", &claim).await.expect("first prepare");
+        let second = ledger.prepare("operation-b", &claim).await.expect("second prepare");
+        // The nonce is the capability's live binding, not a constant: each
+        // prepare mints its own non-zero value, including a repeat prepare of
+        // the same id (which returns a fresh binding to the same live row).
+        assert_ne!(first.nonce(), 0);
+        assert_ne!(second.nonce(), 0);
+        assert_ne!(
+            first.nonce(),
+            second.nonce(),
+            "two prepares must not share one nonce"
+        );
+        let repeat = ledger.prepare("operation-a", &claim).await.expect("repeat prepare");
+        assert_ne!(repeat.nonce(), first.nonce());
+        assert_eq!(ledger.authority_operations().len(), 2);
     }
 
     #[tokio::test]
