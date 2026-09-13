@@ -36,6 +36,7 @@ use schemars::schema::RootSchema;
 mod bazel_evidence;
 mod changelog;
 mod delivery;
+mod gen_broker_operations;
 mod gen_resource_schemas;
 mod gen_resource_type_catalog;
 mod inventory;
@@ -133,6 +134,11 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-provider-packaging" => {
             run_task("gen-provider-packaging", || {
                 provider_packaging::gen_provider_packaging(repo_root()?)
+            })
+        }
+        [command] if command == "gen-broker-operations" => {
+            run_task("gen-broker-operations", || {
+                gen_broker_operations::gen_broker_operations(repo_root()?)
             })
         }
         [command] if command == "gen-semantic-service-schemas" => {

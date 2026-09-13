@@ -47,6 +47,12 @@ rust_binary(
 )
 
 generated_artifact_check(
+    name = "gen_broker_operations_drift",
+    command = "gen-broker-operations",
+    data = ["//:generated_broker_operations"],
+)
+
+generated_artifact_check(
     name = "gen_schemas_drift",
     command = "gen-schemas",
     data = ["//:generated_v2_schemas"],
@@ -154,6 +160,7 @@ generated_artifact_generator(
 test_suite(
     name = "generated_artifacts",
     tests = [
+        ":gen_broker_operations_drift",
         ":gen_cli_schemas_drift",
         ":gen_cli_shell_artifacts_drift",
         ":gen_daemon_api_drift",

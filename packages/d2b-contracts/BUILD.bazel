@@ -7,6 +7,12 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "generated_w3_broker_operations",
+    srcs = ["src/generated/w3_broker_operations.rs"],
+    visibility = ["//visibility:public"],
+)
+
 d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 filegroup(

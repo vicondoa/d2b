@@ -3017,6 +3017,25 @@
               "$ref": "#/definitions/SecurityKeyApplyUdevRulesRequest"
             }
           }
+        },
+        {
+          "description": "Invoke one committed operation by name through the generic envelope.\n\nThe broker resolves the committed `Operation` row the name declares, validates the payload against that row's payload schema, authorizes the caller against the committed grants, audits the invocation with its `invocationId`, and dispatches to the handler the declaring driver registered for it.\n\nA new operation is reached by committing a row - never by adding a variant here, which is what keeps the wire enum a view of the committed rows rather than a second inventory to keep in step.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Invoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/InvokeRequest"
+            }
+          }
         }
       ]
     },
@@ -3848,6 +3867,25 @@
             },
             "payload": {
               "$ref": "#/definitions/ValidateBundleResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of one committed operation invocation.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Invoke"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/InvokeResponse"
             }
           }
         }
@@ -7187,6 +7225,59 @@
       "maxLength": 15,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "InvokeRequest": {
+      "description": "Invoke one committed operation by name.",
+      "type": "object",
+      "required": [
+        "operation",
+        "payload",
+        "zone"
+      ],
+      "properties": {
+        "operation": {
+          "description": "The committed operation name the caller invokes.",
+          "type": "string"
+        },
+        "payload": {
+          "description": "The canonical payload object the operation row validates."
+        },
+        "tracingSpanId": {
+          "description": "Optional tracing correlation identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "description": "The Zone the invocation runs in.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "InvokeResponse": {
+      "description": "The result of one committed operation invocation.",
+      "type": "object",
+      "required": [
+        "invocationId",
+        "operation",
+        "result"
+      ],
+      "properties": {
+        "invocationId": {
+          "description": "The invocation identifier the audit record carries.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "The operation the broker dispatched.",
+          "type": "string"
+        },
+        "result": {
+          "description": "The canonical result payload the handler returned."
+        }
+      },
+      "additionalProperties": false
     },
     "IsolationPosture": {
       "description": "Security boundary presented by a workload runtime.",

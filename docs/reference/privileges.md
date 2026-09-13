@@ -18,6 +18,16 @@ d2b-broker.service
 The broker socket is systemd-owned and socket-activated. The broker adopts
 the inherited fd and does not self-bind, self-chown, or self-fchmod it.
 
+## Committed operation rows
+
+Every broker operation is one committed row. The rows live in
+[`policy/broker-operations.json`](./policy/broker-operations.json), and the
+broker's profile catalogs, its authorization rows, its `W3BrokerOperation`
+inventory, and its typed audit fields are generated views of them. The
+ownership triage of every row - a family driver, the broker itself, or a
+transport concern the envelope does not carry - is the generated
+[broker operation triage](./broker-operation-triage.md).
+
 ## Operation families
 
 | Family | Examples | Owner |

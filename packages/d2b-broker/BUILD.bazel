@@ -16,6 +16,12 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "generated_broker_operation_catalog",
+    srcs = ["src/generated/broker_operation_catalog.rs"],
+    visibility = ["//visibility:public"],
+)
+
 d2b_broker_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 d2b_broker_compile_data = [

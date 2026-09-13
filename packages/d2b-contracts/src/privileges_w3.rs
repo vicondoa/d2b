@@ -97,35 +97,7 @@ impl W3BrokerOperation {
     /// the `Capabilities::broker_operations` advertisement in
     /// `d2b-contracts` and by the broker-enum-disposition gate.
     pub const fn all() -> &'static [W3BrokerOperation] {
-        &[
-            Self::DelegateCgroupV2,
-            Self::OpenCgroupDir,
-            Self::PrepareStateDir,
-            Self::PrepareRuntimeDir,
-            Self::OpenKvm,
-            Self::OpenVhostNet,
-            Self::OpenFuse,
-            Self::OpenDevice,
-            Self::CreateTapFd,
-            Self::CreatePersistentTap,
-            Self::DeletePersistentTap,
-            Self::CreateBridge,
-            Self::DeleteBridge,
-            Self::SetBridgePortFlags,
-            Self::ApplyNftables,
-            Self::ApplyNftablesProjection,
-            Self::ApplyRoute,
-            Self::ApplySysctl,
-            Self::ApplyNmUnmanaged,
-            Self::UpdateHostsFile,
-            Self::BindUnixSocket,
-            Self::SetSocketAcl,
-            Self::ModprobeIfAllowed,
-            Self::UsbipBindFirewallRule,
-            Self::MigrateLegacySwtpmState,
-            Self::SecurityKeyOpenDevice,
-            Self::SecurityKeyApplyUdevRules,
-        ]
+        include!("generated/w3_broker_operations.rs")
     }
 
     /// Returns the audit, mutation, and secret-access posture for the row.

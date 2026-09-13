@@ -16,6 +16,7 @@ GENERATED_ARTIFACT_COMMANDS = [
     "gen-resource-proto",
     "gen-resource-ttrpc",
     "gen-daemon-api",
+    "gen-broker-operations",
     "gen-package-policy-inputs",
 ]
 

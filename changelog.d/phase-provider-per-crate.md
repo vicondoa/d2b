@@ -219,3 +219,29 @@
   `executionRefs`) beside the existing subjects and scope narrowing. Both
   facets are additive: existing rules, subjects, and committed rows keep their
   exact wire shape.
+
+- Broker operations are now one committed catalog. A committed row per
+  operation carries the wire discriminant it inherits, its owner in the
+  three-way triage (a family driver, the broker itself, or a transport concern
+  the envelope does not carry), the declaring provider crate, the profiles that
+  admit it, the authorization facet, and every typed audit record it can emit.
+  The wire's profile catalogs, the `W3BrokerOperation` inventory, the private
+  broker authorization rows, and the typed audit fields are generated views of
+  those rows (`xtask gen-broker-operations`, drift-checked by
+  `//packages/xtask:gen_broker_operations_drift`), and a completeness gate that
+  runs with the broker's tests compares every view against the rows and names
+  any variant, row, profile, authorization, or audit mismatch.
+- The broker gained the generic operation envelope. One invocation resolves the
+  committed row, validates the payload against the row's declared shape,
+  authorizes the caller against the row's committed grants, audits the attempt
+  with an invocation identifier, and dispatches to the handler of the declaring
+  crate. The wire gained one generic `Invoke` request carrying the operation
+  name, the Zone, and the payload, so a new operation is reached by committing a
+  row and registering a handler rather than by adding a wire variant. Deny by
+  default holds at every step: an operation no row declares, a declared
+  operation this broker holds no committed row for, and a caller no committed
+  grant covers each refuse with a named code and exactly one audit record, and
+  the refusal response names the operation and the code.
+- `docs/reference/broker-operation-triage.md` is the operator view of the
+  triage, generated from the committed rows. The W2 dispositions table it was
+  seeded from is kept as the historical triage input.

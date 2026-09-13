@@ -413,6 +413,19 @@ filegroup(
 )
 
 filegroup(
+    name = "generated_broker_operations",
+    srcs = [
+        "docs/reference/broker-operation-triage.md",
+        "docs/reference/policy/broker-operations.json",
+        "//packages/d2b-broker:generated_broker_operation_catalog",
+        "//packages/d2b-contracts:generated_w3_broker_operations",
+        "//packages/d2b-contracts-broker:generated_broker_operation_profiles",
+        "//packages/d2b-core:generated_broker_operation_authz",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "generated_daemon_api",
     srcs = ["docs/reference/daemon-api.md"],
     visibility = ["//visibility:public"],

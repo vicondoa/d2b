@@ -536,6 +536,16 @@ pub enum OperationFields {
         fd_passing_mechanism: String,
         order_key: String,
     },
+    /// One generic envelope invocation: the operation the caller named, the
+    /// invocation identifier the audit record carries, and, when refused, the
+    /// closed refusal code. Only the operation name, the identifier, and the
+    /// code are recorded; payload bytes never reach the audit log.
+    Invoke {
+        operation: String,
+        invocation_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
 }
 
 impl OperationFields {
@@ -898,6 +908,11 @@ impl OperationFields {
                 cloexec_required: bool,
                 fd_passing_mechanism: String,
                 order_key: String,
+            }),
+            "Invoke" => parse_fields!(value => Invoke {
+                operation: String,
+                invocation_id: String,
+                reason: Option<String>,
             }),
             other => Err(serde_json::Error::io(io::Error::new(
                 io::ErrorKind::InvalidInput,

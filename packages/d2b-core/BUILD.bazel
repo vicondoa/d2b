@@ -5,6 +5,12 @@ exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
 
+filegroup(
+    name = "generated_broker_operation_authz",
+    srcs = ["src/generated/broker_operation_authz.rs"],
+    visibility = ["//visibility:public"],
+)
+
 d2b_core_srcs = glob(["src/**/*.rs"])
 
 rust_library(

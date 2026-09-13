@@ -310,6 +310,45 @@ pub enum BrokerRequest {
     ///
     /// Typed stub - live handler target: `live_security_key_apply_udev_rules`.
     SecurityKeyApplyUdevRules(d2b_contracts::security_key::SecurityKeyApplyUdevRulesRequest),
+    /// Invoke one committed operation by name through the generic envelope.
+    ///
+    /// The broker resolves the committed `Operation` row the name declares,
+    /// validates the payload against that row's payload schema, authorizes
+    /// the caller against the committed grants, audits the invocation with
+    /// its `invocationId`, and dispatches to the handler the declaring
+    /// driver registered for it.
+    ///
+    /// A new operation is reached by committing a row - never by adding a
+    /// variant here, which is what keeps the wire enum a view of the
+    /// committed rows rather than a second inventory to keep in step.
+    Invoke(InvokeRequest),
+}
+
+/// Invoke one committed operation by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvokeRequest {
+    /// The committed operation name the caller invokes.
+    pub operation: String,
+    /// The Zone the invocation runs in.
+    pub zone: String,
+    /// The canonical payload object the operation row validates.
+    pub payload: serde_json::Value,
+    /// Optional tracing correlation identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// The result of one committed operation invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvokeResponse {
+    /// The operation the broker dispatched.
+    pub operation: String,
+    /// The invocation identifier the audit record carries.
+    pub invocation_id: String,
+    /// The canonical result payload the handler returned.
+    pub result: serde_json::Value,
 }
 
 /// Path-free result of a source-to-target generation handoff.
@@ -419,6 +458,7 @@ impl BrokerRequest {
             Self::DiskInit(_) => "DiskInit",
             Self::SecurityKeyOpenDevice(_) => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules(_) => "SecurityKeyApplyUdevRules",
+            Self::Invoke(_) => "Invoke",
         }
     }
 
@@ -916,6 +956,9 @@ impl BrokerRequest {
             | Self::PauseBroker
             | Self::PollChildReaped
             | Self::ResumeBroker => return None,
+            // A generic invocation carries no typed durable identity of its
+            // own: the invoked row's join comes from the row, not the wire.
+            | Self::Invoke(_) => return None,
         };
         Some((
             d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
@@ -939,6 +982,11 @@ impl BrokerRequest {
                 | Self::PauseBroker
                 | Self::PollChildReaped
                 | Self::ResumeBroker
+                // The generic entry point carries no durable identity of its
+                // own: the envelope records the invoked operation and its
+                // invocation identifier, and a row whose records have an
+                // identity emits them with it.
+                | Self::Invoke(_)
         )
     }
 }
@@ -1110,121 +1158,7 @@ impl BrokerProfile {
     }
 }
 
-/// Every request currently defined by the broker wire. Host mode is closed
-/// over this list rather than using an open-ended default.
-pub const HOST_OPERATION_CATALOG: &[&str] = &[
-    "ApplyHostGenerationHandoff",
-    "ApplyNftables",
-    "ApplyNftablesProjection",
-    "ApplyNmUnmanaged",
-    "ApplyRoute",
-    "ApplySysctl",
-    "BindUnixSocket",
-    "CreateOrReconcileUsersGroups",
-    "CreateBridge",
-    "DeleteBridge",
-    "CreatePersistentTap",
-    "DeletePersistentTap",
-    "CreateTapFd",
-    "DelegateCgroupV2",
-    "ExportBrokerAudit",
-    "Hello",
-    "InjectSecretById",
-    "LaunchMinijailChild",
-    "ModprobeIfAllowed",
-    "OpenCgroupDir",
-    "OpenDevice",
-    "OpenFuse",
-    "OpenHidrawSecurityKey",
-    "OpenKvm",
-    "QemuMediaEnroll",
-    "QemuMediaRefreshRegistry",
-    "QemuMediaBoot",
-    "QemuMediaSystemPowerdown",
-    "QemuMediaQueryStatus",
-    "QemuMediaQuit",
-    "QemuMediaAttach",
-    "QemuMediaDetach",
-    "OpenPidfd",
-    "ConsumeLifecycleLease",
-    "OpenPeerPidfdFromAcceptedSocket",
-    "ObserveRunner",
-    "PipeWireAudio",
-    "StartSystemdUnit",
-    "CheckSystemdUserManager",
-    "ObserveSystemdUnit",
-    "OpenSystemdUnitPidfd",
-    "StopSystemdUnit",
-    "OpenVhostNet",
-    "PauseBroker",
-    "PollChildReaped",
-    "PrepareRuntimeDir",
-    "PrepareStateDir",
-    "MigrateLegacySwtpmState",
-    "ReconcileStorageScope",
-    "ValidateLockSpec",
-    "PrepareStoreView",
-    "StoreSync",
-    "StoreVerify",
-    "ReadSecretById",
-    "ResumeBroker",
-    "RotateSecretById",
-    "RunHostInstall",
-    "RunMigrate",
-    "RunActivation",
-    "RunGc",
-    "RunKeysRotate",
-    "RunHostKeyTrust",
-    "RunRotateKnownHost",
-    "SetBridgePortFlags",
-    "SetSocketAcl",
-    "SetupMountNamespace",
-    "CgroupKill",
-    "SignalRunner",
-    "DeregisterRunnerPidfd",
-    "SpawnRunner",
-    "UpdateHostsFile",
-    "UsbipBind",
-    "UsbipBindFirewallRule",
-    "UsbipProxyReconcile",
-    "UsbipUnbind",
-    "UsbipExplicitBind",
-    "UsbipExplicitFirewallRule",
-    "ResourceActivationAudit",
-    "ValidateBundle",
-    "SeedDnsmasqLease",
-    "BindMountFromHardlinkFarm",
-    "OwnershipMatrixCheck",
-    "SshHostKeyPreflight",
-    "DiskInit",
-    "SecurityKeyOpenDevice",
-    "SecurityKeyApplyUdevRules",
-];
-
-/// Guest-local process and broker lifecycle effects. Host networking,
-/// devices, storage, realm, and allocator operations are intentionally
-/// absent from this catalog.
-pub const GUEST_OPERATION_CATALOG: &[&str] = &[
-    "Hello",
-    "ExportBrokerAudit",
-    "ValidateBundle",
-    "OpenPidfd",
-    "OpenPeerPidfdFromAcceptedSocket",
-    "ObserveRunner",
-    "StartSystemdUnit",
-    "CheckSystemdUserManager",
-    "ObserveSystemdUnit",
-    "OpenSystemdUnitPidfd",
-    "StopSystemdUnit",
-    "PollChildReaped",
-    "PrepareRuntimeDir",
-    "PrepareStateDir",
-    "SetupMountNamespace",
-    "CgroupKill",
-    "SignalRunner",
-    "DeregisterRunnerPidfd",
-    "SpawnRunner",
-];
+include!("generated/broker_operation_profiles.rs");
 
 /// Broker-side installer driver. The broker resolves the bundle's
 /// `installer:host` intent row (synthesised by
@@ -1490,6 +1424,8 @@ pub enum BrokerResponse {
     StoreVerify(StoreVerifyResponse),
     ValidateLockSpec(ValidateLockSpecResponse),
     ValidateBundle(ValidateBundleResponse),
+    /// Result of one committed operation invocation.
+    Invoke(InvokeResponse),
 }
 
 /// Typed broker error envelope for the real wire. Mirrors the

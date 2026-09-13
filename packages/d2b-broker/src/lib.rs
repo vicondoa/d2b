@@ -36,6 +36,8 @@
 // asserts the production binary compiles clean.
 
 pub mod audit;
+pub mod catalog;
+pub mod envelope;
 pub mod fd_passing;
 // Live broker request handlers (pidfd_open + clone3-based spawn +
 // reconcile-executor calls). Pure-shaped: take their inputs directly so
