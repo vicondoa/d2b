@@ -471,7 +471,7 @@ fn check_closed_matrix(
     let actual: BTreeSet<&str> = members
         .iter()
         .filter(|member| {
-            provider_name_kind(&member.package_name, member.declares_driver)
+            name_kind(&member.package_name, member.declares_driver)
                 == ProviderNameKind::Provider
         })
         .map(|member| member.package_name.as_str())
@@ -728,8 +728,7 @@ fn render_shared_driver_violation(error: &str, module: &str, family: Option<&str
 fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
     let on_disk = on_disk_providers(&repo_root)?;
     let has_provider_member = members.iter().any(|member| {
-        provider_name_kind(&member.package_name, member.declares_driver)
-            == ProviderNameKind::Provider
+        name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
     });
     if !has_provider_member && on_disk.is_empty() {
         return Err("provider-crate-layout-empty-scope".to_owned());
@@ -742,7 +741,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
     let mut violations = Vec::new();
 
     for member in &members {
-        match provider_name_kind(&member.package_name, member.declares_driver) {
+        match name_kind(&member.package_name, member.declares_driver) {
             ProviderNameKind::Provider => {
                 if !is_provider_directory(&repo_root, &member.crate_dir, &member.package_name) {
                     violations.push(Diagnostic::simple(
@@ -774,7 +773,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
                         &crate_on_disk.directory_name,
                     ));
                 }
-                if provider_name_kind(&crate_on_disk.directory_name, crate_on_disk.declares_driver)
+                if name_kind(&crate_on_disk.directory_name, crate_on_disk.declares_driver)
                     == ProviderNameKind::Malformed
                 {
                     violations.push(Diagnostic::simple(
@@ -909,7 +908,7 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
             .map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
         let declares_driver = manifest_declares_driver(&manifest);
         if matches!(
-            provider_name_kind(&directory_name, declares_driver),
+            name_kind(&directory_name, declares_driver),
             ProviderNameKind::NonProvider
         ) {
             continue;
@@ -979,6 +978,27 @@ fn provider_name_kind(name: &str, declares_driver: bool) -> ProviderNameKind {
         return ProviderNameKind::NonProvider;
     }
     ProviderNameKind::Provider
+}
+
+/// Whether the closed matrix names this crate as an accepted Provider.
+fn catalogued_provider(crate_name: &str) -> bool {
+    PROVIDER_MATRIX
+        .iter()
+        .any(|row| row.crate_name == crate_name)
+}
+
+/// The packaging kind of one provider-prefixed crate.
+///
+/// The closed matrix is the authority for the crates it names. A realizer that
+/// hosts the driver of the types it realizes keeps its packaging identity, its
+/// catalog row, and the artifact the Nix layer compiles for it; the declared
+/// driver dependency separates the per-type driver crates the matrix does not
+/// name, which ship no packaging artifact of their own.
+fn name_kind(crate_name: &str, declares_driver: bool) -> ProviderNameKind {
+    if catalogued_provider(crate_name) {
+        return ProviderNameKind::Provider;
+    }
+    provider_name_kind(crate_name, declares_driver)
 }
 
 fn valid_name_segment(segment: &str) -> bool {
@@ -1285,7 +1305,7 @@ mod tests {
     fn classified_kind(root: &Path, name: &str) -> ProviderNameKind {
         let manifest = fs::read_to_string(root.join("packages").join(name).join("Cargo.toml"))
             .expect("read crate manifest");
-        provider_name_kind(name, manifest_declares_driver(&manifest))
+        name_kind(name, manifest_declares_driver(&manifest))
     }
 
     fn required_readme(identity: &str) -> String {
@@ -1384,7 +1404,7 @@ mod tests {
         for (name, manifest_path) in manifests {
             let manifest = fs::read_to_string(&manifest_path).expect("read crate manifest");
             let declares_driver = manifest_declares_driver(&manifest);
-            match provider_name_kind(&name, declares_driver) {
+            match name_kind(&name, declares_driver) {
                 ProviderNameKind::NonProvider => {
                     let single_segment = name
                         .strip_prefix(PROVIDER_PREFIX)
@@ -1398,11 +1418,12 @@ mod tests {
                 }
                 ProviderNameKind::Provider => {
                     assert!(
-                        !declares_driver
-                            && name
-                                .strip_prefix(PROVIDER_PREFIX)
-                                .is_some_and(|suffix| suffix.split('-').count() >= 2),
-                        "{name} is not a two-segment Provider identity that declares no driver"
+                        catalogued_provider(&name)
+                            || (!declares_driver
+                                && name
+                                    .strip_prefix(PROVIDER_PREFIX)
+                                    .is_some_and(|suffix| suffix.split('-').count() >= 2)),
+                        "{name} is neither a catalogued Provider identity nor a two-segment identity that declares no driver"
                     );
                 }
                 ProviderNameKind::Malformed => {
@@ -1686,8 +1707,8 @@ mod tests {
         let d2bd = fixture.root.join("packages/d2bd/src");
         fs::create_dir_all(&d2bd).unwrap();
         fs::write(
-            d2bd.join("credential_driver.rs"),
-            "impl ResourceDriver for CredentialDriver {}\n",
+            d2bd.join("guest_driver.rs"),
+            "impl ResourceDriver for GuestDriver {}\n",
         )
         .unwrap();
         let error = check_shared_driver_placements(&fixture.root)
@@ -1697,7 +1718,7 @@ mod tests {
             error.contains("packages/d2bd/src/activation_driver.rs"),
             "{error}"
         );
-        if error.contains("packages/d2bd/src/credential_driver.rs") {
+        if error.contains("packages/d2bd/src/guest_driver.rs") {
             panic!("the module that still declares a driver must not be stale: {error}");
         }
     }

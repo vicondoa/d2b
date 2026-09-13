@@ -96,11 +96,5 @@ filegroup(
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
-    tests = [
-        ":d2b_provider_device_doc_test",
-        ":d2b_provider_device_unit_test",
-        ":device_family",
-        ":device_family_integration",
-    ],
     visibility = ["//visibility:public"],
 )
