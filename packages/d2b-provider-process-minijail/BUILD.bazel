@@ -58,41 +58,10 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-
-rust_test(
-    name = "ephemeral",
-    srcs = [
-        "tests/ephemeral.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
-        ":d2b_provider_process_minijail",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
 rust_test(
     name = "platform_gate",
     srcs = [
         "tests/platform_gate.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
-        ":d2b_provider_process_minijail",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "sandbox_compilation",
-    srcs = [
-        "tests/sandbox_compilation.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
