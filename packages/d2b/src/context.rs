@@ -2641,6 +2641,7 @@ fn stable_error_class(class: &str) -> &str {
         | "bundle-integrity-failure"
         | "bundle-generation-replay"
         | "bundle-schema-mismatch"
+        | "debug-read-refused"
         | "debug-read-exhausted"
         | "resource-pending-cleanup" => class,
         _ => "internal-error",

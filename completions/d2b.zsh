@@ -176,8 +176,8 @@ _arguments "${_arguments_options[@]}" : \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
+'-h[Print help]' \
+'--help[Print help]' \
 ':zone_ref -- Zone to explain:_default' \
 '::resource_ref -- Resource to explain, as `<ResourceType>/<name>`. Absent renders the zone:_default' \
 && ret=0

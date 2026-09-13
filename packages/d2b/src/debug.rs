@@ -41,11 +41,8 @@ const PAGE_SIZE: u32 = 200;
 #[derive(Debug, clap::Args, Clone)]
 pub(crate) struct DebugArgs {
     /// Zone to explain.
-    ///
-    /// The argument id is deliberately not `zone`: a positional sharing the
-    /// global flag's id makes clap drop `--zone` inside this subcommand, so
-    /// `d2b debug --zone dev work` would fail to parse while every other
-    /// command accepts it.
+    // The argument id is deliberately not `zone`: a positional sharing the
+    // global flag's id makes clap drop `--zone` inside this subcommand.
     #[arg(value_name = "ZONE")]
     pub(crate) zone_ref: String,
     /// Resource to explain, as `<ResourceType>/<name>`. Absent renders the zone.
