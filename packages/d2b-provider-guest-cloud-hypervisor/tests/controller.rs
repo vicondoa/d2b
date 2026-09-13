@@ -1,77 +1,18 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
-    BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController,
-    CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
-    CloudHypervisorResourceResponse, DescriptorSignature, GuestGenerationSet, GuestSeedContract,
-    GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot, SignatureAlgorithm,
+    CloudHypervisorController, CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
+    CloudHypervisorResourceResponse, GuestGenerationSet, GuestSnapshot,
 };
 
-const ARTIFACT_DIGEST: &str =
-    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SCHEMA_FINGERPRINT: &str =
-    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
-const ZONE_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
+mod common;
 
-struct AcceptingVerifier;
-
-impl GuestSetupDescriptorVerifier for AcceptingVerifier {
-    fn verify(
-        &self,
-        _key_fingerprint: &d2b_contracts_resource::v3::SchemaFingerprint,
-        _descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
-        signature: &str,
-    ) -> bool {
-        signature == "signature-sentinel"
-    }
-}
-
-fn descriptor() -> d2b_provider_guest_cloud_hypervisor::VerifiedGuestSetupDescriptor {
-    GuestSetupDescriptor::new(
-        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-        ResourceGeneration::new(3).unwrap(),
-        d2b_contracts_resource::v3::ArtifactId::parse("guest-system").unwrap(),
-        d2b_contracts_provider::v3::ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
-        GuestSeedContract::new(
-            "guest-resource-seed",
-            d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-        )
-        .unwrap(),
-        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
-        DescriptorSignature::new(
-            SignatureAlgorithm::Ed25519Blake3,
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-            "signature-sentinel",
-        )
-        .unwrap(),
-    )
-    .unwrap()
-    .verify_with(&AcceptingVerifier)
-    .unwrap()
-}
-
-fn config() -> CloudHypervisorConfig {
-    CloudHypervisorConfig {
-        controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
-        default_vcpus: 2,
-        default_memory_mb: 512,
-        default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
-        watchdog: true,
-        adoption_window_ms: 30_000,
-        health_check_interval_ms: 30_000,
-        health_check_timeout_ms: 5_000,
-        health_check_failure_threshold: 3,
-        startup_deadline_ms: 120_000,
-    }
-}
+use common::{AcceptingVerifier, GUEST_UID, ZONE_UID, config, descriptor, raw_descriptor};
 
 fn graph() -> BootstrapGraph {
     BootstrapGraph::new(
@@ -309,26 +250,7 @@ fn same_guest_name_in_different_zones_has_distinct_private_runtime_identity() {
 
 #[test]
 fn invalid_descriptor_is_rejected_before_registration() {
-    let raw = GuestSetupDescriptor::new(
-        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-        ResourceGeneration::new(3).unwrap(),
-        d2b_contracts_resource::v3::ArtifactId::parse("guest-system").unwrap(),
-        d2b_contracts_provider::v3::ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
-        GuestSeedContract::new(
-            "guest-resource-seed",
-            d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-        )
-        .unwrap(),
-        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
-        DescriptorSignature::new(
-            SignatureAlgorithm::Ed25519Blake3,
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-            "wrong-signature",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let raw = raw_descriptor("wrong-signature");
     let session = Arc::new(RecordingSession::default());
     let api = AuthenticatedResourceApiAdapter::new(Arc::clone(&session));
 

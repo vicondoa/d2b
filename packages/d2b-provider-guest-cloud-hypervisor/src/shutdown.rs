@@ -664,16 +664,6 @@ pub fn plan_upgrade(
     })
 }
 
-/// Return whether a reconnect generation is strictly newer than the prior
-/// session generation.
-pub const fn session_generation_is_fresh(previous: Option<u64>, candidate: u64) -> bool {
-    let previous = match previous {
-        Some(value) => value,
-        None => 0,
-    };
-    candidate != 0 && candidate > previous
-}
-
 fn upgrade_rank(role: ChildRole) -> u8 {
     match role {
         ChildRole::ChApiEndpoint => 0,

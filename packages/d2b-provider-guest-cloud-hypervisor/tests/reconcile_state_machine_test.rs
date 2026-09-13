@@ -4,92 +4,21 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_contracts_resource::v3::{
     DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, ZoneId,
     ZoneRevision,
 };
 use d2b_provider_guest_cloud_hypervisor::{
-    BootstrapGraph, BootstrapHandoff, ChildRole, ChildSpecUpdate, CloudHypervisorConfig,
-    CloudHypervisorController, CloudHypervisorError, CloudHypervisorResourceApi,
-    CloudHypervisorResourceApiError, CommittedChild, DescriptorSignature, GuestChildCommitResponse,
-    GuestChildCreateBatch, GuestDependencySnapshot, GuestFinalizationInput, GuestGenerationSet,
-    GuestSeedContract, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestStatusProjection, OwnedChildSnapshot, ProcessAdoptionStatus, ProcessState, SessionState,
-    SignatureAlgorithm, UpgradeReason,
+    BootstrapGraph, ChildRole, ChildSpecUpdate, CloudHypervisorController, CloudHypervisorError,
+    CloudHypervisorResourceApi, CloudHypervisorResourceApiError, CommittedChild,
+    GuestChildCommitResponse, GuestChildCreateBatch, GuestDependencySnapshot,
+    GuestFinalizationInput, GuestGenerationSet, GuestSnapshot, GuestStatusProjection,
+    OwnedChildSnapshot, ProcessAdoptionStatus, ProcessState, SessionState, UpgradeReason,
 };
 
-#[test]
-fn cloud_hypervisor_publishes_the_shared_runner_contract() {
-    let contract = d2b_provider_guest_cloud_hypervisor::cloud_hypervisor_runner_contract();
-    assert_eq!(contract.resource_type(), "Guest");
-    assert_eq!(
-        contract.finalizer(),
-        d2b_provider_guest_cloud_hypervisor::GUEST_CONTROLLER_FINALIZER
-    );
-    assert_eq!(contract.repair_interval_secs(), 30);
-    assert!(contract.watched_configuration_is_dependency());
-}
+mod common;
 
-const ARTIFACT_DIGEST: &str =
-    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SCHEMA_FINGERPRINT: &str =
-    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const ZONE_UID: &str = "223e4567-e89b-42d3-a456-426614174001";
-const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
-
-struct AcceptingVerifier;
-
-impl GuestSetupDescriptorVerifier for AcceptingVerifier {
-    fn verify(
-        &self,
-        _key_fingerprint: &d2b_contracts_resource::v3::SchemaFingerprint,
-        _descriptor_digest: &d2b_contracts_resource::v3::SchemaFingerprint,
-        signature: &str,
-    ) -> bool {
-        signature == "signature-sentinel"
-    }
-}
-
-fn descriptor() -> d2b_provider_guest_cloud_hypervisor::VerifiedGuestSetupDescriptor {
-    GuestSetupDescriptor::new(
-        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-        ResourceGeneration::new(3).unwrap(),
-        d2b_contracts_resource::v3::ArtifactId::parse("guest-system").unwrap(),
-        d2b_contracts_provider::v3::ArtifactDigest::parse(ARTIFACT_DIGEST).unwrap(),
-        GuestSeedContract::new(
-            "guest-resource-seed",
-            d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-        )
-        .unwrap(),
-        BootstrapHandoff::new("opaque-bootstrap", 30_000).unwrap(),
-        DescriptorSignature::new(
-            SignatureAlgorithm::Ed25519Blake3,
-            d2b_contracts_resource::v3::SchemaFingerprint::parse(SCHEMA_FINGERPRINT).unwrap(),
-            "signature-sentinel",
-        )
-        .unwrap(),
-    )
-    .unwrap()
-    .verify_with(&AcceptingVerifier)
-    .unwrap()
-}
-
-fn config() -> CloudHypervisorConfig {
-    CloudHypervisorConfig {
-        controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
-        default_vcpus: 2,
-        default_memory_mb: 512,
-        default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
-        watchdog: true,
-        adoption_window_ms: 30_000,
-        health_check_interval_ms: 30_000,
-        health_check_timeout_ms: 5_000,
-        health_check_failure_threshold: 3,
-        startup_deadline_ms: 120_000,
-    }
-}
+use common::{GUEST_UID, ZONE_UID, config, descriptor};
 
 fn graph() -> BootstrapGraph {
     BootstrapGraph::new(

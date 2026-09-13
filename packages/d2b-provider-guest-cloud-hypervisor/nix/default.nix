@@ -209,18 +209,6 @@ let
       };
     in descriptorDigestForPayload (builtins.toJSON unsigned);
 
-  projectedPrivateDescriptors =
-    let
-      compiler = cfg._resourceCompiler or { };
-      projection = compiler.providerProjectionRuntimeCloudHypervisor or { };
-      privateArtifact = projection.privateArtifact or { };
-    in privateArtifact.guestSetupDescriptors or [ ];
-
-  privateDescriptorAssertion = {
-    assertion = projectedPrivateDescriptors == descriptorRows;
-    message = "runtime-cloud-hypervisor private Guest setup descriptors do not match the selected Guest and Provider inputs.";
-  };
-
   providerAssertions = zoneName:
     let
       provider = providerFor zoneName;
@@ -355,8 +343,7 @@ in
   config = {
     assertions =
       lib.concatMap providerAssertions (lib.attrNames zones)
-      ++ guestAssertions
-      ++ [ privateDescriptorAssertion ];
+      ++ guestAssertions;
     d2b._resourceCompiler.providerProjectionRuntimeCloudHypervisor = {
       inherit enabled;
       resourcesByZone = { };

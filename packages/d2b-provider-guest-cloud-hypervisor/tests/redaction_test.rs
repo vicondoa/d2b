@@ -23,9 +23,8 @@ impl GuestSetupDescriptorVerifier for TestVerifier {
     }
 }
 
-#[test]
-fn private_descriptor_and_runtime_scope_debug_are_redacted() {
-    let descriptor = GuestSetupDescriptor::new(
+fn descriptor(signature: &str) -> GuestSetupDescriptor {
+    GuestSetupDescriptor::new(
         ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
         ResourceGeneration::new(2).unwrap(),
         ArtifactId::parse("guest-system").unwrap(),
@@ -40,11 +39,16 @@ fn private_descriptor_and_runtime_scope_debug_are_redacted() {
         DescriptorSignature::new(
             SignatureAlgorithm::Ed25519Blake3,
             SchemaFingerprint::parse(DIGEST).unwrap(),
-            "private-signature-sentinel",
+            signature,
         )
         .unwrap(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn private_descriptor_and_runtime_scope_debug_are_redacted() {
+    let descriptor = descriptor("private-signature-sentinel");
     let rendered = format!("{descriptor:?}");
     assert!(!rendered.contains("opaque-bootstrap"));
     assert!(!rendered.contains("private-signature-sentinel"));
@@ -106,27 +110,7 @@ fn runtime_scope_changes_for_zone_and_guest_reincarnation() {
 
 #[test]
 fn child_batch_debug_and_wire_bytes_do_not_include_descriptor_payload() {
-    let descriptor = GuestSetupDescriptor::new(
-        ResourceRef::parse("Provider/runtime-cloud-hypervisor").unwrap(),
-        ResourceGeneration::new(2).unwrap(),
-        ArtifactId::parse("guest-system").unwrap(),
-        ArtifactDigest::parse(DIGEST).unwrap(),
-        GuestSeedContract::new(
-            "guest-resource-seed",
-            SchemaVersion::new(1, 0).unwrap(),
-            SchemaFingerprint::parse(DIGEST).unwrap(),
-        )
-        .unwrap(),
-        BootstrapHandoff::new("opaque-bootstrap", 10_000).unwrap(),
-        DescriptorSignature::new(
-            SignatureAlgorithm::Ed25519Blake3,
-            SchemaFingerprint::parse(DIGEST).unwrap(),
-            "signature-sentinel",
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let descriptor = descriptor.verify_with(&TestVerifier).unwrap();
+    let descriptor = descriptor("signature-sentinel").verify_with(&TestVerifier).unwrap();
     let batch = GuestChildBatch::from_descriptor(
         ZoneId::parse("dev").unwrap(),
         ResourceRef::parse("Guest/gateway").unwrap(),

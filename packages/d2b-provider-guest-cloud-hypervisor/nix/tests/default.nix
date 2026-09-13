@@ -71,159 +71,94 @@ let
       };
     };
   };
-  enabled = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
-          guest-system = {
-            package = systemPackage;
-            type = "nixos-system";
-          };
-        };
-        config.d2b.zones.dev.resources = guestResources;
-      }
-    ];
+  providerArtifacts = {
+    runtime-cloud-hypervisor = {
+      package = providerPackage;
+      type = "provider";
+    };
   };
-  absent = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
-          guest-system = {
-            package = systemPackage;
-            type = "nixos-system";
-          };
-        };
-        config.d2b.zones.dev.resources.guest = {
-          type = "Guest";
-          spec = {
-            providerRef = "Provider/runtime-cloud-hypervisor";
-            systemArtifactId = "guest-system";
-          };
-        };
-      }
-    ];
+  fullArtifacts = providerArtifacts // {
+    guest-system = {
+      package = systemPackage;
+      type = "nixos-system";
+    };
   };
-  missingArtifact = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
+  mkCase =
+    { artifacts ? fullArtifacts
+    , zones ? { dev.resources = guestResources; }
+    , extraModules ? [ ]
+    , extraConfig ? { }
+    , specialArgs ? { }
+    }:
+    lib.evalModules {
+      modules = [ base ] ++ extraModules ++ [
+        (import ../default.nix)
+        {
+          config.d2b = {
+            artifacts = artifacts;
+            zones = zones;
+          } // extraConfig;
+        }
+      ];
+      inherit specialArgs;
+    };
+  enabled = mkCase { };
+  absent = mkCase {
+    zones = {
+      dev.resources.guest = {
+        type = "Guest";
+        spec = {
+          providerRef = "Provider/runtime-cloud-hypervisor";
+          systemArtifactId = "guest-system";
         };
-        config.d2b.zones.dev.resources = guestResources // {
-          guest = guestResources.guest // {
-            spec = guestResources.guest.spec // {
-              systemArtifactId = "missing-system";
-            };
-          };
-        };
-      }
-    ];
+      };
+    };
   };
-  wrongArtifactType = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
+  missingArtifact = mkCase {
+    artifacts = providerArtifacts;
+    zones = {
+      dev.resources = guestResources // {
+        guest = guestResources.guest // {
+          spec = guestResources.guest.spec // {
+            systemArtifactId = "missing-system";
           };
         };
-        config.d2b.zones.dev.resources = guestResources // {
-          guest = guestResources.guest // {
-            spec = guestResources.guest.spec // {
-              systemArtifactId = "runtime-cloud-hypervisor";
-            };
-          };
-        };
-      }
-    ];
+      };
+    };
   };
-  invalidDescriptorContract = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b._providerCatalog.entries = [{
-          id = "runtime-cloud-hypervisor";
-          entry = {
-            descriptorDigest = "not-a-digest";
-          };
-        }];
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
-          guest-system = {
-            package = systemPackage;
-            type = "nixos-system";
+  wrongArtifactType = mkCase {
+    artifacts = providerArtifacts;
+    zones = {
+      dev.resources = guestResources // {
+        guest = guestResources.guest // {
+          spec = guestResources.guest.spec // {
+            systemArtifactId = "runtime-cloud-hypervisor";
           };
         };
-        config.d2b.zones.dev.resources = guestResources;
-      }
-    ];
+      };
+    };
   };
-  sameName = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
-          guest-system = {
-            package = systemPackage;
-            type = "nixos-system";
-          };
+  invalidDescriptorContract = mkCase {
+    extraConfig = {
+      _providerCatalog.entries = [{
+        id = "runtime-cloud-hypervisor";
+        entry = {
+          descriptorDigest = "not-a-digest";
         };
-        config.d2b.zones = {
-          alpha.resources = guestResources;
-          beta.resources = guestResources;
-        };
-      }
-    ];
+      }];
+    };
   };
-  bundle = lib.evalModules {
-    modules = [
-      base
+  sameName = mkCase {
+    zones = {
+      alpha.resources = guestResources;
+      beta.resources = guestResources;
+    };
+  };
+  bundle = mkCase {
+    extraModules = [
       bundleBase
       (import ../../../../nixos-modules/resources-zones-processes.nix)
       (import ../../../../nixos-modules/bundle-zones.nix)
-      (import ../default.nix)
-      {
-        config.d2b.artifacts = {
-          runtime-cloud-hypervisor = {
-            package = providerPackage;
-            type = "provider";
-          };
-          guest-system = {
-            package = systemPackage;
-            type = "nixos-system";
-          };
-        };
-        config.d2b.zones.dev.resources = guestResources;
-      }
     ];
     specialArgs = {
       pkgs = {
@@ -232,22 +167,19 @@ let
       };
     };
   };
-  invalidProvider = lib.evalModules {
-    modules = [
-      base
-      (import ../default.nix)
-      {
-        config.d2b.zones.dev.resources = {
-          runtime-cloud-hypervisor = {
-            type = "Provider";
-            spec.config = {
-              controllerExecutionRef = "Host/missing";
-              unsupported = true;
-            };
+  invalidProvider = mkCase {
+    artifacts = { };
+    zones = {
+      dev.resources = {
+        runtime-cloud-hypervisor = {
+          type = "Provider";
+          spec.config = {
+            controllerExecutionRef = "Host/missing";
+            unsupported = true;
           };
         };
-      }
-    ];
+      };
+    };
   };
 in
 {

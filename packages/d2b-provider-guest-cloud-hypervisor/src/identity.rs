@@ -6,8 +6,8 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    ArtifactId, CanonicalJsonValue, DesiredLifecycle, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, ZoneId, ZoneRevision, execution_policy::BoundedToken,
+    ArtifactId, DesiredLifecycle, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    ZoneRevision, execution_policy::BoundedToken,
     resource_schema::canonical_json_bytes,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -841,73 +841,6 @@ pub fn map_commit_response(
         return Err(CommitResponseError::Missing);
     }
     Ok(mapped)
-}
-
-/// Map a generated Resource API CommitBatch response.
-pub fn map_wire_commit_response(
-    batch: &GuestChildBatch,
-    response: &d2b_contracts_resource::resource_proto::CommitBatchResponse,
-) -> Result<CommittedChildren, CommitResponseError> {
-    if response.error.is_some() {
-        return Err(CommitResponseError::ApiError);
-    }
-    let returned = response
-        .resources
-        .iter()
-        .map(committed_child_from_wire)
-        .collect::<Result<Vec<_>, _>>()?;
-    map_commit_response(batch, returned)
-}
-
-fn committed_child_from_wire(
-    resource: &d2b_contracts_resource::resource_proto::ResourceEnvelopeBytes,
-) -> Result<CommittedChild, CommitResponseError> {
-    let identity = resource
-        .identity
-        .as_ref()
-        .ok_or(CommitResponseError::MalformedResponse)?;
-    let resource_ref = ResourceRef::parse(&format!("{}/{}", identity.resource_type, identity.name))
-        .map_err(|_| CommitResponseError::InvalidIdentity)?;
-    let zone =
-        ZoneId::parse(identity.zone.clone()).map_err(|_| CommitResponseError::InvalidIdentity)?;
-    let uid = identity
-        .uid
-        .as_ref()
-        .ok_or(CommitResponseError::MalformedResponse)
-        .and_then(|value| {
-            ResourceUid::parse(value.clone()).map_err(|_| CommitResponseError::InvalidIdentity)
-        })?;
-    let revision = identity
-        .revision
-        .filter(|revision| *revision > 0)
-        .map(ZoneRevision::new)
-        .ok_or(CommitResponseError::MalformedResponse)?;
-    let owner_ref = owner_ref_from_canonical_json(&resource.canonical_json)?;
-    CommittedChild::new(resource_ref, owner_ref, zone, uid, revision)
-        .map_err(|_| CommitResponseError::InvalidIdentity)
-}
-
-fn owner_ref_from_canonical_json(bytes: &[u8]) -> Result<ResourceRef, CommitResponseError> {
-    let value =
-        CanonicalJsonValue::parse(bytes).map_err(|_| CommitResponseError::MalformedResponse)?;
-    if value.to_canonical_bytes() != bytes {
-        return Err(CommitResponseError::MalformedResponse);
-    }
-    let root = value
-        .as_object()
-        .ok_or(CommitResponseError::MalformedResponse)?;
-    let metadata = root
-        .get("metadata")
-        .and_then(CanonicalJsonValue::as_object)
-        .ok_or(CommitResponseError::MalformedResponse)?;
-    let owner = metadata
-        .get("ownerRef")
-        .and_then(|value| match value {
-            CanonicalJsonValue::String(owner) => Some(owner.as_str()),
-            _ => None,
-        })
-        .ok_or(CommitResponseError::MalformedResponse)?;
-    ResourceRef::parse(owner).map_err(|_| CommitResponseError::InvalidIdentity)
 }
 
 /// An opaque host-global runtime scope for one Guest incarnation and role.

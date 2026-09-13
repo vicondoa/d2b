@@ -2,7 +2,6 @@
 
 use std::fmt;
 
-use async_trait::async_trait;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
@@ -205,7 +204,7 @@ impl GuestSessionEvidence {
         if guest_ref.resource_type().as_str() != "Guest"
             || guest_ref.name().as_str().is_empty()
             || reconnect_generation == 0
-            || !valid_digest(&boot_identity_digest)
+            || SchemaFingerprint::parse(boot_identity_digest.as_str()).is_err()
         {
             return Err(GuestSessionError::AuthenticationFailed);
         }
@@ -429,13 +428,6 @@ impl fmt::Debug for GuestSessionEvidence {
     }
 }
 
-fn valid_digest(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn validate_capabilities(
     capabilities: impl IntoIterator<Item = String>,
 ) -> Result<Vec<String>, GuestSessionError> {
@@ -479,20 +471,6 @@ impl GuestSessionError {
             Self::Disconnected => "component-session-disconnected",
         }
     }
-}
-
-/// Authenticated Guest ComponentSession evidence probe.
-#[async_trait]
-pub trait GuestSessionEvidenceProbe: Send + Sync {
-    /// Observe the current authenticated Guest session and its capabilities.
-    async fn observe(
-        &self,
-        expected_cid: u32,
-        deadline_ms: u32,
-    ) -> Result<GuestSessionEvidence, GuestSessionError>;
-
-    /// Close the authenticated Guest session before VMM teardown.
-    async fn close(&self, expected_cid: u32) -> Result<(), GuestSessionError>;
 }
 
 #[cfg(test)]

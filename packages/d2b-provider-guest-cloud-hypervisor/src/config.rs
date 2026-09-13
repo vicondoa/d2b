@@ -6,16 +6,6 @@ use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 
-/// Console mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub enum ConsoleType {
-    /// Headless console.
-    Null,
-    /// Virtio console.
-    Virtio,
-}
-
 /// Provider root configuration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -44,7 +34,7 @@ pub struct CloudHypervisorConfig {
 
 impl CloudHypervisorConfig {
     /// Validate root configuration.
-    pub fn validate(&self) -> Result<(), CloudHypervisorConfigError> {
+    pub fn validate(&self) -> Result<(), ()> {
         if self.controller_execution_ref.resource_type().as_str() != "Host"
             || !(1..=1024).contains(&self.default_vcpus)
             || !(128..=524_288).contains(&self.default_memory_mb)
@@ -55,7 +45,7 @@ impl CloudHypervisorConfig {
             || self.health_check_failure_threshold == 0
             || !(1..=900_000).contains(&self.startup_deadline_ms)
         {
-            return Err(CloudHypervisorConfigError::Invalid);
+            return Err(());
         }
         Ok(())
     }
@@ -80,69 +70,4 @@ impl fmt::Debug for CloudHypervisorConfig {
             .field("startup_deadline_ms", &self.startup_deadline_ms)
             .finish()
     }
-}
-
-/// Guest-specific VMM settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CloudHypervisorGuestSettings {
-    /// VCPU count override.
-    pub vcpus: Option<u16>,
-    /// Memory override.
-    pub memory_mb: Option<u32>,
-    /// Machine type override.
-    pub machine_type: Option<OpaqueAzureRef>,
-    /// Console mode.
-    pub console_type: ConsoleType,
-    /// Whether a serial console is emitted.
-    pub serial_port: bool,
-    /// Whether pvpanic is enabled.
-    pub pvpanic: bool,
-    /// Optional watchdog override.
-    pub watchdog_override: Option<bool>,
-    /// Whether shared memory is enabled.
-    pub memory_shared: bool,
-    /// Whether a virtiofs attachment exists.
-    pub has_virtiofs_attachment: bool,
-    /// Required top-level system artifact id.
-    pub system_artifact_id: Option<String>,
-}
-
-impl CloudHypervisorGuestSettings {
-    /// Validate Guest settings and the system artifact rule.
-    pub fn validate(&self) -> Result<(), CloudHypervisorConfigError> {
-        if self.vcpus.is_some_and(|value| !(1..=1024).contains(&value))
-            || self
-                .memory_mb
-                .is_some_and(|value| !(128..=524_288).contains(&value))
-            || self
-                .machine_type
-                .as_ref()
-                .is_some_and(|value| !matches!(value.as_str(), "q35" | "microvm"))
-            || (!self.memory_shared && self.has_virtiofs_attachment)
-            || self.system_artifact_id.is_none()
-            || self
-                .system_artifact_id
-                .as_ref()
-                .is_some_and(|id| id.is_empty() || id.len() > 63 || !valid_token(id))
-        {
-            return Err(CloudHypervisorConfigError::Invalid);
-        }
-        Ok(())
-    }
-}
-
-/// Configuration validation failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloudHypervisorConfigError {
-    /// A bound, reference, or required field was invalid.
-    Invalid,
-}
-
-fn valid_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.as_bytes()[0].is_ascii_lowercase()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }

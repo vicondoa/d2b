@@ -38,10 +38,10 @@ pub struct AttachmentRef(String);
 
 impl AttachmentRef {
     /// Construct a bounded opaque attachment ref.
-    pub fn new(value: impl Into<String>) -> Result<Self, BootstrapGraphError> {
+    pub fn new(value: impl Into<String>) -> Result<Self, ()> {
         let value = value.into();
         if value.is_empty() || value.len() > 128 || !value.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(BootstrapGraphError::InvalidReference);
+            return Err(());
         }
         Ok(Self(value))
     }
@@ -75,7 +75,7 @@ impl BootstrapGraph {
         guest_ref: ResourceRef,
         execution_ref: ResourceRef,
         descriptor: &VerifiedGuestSetupDescriptor,
-    ) -> Result<GuestChildGraphPlan, BootstrapGraphError> {
+    ) -> Result<GuestChildGraphPlan, ()> {
         GuestChildGraphPlan::from_descriptor(zone, guest_ref, execution_ref, descriptor)
     }
 
@@ -86,7 +86,7 @@ impl BootstrapGraph {
         volumes: Vec<ResourceRef>,
         bindings: Vec<ResourceRef>,
         attachments: Vec<AttachmentRef>,
-    ) -> Result<Self, BootstrapGraphError> {
+    ) -> Result<Self, ()> {
         if devices
             .iter()
             .chain(networks.iter())
@@ -94,7 +94,7 @@ impl BootstrapGraph {
             .chain(bindings.iter())
             .any(|reference| reference.resource_type().as_str() == "Host")
         {
-            return Err(BootstrapGraphError::InvalidReference);
+            return Err(());
         }
         Ok(Self {
             devices,
@@ -168,9 +168,9 @@ impl GuestChildGraphPlan {
         guest_ref: ResourceRef,
         execution_ref: ResourceRef,
         descriptor: &VerifiedGuestSetupDescriptor,
-    ) -> Result<Self, BootstrapGraphError> {
+    ) -> Result<Self, ()> {
         let batch = GuestChildBatch::from_descriptor(zone, guest_ref, execution_ref, descriptor)
-            .map_err(|_| BootstrapGraphError::InvalidReference)?;
+            .map_err(|_| ())?;
         let mut creation_order = child_refs(&batch);
         creation_order.sort_by_key(|target| {
             (
@@ -214,13 +214,6 @@ fn child_refs(batch: &GuestChildBatch) -> Vec<ResourceRef> {
         .iter()
         .map(|mutation| mutation.target().clone())
         .collect()
-}
-
-/// Bootstrap graph construction failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BootstrapGraphError {
-    /// A reference or opaque ticket was invalid.
-    InvalidReference,
 }
 
 #[cfg(test)]

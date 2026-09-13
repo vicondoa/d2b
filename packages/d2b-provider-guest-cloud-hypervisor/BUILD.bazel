@@ -14,6 +14,15 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+def _guest_test(name, srcs, deps):
+    rust_test(
+        name = name,
+        srcs = srcs,
+        compile_data = ["Cargo.toml"],
+        visibility = ["//visibility:public"],
+        deps = deps + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    )
+
 rust_library(
     name = "d2b_provider_guest_cloud_hypervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
@@ -88,148 +97,67 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
-rust_test(
-    name = "adoption",
-    srcs = [
-        "tests/adoption.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "adoption_property_test",
-    srcs = [
-        "tests/adoption_property_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
+_guest_test(
     name = "finalize_ordering_test",
-    srcs = [
-        "tests/finalize_ordering_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    srcs = ["tests/finalize_ordering_test.rs"],
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource"],
 )
 
-rust_test(
+_guest_test(
     name = "controller",
     srcs = [
         "tests/controller.rs",
+        "tests/common/mod.rs",
     ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ],
 )
 
-rust_test(
+_guest_test(
     name = "reconcile_state_machine_test",
     srcs = [
         "tests/reconcile_state_machine_test.rs",
+        "tests/common/mod.rs",
     ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ],
 )
 
-rust_test(
+_guest_test(
     name = "state_status_test",
-    srcs = [
-        "tests/state_status_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
+    srcs = ["tests/state_status_test.rs"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ],
 )
 
-rust_test(
+_guest_test(
     name = "guest_spec_validation_test",
     srcs = [
         "tests/guest_spec_validation_test.rs",
+        "tests/common/mod.rs",
     ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ],
 )
 
-rust_test(
+_guest_test(
     name = "redaction_test",
-    srcs = [
-        "tests/redaction_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
+    srcs = ["tests/redaction_test.rs"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "health_check_test",
-    srcs = [
-        "tests/health_check_test.rs",
     ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-session:d2b_session",
-        "//packages/d2b-session-unix:d2b_session_unix",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "guest_local_seed_test",
-    srcs = [
-        "tests/guest_local_seed_test.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-session:d2b_session",
-        "//packages/d2b-session-unix:d2b_session_unix",
-        ":d2b_provider_guest_cloud_hypervisor",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

@@ -286,13 +286,6 @@ fn disruptive_upgrade_preserves_durable_volume_and_advances_session_generation()
     assert!(plan.preserve_state());
     assert_eq!(plan.durable_volumes(), &[durable]);
     assert_eq!(plan.next_session_generation(), 10);
-    assert!(!d2b_provider_guest_cloud_hypervisor::session_generation_is_fresh(Some(9), 9));
-    assert!(
-        d2b_provider_guest_cloud_hypervisor::session_generation_is_fresh(
-            Some(9),
-            plan.next_session_generation()
-        )
-    );
     assert!(
         plan.transient_children()
             .iter()

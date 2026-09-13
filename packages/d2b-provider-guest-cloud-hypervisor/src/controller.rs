@@ -23,7 +23,7 @@ use crate::{
     health::{GuestSessionEvidence, GuestSessionHealth},
     identity::{
         ChildCreateBody, ChildMutation, ChildRole, ChildRoleSet, CommittedChild, GuestChildBatch,
-        PrivateRuntimeScope, derive_private_runtime_scope,
+        PrivateRuntimeScope, derive_private_runtime_scope, map_commit_response,
     },
     shutdown::{
         FencedChild, FinalizationDisposition, FinalizationStep, GuestFinalizationInput,
@@ -39,47 +39,6 @@ use crate::{
 pub const GUEST_CONTROLLER_FINALIZER: &str = "runtime-cloud-hypervisor.d2bus.org/guest";
 /// Default descriptor repair interval.
 pub const CLOUD_HYPERVISOR_REPAIR_INTERVAL_SECS: u64 = 30;
-
-/// The shared-Runner contract for the Cloud Hypervisor Guest owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CloudHypervisorRunnerContract {
-    resource_type: &'static str,
-    finalizer: &'static str,
-    repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-}
-
-impl CloudHypervisorRunnerContract {
-    /// Return the owned ResourceType.
-    pub const fn resource_type(self) -> &'static str {
-        self.resource_type
-    }
-
-    /// Return the exact Guest finalizer.
-    pub const fn finalizer(self) -> &'static str {
-        self.finalizer
-    }
-
-    /// Return the bounded repair interval.
-    pub const fn repair_interval_secs(self) -> u64 {
-        self.repair_interval_secs
-    }
-
-    /// Whether watched configuration is treated as a dependency.
-    pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
-    }
-}
-
-/// Return the shared-Runner contract for Cloud Hypervisor Guests.
-pub const fn cloud_hypervisor_runner_contract() -> CloudHypervisorRunnerContract {
-    CloudHypervisorRunnerContract {
-        resource_type: "Guest",
-        finalizer: GUEST_CONTROLLER_FINALIZER,
-        repair_interval_secs: CLOUD_HYPERVISOR_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-    }
-}
 
 /// Errors returned by the authenticated Resource API seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2106,18 +2065,18 @@ where
                             | CloudHypervisorResourceApiError::Truncated
                     ) =>
                 {
-                    return self
-                        .pending_after_batch(
+                    return Ok(CloudHypervisorReconcileOutcome::from_status(
+                        self.project_status(
                             &guest,
                             &child_plan,
                             &children,
                             dependency_readiness,
                             dependency_conditions,
-                            true,
-                            lifecycle_conditions,
+                            &lifecycle_conditions,
                             force_degraded,
-                        )
-                        .await;
+                        ),
+                        true,
+                    ));
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -2131,42 +2090,25 @@ where
             };
             match response {
                 GuestChildCommitResponse::Committed(returned) => {
-                    match validate_commit_response(&batch, returned) {
-                        Ok(_) => {
-                            return self
-                                .pending_after_batch(
-                                    &guest,
-                                    &child_plan,
-                                    &children,
-                                    dependency_readiness,
-                                    dependency_conditions,
-                                    true,
-                                    lifecycle_conditions,
-                                    force_degraded,
-                                )
-                                .await;
-                        }
-                        Err(CloudHypervisorError::BatchResponseInvalid) => {
-                            tracing::warn!(
-                                zone = ?guest.zone,
-                                resource = ?guest.resource_ref,
-                                "child commit response failed validation; deferring with pending status"
-                            );
-                            return self
-                                .pending_after_batch(
-                                    &guest,
-                                    &child_plan,
-                                    &children,
-                                    dependency_readiness,
-                                    dependency_conditions,
-                                    true,
-                                    lifecycle_conditions,
-                                    force_degraded,
-                                )
-                                .await;
-                        }
-                        Err(error) => return Err(error),
+                    if map_commit_response(batch.source(), returned).is_err() {
+                        tracing::warn!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            "child commit response failed validation; deferring with pending status"
+                        );
                     }
+                    return Ok(CloudHypervisorReconcileOutcome::from_status(
+                        self.project_status(
+                            &guest,
+                            &child_plan,
+                            &children,
+                            dependency_readiness,
+                            dependency_conditions,
+                            &lifecycle_conditions,
+                            force_degraded,
+                        ),
+                        true,
+                    ));
                 }
                 GuestChildCommitResponse::Uncertain | GuestChildCommitResponse::Truncated => {
                     tracing::debug!(
@@ -2174,18 +2116,18 @@ where
                         resource = ?guest.resource_ref,
                         "child commit outcome uncertain or truncated; requiring relist"
                     );
-                    return self
-                        .pending_after_batch(
+                    return Ok(CloudHypervisorReconcileOutcome::from_status(
+                        self.project_status(
                             &guest,
                             &child_plan,
                             &children,
                             dependency_readiness,
                             dependency_conditions,
-                            true,
-                            lifecycle_conditions,
+                            &lifecycle_conditions,
                             force_degraded,
-                        )
-                        .await;
+                        ),
+                        true,
+                    ));
                 }
             }
         }
@@ -2856,32 +2798,6 @@ where
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
     }
 
-    async fn pending_after_batch(
-        &self,
-        guest: &GuestSnapshot,
-        plan: &GuestChildGraphPlan,
-        children: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
-        dependency_readiness: DependencyReadiness,
-        conditions: Vec<GuestCondition>,
-        relist_required: bool,
-        extra_conditions: Vec<GuestCondition>,
-        force_degraded: bool,
-    ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
-        let status = self.project_status(
-            guest,
-            plan,
-            children,
-            dependency_readiness,
-            conditions,
-            &extra_conditions,
-            force_degraded,
-        );
-        Ok(CloudHypervisorReconcileOutcome::from_status(
-            status,
-            relist_required,
-        ))
-    }
-
     fn validate_owner_relist(
         &self,
         guest: &GuestSnapshot,
@@ -3127,35 +3043,6 @@ impl<A> fmt::Debug for CloudHypervisorController<A> {
             .field("registered", &self.registered)
             .finish()
     }
-}
-
-fn validate_commit_response(
-    batch: &GuestChildCreateBatch,
-    returned: Vec<CommittedChild>,
-) -> Result<BTreeMap<ResourceRef, CommittedChild>, CloudHypervisorError> {
-    let expected = batch
-        .mutations()
-        .iter()
-        .map(|mutation| mutation.target().clone())
-        .collect::<BTreeSet<_>>();
-    if returned.len() != expected.len() {
-        return Err(CloudHypervisorError::BatchResponseInvalid);
-    }
-    let mut seen_refs = BTreeSet::new();
-    let mut seen_uids = BTreeSet::new();
-    let mut mapped = BTreeMap::new();
-    for child in returned {
-        if !expected.contains(child.resource_ref())
-            || child.zone() != batch.zone()
-            || child.owner_ref() != batch.owner_ref()
-            || !seen_refs.insert(child.resource_ref().clone())
-            || !seen_uids.insert(child.uid().clone())
-        {
-            return Err(CloudHypervisorError::BatchResponseInvalid);
-        }
-        mapped.insert(child.resource_ref().clone(), child);
-    }
-    Ok(mapped)
 }
 
 fn materialize_child_payload(mutation: &ChildMutation) -> Result<Vec<u8>, CloudHypervisorError> {
