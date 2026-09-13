@@ -1,8 +1,13 @@
 # Clippy configuration for the whole workspace (U33, plan R22/R25).
 #
-# `clippy::disallowed_methods` is denied in the workspace manifest's
-# `[lints.clippy]` table. Every entry below names a call that blocks the thread
-# it runs on, plus the replacement this repository already uses or ships.
+# `clippy::disallowed_methods` is armed by this list; its level lives in the
+# workspace manifest's `[lints.clippy]` table. That level is `deny` in
+# principle, but while the 4,948-site blocking-API backlog is converted it
+# stands at `allow`, with the census and the removal condition recorded beside
+# it in `Cargo.toml`; `make check-clippy` runs clippy with the table's levels
+# and fails on this lint the moment it is flipped to `deny`. Every entry below
+# names a call that blocks the thread it runs on, plus the replacement this
+# repository already uses or ships.
 # The lint is deliberately global: it does not know whether the caller is async,
 # so a genuinely synchronous path (a command-line-only path, a `cfg(test)`
 # helper, a dedicated blocking worker thread) takes an inline
@@ -42,6 +47,15 @@
 # produced). Re-evaluate if the toolchain moves to nightly; until then the
 # guard-across-await class is covered by `clippy::await_holding_lock` and
 # `clippy::await_holding_refcell_ref`.
+#
+# Those two lints do not cover the scoped case: a synchronous lock *acquired*
+# inside an `async fn` whose guard drops before every suspension point still
+# parks the executor worker while another thread holds the lock, and no clippy
+# lint sees it. `std::sync` locking on an async path is the rule; the async
+# half therefore needs a source-level policy check that scans for lock
+# acquisition lexically inside `async fn` bodies and fails closed. That check
+# is not implemented yet, so `await_holding_lock` is the mechanical half of the
+# rule only - see the note beside the workspace lint table in `Cargo.toml`.
 #
 # A path that does not resolve in a given crate (for example `nix::sys::socket`
 # in a crate that does not depend on `nix`) simply does not apply there; clippy

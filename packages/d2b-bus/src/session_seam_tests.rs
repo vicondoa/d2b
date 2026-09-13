@@ -1610,34 +1610,37 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
         }
     }
 
-    let lists = lists.lock().unwrap();
-    assert_eq!(lists.len(), 1);
-    assert_eq!(
-        lists[0].resource_types,
-        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
-    );
-    assert_eq!(lists[0].resource_names, Vec::new());
-    assert_eq!(lists[0].filters.len(), 1);
-    assert_eq!(lists[0].filters[0].field, "owner.resourceUid");
-    assert_eq!(
-        lists[0].filters[0].values,
-        vec![owner_uid.as_str().to_owned()]
-    );
-    drop(lists);
+    {
+        let lists = lists.lock().unwrap();
+        assert_eq!(lists.len(), 1);
+        assert_eq!(
+            lists[0].resource_types,
+            vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
+        );
+        assert_eq!(lists[0].resource_names, Vec::new());
+        assert_eq!(lists[0].filters.len(), 1);
+        assert_eq!(lists[0].filters[0].field, "owner.resourceUid");
+        assert_eq!(
+            lists[0].filters[0].values,
+            vec![owner_uid.as_str().to_owned()]
+        );
+    }
 
-    let watches = watches.lock().unwrap();
-    assert_eq!(watches.len(), 1);
-    assert_eq!(
-        watches[0].resource_types,
-        vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
-    );
-    assert_eq!(watches[0].resource_names, Vec::new());
-    assert_eq!(watches[0].filters.len(), 1);
-    assert_eq!(watches[0].filters[0].field, "owner.resourceUid");
-    assert_eq!(
-        watches[0].filters[0].values,
-        vec![owner_uid.as_str().to_owned()]
-    );
+    {
+        let watches = watches.lock().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(
+            watches[0].resource_types,
+            vec![d2b_contracts_resource::v3::ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()]
+        );
+        assert_eq!(watches[0].resource_names, Vec::new());
+        assert_eq!(watches[0].filters.len(), 1);
+        assert_eq!(watches[0].filters[0].field, "owner.resourceUid");
+        assert_eq!(
+            watches[0].filters[0].values,
+            vec![owner_uid.as_str().to_owned()]
+        );
+    }
 
     service_task.abort();
     let _ = service_task.await;

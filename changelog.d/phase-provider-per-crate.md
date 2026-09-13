@@ -500,6 +500,28 @@
   the census command, and the removal condition sit in the root manifest next
   to the allowance.
 
+- The blocking-API rule now has a gate and its first enforced lints. `make
+  check-clippy` (cargo-scoped, because Bazel has no clippy aspect over the
+  workspace crates) runs `cargo clippy --workspace --all-targets --locked
+  --keep-going` with `RUSTFLAGS` replaced by an empty value - the config's
+  `-D warnings` is cleared so the pre-existing `clippy::all` corpus stays
+  non-fatal and the `[workspace.lints]` levels decide what fails - and `check`
+  and `check-ci` depend on it. `await_holding_lock` and
+  `await_holding_refcell_ref` are denied there and green: the one production
+  lock-across-await site (the daemon runtime's `shutdown`, which held the
+  registrar mutex guard across each session's revoke await) now takes the
+  registrar out of its shared slot before the per-session awaits, and the two
+  test guards in `d2b-bus`'s session seam tests are scoped so no guard is in
+  scope at an await. `disallowed_methods` stays allowed at the table for its
+  4,948-site backlog, with the census and the flip condition recorded beside
+  it; the gate enforces it the moment that line flips, with no gate change.
+  What those lints still cannot see - a synchronous lock acquired inside an
+  `async fn` whose guard drops before every await, which parks the executor
+  worker just the same - needs a source-level check (a lexical scan for
+  `std::sync` lock acquisition in `async fn` bodies, fail-closed). It is not
+  landed; `clippy.toml` and the root manifest record that gap rather than
+  implying coverage.
+
 ### Removed
 
 - Seven broker operations nothing in tree constructed are gone with their rows,

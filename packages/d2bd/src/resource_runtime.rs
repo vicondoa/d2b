@@ -9083,6 +9083,16 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .into_inner()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        // Take the registrar out of its shared slot for the whole teardown:
+        // each session's `revoke_in_place` is an await, so no `std::sync`
+        // guard may be held across it (`clippy::await_holding_lock`). The
+        // value goes back before the drops below, so the tail's
+        // `Arc::try_unwrap` keeps its meaning: it fails exactly when another
+        // owner still shares this runtime's slot.
+        let mut session_registrar = registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
         for (_, mut session) in sessions {
             session.cancel_backend_lease();
             if d2b_provider_guest_cloud_hypervisor::is_provider_ref(
@@ -9104,12 +9114,15 @@ impl ZoneResourceRuntime {
             session.service_task.abort();
             let _ = session.service_task.await;
             let mut ingress = session.ingress;
-            let mut registrar = registrar
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
-            if let Some(registrar) = registrar.as_mut() {
+            if let Some(registrar) = session_registrar.as_mut() {
                 let _ = registrar.revoke_in_place(&mut ingress).await;
             }
+        }
+        if let Some(session_registrar) = session_registrar {
+            *registrar
+                .lock()
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+                Some(session_registrar);
         }
         drop(process_status_client);
         drop(

@@ -17,7 +17,7 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
-	check-ci test-integration test-host-integration perf \
+	check-clippy check-ci test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-flake-check
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
 D2B_MAKE_UTILITY_TARGETS := changelog-fold generate
@@ -70,7 +70,7 @@ else
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-ci check-fast check-tier0 \
+        check check-clippy check-ci check-fast check-tier0 \
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
@@ -116,8 +116,27 @@ BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
 D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG) $(if $(strip $(D2B_BAZEL_JOBS)),--jobs=$(D2B_BAZEL_JOBS)) $(if $(strip $(D2B_BAZEL_LOCAL_TEST_JOBS)),--local_test_jobs=$(D2B_BAZEL_LOCAL_TEST_JOBS)) $(if $(strip $(D2B_BAZEL_TEST_OUTPUT)),--test_output=$(D2B_BAZEL_TEST_OUTPUT)) --test_env=D2B_REPO_ROOT="$(CURDIR)"
 export D2B_BAZEL_PROFILE D2B_BAZEL_LOCAL_TEST_JOBS D2B_BAZEL_JOBS D2B_BAZEL_TEST_OUTPUT
 
+## check - Layer-1 Bazel gate, preceded by the cargo clippy deny-rule gate.
+## The clippy half is cargo-scoped because Bazel has no clippy aspect over the
+## workspace crates; `check` runs in the same dispatched shell either way.
+check: check-clippy
+
+## check-clippy - cargo clippy over the workspace with the workspace lint
+## table's levels as the failure condition. `.cargo/config.toml` sets
+## `-D warnings` (this worktree's copy and the enclosing checkout's both apply,
+## and cargo merges their rustflags), which would turn the pre-existing
+## `clippy::all` corpus (833 diagnostics at 040896e9f) into gate failures.
+## `RUSTFLAGS=` replaces the config's rustflags instead of merging with them,
+## so the manifest decides: only lints denied by `[workspace.lints]` fail the
+## build, everything else stays a warning. `disallowed_methods` is allowed
+## there while its 4,948-site backlog is converted - see the removal condition
+## beside the allowance in Cargo.toml; `await_holding_lock` and
+## `await_holding_refcell_ref` are denied and enforced by this target.
+check-clippy:
+	RUSTFLAGS= cargo clippy --workspace --all-targets --locked --keep-going
+
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
-check-ci:
+check-ci: check-clippy
 	$(D2B_BAZEL_TEST) //bazel/checks:check
 	$(MAKE) test-integration
 
