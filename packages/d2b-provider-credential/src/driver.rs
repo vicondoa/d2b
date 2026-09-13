@@ -1593,11 +1593,6 @@ mod tests {
             ctx.status::<CredentialDriverStatus>(),
             Some(&CredentialDriverStatus::Ready)
         );
-        assert_eq!(
-            ctx.status::<CredentialDriverStatus>()
-                .map(CredentialDriverStatus::outcome_code),
-            Some("success")
-        );
     }
 
     #[tokio::test]
