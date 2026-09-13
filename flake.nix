@@ -157,6 +157,9 @@
           cp -r ${./packages/d2bd} $out/packages/d2bd
           cp -r ${./packages/d2bd-runtime} $out/packages/d2bd-runtime
           mkdir -p $out/docs/reference/schemas/v3/providers
+          mkdir -p $out/docs/reference/policy
+          cp ${./docs/reference/policy/principal-allocation.json} \
+            $out/docs/reference/policy/principal-allocation.json
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
             $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
           cp ${./docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \

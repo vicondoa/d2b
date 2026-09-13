@@ -179,3 +179,43 @@
   empty: no module in a shared crate declares a resource driver, so the list
   retires its last entry with the Guest move and a driver outside a provider
   crate fails with its module path instead of an exemption.
+
+- The controller family's policy types now have their authored spec schemas:
+  `Command` (executable, argv placeholder slots validated against the declared
+  parameters, JSON Schema parameters, worker `roleRef`, and the intent facet),
+  `Operation` (payload schema, destructive flag, secret-access ceiling, audit
+  facet with retained fields, redaction keys and target label, audit-join
+  facet, authority facet, fd contract, bounds, payload provenance, and the
+  inherited wire tag), and `SeccompProfile` (syscall allowlist, namespace and
+  cgroup sets, and inline device-node binds). A payload schema is always a
+  closed object, and a `writeOnly` property never carries a
+  default/enum/const/examples value. The compiler's schema farm now resolves
+  every standard ResourceType.
+- The foundation seed commits the committed policy rows in the order the
+  resource plane depends on them: the zone itself, the declared postures,
+  roles, and commands, the provider self-bindings, the spawn operations the
+  process controller materializes from those commands, and the operator
+  bindings. Resolution is declare-then-validate over the committed set, so the
+  command-to-role-to-operation cycle resolves without an ordering hack and a
+  refused seed writes nothing. An uncommitted profile, command, role,
+  operation, or principal is a named refusal.
+- Operation materialization is authorized by the process controller's own
+  committed self-binding alone: a role that lacks the command scope cannot
+  publish the operation, and a controller with no binding materializes
+  nothing.
+- Principal uid/gid come from a committed allocation document; manifests
+  declare principals by name only, an unseen name takes the next free id in
+  the reserved range, and an id a host account already owns is refused. The
+  ids a name was allocated are stable across restarts and hosts, and a role
+  posture naming an unallocated principal refuses.
+- A zone-local resource plane now refuses a write to a system-homed type
+  (`Command`, `Operation`, `SeccompProfile`) with the terminal named refusal
+  shape the plane partition uses; only the foundation plane the seed runs on
+  carries those rows.
+- Role rows carry the authority facet (`operationRefs`, `commandRefs`) and the
+  optional posture facet (`seccompRef`, `principalRef`, capabilities,
+  namespaces, mounts, umask, and the user-namespace flag), and RoleBinding
+  rows carry the typed scope lists (`resourceRefs`, `zoneRefs`,
+  `executionRefs`) beside the existing subjects and scope narrowing. Both
+  facets are additive: existing rules, subjects, and committed rows keep their
+  exact wire shape.

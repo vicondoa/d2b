@@ -16112,6 +16112,27 @@ async fn open_resource_plane(
             // evidence (the same seam the G5 reader bridge uses), never a
             // durable status copy.
             inputs.provider_effects = runtime.provider_driver_effects();
+            // The durable authority's home carries the foundation seed: the
+            // zone itself, the built-in roles, the declared commands, the
+            // provider self-bindings, the materialized spawn operations, and
+            // the operator bindings commit before this plane's manager
+            // spawns. Every other plane is zone-local and refuses a write to
+            // a system-homed type.
+            if _zone == &topology.root {
+                let allocation = crate::principal_allocation::PrincipalAllocation::committed()
+                    .map_err(|error| {
+                        tracing::error!(
+                            zone = %_zone.as_str(),
+                            error = %error,
+                            "committed principal allocation is malformed"
+                        );
+                        resource_runtime::ResourceRuntimeError::HandlerNotReady
+                    })?;
+                inputs.foundation = Some(crate::resource_plane_v3::FoundationInputs {
+                    declarations: crate::foundation_seed::core_declarations(),
+                    allocation,
+                });
+            }
             let plane_v3 = crate::resource_plane_v3::ResourcePlaneV3::open(inputs).await.map_err(|error| {
                 tracing::error!(zone = %_zone.as_str(), error = ?error, "v3 resource plane open failed");
                 resource_runtime::ResourceRuntimeError::HandlerNotReady

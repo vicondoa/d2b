@@ -75,7 +75,7 @@ use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    AllowAll, DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
+    DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
     ResourceManagerMsg, ResourceSelector,
 };
 use d2b_resource_runtime::provider::ProviderDirectory;
@@ -1394,6 +1394,20 @@ pub struct ConstructionInputs {
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
     pub interaction_effects: Arc<dyn InteractionDriverEffects>,
+    /// The committed policy rows this plane seeds before its manager spawns.
+    ///
+    /// The composition sets this for the foundation plane - the durable
+    /// authority's home - and leaves it clear for every zone-local plane, so
+    /// a system-homed row can never be written outside the seed.
+    pub foundation: Option<FoundationInputs>,
+}
+
+/// The declarations one foundation plane seeds before its manager spawns.
+pub struct FoundationInputs {
+    /// The declared policy rows.
+    pub declarations: crate::foundation_seed::FoundationDeclarations,
+    /// The committed principal allocation the postures resolve through.
+    pub allocation: crate::principal_allocation::PrincipalAllocation,
 }
 
 /// Production construction for one zone under `open_resource_plane`: reuse
@@ -1587,6 +1601,7 @@ impl ConstructionInputs {
                 Arc::clone(state),
                 zone.clone(),
             )),
+            foundation: None,
         })
     }
 }
@@ -1695,6 +1710,8 @@ fn check_registry_catalog(
 pub enum PlaneError {
     #[error("spec store open failed: {0}")]
     SpecStore(#[from] d2b_resource_runtime::spec_store::SpecStoreError),
+    #[error("foundation seed failed: {0}")]
+    FoundationSeed(String),
     #[error("provider registration failed: {0}")]
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
@@ -1977,6 +1994,32 @@ impl ResourcePlaneV3 {
         // and the registered set is cross-checked against the generated
         // converted-type catalog before the manager spawns.
         let mut providers = Self::build_providers(&inputs)?;
+        // The foundation plane commits its declared policy rows - the system
+        // zone itself, the postures, roles, commands, self-bindings, the
+        // materialized spawn operations, and the operator bindings - before
+        // its manager spawns, so every seeded row's actor starts from a
+        // committed row (F1). The manager's pre_start loads them.
+        if let Some(foundation) = &inputs.foundation {
+            // The store is a threaded handle, so the seed drives it the same
+            // way this constructor spawns the manager below: on the ambient
+            // runtime, from a blocking section.
+            let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                PlaneError::FoundationSeed("the foundation seed requires a tokio runtime".into())
+            })?;
+            let seed = crate::foundation_seed::FoundationSeed::new(
+                foundation.declarations.clone(),
+                foundation.allocation.clone(),
+            );
+            let report = tokio::task::block_in_place(|| runtime.block_on(seed.run(&store, &providers)))
+                .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
+            tracing::info!(
+                zone = %inputs.zone.as_str(),
+                committed = report.committed.len(),
+                materialized = report.materialized.len(),
+                unchanged = report.unchanged,
+                "foundation seed committed the policy rows"
+            );
+        }
         providers.mark_plane_open();
         check_registry_catalog(
             providers.registered_types(),
@@ -2000,7 +2043,9 @@ impl ResourcePlaneV3 {
             store: Arc::clone(&store),
             providers,
             hub: Arc::clone(&hub),
-            admission: Arc::new(AllowAll),
+            admission: Arc::new(crate::foundation_seed::SystemZoneWriteFence::new(
+                inputs.foundation.is_some(),
+            )),
             decoders,
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
@@ -2853,6 +2898,7 @@ mod tests {
                 },
                 guest_effects: Arc::new(FakeGuestEffects),
                 interaction_effects: Arc::new(FakeInteractionEffects),
+                foundation: None,
             },
             readiness,
         )
@@ -3615,5 +3661,110 @@ mod tests {
             },
         }))
         .expect("child envelope")
+    }
+    /// A system-homed policy row as a caller would submit it.
+    fn command_desired(zone: &str, name: &str) -> DesiredResource {
+        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
+            "exec": "/usr/lib/d2b/libexec/virtiofsd",
+            "argv": ["--socket-path", "{socketPath}"],
+            "params": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "socketPath": { "type": "string" } }
+            },
+            "roleRef": "Role/worker",
+            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+        }))
+        .expect("canonical command spec");
+        let metadata = serde_json::to_vec(&serde_json::json!({
+            "annotations": {},
+            "labels": {},
+            "ownerRef": null
+        }))
+        .expect("metadata");
+        DesiredResource {
+            key: ResourceKey::new(zone, "Command", name),
+            spec,
+            metadata,
+            provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
+        }
+    }
+
+    fn api_subject(principal: &str) -> d2b_resource_runtime::manager::MutationSubject {
+        d2b_resource_runtime::manager::MutationSubject {
+            principal: principal.to_owned(),
+            origin: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
+        }
+    }
+
+    /// A zone-local plane is not the foundation plane: a system-homed row is
+    /// refused terminally, naming the type and the caller.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zone_local_plane_refuses_a_system_homed_row() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+
+        let error = plane
+            .client()
+            .apply(api_subject("User/alice"), command_desired("test", "worker"))
+            .await
+            .expect_err("a system-homed write is refused");
+        assert!(
+            matches!(
+                &error,
+                d2b_resource_runtime::error::ResourceError::AdmissionDenied {
+                    type_name,
+                    principal,
+                    ..
+                } if type_name == "Command" && principal == "User/alice"
+            ),
+            "unexpected refusal: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("wrong plane"),
+            "the refusal keeps the named shape: {error}"
+        );
+        // The refused row never reached the durable store.
+        assert!(plane.store().list(SpecSelector::default()).await.expect("list")
+            .iter()
+            .all(|row| row.key.type_name != "Command"));
+    }
+
+    /// The foundation plane commits the seeded policy rows before its manager
+    /// starts, and admits the writes only it may make.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_foundation_plane_commits_the_seed_and_admits_the_system_rows() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.foundation = Some(FoundationInputs {
+            declarations: crate::foundation_seed::core_declarations(),
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+                .expect("committed allocation"),
+        });
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+
+        let rows = plane
+            .store()
+            .list(SpecSelector::default())
+            .await
+            .expect("list rows");
+        let refs: Vec<String> = rows
+            .iter()
+            .map(|row| format!("{}/{}", row.key.type_name, row.key.name))
+            .collect();
+        assert!(refs.contains(&"Zone/system".to_owned()), "refs: {refs:?}");
+        assert!(
+            refs.contains(&"Role/operation-publisher".to_owned()),
+            "refs: {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|reference| reference.starts_with("RoleBinding/")),
+            "refs: {refs:?}"
+        );
+        // The system-homed write is admitted on this plane.
+        plane
+            .client()
+            .apply(api_subject("User/alice"), command_desired("system", "worker"))
+            .await
+            .expect("the foundation plane admits the write");
     }
 }

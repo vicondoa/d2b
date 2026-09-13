@@ -19,6 +19,7 @@ d2bd_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 d2bd_compile_data = [
     "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+    "//:docs/reference/policy/principal-allocation.json",  # keep: include_str! by the foundation seed
     "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
     "Cargo.toml",
     "src/composition.rs",
